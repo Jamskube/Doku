@@ -1,0 +1,20 @@
+* { box-sizing: border-box; }
+body { margin: 0; font-family: system-ui, sans-serif; background: #F4F1E9; color: #1C1A16; height: 100vh; display: flex; flex-direction: column; }
+.hub { max-width: 640px; margin: 4rem auto; }
+.bar { display: flex; gap: .5rem; align-items: center; padding: .4rem .8rem; background: #EFEAE0; border-bottom: 1px solid rgba(28,26,22,.12); flex: none; }
+.bar button, .bar select { font: inherit; padding: .25rem .6rem; }
+.split { display: flex; flex: 1; min-height: 0; }
+.editor { flex: 2; overflow: auto; background: #FDFBF5; }
+.log { flex: 1; margin: 0; overflow: auto; padding: .8rem; font-size: 12px; background: #1C1A16; color: #E6E6EA; white-space: pre-wrap; }
+
+/* Milkdown */
+.editor .milkdown { padding: 1.5rem 2rem; outline: none; max-width: 72ch; margin: 0 auto; }
+.editor .milkdown .ProseMirror { outline: none; }
+
+/* CM6 */
+.editor .cm-editor { height: 100%; background: #FDFBF5; }
+.editor .cm-editor .cm-content { max-width: 72ch; margin: 0 auto; padding: 1.5rem 0; font-family: system-ui, sans-serif; font-size: 15px; line-height: 1.7; }
+.editor .cm-editor.cm-focused { outline: none; }
+.cm-task-checkbox { margin-right: .35em; transform: translateY(1px); cursor: pointer; }
+.cm-lp-wikilink { color: #6BA47B; cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
+.cm-lp-codeblock { background: #F9F5EC; font-family: ui-monospace, monospace; font-size: 13px; }

@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <title>Spike A — Milkdown</title>
+  <link rel="stylesheet" href="/src/spike.css" />
+</head>
+<body>
+  <header class="bar">
+    <strong>A — Milkdown</strong>
+    <button id="btn-roundtrip">Round-trip corpus</button>
+    <button id="btn-load-stress">Charger 500 Ko</button>
+    <button id="btn-typing">Test frappe</button>
+    <select id="file-select"></select>
+    <a href="/index.html">← hub</a>
+  </header>
+  <div class="split">
+    <div id="editor" class="editor"></div>
+    <pre id="log" class="log">prêt.</pre>
+  </div>
+  <script type="module" src="/src/a-milkdown.ts"></script>
+</body>
+</html>
