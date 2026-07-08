@@ -87,7 +87,6 @@
     flex: 1;
     min-width: 0;
     background: var(--cream-content);
-    border-top: 1px solid var(--line-1);
     border-radius: 14px 14px 0 0;
     overflow: hidden;
     display: flex;

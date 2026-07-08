@@ -153,29 +153,27 @@
   .tab:hover { background: var(--surface-hover); color: var(--ink-2); }
   .tab.active {
     background: var(--cream-content);
-    border-color: var(--line-1);
     color: var(--ink);
     font-weight: 500;
     z-index: 2;
-    margin-bottom: -1px;
   }
   .tab.active:hover { background: var(--cream-content); }
   .tab.active::before,
   .tab.active::after {
     content: '';
     position: absolute;
-    bottom: -1px;
+    bottom: 0;
     width: 11px;
     height: 11px;
     pointer-events: none;
   }
   .tab.active::before {
     left: -11px;
-    background: radial-gradient(circle at top left, transparent 9.5px, var(--line-1) 9.5px, var(--line-1) 10.5px, var(--cream-content) 10.5px);
+    background: radial-gradient(circle at top left, transparent 10.5px, var(--cream-content) 10.5px);
   }
   .tab.active::after {
     right: -11px;
-    background: radial-gradient(circle at top right, transparent 9.5px, var(--line-1) 9.5px, var(--line-1) 10.5px, var(--cream-content) 10.5px);
+    background: radial-gradient(circle at top right, transparent 10.5px, var(--cream-content) 10.5px);
   }
 
   .dot { font-size: 9px; color: var(--ink); line-height: 1; margin-right: 1px; }
