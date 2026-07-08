@@ -15,9 +15,19 @@
 3. **Frappe** (bouton) : 80 caractères insérés un par frame, on mesure l'écart moyen / p95 / max entre frames.
 4. **Faisabilité** : checkbox de tâches cliquables et wikilinks `[[…]]` cliquables, vérifiés à la main dans les deux prototypes.
 
-## Résultats
+## Résultats (run du 2026-07-08, Surface Pro 11 / Snapdragon X Elite, Chrome via Playwright)
 
-_À compléter à l'issue du run — voir ADR-0002 pour le verdict._
+| Critère | A — Milkdown 7.21 | B — CM6 live preview (plugin spike) |
+|---|---|---|
+| Round-trip corpus (8 fichiers, zéro édition) | **0/8 identiques** — 9 à 176 lignes de diff par fichier (tables re-paddées, `_it_`→`*it*`, `\[` échappés, lignes vides) | **8/8 identiques octet pour octet** (par construction) |
+| Chargement 500 Ko + premier rendu | 1 727 ms | **27 ms** |
+| Frappe sur 500 Ko (par frame) | avg **68,7 ms** · p95 80,3 · max 85,5 (~15 fps) | avg **17,3 ms** · p95 27,1 · max 40,5 |
+| Frappe sur document normal | avg 16,6 ms ✓ | équivalent ✓ |
+| Checkbox cliquable | modèle `data-checked` présent, UI headless à styler/brancher | **démontré** : widget `<input>`, le clic réécrit `[ ]`↔`[x]` dans la source |
+| Wikilink `[[…]]` | texte brut — plugin remark à écrire (~½ j) | **démontré** : décoré, cliquable, cible résolue |
+| Masquage de syntaxe hors ligne active | n/a (WYSIWYG pur — la syntaxe n'existe plus) | **démontré** : `#`, `**`, `` ` ``, marqueurs de liens masqués, révélés sur la ligne active |
+
+**Verdict : CodeMirror 6 live preview** — voir `docs/adr/0002-moteur-wysiwyg-cm6-live-preview.md`. Le comportement spécifié par FR-3 (« syntaxe du bloc courant visible pendant l'édition ») *est* le modèle live-preview ; Milkdown le contredit deux fois (round-trip destructif, perf).
 
 ## Notes de périmètre
 

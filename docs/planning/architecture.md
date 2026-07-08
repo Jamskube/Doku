@@ -25,7 +25,7 @@ Doku est une app desktop Windows ARM64 légère pour ouvrir, lire et éditer des
 │  └──────────────┬────────────────────────────────────────────────────────┘ │
 │                 │ affiche                                                   │
 │  ┌ DocumentView (interface par format) ──────────────────────────────────┐ │
-│  │ MarkdownEditor (WYSIWYG, lib → spike S0) ── SourceEditor (CM6)        │ │
+│  │ MarkdownEditor (CM6 + live preview ⇄ source via Compartment)          │ │
 │  │ HtmlView (iframe sandbox + source CM6)      TxtView (CM6)             │ │
 │  │ [v2 : PdfView]                                                        │ │
 │  └──────────────┬────────────────────────────────────────────────────────┘ │
@@ -51,8 +51,8 @@ Doku est une app desktop Windows ARM64 légère pour ouvrir, lire et éditer des
 |---|---|---|
 | Shell | Grille sidebar/titlebar/stage, onglets, panneaux (Fichiers/Plan/Historique), mode focus, accueil | Svelte 5, tokens AIR repris de KUDE `App.css` (épurés des alias legacy) |
 | DocumentView | Interface commune par format : `load/render/save/dirty/serialize` — le point d'extension v2 (PDF) | TS interface + un composant Svelte par format |
-| MarkdownEditor | WYSIWYG à la Typora (FR-3) : syntaxe révélée au curseur, mini-barre de sélection, checkboxes cliquables, wikilinks | **Spike S0** : Milkdown (ProseMirror) vs CodeMirror 6 « live preview » — ADR-0002 |
-| SourceEditor | Mode source Ctrl+/ (FR-5), et vue d'édition des .html/.txt | CodeMirror 6 (config héritée de KUDE `CodeViewer`, instance conservée — pas de destroy/remount) |
+| MarkdownEditor | Édition à la Typora (FR-3) : CM6 + couche « live preview » maison (décorations sélection-aware, checkbox-widgets, wikilinks) — base : `spike/src/live-preview.ts` | CodeMirror 6 — **ADR-0002** (Milkdown rejeté sur mesures : round-trip destructif, perf) |
+| SourceEditor | Mode source Ctrl+/ (FR-5) = **le même** éditeur CM6, décorations désactivées via `Compartment` (pas de destroy/remount) ; sert aussi aux .html/.txt | CodeMirror 6 (config héritée de KUDE `CodeViewer`) |
 | HtmlView | Rendu .html sandboxé : `<iframe sandbox>` sans script ni réseau, CSP stricte | iframe + CSP ; bascule source via SourceEditor |
 | Stores | tabs (ouverts, actif, dirty), session (restauration), settings (thème, largeur, sidebar), persistés en JSON debouncé | Runes Svelte 5 + fichier `settings.json`/`session.json` |
 | FileService | Ouverture (détection encodage), **écriture atomique** (tmp + rename), watcher de fichiers ouverts, dialogues | `@tauri-apps/plugin-fs` + `plugin-dialog` **directement** (leçon KUDE : pas de commandes Rust custom, pas de `fs_read` numéroté) |
@@ -77,8 +77,7 @@ Emplacement proposé : `%APPDATA%\Doku\` centralisé (ADR-0003 — alternative `
 Aucun service externe au runtime (NFR offline). Dépendances de build/libs notables :
 
 - **Tauri 2 + plugins officiels** — coquille native ; fallback : aucun (choix structurel, ADR-0001).
-- **Moteur WYSIWYG (spike S0)** — Milkdown/ProseMirror **ou** CodeMirror 6 live-preview ; fallback assumé par le PRD : bascule preview↔source (pattern KUDE), FR-5 promu P0.
-- **CodeMirror 6** — mode source + txt/html (déjà maîtrisé via KUDE).
+- **CodeMirror 6** — moteur unique : live preview (ADR-0002) + mode source + txt/html (déjà maîtrisé via KUDE) ; fallback toujours assumé par le PRD si la couche live-preview déçoit : bascule preview↔source, FR-5 promu P0.
 - **marked + DOMPurify** — rendu/sanitization (repris de KUDE).
 - **WebView2** — présent sur Windows 11 ARM64 (composant OS, evergreen).
 
@@ -98,18 +97,17 @@ Aucun service externe au runtime (NFR offline). Dépendances de build/libs notab
 ## Decisions (link to ADRs)
 
 - [ADR-0001](../adr/0001-stack-tauri-svelte.md) Stack : Tauri 2 + Svelte 5 + TypeScript — **accepted** (2026-07-08)
-- [ADR-0002] Moteur WYSIWYG Markdown (Milkdown vs CM6 live-preview vs Tiptap ; critères : fidélité round-trip octet-pour-octet, perf 500 Ko, effort d'intégration Svelte 5, tables/images) → **après spike S0** — réservé
+- [ADR-0002](../adr/0002-moteur-wysiwyg-cm6-live-preview.md) Moteur d'édition : CM6 « live preview » — **accepted** (2026-07-08, sur mesures du spike S0)
 - [ADR-0003](../adr/0003-stockage-snapshots-appdata.md) Snapshots centralisés dans `%APPDATA%\Doku` — **accepted** (2026-07-08)
 - [ADR-0004](../adr/0004-io-fichiers-plugins-officiels.md) I/O via plugins officiels, zéro commande Rust custom — **accepted** (2026-07-08)
 
-### Spike S0 — moteur WYSIWYG (bloque ADR-0002, jalon M0 du PRD)
-Prototype jetable par candidat (Milkdown ; CM6 live-preview) : charger → éditer 3 blocs (titre, liste à cases, code fence) → sauver. Mesures : (1) round-trip d'un corpus de 10 fichiers réels sans édition = diff vide ; (2) frappe fluide sur 500 Ko ; (3) checkbox cliquable + wikilink custom faisables ; (4) jours d'effort estimés pour FR-3 complet. Sortie : ADR-0002 + go/no-go WYSIWYG vs repli bascule.
+### Spike S0 — moteur WYSIWYG ✅ (exécuté le 2026-07-08)
+Protocole, prototypes et mesures dans `spike/` (conservé comme référence et base de tests). Verdict : CM6 live preview — ADR-0002. Chiffres clés : round-trip 8/8 vs 0/8 ; 500 Ko en 27 ms vs 1 727 ms ; frappe 17 ms vs 69 ms par frame.
 
 ## Open questions
 
-- Résultat du spike S0 → fige MarkdownEditor (la plus grosse inconnue restante).
 - Association `.txt` par défaut : conflit Notepad (PRD Q3 — décision produit à l'installation, « proposer sans forcer »).
-- Stratégie exacte gros documents : seuil 2 Mo à valider au spike (dépend du moteur retenu).
+- Tableaux et images en live preview : widget rendu + édition source au clic (compromis Obsidian) — phasage exact v1 vs v1.5 à trancher à `/epics`.
 - Wordmark/iconographie : icône app à dériver de `src/assets/doku-mark-rounded.svg` (fill blanc du pli à corriger → transparent/`currentColor`).
 
 ## Out of scope
