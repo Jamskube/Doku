@@ -1,0 +1,99 @@
+/* Tokens AIR — source de vérité : docs/design/w1/Doku W1 - Fenetre principale.dc.html */
+:root {
+  --desk: #dedacf;
+  --cream-base: #F4F1E9;
+  --cream-content: #FDFBF5;
+  --cream-soft: #F9F5EC;
+  --cream-tint: #EFEAE0;
+  --surface: #FBF7ED;
+  --surface-2: #F4EFE2;
+  --ink-rgb: 28, 26, 22;
+  --ink: rgb(var(--ink-rgb));
+  --ink-2: rgba(var(--ink-rgb), 0.90);
+  --ink-3: rgba(var(--ink-rgb), 0.75);
+  --ink-4: rgba(var(--ink-rgb), 0.62);
+  --ink-5: rgba(var(--ink-rgb), 0.48);
+  --line-1: rgba(var(--ink-rgb), 0.12);
+  --line-2: rgba(var(--ink-rgb), 0.18);
+  --line-3: rgba(var(--ink-rgb), 0.28);
+  --surface-hover: rgba(var(--ink-rgb), 0.03);
+  --accent-soft: rgba(var(--ink-rgb), 0.08);
+  --ok: #6BA47B;
+  --warn: #D4A23E;
+  --err: #C45F4F;
+  --font-sans: 'Geist', -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-mono: 'Geist Mono', ui-monospace, monospace;
+  --font-serif: 'Source Serif 4 Variable', 'Iowan Old Style', Georgia, serif;
+}
+
+:root[data-theme='dark'] {
+  --desk: #161619;
+  --cream-base: #25252A;
+  --cream-content: #2E2E34;
+  --cream-soft: #36363D;
+  --cream-tint: #3D3D44;
+  --surface: #2E2E34;
+  --surface-2: #36363D;
+  --ink-rgb: 235, 237, 241;
+  --ink-2: rgba(var(--ink-rgb), 0.94);
+  --ink-3: rgba(var(--ink-rgb), 0.78);
+  --ink-4: rgba(var(--ink-rgb), 0.62);
+  --ink-5: rgba(var(--ink-rgb), 0.48);
+  --line-1: rgba(var(--ink-rgb), 0.14);
+  --line-2: rgba(var(--ink-rgb), 0.22);
+  --line-3: rgba(var(--ink-rgb), 0.32);
+  --surface-hover: rgba(var(--ink-rgb), 0.08);
+  --accent-soft: rgba(var(--ink-rgb), 0.10);
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body, #app { height: 100%; }
+
+body {
+  background: var(--cream-base);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+  overflow: hidden;
+  user-select: none;
+}
+
+a { color: inherit; text-decoration: none; }
+
+button { font-family: inherit; }
+
+::-webkit-scrollbar { width: 9px; height: 9px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: rgba(120, 110, 90, 0.28);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover { background: rgba(120, 110, 90, 0.45); background-clip: padding-box; }
+:root[data-theme='dark'] ::-webkit-scrollbar-thumb { background: rgba(180, 180, 190, 0.25); background-clip: padding-box; }
+
+.doku-doc ::selection { background: rgba(var(--ink-rgb), 0.12); }
+
+/* Material Symbols Rounded (bundlée via le paquet material-symbols, offline) */
+.msr {
+  font-family: 'Material Symbols Rounded';
+  font-weight: normal;
+  font-style: normal;
+  line-height: 1;
+  letter-spacing: normal;
+  text-transform: none;
+  display: inline-block;
+  white-space: nowrap;
+  word-wrap: normal;
+  direction: ltr;
+  -webkit-font-smoothing: antialiased;
+  font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+}

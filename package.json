@@ -1,0 +1,36 @@
+{
+  "name": "doku",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "check": "svelte-check --tsconfig ./tsconfig.json",
+    "tauri": "tauri"
+  },
+  "dependencies": {
+    "@codemirror/lang-markdown": "^6.3.0",
+    "@codemirror/language": "^6.11.0",
+    "@codemirror/language-data": "^6.5.0",
+    "@codemirror/state": "^6.5.0",
+    "@codemirror/view": "^6.38.0",
+    "@fontsource-variable/source-serif-4": "^5.2.0",
+    "@fontsource/geist-mono": "^5.2.0",
+    "@fontsource/geist-sans": "^5.2.0",
+    "@lezer/highlight": "^1.2.0",
+    "@tauri-apps/api": "^2.10.0",
+    "@tauri-apps/plugin-dialog": "^2.7.0",
+    "@tauri-apps/plugin-fs": "^2.5.0",
+    "codemirror": "^6.0.1",
+    "material-symbols": "^0.36.0"
+  },
+  "devDependencies": {
+    "@sveltejs/vite-plugin-svelte": "^7.0.0",
+    "@tauri-apps/cli": "^2.10.0",
+    "svelte": "^5.55.0",
+    "svelte-check": "^4.4.0",
+    "typescript": "~6.0.2",
+    "vite": "^8.0.0"
+  }
+}

@@ -9,16 +9,17 @@ Doku — petite application pour **ouvrir, lire et éditer des fichiers Markdown
 - Language: TypeScript (frontend) + Rust minimal (hôte Tauri, zéro logique métier — ADR-0004)
 - Framework: Tauri 2 + Svelte 5 + Vite — décidé, ADR-0001 accepted (`docs/adr/`)
 - Contrainte machine : **Windows ARM64** — Surface Pro 11, Snapdragon X Elite, NPU (IA locale envisagée en v2) → la stack doit tourner nativement en ARM64
-- Référence : un repo local existant de l'utilisateur contient un mode lecture/édition Markdown (design + implémentation de référence — chemin à demander)
-- Database / ORM: aucune prévue pour l'instant (fichiers locaux)
-- Package manager: à définir
+- Référence : `G:\KUDE` (mode lecture/édition Markdown + design system AIR) ; maquettes officielles dans `docs/design/w1/`
+- Éditeur : CodeMirror 6 « live preview » (ADR-0002) — `src/lib/editor/`
+- Database / ORM: aucune (fichiers locaux)
+- Package manager: npm
 
 ## Setup commands
-- Install : _à définir une fois la stack choisie_
-- Dev : _à définir_
-- Build : _à définir_
-- Test : _à définir_
-- Lint : _à définir_
+- Install : `npm install`
+- Dev (UI navigateur, APIs Tauri neutralisées) : `npm run dev` → http://localhost:1420
+- Dev (app native) : `npm run tauri dev` (première compile Rust longue)
+- Build : `npm run build` · installateur : `npm run tauri build`
+- Typecheck : `npm run check`
 
 ## Conventions
 - Commentaires uniquement sur le code non évident (des identifiants bien nommés font le reste)
@@ -28,8 +29,10 @@ Doku — petite application pour **ouvrir, lire et éditer des fichiers Markdown
 ## Architecture
 | Folder | Purpose |
 |---|---|
-| `src/` | Code source (sous-dossiers créés plus tard selon la stack choisie) |
-| `docs/` | Documentation (planning, journal, archives) |
+| `src/` | Frontend Svelte 5 (components/, lib/, lib/editor/, assets/) |
+| `src-tauri/` | Hôte Rust minimal — plugins officiels uniquement (ADR-0004) |
+| `spike/` | Spike S0 (comparatif moteurs WYSIWYG) — conservé comme référence |
+| `docs/` | Documentation (planning, adr, design, journal, archives) |
 
 ## Patterns
 - ALWAYS: garder le cœur « lecture/édition de documents » extensible — le Markdown est le premier format, pas le seul (PDF et autres suivront)
@@ -45,9 +48,11 @@ _Append via `/start learn <type>: <lesson>`. NEVER delete this section on update
 
 ### Critical Warnings
 <!-- things that broke or caused issues -->
+- [2026-07-08] Ne jamais sérialiser le markdown utilisateur via ProseMirror/remark-stringify : réécriture systématique des fichiers (mesuré au spike S0 : 0/8 fichiers préservés — voir ADR-0002)
 
 ### Gotchas
 <!-- non-obvious behaviors discovered -->
+- [2026-07-08] CodeMirror 6 ne rend que le viewport : tout test DOM/Playwright sur l'éditeur doit d'abord scroller la cible en vue ; un conteneur scrollable externe garde son scrollTop entre `setState`
 
 ### Workarounds
 <!-- working solutions to known issues -->

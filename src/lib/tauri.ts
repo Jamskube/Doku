@@ -1,0 +1,50 @@
+// Garde Tauri : toutes les APIs natives passent ici, avec repli silencieux en
+// mode navigateur (dev UI). ADR-0004 : plugins officiels uniquement, écriture
+// atomique composée côté TS (tmp + rename).
+export const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
+
+export async function minimizeWindow() {
+  if (!isTauri) return
+  const { getCurrentWindow } = await import('@tauri-apps/api/window')
+  await getCurrentWindow().minimize()
+}
+
+export async function toggleMaximizeWindow() {
+  if (!isTauri) return
+  const { getCurrentWindow } = await import('@tauri-apps/api/window')
+  await getCurrentWindow().toggleMaximize()
+}
+
+export async function closeWindow() {
+  if (!isTauri) return
+  const { getCurrentWindow } = await import('@tauri-apps/api/window')
+  await getCurrentWindow().close()
+}
+
+export async function setAlwaysOnTop(value: boolean) {
+  if (!isTauri) return
+  const { getCurrentWindow } = await import('@tauri-apps/api/window')
+  await getCurrentWindow().setAlwaysOnTop(value)
+}
+
+export async function openFileDialog(): Promise<{ path: string; name: string; content: string } | null> {
+  if (!isTauri) return null
+  const { open } = await import('@tauri-apps/plugin-dialog')
+  const path = await open({
+    multiple: false,
+    filters: [{ name: 'Documents', extensions: ['md', 'markdown', 'txt', 'html', 'htm'] }],
+  })
+  if (typeof path !== 'string') return null
+  const { readTextFile } = await import('@tauri-apps/plugin-fs')
+  const content = await readTextFile(path)
+  const name = path.split(/[\\/]/).pop() ?? path
+  return { path, name, content }
+}
+
+export async function writeTextFileAtomic(path: string, content: string) {
+  if (!isTauri) return
+  const { writeTextFile, rename } = await import('@tauri-apps/plugin-fs')
+  const tmp = path + '.doku-tmp'
+  await writeTextFile(tmp, content)
+  await rename(tmp, path)
+}
