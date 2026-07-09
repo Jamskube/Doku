@@ -22,7 +22,8 @@ let nextId = 1
 export const app = $state({
   theme: 'light' as 'light' | 'dark',
   pinned: false,
-  sidebarOpen: true,
+  // Masquée par défaut (app « légère » — FR-6) ; l'état est persisté (settings).
+  sidebarOpen: false,
   sidebarView: 'files' as SidebarView,
   sourceMode: false,
   tabs: [] as DocTab[],
@@ -34,10 +35,39 @@ export const app = $state({
 // Accès non réactif à la vue CM6 courante (scroll TOC, sauvegarde…)
 export const editorRef: { view: EditorView | null } = { view: null }
 
-export function initApp() {
-  const saved = localStorage.getItem('doku-theme')
-  if (saved === 'dark' || saved === 'light') app.theme = saved
+const SETTINGS_KEY = 'doku-settings'
+
+// Préférences persistées (thème, état sidebar) — localStorage, survit aux
+// relancements du webview Tauri. Chargé dès l'import, avant tout composant.
+export function loadSettings() {
+  try {
+    const raw = localStorage.getItem(SETTINGS_KEY)
+    if (raw) {
+      const s = JSON.parse(raw)
+      if (s.theme === 'dark' || s.theme === 'light') app.theme = s.theme
+      if (typeof s.sidebarOpen === 'boolean') app.sidebarOpen = s.sidebarOpen
+      if (s.sidebarView === 'files' || s.sidebarView === 'plan' || s.sidebarView === 'history') {
+        app.sidebarView = s.sidebarView
+      }
+    }
+  } catch {
+    // settings corrompus/indisponibles : valeurs par défaut
+  }
   applyTheme()
+}
+
+export function saveSettings() {
+  try {
+    localStorage.setItem(
+      SETTINGS_KEY,
+      JSON.stringify({ theme: app.theme, sidebarOpen: app.sidebarOpen, sidebarView: app.sidebarView }),
+    )
+  } catch {
+    // stockage indisponible : on ignore
+  }
+}
+
+export function initApp() {
   // La démo ne sert qu'au mode navigateur (design/dev) ; en natif, l'app est
   // pilotée par de vrais fichiers (Ctrl+O, associations) — story 1.1.
   if (app.tabs.length === 0 && !isTauri) {
@@ -52,9 +82,10 @@ export function applyTheme() {
 
 export function toggleTheme() {
   app.theme = app.theme === 'dark' ? 'light' : 'dark'
-  localStorage.setItem('doku-theme', app.theme)
   applyTheme()
 }
+
+loadSettings()
 
 export function activeTab(): DocTab | undefined {
   return app.tabs.find((t) => t.id === app.activeId)

@@ -4,8 +4,14 @@
   import TitleBar from './components/TitleBar.svelte'
   import DocumentView from './components/DocumentView.svelte'
   import ConfirmDialog from './components/ConfirmDialog.svelte'
-  import { app, activeTab, askSave, cycleTab, dialog, initApp, isDirty, openTab, requestCloseTab, saveTab, toggleSidebarView } from './lib/stores.svelte'
+  import { app, activeTab, askSave, cycleTab, dialog, initApp, isDirty, openTab, requestCloseTab, saveSettings, saveTab, toggleSidebarView } from './lib/stores.svelte'
   import { onWindowCloseRequested, openFileDialog } from './lib/tauri'
+
+  // Persiste les préférences (thème, état sidebar) à chaque changement — les lectures
+  // de app.* dans saveSettings sont suivies par l'effet.
+  $effect(() => {
+    saveSettings()
+  })
 
   async function saveActive() {
     const tab = activeTab()
