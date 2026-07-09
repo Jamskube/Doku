@@ -10,6 +10,6 @@
     { "id": "1.4", "title": "Sanitization du HTML inline (allowlist)", "verify": "doc avec <script>/onclick -> aucun script execute au rendu", "passes": true, "verified_by": "Playwright : <script>/onerror dans l'editeur = texte, non execute (chemin CM6 sur par construction) ; primitive sanitizeHtml DOMPurify 6 tests jsdom (2026-07-09)" },
     { "id": "4.1", "title": "Explorateur de dossier reel", "verify": "sidebar Fichiers liste le dossier du doc actif (dossiers puis fichiers tries) ; clic -> onglet", "passes": true, "verified_by": "scan vrai dossier valide en natif par l'utilisateur ; logique+nav+clic Playwright + 14 tests (2026-07-09)" },
     { "id": "4.2", "title": "Etat sidebar persistant (masquee par defaut)", "verify": "replier la sidebar, relancer -> reste masquee ; etat persiste (settings.json)", "passes": true, "verified_by": "Playwright : defaut masquee ; ouvrir->reload reste ouverte ; fermer->reload reste fermee (localStorage doku-settings) 2026-07-09" },
-    { "id": "2.5", "title": "Restauration de session (onglets + actif)", "verify": "ouvrir des onglets, relancer -> memes onglets + actif ; fichier disparu signale puis retire", "passes": false, "verified_by": null }
+    { "id": "2.5", "title": "Restauration de session (onglets + actif)", "verify": "ouvrir des onglets, relancer -> memes onglets + actif ; fichier disparu signale puis retire", "passes": true, "verified_by": "restauration + banniere fichier disparu validees en natif par l'utilisateur ; save+banniere Playwright (2026-07-09)" }
   ]
 }

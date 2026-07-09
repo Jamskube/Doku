@@ -4,13 +4,21 @@
   import TitleBar from './components/TitleBar.svelte'
   import DocumentView from './components/DocumentView.svelte'
   import ConfirmDialog from './components/ConfirmDialog.svelte'
-  import { app, activeTab, askSave, cycleTab, dialog, initApp, isDirty, openTab, requestCloseTab, saveSettings, saveTab, toggleSidebarView } from './lib/stores.svelte'
+  import { app, activeTab, askSave, cycleTab, dialog, initApp, isDirty, openTab, requestCloseTab, saveSession, saveSettings, saveTab, toggleSidebarView } from './lib/stores.svelte'
   import { onWindowCloseRequested, openFileDialog } from './lib/tauri'
 
   // Persiste les préférences (thème, état sidebar) à chaque changement — les lectures
   // de app.* dans saveSettings sont suivies par l'effet.
   $effect(() => {
     saveSettings()
+  })
+
+  // Persiste la session (onglets ouverts + actif), débouncée à 500 ms.
+  let sessionTimer: ReturnType<typeof setTimeout> | undefined
+  $effect(() => {
+    void [app.tabs.map((t) => t.path).join('|'), app.activeId]
+    clearTimeout(sessionTimer)
+    sessionTimer = setTimeout(saveSession, 500)
   })
 
   async function saveActive() {
@@ -33,6 +41,7 @@
 
     let unlistenClose: (() => void) | null = null
     onWindowCloseRequested(async () => {
+      saveSession() // flush au quit (au-delà du débounce)
       const dirty = app.tabs.filter(isDirty)
       if (dirty.length === 0) return true
       const choice = await askSave(
@@ -102,6 +111,15 @@
   <Sidebar />
   <div class="main">
     <TitleBar onOpen={openFromDialog} />
+    {#if app.banner}
+      <div class="banner" role="status">
+        <span class="msr" style="font-size:18px">error</span>
+        <span class="banner-msg">{app.banner}</span>
+        <button class="banner-close" onclick={() => (app.banner = null)} aria-label="Fermer">
+          <span class="msr" style="font-size:16px">close</span>
+        </button>
+      </div>
+    {/if}
     <div class="stage">
       <div class="page">
         <DocumentView onOpen={openFromDialog} />
@@ -115,6 +133,32 @@
 <style>
   .app { height: 100%; display: flex; background: var(--cream-base); }
   .main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  .banner {
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 16px;
+    background: rgba(var(--ink-rgb), 0.04);
+    border-bottom: 1px solid var(--line-2);
+    color: var(--ink-2);
+    font-size: 12.5px;
+  }
+  .banner > .msr { color: var(--warn); flex: none; }
+  .banner-msg { flex: 1; min-width: 0; }
+  .banner-close {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: 0;
+    background: transparent;
+    color: var(--ink-4);
+    cursor: pointer;
+    border-radius: 5px;
+    padding: 3px;
+  }
+  .banner-close:hover { background: var(--surface-hover); color: var(--ink); }
   .stage { flex: 1; min-height: 0; display: flex; background: var(--cream-base); }
   .page {
     flex: 1;

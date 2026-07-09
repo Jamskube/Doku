@@ -30,6 +30,8 @@ export const app = $state({
   activeId: 0,
   // Dossier affiché par l'explorateur ; null = suit le dossier du document actif.
   explorerDir: null as string | null,
+  // Bannière d'information transitoire (ex. fichiers de session introuvables).
+  banner: null as string | null,
 })
 
 // Accès non réactif à la vue CM6 courante (scroll TOC, sauvegarde…)
@@ -67,13 +69,61 @@ export function saveSettings() {
   }
 }
 
+const SESSION_KEY = 'doku-session'
+// Empêche la sauvegarde de session d'écraser l'enregistrement pendant le chargement.
+let sessionReady = false
+
+// Persiste les onglets ouverts (chemins) + l'actif. Le contenu n'est PAS stocké :
+// la source de vérité reste le fichier sur disque, relu à la restauration.
+export function saveSession() {
+  if (!sessionReady) return
+  try {
+    const tabs = app.tabs.filter((t) => t.path).map((t) => t.path)
+    localStorage.setItem(SESSION_KEY, JSON.stringify({ tabs, activePath: activeTab()?.path ?? null }))
+  } catch {
+    // stockage indisponible : on ignore
+  }
+}
+
+// Restaure la session au démarrage (natif) : relit chaque fichier ; un fichier
+// disparu est retiré et signalé via la bannière (FR-4).
+export async function restoreSession() {
+  let session: { tabs?: string[]; activePath?: string | null } | null = null
+  try {
+    const raw = localStorage.getItem(SESSION_KEY)
+    if (raw) session = JSON.parse(raw)
+  } catch {
+    session = null
+  }
+  const paths = session?.tabs ?? []
+  const missing: string[] = []
+  for (const p of paths) {
+    const content = await readTextFileAt(p)
+    if (content == null) {
+      missing.push(p)
+      continue
+    }
+    openTab(baseName(p), p, content)
+  }
+  const active = session?.activePath ? app.tabs.find((t) => t.path === session!.activePath) : undefined
+  if (active) app.activeId = active.id
+  if (missing.length) {
+    app.banner = `${missing.length} fichier(s) introuvable(s), retiré(s) de la session : ${missing.map(baseName).join(', ')}`
+  }
+  sessionReady = true
+}
+
 export function initApp() {
-  // La démo ne sert qu'au mode navigateur (design/dev) ; en natif, l'app est
-  // pilotée par de vrais fichiers (Ctrl+O, associations) — story 1.1.
-  if (app.tabs.length === 0 && !isTauri) {
+  if (isTauri) {
+    void restoreSession()
+    return
+  }
+  // Mode navigateur (design/dev) : contenu de démonstration.
+  if (app.tabs.length === 0) {
     for (const d of DEMO_TABS) openTab(d.name, d.path, d.content, d.kind)
     app.activeId = app.tabs[0]?.id ?? 0
   }
+  sessionReady = true
 }
 
 export function applyTheme() {
