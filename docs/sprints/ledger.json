@@ -2,9 +2,9 @@
   "sprint": 1,
   "features": [
     { "id": "1.1", "title": "Ouverture reelle via dialogue + I/O natif (Ctrl+O)", "verify": "npm run tauri dev -> Ctrl+O sur un vrai .md -> contenu reel affiche (pas la demo)", "passes": true, "verified_by": "npm run tauri dev — Ctrl+O sur vrai .md, valide utilisateur 2026-07-09" },
-    { "id": "3.2", "title": "Sauvegarde atomique + indicateur modifie (Ctrl+S)", "verify": "editer + Ctrl+S -> fichier ecrit via tmp+rename, badge dirty disparait", "passes": false, "verified_by": null },
+    { "id": "3.2", "title": "Sauvegarde atomique + indicateur modifie (Ctrl+S)", "verify": "editer + Ctrl+S -> fichier ecrit via tmp+rename, badge dirty disparait", "passes": true, "verified_by": "Ctrl+S sur vrai fichier, valide utilisateur (tmp+rename) 2026-07-09 ; flux dirty->enregistre Playwright" },
     { "id": "3.4", "title": "Confirmation de fermeture non sauvee", "verify": "fermer un onglet dirty -> dialogue Sauver/Ignorer/Annuler", "passes": true, "verified_by": "Playwright : dirty+Ctrl+W -> dialogue ; Annuler/Ignorer/Sauver OK ; non-dirty ferme direct (2026-07-09)" },
-    { "id": "2.2", "title": "Nouvel onglet actif + differenciateur d'homonymes", "verify": "ouvrir 2 fichiers homonymes -> dossier parent affiche en differenciateur", "passes": false, "verified_by": null },
+    { "id": "2.2", "title": "Nouvel onglet actif + differenciateur d'homonymes", "verify": "ouvrir 2 fichiers homonymes -> dossier parent affiche en differenciateur", "passes": true, "verified_by": "npm test tabs (7 tests) + Playwright : 2x notes.md -> Notes/Archives, noms uniques sans suffixe (2026-07-09)" },
     { "id": "3.3", "title": "Round-trip Markdown sans perte + tests auto", "verify": "npm run test roundtrip -> corpus ouvert+sauve identique octet pour octet (hors normalisation documentee)", "passes": true, "verified_by": "npm test : 19/19 (corpus LF+CRLF byte-identique apres edition ; mixte normalise dominante) 2026-07-09" }
   ]
 }

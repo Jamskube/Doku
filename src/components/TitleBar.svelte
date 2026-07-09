@@ -1,5 +1,6 @@
 <script lang="ts">
   import { app, activeTab, requestCloseTab, isDirty, toggleTheme } from '../lib/stores.svelte'
+  import { tabDiscriminator } from '../lib/tabs'
   import { closeWindow, minimizeWindow, setAlwaysOnTop, toggleMaximizeWindow } from '../lib/tauri'
   import DokuMark from '../lib/DokuMark.svelte'
 
@@ -39,17 +40,19 @@
 
   <div class="tabs" data-tauri-drag-region>
     {#each app.tabs as tab (tab.id)}
+      {@const parent = tabDiscriminator(tab, app.tabs)}
       <button
         class="tab"
         class:active={tab.id === app.activeId}
         role="tab"
         aria-selected={tab.id === app.activeId}
-        title={isDirty(tab) ? `${tab.name} — non enregistré` : tab.name}
+        title={(tab.path ?? tab.name) + (isDirty(tab) ? ' — non enregistré' : '')}
         onclick={() => (app.activeId = tab.id)}
         onauxclick={(e) => { if (e.button === 1) requestCloseTab(tab.id) }}
       >
         {#if isDirty(tab)}<span class="dot">●</span>{/if}
         <span class="name">{tab.name}</span>
+        {#if parent}<span class="parent">{parent}</span>{/if}
         <span
           class="close"
           title="Fermer l'onglet"
@@ -175,6 +178,17 @@
 
   .dot { font-size: 9px; color: var(--ink); line-height: 1; margin-right: 1px; }
   .name { min-width: 0; max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .parent {
+    flex-shrink: 3;
+    min-width: 0;
+    max-width: 90px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 10.5px;
+    color: var(--ink-5);
+  }
+  .parent::before { content: '·'; margin-right: 4px; opacity: 0.55; }
   .close {
     display: inline-flex;
     align-items: center;
