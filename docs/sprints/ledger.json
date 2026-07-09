@@ -1,5 +1,5 @@
 {
-  "sprint": 3,
+  "sprint": 4,
   "features": [
     { "id": "1.1", "title": "Ouverture reelle via dialogue + I/O natif (Ctrl+O)", "verify": "npm run tauri dev -> Ctrl+O sur un vrai .md -> contenu reel affiche (pas la demo)", "passes": true, "verified_by": "npm run tauri dev — Ctrl+O sur vrai .md, valide utilisateur 2026-07-09" },
     { "id": "3.2", "title": "Sauvegarde atomique + indicateur modifie (Ctrl+S)", "verify": "editer + Ctrl+S -> fichier ecrit via tmp+rename, badge dirty disparait", "passes": true, "verified_by": "Ctrl+S sur vrai fichier, valide utilisateur (tmp+rename) 2026-07-09 ; flux dirty->enregistre Playwright" },
@@ -15,6 +15,14 @@
     { "id": "1.5", "title": "Images locales (relatives + placeholder)", "verify": "image relative affichee (resolue au dossier du fichier) ; image manquante -> placeholder discret", "passes": true, "verified_by": "vraie image locale affichee (valide natif utilisateur) ; placeholder Playwright + 6 tests (2026-07-09)" },
     { "id": "4.4", "title": "Resolution & navigation des wikilinks", "verify": "clic sur [[note]] avec note.md dans le dossier/sous-dossiers -> ouvre l'onglet", "passes": true, "verified_by": "clic wikilink vers fichier non ouvert -> ouvre (valide natif utilisateur) ; onglet ouvert Playwright + 7 tests (2026-07-09)" },
     { "id": "6.2", "title": "Largeur de colonne reglable (3 crans)", "verify": "3 crans ~65ch/~80ch/pleine appliques immediatement + persistes", "passes": true, "verified_by": "Playwright : cycle 680/820/none via bouton doc-head, applique immediat, persiste au reload (settings) 2026-07-09" },
-    { "id": "6.3", "title": "Mode focus (masque le chrome)", "verify": "F9 masque titlebar/sidebar/barres ; Echap restaure", "passes": true, "verified_by": "Playwright : F9 -> titlebar/sidebar/doc-head masques, editeur reste ; Echap restaure tout (2026-07-09)" }
+    { "id": "6.3", "title": "Mode focus (masque le chrome)", "verify": "F9 masque titlebar/sidebar/barres ; Echap restaure", "passes": true, "verified_by": "Playwright : F9 -> titlebar/sidebar/doc-head masques, editeur reste ; Echap restaure tout (2026-07-09)" },
+    { "id": "5.1", "title": "Vue HTML rendue (sandbox)", "verify": ".html s'ouvre rendu dans iframe sandbox (sans script ni reseau)", "passes": false, "verified_by": null },
+    { "id": "5.2", "title": "HTML : edition source + refresh", "verify": "bascule source .html editable ; Ctrl+S rafraichit le rendu", "passes": false, "verified_by": null },
+    { "id": "3.6", "title": "Mode source Ctrl+/ (formaliser)", "verify": "Ctrl+/ -> source coloree, curseur conserve, retour WYSIWYG sans perte", "passes": false, "verified_by": null },
+    { "id": "4.6", "title": "Table des matieres (highlight au scroll)", "verify": "TOC H1-H3 ; titre courant surligne au scroll ; clic navigue", "passes": false, "verified_by": null },
+    { "id": "3.5", "title": "Rechargement sur modification externe", "verify": "fichier modifie sur disque + focus -> propose recharger (silencieux si pas de modif locale)", "passes": false, "verified_by": null },
+    { "id": "6.1", "title": "Theme creme persistant", "verify": "theme creme par defaut ; bascule persiste entre sessions", "passes": true, "verified_by": "acquis S2 : couche settings loadSettings/saveSettings (localStorage doku-settings), validee Playwright reload (4.2) 2026-07-09" },
+    { "id": "8.1", "title": "Build ARM64 natif", "verify": "binaire ARM64 natif (aucune emulation) ; demarrage < 1.5s", "passes": true, "verified_by": "acquis S2 : tauri build release -> Target: arm64, exe+NSIS+MSI generes 2026-07-09" },
+    { "id": "8.2", "title": "Installateur NSIS + associations", "verify": "installateur ; .md/.html associes apres install", "passes": true, "verified_by": "acquis S2 (2.3) : fileAssociations NSIS, associations validees en natif apres install par l'utilisateur 2026-07-09" }
   ]
 }
