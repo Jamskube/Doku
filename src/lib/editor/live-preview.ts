@@ -3,7 +3,7 @@
 // une sélection) et remplacent les marqueurs par des widgets.
 // Origine : spike/src/live-preview.ts, validé par mesures le 2026-07-08.
 import { syntaxTree } from '@codemirror/language'
-import type { Range } from '@codemirror/state'
+import { Facet, type Range } from '@codemirror/state'
 import {
   Decoration,
   type DecorationSet,
@@ -12,6 +12,56 @@ import {
   type ViewUpdate,
   WidgetType,
 } from '@codemirror/view'
+import { convertFileSrc } from '@tauri-apps/api/core'
+import { isTauri } from '../tauri'
+import { isExternalUrl, resolveLocalImagePath } from '../images'
+
+// Dossier du document courant (fourni par état, dans DocumentView) — sert à
+// résoudre les images relatives.
+export const docDirFacet = Facet.define<string, string>({ combine: (v) => v[0] ?? '' })
+
+// URL affichable d'une image : externe telle quelle ; locale résolue au dossier
+// puis convertie en asset:// (natif). En navigateur : chemin brut → erreur → placeholder.
+function imageSrc(url: string, dir: string): string {
+  if (isExternalUrl(url)) return url
+  const abs = resolveLocalImagePath(url, dir)
+  return isTauri ? convertFileSrc(abs) : abs
+}
+
+class ImageWidget extends WidgetType {
+  constructor(
+    private url: string,
+    private alt: string,
+    private dir: string,
+  ) {
+    super()
+  }
+
+  eq(o: ImageWidget) {
+    return o.url === this.url && o.alt === this.alt && o.dir === this.dir
+  }
+
+  toDOM() {
+    // Conteneur stable géré par CM6 ; on mute son contenu à l'erreur (pas de
+    // replaceWith, qui serait clobbered par la réconciliation DOM de CodeMirror).
+    const wrap = document.createElement('span')
+    wrap.className = 'cm-lp-image-wrap'
+    const img = document.createElement('img')
+    img.className = 'cm-lp-image'
+    img.alt = this.alt
+    img.src = imageSrc(this.url, this.dir)
+    img.addEventListener('error', () => {
+      wrap.className = 'cm-lp-image-missing'
+      wrap.textContent = this.alt ? `Image introuvable — ${this.alt}` : 'Image introuvable'
+    })
+    wrap.appendChild(img)
+    return wrap
+  }
+
+  ignoreEvent() {
+    return true
+  }
+}
 
 class CheckboxWidget extends WidgetType {
   constructor(
@@ -55,6 +105,7 @@ const HEADING_LINE = new Map([
 function buildDecorations(view: EditorView): DecorationSet {
   const decos: Range<Decoration>[] = []
   const { state } = view
+  const docDir = state.facet(docDirFacet)
 
   const activeLines = new Set<number>()
   for (const r of state.selection.ranges) {
@@ -121,6 +172,18 @@ function buildDecorations(view: EditorView): DecorationSet {
             decos.push(Decoration.line({ class: 'cm-lp-quote' }).range(state.doc.line(n).from))
           }
           return
+        }
+
+        if (name === 'Image') {
+          if (isActive(node.from, node.to)) return
+          const raw = state.sliceDoc(node.from, node.to)
+          const m = /^!\[([^\]]*)\]\(([^)\s]+)/.exec(raw)
+          if (m) {
+            decos.push(
+              Decoration.replace({ widget: new ImageWidget(m[2], m[1], docDir) }).range(node.from, node.to),
+            )
+          }
+          return false
         }
 
         if (name === 'Link') {

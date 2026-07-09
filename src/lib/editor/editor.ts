@@ -86,6 +86,23 @@ const dokuTheme = EditorView.theme({
     borderBottom: '1px solid var(--line-3)',
     cursor: 'pointer',
   },
+  '.cm-lp-image-wrap': { display: 'block' },
+  '.cm-lp-image': {
+    display: 'block',
+    maxWidth: '100%',
+    borderRadius: '8px',
+    margin: '6px 0',
+  },
+  '.cm-lp-image-missing': {
+    display: 'inline-flex',
+    alignItems: 'center',
+    padding: '6px 12px',
+    borderRadius: '8px',
+    border: '1px dashed var(--line-3)',
+    color: 'var(--ink-4)',
+    fontFamily: 'var(--font-mono)',
+    fontSize: '12px',
+  },
   '.cm-task-checkbox': {
     appearance: 'none',
     width: '19px',

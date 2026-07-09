@@ -4,6 +4,8 @@
   import { EditorState } from '@codemirror/state'
   import { app, activeTab, cycleColumnWidth, editorRef, isDirty } from '../lib/stores.svelte'
   import { baseExtensions, livePreviewComp, previewExtensions, serializeDoc, sourceExtensions } from '../lib/editor/editor'
+  import { docDirFacet } from '../lib/editor/live-preview'
+  import { parentPath } from '../lib/explorer'
   import DokuMark from '../lib/DokuMark.svelte'
 
   let { onOpen }: { onOpen: () => void } = $props()
@@ -14,9 +16,11 @@
   let renderedId = -1
 
   function makeState(tabId: number, content: string): EditorState {
+    const dir = parentPath(app.tabs.find((t) => t.id === tabId)?.path ?? null) ?? ''
     return EditorState.create({
       doc: content,
       extensions: baseExtensions(app.sourceMode, [
+        docDirFacet.of(dir),
         EditorView.updateListener.of((u) => {
           if (u.docChanged) {
             const tab = app.tabs.find((t) => t.id === tabId)
