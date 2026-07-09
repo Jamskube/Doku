@@ -3,24 +3,13 @@
   import Sidebar from './components/Sidebar.svelte'
   import TitleBar from './components/TitleBar.svelte'
   import DocumentView from './components/DocumentView.svelte'
-  import { app, activeTab, closeTab, cycleTab, initApp, openTab, toggleSidebarView } from './lib/stores.svelte'
-  import { isTauri, openFileDialog, writeTextFileAtomic } from './lib/tauri'
+  import ConfirmDialog from './components/ConfirmDialog.svelte'
+  import { app, activeTab, askSave, cycleTab, dialog, initApp, isDirty, openTab, requestCloseTab, saveTab, toggleSidebarView } from './lib/stores.svelte'
+  import { onWindowCloseRequested, openFileDialog } from './lib/tauri'
 
   async function saveActive() {
     const tab = activeTab()
-    if (!tab) return
-    if (isTauri) {
-      if (!tab.path) return // « Enregistrer sous » : story ultérieure
-      try {
-        await writeTextFileAtomic(tab.path, tab.content)
-      } catch (err) {
-        // Buffer intact + onglet reste « modifié ». Bandeau [Réessayer / Enregistrer sous] : story ultérieure
-        console.error('Sauvegarde échouée', err)
-        return
-      }
-    }
-    // Marqué « enregistré » seulement après une écriture réussie (ou mode navigateur)
-    tab.savedContent = tab.content
+    if (tab) await saveTab(tab)
   }
 
   async function openFromDialog() {
@@ -36,7 +25,25 @@
   onMount(() => {
     initApp()
 
+    let unlistenClose: (() => void) | null = null
+    onWindowCloseRequested(async () => {
+      const dirty = app.tabs.filter(isDirty)
+      if (dirty.length === 0) return true
+      const choice = await askSave(
+        'Modifications non enregistrées',
+        dirty.length === 1
+          ? `« ${dirty[0].name} » contient des modifications non enregistrées.`
+          : `${dirty.length} documents contiennent des modifications non enregistrées.`,
+      )
+      if (choice === 'cancel') return false
+      if (choice === 'save') {
+        for (const t of dirty) if (!(await saveTab(t))) return false
+      }
+      return true
+    }).then((u) => (unlistenClose = u))
+
     const onKey = async (e: KeyboardEvent) => {
+      if (dialog.open) return
       const mod = e.ctrlKey || e.metaKey
       if (!mod) return
       const k = e.key.toLowerCase()
@@ -45,7 +52,7 @@
         await saveActive()
       } else if (k === 'w') {
         e.preventDefault()
-        if (app.activeId) closeTab(app.activeId)
+        if (app.activeId) requestCloseTab(app.activeId)
       } else if (k === 'tab') {
         e.preventDefault()
         cycleTab(e.shiftKey ? -1 : 1)
@@ -76,6 +83,7 @@
     window.addEventListener('keydown', onKey)
     window.addEventListener('doku:wikilink', onWikilink)
     return () => {
+      unlistenClose?.()
       window.removeEventListener('keydown', onKey)
       window.removeEventListener('doku:wikilink', onWikilink)
     }
@@ -93,6 +101,8 @@
     </div>
   </div>
 </div>
+
+<ConfirmDialog />
 
 <style>
   .app { height: 100%; display: flex; background: var(--cream-base); }

@@ -1,6 +1,6 @@
 import type { EditorView } from '@codemirror/view'
 import { DEMO_TABS } from './demo'
-import { isTauri } from './tauri'
+import { isTauri, writeTextFileAtomic } from './tauri'
 
 export type DocKind = 'md' | 'html' | 'txt'
 export type SidebarView = 'files' | 'plan' | 'history'
@@ -141,4 +141,60 @@ export function scrollToLine(line: number) {
     scrollIntoView: true,
   })
   view.focus()
+}
+
+// --- Sauvegarde ---
+
+// Écrit un onglet sur disque (atomique). savedContent n'est marqué qu'après
+// succès (mode navigateur : no-op d'écriture). Renvoie false si rien n'a été écrit.
+export async function saveTab(tab: DocTab): Promise<boolean> {
+  if (isTauri) {
+    if (!tab.path) return false // « Enregistrer sous » : story ultérieure
+    try {
+      await writeTextFileAtomic(tab.path, tab.content)
+    } catch (err) {
+      console.error('Sauvegarde échouée', err)
+      return false
+    }
+  }
+  tab.savedContent = tab.content
+  return true
+}
+
+// --- Modal de confirmation (Sauver / Ignorer / Annuler) ---
+
+export type CloseChoice = 'save' | 'discard' | 'cancel'
+
+export const dialog = $state({ open: false, title: '', message: '' })
+let dialogResolver: ((choice: CloseChoice) => void) | null = null
+
+export function askSave(title: string, message: string): Promise<CloseChoice> {
+  dialog.title = title
+  dialog.message = message
+  dialog.open = true
+  return new Promise((resolve) => {
+    dialogResolver = resolve
+  })
+}
+
+export function resolveDialog(choice: CloseChoice) {
+  if (!dialog.open) return
+  dialog.open = false
+  const resolve = dialogResolver
+  dialogResolver = null
+  resolve?.(choice)
+}
+
+// Ferme un onglet en confirmant d'abord si des modifications sont non enregistrées.
+export async function requestCloseTab(id: number) {
+  const tab = app.tabs.find((t) => t.id === id)
+  if (tab && isDirty(tab)) {
+    const choice = await askSave(
+      'Modifications non enregistrées',
+      `« ${tab.name} » contient des modifications non enregistrées.`,
+    )
+    if (choice === 'cancel') return
+    if (choice === 'save' && !(await saveTab(tab))) return
+  }
+  closeTab(id)
 }

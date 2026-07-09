@@ -41,6 +41,25 @@ export async function openFileDialog(): Promise<{ path: string; name: string; co
   return { path, name, content }
 }
 
+// Intercepte la fermeture de la fenêtre : `handler` renvoie true si la fermeture
+// est autorisée (rien à sauver, ou choix Sauver/Ignorer honoré). Réutilise close()
+// (déjà autorisé) via un drapeau, sans permission `destroy`.
+export async function onWindowCloseRequested(handler: () => Promise<boolean>): Promise<() => void> {
+  if (!isTauri) return () => {}
+  const { getCurrentWindow } = await import('@tauri-apps/api/window')
+  const win = getCurrentWindow()
+  let allowed = false
+  const unlisten = await win.onCloseRequested(async (event) => {
+    if (allowed) return
+    event.preventDefault()
+    if (await handler()) {
+      allowed = true
+      await win.close()
+    }
+  })
+  return unlisten
+}
+
 export async function writeTextFileAtomic(path: string, content: string) {
   if (!isTauri) return
   const { writeTextFile, rename } = await import('@tauri-apps/plugin-fs')

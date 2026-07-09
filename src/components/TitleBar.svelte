@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { app, activeTab, closeTab, isDirty, toggleTheme } from '../lib/stores.svelte'
+  import { app, activeTab, requestCloseTab, isDirty, toggleTheme } from '../lib/stores.svelte'
   import { closeWindow, minimizeWindow, setAlwaysOnTop, toggleMaximizeWindow } from '../lib/tauri'
   import DokuMark from '../lib/DokuMark.svelte'
 
@@ -46,7 +46,7 @@
         aria-selected={tab.id === app.activeId}
         title={isDirty(tab) ? `${tab.name} — non enregistré` : tab.name}
         onclick={() => (app.activeId = tab.id)}
-        onauxclick={(e) => { if (e.button === 1) closeTab(tab.id) }}
+        onauxclick={(e) => { if (e.button === 1) requestCloseTab(tab.id) }}
       >
         {#if isDirty(tab)}<span class="dot">●</span>{/if}
         <span class="name">{tab.name}</span>
@@ -55,8 +55,8 @@
           title="Fermer l'onglet"
           role="button"
           tabindex="-1"
-          onclick={(e) => { e.stopPropagation(); closeTab(tab.id) }}
-          onkeydown={(e) => { if (e.key === 'Enter') { e.stopPropagation(); closeTab(tab.id) } }}
+          onclick={(e) => { e.stopPropagation(); requestCloseTab(tab.id) }}
+          onkeydown={(e) => { if (e.key === 'Enter') { e.stopPropagation(); requestCloseTab(tab.id) } }}
         >
           <span class="msr" style="font-size:16px">close</span>
         </span>
