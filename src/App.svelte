@@ -9,7 +9,17 @@
   async function saveActive() {
     const tab = activeTab()
     if (!tab) return
-    if (isTauri && tab.path) await writeTextFileAtomic(tab.path, tab.content)
+    if (isTauri) {
+      if (!tab.path) return // « Enregistrer sous » : story ultérieure
+      try {
+        await writeTextFileAtomic(tab.path, tab.content)
+      } catch (err) {
+        // Buffer intact + onglet reste « modifié ». Bandeau [Réessayer / Enregistrer sous] : story ultérieure
+        console.error('Sauvegarde échouée', err)
+        return
+      }
+    }
+    // Marqué « enregistré » seulement après une écriture réussie (ou mode navigateur)
     tab.savedContent = tab.content
   }
 
