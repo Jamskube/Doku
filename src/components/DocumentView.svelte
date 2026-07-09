@@ -6,7 +6,11 @@
   import { baseExtensions, livePreviewComp, previewExtensions, serializeDoc, sourceExtensions } from '../lib/editor/editor'
   import { docDirFacet } from '../lib/editor/live-preview'
   import { parentPath } from '../lib/explorer'
+  import { sandboxDoc } from '../lib/html'
   import DokuMark from '../lib/DokuMark.svelte'
+
+  // Onglet HTML en mode rendu : aperçu sandboxé (iframe), pas l'éditeur (FR-8).
+  const htmlRender = $derived(activeTab()?.kind === 'html' && !app.sourceMode)
 
   let { onOpen }: { onOpen: () => void } = $props()
 
@@ -68,7 +72,10 @@
       </button>
     </div>
   {/if}
-  <div class="editor-host doku-doc" class:source-mode={app.sourceMode} bind:this={host}></div>
+  {#if htmlRender}
+    <iframe class="html-view" title="Aperçu HTML" sandbox="" srcdoc={sandboxDoc(activeTab()!.content)}></iframe>
+  {/if}
+  <div class="editor-host doku-doc" class:source-mode={app.sourceMode} class:hidden={htmlRender} bind:this={host}></div>
 
   {#if !activeTab()}
     <div class="empty">
@@ -156,6 +163,14 @@
   }
   .width-btn:hover { background: var(--surface-hover); color: var(--ink); }
   .editor-host { flex: 1; min-height: 0; user-select: text; }
+  .editor-host.hidden { display: none; }
+  .html-view {
+    flex: 1;
+    min-height: 0;
+    width: 100%;
+    border: 0;
+    background: var(--cream-content);
+  }
   .editor-host :global(.cm-editor) { height: 100%; }
   .editor-host.source-mode :global(.cm-content) {
     font-family: var(--font-mono);

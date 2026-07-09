@@ -9,7 +9,7 @@
 
 | # | Story | Size | Priority | Status | Notes |
 |---|-------|------|----------|--------|-------|
-| 5.1 | Vue HTML rendue (sandbox) | M | P1 | TODO | `<iframe sandbox>` sans script ni réseau, CSP `default-src 'none'` ; `.html` s'ouvre en texte aujourd'hui |
+| 5.1 | Vue HTML rendue (sandbox) | M | P1 | ✅ Done | `<iframe sandbox="">` + CSP `default-src 'none'` injectée (`html.ts`, 4 tests) ; éditeur masqué ; validé Playwright (recette.html) |
 | 5.2 | HTML : édition source + refresh | S | P1 | TODO | bascule source (CM6 html) ↔ rendu ; Ctrl+S rafraîchit |
 | 3.6 | Mode source Ctrl+/ (formaliser + vérifier) | S | P1 | TODO | socle en place (Compartment) ; vérifier curseur conservé + retour sans perte |
 | 4.6 | Table des matières (highlight au scroll) | S | P2 | TODO | panneau Plan calcule déjà `docHeadings` + `scrollToLine` ; ajouter le surlignage du titre courant au scroll |
@@ -29,3 +29,7 @@ _None_
 ### 2026-07-09
 - Sprint initialisé : 5 stories neuves (4 P1, 1 P2) + 3 freebies clôturés au ledger
 - Rappels process (rétros) : design hors stories ; smoke-tester en release/natif tôt ; logique pure → tests ; privilégier le browser-testable
+
+### 2026-07-09 — 5.1 (+ correctif 1.5)
+- **Correctif 1.5** : la CLI Tauri a auto-ajouté `features = ["protocol-asset"]` à `Cargo.toml` lors du smoke test natif de 1.5 (requis par `assetProtocol`) — commité à part, sinon un build neuf casserait.
+- **5.1** ✅ **Done** : onglet `.html` en mode rendu → `<iframe class="html-view" sandbox="">` (scripts off) avec CSP `default-src 'none'` injectée via `html.ts::sandboxDoc` (4 tests) ; l'éditeur CM6 reste monté mais masqué (`.hidden`). Ctrl+/ basculera vers la source (5.2). Validé Playwright : recette.html rendu (h1 + p), `sandbox=""`, CSP présente, éditeur masqué.
