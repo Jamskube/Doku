@@ -4,8 +4,8 @@
   import TitleBar from './components/TitleBar.svelte'
   import DocumentView from './components/DocumentView.svelte'
   import ConfirmDialog from './components/ConfirmDialog.svelte'
-  import { app, activeTab, askSave, cycleTab, dialog, initApp, isDirty, openTab, requestCloseTab, saveSession, saveSettings, saveTab, toggleSidebarView } from './lib/stores.svelte'
-  import { onWindowCloseRequested, openFileDialog } from './lib/tauri'
+  import { app, activeTab, askSave, cycleTab, dialog, initApp, isDirty, openPath, openTab, requestCloseTab, saveSession, saveSettings, saveTab, toggleSidebarView } from './lib/stores.svelte'
+  import { onOpenFile, onWindowCloseRequested, openFileDialog } from './lib/tauri'
 
   // Persiste les préférences (thème, état sidebar) à chaque changement — les lectures
   // de app.* dans saveSettings sont suivies par l'effet.
@@ -59,6 +59,12 @@
       .then((u) => (unlistenClose = u))
       .catch((err) => console.error('Enregistrement du garde de fermeture échoué', err))
 
+    // Ouverture de fichier venue de l'hôte (double-clic, association, 2e instance).
+    let unlistenOpen: (() => void) | null = null
+    onOpenFile((path) => openPath(path))
+      .then((u) => (unlistenOpen = u))
+      .catch((err) => console.error("Écoute d'ouverture de fichier échouée", err))
+
     const onKey = async (e: KeyboardEvent) => {
       if (dialog.open) return
       const mod = e.ctrlKey || e.metaKey
@@ -101,6 +107,7 @@
     window.addEventListener('doku:wikilink', onWikilink)
     return () => {
       unlistenClose?.()
+      unlistenOpen?.()
       window.removeEventListener('keydown', onKey)
       window.removeEventListener('doku:wikilink', onWikilink)
     }

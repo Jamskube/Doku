@@ -5,6 +5,17 @@ import type { FsEntry } from './explorer'
 // atomique composée côté TS (tmp + rename).
 export const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
 
+// Écoute les demandes d'ouverture de fichier venues de l'hôte Rust (double-clic,
+// association, 2e instance). Émet `doku://ready` pour déclencher l'ouverture du
+// fichier de lancement une fois le listener en place. Renvoie un unlisten.
+export async function onOpenFile(handler: (path: string) => void): Promise<() => void> {
+  if (!isTauri) return () => {}
+  const { listen, emit } = await import('@tauri-apps/api/event')
+  const unlisten = await listen<string>('doku://open', (event) => handler(event.payload))
+  await emit('doku://ready')
+  return unlisten
+}
+
 // Liste un dossier (natif). [] en mode navigateur.
 export async function readDirectory(path: string): Promise<FsEntry[]> {
   if (!isTauri) return []

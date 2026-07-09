@@ -9,7 +9,7 @@
 
 | # | Story | Size | Priority | Status | Notes |
 |---|-------|------|----------|--------|-------|
-| 2.3 | Instance unique + double-clic/association de fichiers | M | P0 | TODO | plugin single-instance déjà présent ; ajouter `fileAssociations` NSIS + ouverture par argument/CLI ; smoke tests natifs tôt |
+| 2.3 | Instance unique + double-clic/association de fichiers | M | P0 | Review | Rust : 2e instance → focus + `doku://open` ; 1er lancement → arg émis via handshake `doku://ready` ; frontend `onOpenFile`→`openPath` ; associations NSIS `.md`/`.html` + `bundle.active`. `cargo check` OK, typecheck OK. Smoke test natif (2e instance + build/install pour assoc) = utilisateur |
 | 1.4 | Sanitization du HTML inline (allowlist) | S | P0 | ✅ Done | Chemin markdown (CM6) sûr par construction (HTML = texte, non exécuté) ; primitive `sanitizeHtml` (DOMPurify) + 6 tests, prête pour la vue HTML (FR-8) |
 | 4.1 | Explorateur de dossier réel (remplace la démo) | M | P1 | ✅ Done | Listing/tri/filtre/navigation + clic→onglet ; 14 tests unitaires ; scan de vrai dossier validé en natif |
 | 4.2 | État sidebar persistant (masquée par défaut) | S | P1 | ✅ Done | Couche settings `loadSettings`/`saveSettings` (localStorage `doku-settings`) ; défaut masquée ; persistance validée Playwright (reload) |
@@ -25,6 +25,9 @@ _None_
 - Rappel process (rétro S1) : itérations design/logo **hors stories** ; smoke tests natifs **tôt** (surtout 2.3)
 
 ### 2026-07-09 — 4.1
+### 2026-07-09 — 2.3 (implémentation)
+- **2.3** → Review : hôte Rust étendu (toujours minimal) — callback single-instance remonte la fenêtre (show/unminimize/focus) + émet `doku://open` avec le fichier des args ; `setup` émet le fichier de lancement après handshake `doku://ready` (pas de délai arbitraire). Frontend : `onOpenFile` (listen `doku://open` → `openPath`, émet `doku://ready`). Config : `fileAssociations` `.md`/`.markdown` + `.html`/`.htm` (`.txt` volontairement non forcé, PRD Q3), `bundle.active: true`, permission `core:event:default`. `cargo check` vert (API Emitter/Listener OK), typecheck 0/0. Reste : smoke test natif (2e instance forward + `tauri build`/install pour les associations).
+
 ### 2026-07-09 — smoke tests natifs
 - **2.5** ✅ **Done** : restauration de session + bannière « fichier introuvable » validées en natif par l'utilisateur.
 - **3.4 (quit fenêtre)** confirmé en natif : fermer l'app avec un onglet non enregistré demande confirmation, et se ferme normalement sinon (pas de blocage).
