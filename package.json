@@ -24,11 +24,13 @@
     "@tauri-apps/plugin-dialog": "^2.7.0",
     "@tauri-apps/plugin-fs": "^2.5.0",
     "codemirror": "^6.0.1",
+    "dompurify": "^3.4.11",
     "material-symbols": "^0.36.0"
   },
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "^7.0.0",
     "@tauri-apps/cli": "^2.10.0",
+    "jsdom": "^29.1.1",
     "svelte": "^5.55.0",
     "svelte-check": "^4.4.0",
     "typescript": "~6.0.2",
