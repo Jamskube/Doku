@@ -53,9 +53,12 @@ _Append via `/start learn <type>: <lesson>`. NEVER delete this section on update
 ### Gotchas
 <!-- non-obvious behaviors discovered -->
 - [2026-07-08] CodeMirror 6 ne rend que le viewport : tout test DOM/Playwright sur l'éditeur doit d'abord scroller la cible en vue ; un conteneur scrollable externe garde son scrollTop entre `setState`
+- [2026-07-08] tauri-build exige `icons/icon.ico` même avec `bundle.active: false` — et l'erreur ne tombe qu'en toute fin de compilation (~350/370 crates)
+- [2026-07-08] Svelte 5 élague les sélecteurs CSS scopés « inutilisés » : une classe posée en JS (`classList`) est invisible pour le compilateur → toujours déclarer via `class:` dans le template (le warning `css_unused_selector` est un vrai signal)
 
 ### Workarounds
 <!-- working solutions to known issues -->
+- [2026-07-08] `fs:default` (plugin-fs Tauri) ne couvre pas la lecture/écriture hors dossiers app → déclarer explicitement `fs:allow-read-text-file`, `fs:allow-write-text-file`, `fs:allow-rename` avec un scope dans `capabilities/default.json`
 
 ### Performance Notes
 <!-- perf learnings -->

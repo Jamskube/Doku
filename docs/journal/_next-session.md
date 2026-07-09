@@ -1,13 +1,13 @@
 # Next session pointer
-_Updated: 2026-07-08 13:05_
+_Updated: 2026-07-08 19:05_
 
 ## Where I left off
-Jalon M0 (architecture) terminé et poussé : PRD, spec UX validée, architecture, 4 ADRs accepted, spike S0 exécuté avec verdict mesuré — le moteur d'édition sera **CodeMirror 6 live preview** (base réutilisable : `spike/src/live-preview.ts`). En parallèle, l'utilisateur fait produire les maquettes par Claude design à partir de `docs/planning/claude-design-prompt.md` — les intégrer quand elles arrivent (tokens AIR, 5 écrans W1-W5, thèmes crème + sombre).
+**L'app tourne en natif** : `npm run tauri dev` compile et lance la fenêtre Doku (sans décorations, icône D, validée visuellement par l'utilisateur). Le shell W1 est fidèle à la maquette (onglets Chrome-style sans filet — retiré à la demande —, sidebar ruban+panneau repliable à 0 px, crème/sombre) et l'éditeur CM6 live preview fonctionne (checkboxes, wikilinks, mode source Ctrl+/). Contenu = démo en mémoire ; l'ouverture/sauvegarde réelles (`Ctrl+O`/`Ctrl+S` via plugin-dialog/fs) sont câblées mais **pas encore testées en natif**.
 
 ## Open work
-- Branch: main (clean, synchronisé avec origin)
+- Branch: main — **1 fichier non commité attendu** (`docs/journal/*` + AGENTS.md memories de cette clôture) ; tout le reste est poussé (`2e099f3`)
 - Open PRs: aucune
-- Drafts/plans: tout `docs/planning/` est à jour ; pas de plan d'implémentation encore (`docs/plans/` vide)
+- Reste W1/M1 : tester ouverture/sauvegarde natives · vrai explorateur de dossier (FR-6, remplacer la démo) · SnapshotService (FR-12, ADR-0003) · widgets tableaux/images dans l'éditeur · mini-barre de sélection · écrans W3 (accueil), W4 (focus), W5 (bannières) — maquettes à faire côté Claude design (« on rajoutera des choses plus tard »)
 
 ## Next concrete step
-`/gate readiness` pour valider le passage en implémentation, puis `/epics` (découpage M1 — socle lecteur : ouvrir/lire/onglets, scaffolding Tauri+Svelte dans `src/`).
+Lancer `npm run tauri dev`, tester Ctrl+O/Ctrl+S sur de vrais fichiers (+ épinglage 📌 et drag de fenêtre), corriger ce qui accroche, puis attaquer le vrai explorateur de dossier (FR-6) — ou `/epics` pour structurer le reste de M1.
