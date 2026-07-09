@@ -1,5 +1,6 @@
 // Contenu de démonstration (mode navigateur / premier lancement) — reprend la maquette W1.
 import type { DocKind } from './stores.svelte'
+import type { FsEntry } from './explorer'
 
 const NOTES_MD = `# Mes notes de projet
 
@@ -59,4 +60,15 @@ export const DEMO_TABS: { name: string; path: string | null; content: string; ki
   { name: 'notes.md', path: 'G:\\Notes\\notes.md', content: NOTES_MD, kind: 'md' },
   { name: 'idées.md', path: 'G:\\Notes\\idées.md', content: IDEES_MD, kind: 'md' },
   { name: 'recette.html', path: 'G:\\Notes\\recette.html', content: RECETTE_HTML, kind: 'html' },
+]
+
+// Dossier de démonstration (mode navigateur) pour visualiser l'explorateur (FR-6).
+export const DEMO_DIR: FsEntry[] = [
+  { name: 'Projets', isDir: true },
+  { name: 'archives', isDir: true },
+  { name: 'notes.md', isDir: false },
+  { name: 'idées.md', isDir: false },
+  { name: 'recette.html', isDir: false },
+  { name: 'todo.md', isDir: false },
+  { name: 'image.png', isDir: false },
 ]

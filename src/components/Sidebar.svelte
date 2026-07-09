@@ -1,17 +1,37 @@
 <script lang="ts">
-  import { app, activeTab, docHeadings, isDirty, scrollToLine, toggleSidebarView } from '../lib/stores.svelte'
+  import { app, activeTab, docHeadings, isDirty, openPath, scrollToLine, toggleSidebarView } from '../lib/stores.svelte'
+  import { baseName, joinPath, parentPath, visibleEntries, type FsEntry } from '../lib/explorer'
+  import { isTauri, readDirectory } from '../lib/tauri'
+  import { DEMO_DIR } from '../lib/demo'
   import DokuMark from '../lib/DokuMark.svelte'
 
   const headings = $derived(docHeadings(activeTab()?.content ?? ''))
 
-  function openByName(name: string) {
-    const tab = app.tabs.find((t) => t.name === name)
-    if (tab) app.activeId = tab.id
-  }
+  // Dossier explorateur : navigation explicite, sinon dossier du document actif.
+  const targetDir = $derived(app.explorerDir ?? parentPath(activeTab()?.path ?? null))
+  let entries = $state<FsEntry[]>([])
 
-  function tabDirty(name: string): boolean {
-    const tab = app.tabs.find((t) => t.name === name)
-    return tab ? isDirty(tab) : false
+  $effect(() => {
+    const dir = targetDir
+    if (!dir) {
+      entries = []
+      return
+    }
+    let cancelled = false
+    ;(async () => {
+      const raw = isTauri ? await readDirectory(dir) : DEMO_DIR
+      if (!cancelled) entries = visibleEntries(raw)
+    })()
+    return () => {
+      cancelled = true
+    }
+  })
+
+  function openEntry(entry: FsEntry) {
+    if (!targetDir) return
+    const full = joinPath(targetDir, entry.name)
+    if (entry.isDir) app.explorerDir = full
+    else openPath(full)
   }
 </script>
 
@@ -54,41 +74,33 @@
 
       <div class="panel-body">
         {#if app.sidebarView === 'files'}
-          <!-- Arborescence de démonstration (le vrai explorateur arrive avec FR-6) -->
-          <button class="row folder">
-            <span class="msr chev">keyboard_arrow_down</span>
-            <span class="msr fold">folder</span>
-            <span class="label strong">Projets</span>
-          </button>
-          <div class="children">
-            <button class="row folder">
-              <span class="msr chev">keyboard_arrow_down</span>
-              <span class="msr fold">folder</span>
-              <span class="label strong">SoundNodes</span>
-            </button>
-            <div class="children">
-              <button class="row file"><span class="label">_index</span></button>
-              <button class="row file"><span class="label">Audience</span></button>
-              <button class="row file"><span class="label grow">Fiche-remise</span><span class="chip">PDF</span></button>
-            </div>
-          </div>
-          <button class="row folder">
-            <span class="msr chev">chevron_right</span>
-            <span class="msr fold">folder</span>
-            <span class="label strong">archives</span>
-          </button>
-
-          <div style="height:6px"></div>
-
-          <button class="row file root" class:current={activeTab()?.name === 'notes.md'} onclick={() => openByName('notes.md')}>
-            <span class="label grow strong-if-current">notes</span>
-            {#if tabDirty('notes.md')}<span class="filedot">●</span>{/if}
-          </button>
-          <button class="row file root" class:current={activeTab()?.name === 'idées.md'} onclick={() => openByName('idées.md')}>
-            <span class="label grow">idées</span>
-          </button>
-          <button class="row file root"><span class="label grow">todo</span></button>
-          <button class="row file root"><span class="label grow">image</span><span class="chip">PNG</span></button>
+          {#if targetDir}
+            <div class="crumb">{baseName(targetDir)}</div>
+            {#if parentPath(targetDir)}
+              <button class="row up" onclick={() => (app.explorerDir = parentPath(targetDir))}>
+                <span class="msr fold">drive_folder_upload</span>
+                <span class="label">..</span>
+              </button>
+            {/if}
+            {#each entries as entry (entry.name)}
+              {@const full = joinPath(targetDir, entry.name)}
+              {@const open = app.tabs.find((t) => t.path === full)}
+              <button
+                class="row"
+                class:current={!entry.isDir && activeTab()?.path === full}
+                title={entry.name}
+                onclick={() => openEntry(entry)}
+              >
+                <span class="msr fold">{entry.isDir ? 'folder' : 'description'}</span>
+                <span class="label grow" class:strong={entry.isDir}>{entry.name}</span>
+                {#if open && isDirty(open)}<span class="filedot">●</span>{/if}
+              </button>
+            {:else}
+              <p class="empty">Dossier vide</p>
+            {/each}
+          {:else}
+            <p class="empty">Ouvrez un fichier pour explorer son dossier</p>
+          {/if}
         {:else if app.sidebarView === 'plan'}
           <div class="plan">
             {#each headings as h, i (h.line)}
@@ -215,25 +227,22 @@
     text-align: left;
   }
   .row:hover { background: var(--surface-hover); color: var(--ink); }
-  .row.file { padding-left: 23px; color: var(--ink-3); gap: 6px; }
-  .row.file.root { padding: 0 8px 0 25px; }
-  .row.file.current { background: var(--accent-soft); color: var(--ink); }
-  .row.file.current .label { font-weight: 500; }
-  .children { margin-left: 14px; border-left: 1px solid var(--line-1); padding-left: 3px; }
-  .chev { font-size: 20px; color: var(--ink-4); }
+  .row.current { background: var(--accent-soft); color: var(--ink); }
+  .row.current .label { font-weight: 500; }
+  .row.up { color: var(--ink-4); }
   .fold { font-size: 19px; color: var(--ink-4); }
-  .label { font-size: 13px; }
+  .label { font-size: 13px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .label.strong { font-weight: 500; }
   .label.grow { flex: 1; }
-  .filedot { font-size: 8px; color: var(--ink); }
-  .chip {
-    font-family: var(--font-mono);
-    font-size: 8.5px;
-    letter-spacing: 0.06em;
-    color: var(--ink-5);
-    border: 1px solid var(--line-2);
-    border-radius: 4px;
-    padding: 1px 4px;
+  .filedot { font-size: 8px; color: var(--ink); flex-shrink: 0; }
+  .crumb {
+    font-size: 11px;
+    color: var(--ink-4);
+    font-weight: 500;
+    padding: 2px 8px 6px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .plan { padding-top: 4px; }

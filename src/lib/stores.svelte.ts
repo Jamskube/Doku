@@ -1,7 +1,8 @@
 import type { EditorView } from '@codemirror/view'
 import { DEMO_TABS } from './demo'
 import { detectLineEnding } from './editor/editor'
-import { isTauri, writeTextFileAtomic } from './tauri'
+import { baseName } from './explorer'
+import { isTauri, readTextFileAt, writeTextFileAtomic } from './tauri'
 
 export type DocKind = 'md' | 'html' | 'txt'
 export type SidebarView = 'files' | 'plan' | 'history'
@@ -26,6 +27,8 @@ export const app = $state({
   sourceMode: false,
   tabs: [] as DocTab[],
   activeId: 0,
+  // Dossier affiché par l'explorateur ; null = suit le dossier du document actif.
+  explorerDir: null as string | null,
 })
 
 // Accès non réactif à la vue CM6 courante (scroll TOC, sauvegarde…)
@@ -85,7 +88,21 @@ export function openTab(name: string, path: string | null, content: string, kind
   }
   app.tabs.push(tab)
   app.activeId = tab.id
+  // Ouvrir un fichier resynchronise l'explorateur sur son dossier.
+  app.explorerDir = null
   return tab
+}
+
+// Ouvre un fichier par chemin (clic dans l'explorateur). No-op en navigateur.
+export async function openPath(path: string) {
+  const existing = app.tabs.find((t) => t.path === path)
+  if (existing) {
+    app.activeId = existing.id
+    return
+  }
+  const content = await readTextFileAt(path)
+  if (content == null) return
+  openTab(baseName(path), path, content)
 }
 
 export function closeTab(id: number) {

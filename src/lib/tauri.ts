@@ -1,7 +1,24 @@
+import type { FsEntry } from './explorer'
+
 // Garde Tauri : toutes les APIs natives passent ici, avec repli silencieux en
 // mode navigateur (dev UI). ADR-0004 : plugins officiels uniquement, écriture
 // atomique composée côté TS (tmp + rename).
 export const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
+
+// Liste un dossier (natif). [] en mode navigateur.
+export async function readDirectory(path: string): Promise<FsEntry[]> {
+  if (!isTauri) return []
+  const { readDir } = await import('@tauri-apps/plugin-fs')
+  const entries = await readDir(path)
+  return entries.map((e) => ({ name: e.name, isDir: e.isDirectory }))
+}
+
+// Lit le contenu texte d'un fichier (natif). null en mode navigateur.
+export async function readTextFileAt(path: string): Promise<string | null> {
+  if (!isTauri) return null
+  const { readTextFile } = await import('@tauri-apps/plugin-fs')
+  return readTextFile(path)
+}
 
 export async function minimizeWindow() {
   if (!isTauri) return
