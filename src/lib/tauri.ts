@@ -1,4 +1,4 @@
-import type { FsEntry } from './explorer'
+import { joinPath, type FsEntry } from './explorer'
 
 // Garde Tauri : toutes les APIs natives passent ici, avec repli silencieux en
 // mode navigateur (dev UI). ADR-0004 : plugins officiels uniquement, écriture
@@ -22,6 +22,30 @@ export async function readDirectory(path: string): Promise<FsEntry[]> {
   const { readDir } = await import('@tauri-apps/plugin-fs')
   const entries = await readDir(path)
   return entries.map((e) => ({ name: e.name, isDir: e.isDirectory }))
+}
+
+// Scanne récursivement un dossier et renvoie tous les fichiers (chemin + nom).
+// Profondeur bornée ; [] en mode navigateur. Sert au résolveur de wikilinks.
+export async function scanFiles(dir: string, maxDepth = 4): Promise<{ path: string; name: string }[]> {
+  if (!isTauri) return []
+  const { readDir } = await import('@tauri-apps/plugin-fs')
+  const out: { path: string; name: string }[] = []
+  const walk = async (d: string, depth: number) => {
+    if (depth > maxDepth) return
+    let entries
+    try {
+      entries = await readDir(d)
+    } catch {
+      return
+    }
+    for (const e of entries) {
+      const full = joinPath(d, e.name)
+      if (e.isDirectory) await walk(full, depth + 1)
+      else out.push({ path: full, name: e.name })
+    }
+  }
+  await walk(dir, 0)
+  return out
 }
 
 // Lit le contenu texte d'un fichier (natif). null en mode navigateur.

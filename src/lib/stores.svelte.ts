@@ -1,8 +1,9 @@
 import type { EditorView } from '@codemirror/view'
-import { DEMO_TABS } from './demo'
+import { DEMO_DIR, DEMO_TABS } from './demo'
 import { detectLineEnding } from './editor/editor'
-import { baseName } from './explorer'
-import { isTauri, readTextFileAt, writeTextFileAtomic } from './tauri'
+import { baseName, joinPath, parentPath } from './explorer'
+import { isTauri, readTextFileAt, scanFiles, writeTextFileAtomic } from './tauri'
+import { matchWikilink, normalizeTarget } from './wikilink'
 
 export type DocKind = 'md' | 'html' | 'txt'
 export type SidebarView = 'files' | 'plan' | 'history'
@@ -172,6 +173,25 @@ export function openTab(name: string, path: string | null, content: string, kind
   // Ouvrir un fichier resynchronise l'explorateur sur son dossier.
   app.explorerDir = null
   return tab
+}
+
+// Résout et ouvre un wikilink `[[note]]` (FR-7) : d'abord un onglet déjà ouvert
+// du même nom, sinon le fichier dans le dossier du doc actif (+ sous-dossiers).
+// Cible absente → no-op (création = story 4.5).
+export async function openWikilink(target: string) {
+  const t = normalizeTarget(target)
+  const open = app.tabs.find((tab) => normalizeTarget(tab.name) === t)
+  if (open) {
+    app.activeId = open.id
+    return
+  }
+  const base = parentPath(activeTab()?.path ?? null)
+  if (!base) return
+  const files = isTauri
+    ? await scanFiles(base)
+    : DEMO_DIR.filter((e) => !e.isDir).map((e) => ({ name: e.name, path: joinPath(base, e.name) }))
+  const path = matchWikilink(target, files)
+  if (path) await openPath(path)
 }
 
 // Ouvre un fichier par chemin (clic dans l'explorateur). No-op en navigateur.

@@ -4,7 +4,7 @@
   import TitleBar from './components/TitleBar.svelte'
   import DocumentView from './components/DocumentView.svelte'
   import ConfirmDialog from './components/ConfirmDialog.svelte'
-  import { app, activeTab, askSave, cycleTab, dialog, initApp, isDirty, openPath, openTab, requestCloseTab, saveSession, saveSettings, saveTab, toggleSidebarView } from './lib/stores.svelte'
+  import { app, activeTab, askSave, cycleTab, dialog, initApp, isDirty, openPath, openTab, openWikilink, requestCloseTab, saveSession, saveSettings, saveTab, toggleSidebarView } from './lib/stores.svelte'
   import { onOpenFile, onWindowCloseRequested, openFileDialog } from './lib/tauri'
 
   // Persiste les préférences (thème, état sidebar) à chaque changement — les lectures
@@ -98,9 +98,7 @@
     }
 
     const onWikilink = (e: Event) => {
-      const target = (e as CustomEvent<string>).detail
-      const existing = app.tabs.find((t) => t.name.replace(/\.(md|markdown)$/i, '') === target)
-      if (existing) app.activeId = existing.id
+      openWikilink((e as CustomEvent<string>).detail)
     }
 
     window.addEventListener('keydown', onKey)
