@@ -3,15 +3,15 @@
 **Goal** : Lire comme un document fini — rendu riche (code coloré, images), wikilinks navigables, et confort de lecture (largeur, focus).
 **Start** : 2026-07-09
 **End** : 2026-07-16
-**Status** : Completed (code) 2026-07-09 — voir `retro-sprint-3.md` ; **4.4 & 1.5 en Review** (validation native en attente)
+**Status** : Completed (2026-07-09) — 5/5 `passes:true` ; voir `retro-sprint-3.md`
 
 ## Stories
 
 | # | Story | Size | Priority | Status | Notes |
 |---|-------|------|----------|--------|-------|
 | 1.3 | Rendu GFM : coloration des blocs de code | M | P0 | ✅ Done | Coloration déjà via `codeLanguages` ; `dokuHighlight` enrichi (types/fonctions/propriétés/opérateurs/bool) ; validé JS + TS (Playwright) |
-| 1.5 | Images locales (relatives + placeholder) | S | P1 | Review | Widget image live-preview + résolution (`images.ts`, 6 tests) + `convertFileSrc` + assetProtocol ; placeholder validé Playwright ; affichage d'une vraie image locale = smoke test natif |
-| 4.4 | Résolution & navigation des wikilinks | M | P1 | Review | `wikilink.ts` (`normalizeTarget`/`matchWikilink`, 7 tests) + `scanFiles` récursif ; clic → onglet ouvert (validé Playwright) ou fichier du dossier (scan disque = smoke test natif) |
+| 1.5 | Images locales (relatives + placeholder) | S | P1 | ✅ Done | Widget image + résolution (`images.ts`, 6 tests) + `convertFileSrc`/assetProtocol ; vraie image + placeholder validés natif |
+| 4.4 | Résolution & navigation des wikilinks | M | P1 | ✅ Done | `wikilink.ts` (7 tests) + `scanFiles` récursif ; clic → ouvre le fichier du dossier ; validé natif |
 | 6.2 | Largeur de colonne réglable (3 crans) | S | P1 | ✅ Done | Variable `--doc-width` (680/820/none) pilotée par bouton doc-head ; persistée (settings) ; validé Playwright |
 | 6.3 | Mode focus (masque le chrome) | S | P1 | ✅ Done | `app.focus` (transitoire) ; F9 bascule, Échap sort ; masque titlebar/sidebar/doc-head/bannière ; validé Playwright |
 
