@@ -40,7 +40,9 @@
         for (const t of dirty) if (!(await saveTab(t))) return false
       }
       return true
-    }).then((u) => (unlistenClose = u))
+    })
+      .then((u) => (unlistenClose = u))
+      .catch((err) => console.error('Enregistrement du garde de fermeture échoué', err))
 
     const onKey = async (e: KeyboardEvent) => {
       if (dialog.open) return

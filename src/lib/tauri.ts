@@ -52,7 +52,15 @@ export async function onWindowCloseRequested(handler: () => Promise<boolean>): P
   const unlisten = await win.onCloseRequested(async (event) => {
     if (allowed) return
     event.preventDefault()
-    if (await handler()) {
+    let ok = false
+    try {
+      ok = await handler()
+    } catch (err) {
+      // Ne jamais piéger la fenêtre : en cas d'erreur, on autorise la fermeture.
+      console.error('Garde de fermeture: erreur, fermeture autorisée', err)
+      ok = true
+    }
+    if (ok) {
       allowed = true
       await win.close()
     }
