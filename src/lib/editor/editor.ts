@@ -25,8 +25,12 @@ const dokuHighlight = HighlightStyle.define([
   { tag: tags.meta, color: 'var(--ink-4)' },
   { tag: tags.comment, fontFamily: 'var(--font-mono)', color: 'var(--ink-4)' },
   { tag: tags.keyword, color: 'var(--ink)', fontWeight: '500' },
-  { tag: [tags.string, tags.special(tags.string)], color: 'var(--ok)' },
-  { tag: tags.number, color: 'var(--warn)' },
+  { tag: [tags.string, tags.special(tags.string), tags.regexp, tags.escape], color: 'var(--ok)' },
+  { tag: [tags.number, tags.bool, tags.atom, tags.null, tags.constant(tags.variableName)], color: 'var(--warn)' },
+  { tag: [tags.function(tags.variableName), tags.function(tags.propertyName)], color: 'var(--ink)', fontWeight: '500' },
+  { tag: [tags.typeName, tags.className, tags.namespace], color: 'var(--ink-2)', fontWeight: '500' },
+  { tag: [tags.propertyName, tags.attributeName, tags.variableName, tags.definition(tags.variableName)], color: 'var(--ink-2)' },
+  { tag: [tags.operator, tags.punctuation, tags.separator, tags.bracket, tags.derefOperator], color: 'var(--ink-3)' },
 ])
 
 const dokuTheme = EditorView.theme({
