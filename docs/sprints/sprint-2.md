@@ -3,13 +3,13 @@
 **Goal** : Doku devient l'app qu'on double-clique et dans laquelle on navigue — instance unique, vrai explorateur de dossier, session restaurée, contenu sûr.
 **Start** : 2026-07-09
 **End** : 2026-07-16
-**Status** : Active
+**Status** : Completed (2026-07-09) — voir `retro-sprint-2.md`
 
 ## Stories
 
 | # | Story | Size | Priority | Status | Notes |
 |---|-------|------|----------|--------|-------|
-| 2.3 | Instance unique + double-clic/association de fichiers | M | P0 | Review | Rust : 2e instance → focus + `doku://open` ; 1er lancement → arg émis via handshake `doku://ready` ; frontend `onOpenFile`→`openPath` ; associations NSIS `.md`/`.html` + `bundle.active`. `cargo check` OK, typecheck OK. Smoke test natif (2e instance + build/install pour assoc) = utilisateur |
+| 2.3 | Instance unique + double-clic/association de fichiers | M | P0 | ✅ Done | Instance unique + ouverture par argument + associations NSIS validées en natif (release ARM64) |
 | 1.4 | Sanitization du HTML inline (allowlist) | S | P0 | ✅ Done | Chemin markdown (CM6) sûr par construction (HTML = texte, non exécuté) ; primitive `sanitizeHtml` (DOMPurify) + 6 tests, prête pour la vue HTML (FR-8) |
 | 4.1 | Explorateur de dossier réel (remplace la démo) | M | P1 | ✅ Done | Listing/tri/filtre/navigation + clic→onglet ; 14 tests unitaires ; scan de vrai dossier validé en natif |
 | 4.2 | État sidebar persistant (masquée par défaut) | S | P1 | ✅ Done | Couche settings `loadSettings`/`saveSettings` (localStorage `doku-settings`) ; défaut masquée ; persistance validée Playwright (reload) |
@@ -32,6 +32,10 @@ _None_
 - **2.5** ✅ **Done** : restauration de session + bannière « fichier introuvable » validées en natif par l'utilisateur.
 - **3.4 (quit fenêtre)** confirmé en natif : fermer l'app avec un onglet non enregistré demande confirmation, et se ferme normalement sinon (pas de blocage).
 - Icône barre des tâches (nouveau logo) confirmée.
+- **2.3** ✅ **Done** : validé en natif sur build **release ARM64** — instance unique (2e lancement → focus + ouverture dans l'instance existante), 1er lancement avec argument, associations `.md`/`.html` après install NSIS.
+- **Bug fermeture (release)** : le X ne fermait pas — le garde `onCloseRequested` rappelait `close()` (ré-entrance qui ne se propage pas en release). Corrigé : `destroy()` + permission `core:window:allow-destroy` (commit `fix: fermeture fenêtre via destroy`). Validé en dev.
+- Build release produit exe + NSIS + MSI **ARM64 natif** (`Target: arm64`) — bon présage pour l'épic Distribution (8.x).
+- **Sprint 2 complet : 5/5 `passes:true`.**
 
 ### 2026-07-09 — 2.5 (implémentation)
 - **2.5** → Review : session persistée en localStorage `doku-session` (chemins d'onglets + `activePath` ; **contenu non stocké** — source de vérité = disque, relu à la restauration). Sauvegarde débouncée 500ms (`$effect`) + flush au quit ; drapeau `sessionReady` anti-écrasement pendant le chargement. `restoreSession` (natif) relit chaque fichier ; fichier disparu → **retiré + signalé** via `app.banner` (bannière warn dismissible, primitive réutilisable W5). Validé Playwright : structure de save (switch onglet → `activePath` MAJ), rendu bannière. Reste : restauration réelle en natif.

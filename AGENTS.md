@@ -57,6 +57,9 @@ _Append via `/start learn <type>: <lesson>`. NEVER delete this section on update
 - [2026-07-08] Svelte 5 élague les sélecteurs CSS scopés « inutilisés » : une classe posée en JS (`classList`) est invisible pour le compilateur → toujours déclarer via `class:` dans le template (le warning `css_unused_selector` est un vrai signal)
 - [2026-07-09] CodeMirror 6 : `state.doc.toString()` renvoie **toujours** du `\n` ; le facet `lineSeparator` n'agit que sur le découpage, pas la sérialisation. Pour préserver le round-trip (fichiers CRLF), détecter la fin de ligne du fichier et la restituer soi-même (`detectLineEnding` + `serializeDoc`, `src/lib/editor/editor.ts`)
 - [2026-07-09] Icône barre des tâches Windows = **double cache** : l'icône est gravée dans l'exe **au build** (ajouter `println!("cargo:rerun-if-changed=icons/icon.ico")` dans `build.rs`, sinon `tauri dev` ne la ré-embarque pas) ET Windows cache la miniature (`ie4uinit.exe -show`, ou reset Explorer). Toujours rebuild propre + vider le cache avant de conclure
+- [2026-07-09] Tauri v2 : **ne jamais rappeler `window.close()` depuis un handler `onCloseRequested`** — la ré-entrance ne se propage pas (surtout en profil **release** : la fenêtre ne se ferme plus). Après confirmation, utiliser `window.destroy()` (+ permission `core:window:allow-destroy`)
+- [2026-07-09] Certains comportements natifs (fermeture de fenêtre, `windows_subsystem`) **diffèrent entre dev (debug) et release** → smoke-tester en **build release** avant de marquer « done » une story fenêtre/OS (le bug de fermeture ci-dessus n'apparaissait qu'en release)
+- [2026-07-09] **DOMPurify est incompatible avec happy-dom** (sanitization dégradée : déstructure le HTML au lieu de le nettoyer) → tester avec **jsdom** (`// @vitest-environment jsdom`)
 
 ### Workarounds
 <!-- working solutions to known issues -->
