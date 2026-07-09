@@ -60,6 +60,7 @@ _Append via `/start learn <type>: <lesson>`. NEVER delete this section on update
 - [2026-07-09] Tauri v2 : **ne jamais rappeler `window.close()` depuis un handler `onCloseRequested`** — la ré-entrance ne se propage pas (surtout en profil **release** : la fenêtre ne se ferme plus). Après confirmation, utiliser `window.destroy()` (+ permission `core:window:allow-destroy`)
 - [2026-07-09] Certains comportements natifs (fermeture de fenêtre, `windows_subsystem`) **diffèrent entre dev (debug) et release** → smoke-tester en **build release** avant de marquer « done » une story fenêtre/OS (le bug de fermeture ci-dessus n'apparaissait qu'en release)
 - [2026-07-09] **DOMPurify est incompatible avec happy-dom** (sanitization dégradée : déstructure le HTML au lieu de le nettoyer) → tester avec **jsdom** (`// @vitest-environment jsdom`)
+- [2026-07-09] CodeMirror 6 : **ne pas muter le DOM d'un `WidgetType` via `replaceWith`** — CM6 réconcilie et clobber la modif (le widget disparaît). Retourner un **conteneur stable** (span) et muter son contenu/classe (ex. `<img>` → placeholder à l'erreur de chargement dans `live-preview.ts`)
 
 ### Workarounds
 <!-- working solutions to known issues -->

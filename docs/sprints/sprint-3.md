@@ -3,7 +3,7 @@
 **Goal** : Lire comme un document fini — rendu riche (code coloré, images), wikilinks navigables, et confort de lecture (largeur, focus).
 **Start** : 2026-07-09
 **End** : 2026-07-16
-**Status** : Active
+**Status** : Completed (code) 2026-07-09 — voir `retro-sprint-3.md` ; **4.4 & 1.5 en Review** (validation native en attente)
 
 ## Stories
 
