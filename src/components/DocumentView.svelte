@@ -5,6 +5,8 @@
   import { app, activeTab, editorRef, isDirty } from '../lib/stores.svelte'
   import { baseExtensions, livePreviewComp, previewExtensions, sourceExtensions } from '../lib/editor/editor'
 
+  let { onOpen }: { onOpen: () => void } = $props()
+
   let host: HTMLElement | undefined = $state()
   let view: EditorView | null = null
   const states = new Map<number, EditorState>()
@@ -54,10 +56,65 @@
     </div>
   {/if}
   <div class="editor-host doku-doc" class:source-mode={app.sourceMode} bind:this={host}></div>
+
+  {#if !activeTab()}
+    <div class="empty">
+      <svg class="empty-mark" width="72" height="72" viewBox="0 0 512 512" fill="none" aria-hidden="true">
+        <path d="M122 132 H275 L378 235 V285 C378 353 326 407 260 407 H122 Z" fill="none" stroke="currentColor" stroke-width="46" stroke-linejoin="round" stroke-linecap="round" />
+        <path d="M275 132 V214 H356" fill="none" stroke="currentColor" stroke-width="46" stroke-linejoin="round" stroke-linecap="round" />
+      </svg>
+      <p class="empty-title">Aucun document ouvert</p>
+      <button class="empty-open" onclick={onOpen}>
+        <span class="msr" style="font-size:18px">folder_open</span>
+        Ouvrir un fichier
+        <span class="keys"><kbd>Ctrl</kbd><kbd>O</kbd></span>
+      </button>
+    </div>
+  {/if}
 </div>
 
 <style>
-  .doc { flex: 1; min-height: 0; display: flex; flex-direction: column; background: var(--cream-content); }
+  .doc { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; background: var(--cream-content); }
+
+  .empty {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 16px;
+    background: var(--cream-content);
+    color: var(--ink-4);
+    user-select: none;
+  }
+  .empty-mark { color: var(--ink-4); opacity: 0.35; }
+  .empty-title { margin: 0; font-size: 14px; color: var(--ink-3); }
+  .empty-open {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 14px;
+    border: 1px solid var(--line-2);
+    border-radius: 9px;
+    background: var(--surface);
+    color: var(--ink-2);
+    font-size: 13px;
+    cursor: pointer;
+    transition: background 140ms ease, color 140ms ease, border-color 140ms ease;
+  }
+  .empty-open:hover { background: var(--surface-hover); color: var(--ink); border-color: var(--line-3); }
+  .empty-open .keys { display: inline-flex; gap: 3px; margin-left: 4px; }
+  .empty-open kbd {
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    line-height: 1;
+    padding: 3px 5px;
+    border-radius: 4px;
+    background: var(--surface-2);
+    color: var(--ink-4);
+    border: 1px solid var(--line-2);
+  }
   .doc-head {
     flex: none;
     max-width: 680px;

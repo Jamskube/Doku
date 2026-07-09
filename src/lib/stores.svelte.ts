@@ -1,5 +1,6 @@
 import type { EditorView } from '@codemirror/view'
 import { DEMO_TABS } from './demo'
+import { isTauri } from './tauri'
 
 export type DocKind = 'md' | 'html' | 'txt'
 export type SidebarView = 'files' | 'plan' | 'history'
@@ -32,7 +33,9 @@ export function initApp() {
   const saved = localStorage.getItem('doku-theme')
   if (saved === 'dark' || saved === 'light') app.theme = saved
   applyTheme()
-  if (app.tabs.length === 0) {
+  // La démo ne sert qu'au mode navigateur (design/dev) ; en natif, l'app est
+  // pilotée par de vrais fichiers (Ctrl+O, associations) — story 1.1.
+  if (app.tabs.length === 0 && !isTauri) {
     for (const d of DEMO_TABS) openTab(d.name, d.path, d.content, d.kind)
     app.activeId = app.tabs[0]?.id ?? 0
   }

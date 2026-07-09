@@ -14,8 +14,13 @@
   }
 
   async function openFromDialog() {
-    const file = await openFileDialog()
-    if (file) openTab(file.name, file.path, file.content)
+    try {
+      const file = await openFileDialog()
+      if (file) openTab(file.name, file.path, file.content)
+    } catch (err) {
+      // UX d'erreur complète (encodage/binaire) : story 1.2
+      console.error('Ouverture du fichier échouée', err)
+    }
   }
 
   onMount(() => {
@@ -73,7 +78,7 @@
     <TitleBar onOpen={openFromDialog} />
     <div class="stage">
       <div class="page">
-        <DocumentView />
+        <DocumentView onOpen={openFromDialog} />
       </div>
     </div>
   </div>
