@@ -3,7 +3,7 @@
   import { EditorView } from '@codemirror/view'
   import { EditorState } from '@codemirror/state'
   import { app, activeTab, cycleColumnWidth, editorRef, isDirty } from '../lib/stores.svelte'
-  import { baseExtensions, livePreviewComp, previewExtensions, serializeDoc, sourceExtensions } from '../lib/editor/editor'
+  import { baseExtensions, htmlSourceExtensions, livePreviewComp, previewExtensions, serializeDoc, sourceExtensions } from '../lib/editor/editor'
   import { docDirFacet } from '../lib/editor/live-preview'
   import { parentPath } from '../lib/explorer'
   import { sandboxDoc } from '../lib/html'
@@ -20,18 +20,20 @@
   let renderedId = -1
 
   function makeState(tabId: number, content: string): EditorState {
-    const dir = parentPath(app.tabs.find((t) => t.id === tabId)?.path ?? null) ?? ''
+    const tab = app.tabs.find((t) => t.id === tabId)
+    const dir = parentPath(tab?.path ?? null) ?? ''
+    const extra = [
+      docDirFacet.of(dir),
+      EditorView.updateListener.of((u) => {
+        if (u.docChanged) {
+          const t = app.tabs.find((x) => x.id === tabId)
+          if (t) t.content = serializeDoc(u.state.doc.toString(), t.eol)
+        }
+      }),
+    ]
     return EditorState.create({
       doc: content,
-      extensions: baseExtensions(app.sourceMode, [
-        docDirFacet.of(dir),
-        EditorView.updateListener.of((u) => {
-          if (u.docChanged) {
-            const tab = app.tabs.find((t) => t.id === tabId)
-            if (tab) tab.content = serializeDoc(u.state.doc.toString(), tab.eol)
-          }
-        }),
-      ]),
+      extensions: tab?.kind === 'html' ? htmlSourceExtensions(extra) : baseExtensions(app.sourceMode, extra),
     })
   }
 

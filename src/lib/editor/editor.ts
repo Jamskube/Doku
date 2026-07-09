@@ -2,6 +2,7 @@ import { minimalSetup } from 'codemirror'
 import { EditorView, keymap } from '@codemirror/view'
 import { Compartment, EditorState, type Extension } from '@codemirror/state'
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown'
+import { html } from '@codemirror/lang-html'
 import { languages } from '@codemirror/language-data'
 import { HighlightStyle, syntaxHighlighting } from '@codemirror/language'
 import { tags } from '@lezer/highlight'
@@ -31,6 +32,11 @@ const dokuHighlight = HighlightStyle.define([
   { tag: [tags.typeName, tags.className, tags.namespace], color: 'var(--ink-2)', fontWeight: '500' },
   { tag: [tags.propertyName, tags.attributeName, tags.variableName, tags.definition(tags.variableName)], color: 'var(--ink-2)' },
   { tag: [tags.operator, tags.punctuation, tags.separator, tags.bracket, tags.derefOperator], color: 'var(--ink-3)' },
+  // Balisage (HTML source + HTML inline dans le markdown)
+  { tag: tags.tagName, color: 'var(--ink)', fontWeight: '500' },
+  { tag: tags.attributeName, color: 'var(--ink-2)' },
+  { tag: tags.attributeValue, color: 'var(--ok)' },
+  { tag: tags.angleBracket, color: 'var(--ink-3)' },
 ])
 
 const dokuTheme = EditorView.theme({
@@ -182,6 +188,20 @@ export function baseExtensions(sourceMode: boolean, extra: Extension[] = []): Ex
     markdown({ base: markdownLanguage, codeLanguages: languages }),
     dokuTheme,
     livePreviewComp.of(sourceMode ? sourceExtensions() : previewExtensions()),
+    keymap.of([]),
+    ...extra,
+  ]
+}
+
+// Éditeur source pour les fichiers HTML (FR-8, 5.2) : langage HTML, coloration
+// des balises/attributs via dokuHighlight, sans live preview (le rendu = iframe).
+export function htmlSourceExtensions(extra: Extension[] = []): Extension[] {
+  return [
+    minimalSetup,
+    EditorView.lineWrapping,
+    html(),
+    dokuTheme,
+    syntaxHighlighting(dokuHighlight),
     keymap.of([]),
     ...extra,
   ]
