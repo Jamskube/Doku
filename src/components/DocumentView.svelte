@@ -4,6 +4,7 @@
   import { EditorState } from '@codemirror/state'
   import { app, activeTab, editorRef, isDirty } from '../lib/stores.svelte'
   import { baseExtensions, livePreviewComp, previewExtensions, sourceExtensions } from '../lib/editor/editor'
+  import DokuMark from '../lib/DokuMark.svelte'
 
   let { onOpen }: { onOpen: () => void } = $props()
 
@@ -59,10 +60,7 @@
 
   {#if !activeTab()}
     <div class="empty">
-      <svg class="empty-mark" width="72" height="72" viewBox="0 0 512 512" fill="none" aria-hidden="true">
-        <path d="M122 132 H275 L378 235 V285 C378 353 326 407 260 407 H122 Z" fill="none" stroke="currentColor" stroke-width="46" stroke-linejoin="round" stroke-linecap="round" />
-        <path d="M275 132 V214 H356" fill="none" stroke="currentColor" stroke-width="46" stroke-linejoin="round" stroke-linecap="round" />
-      </svg>
+      <span class="empty-mark"><DokuMark size={64} /></span>
       <p class="empty-title">Aucun document ouvert</p>
       <button class="empty-open" onclick={onOpen}>
         <span class="msr" style="font-size:18px">folder_open</span>
@@ -88,7 +86,7 @@
     color: var(--ink-4);
     user-select: none;
   }
-  .empty-mark { color: var(--ink-4); opacity: 0.35; }
+  .empty-mark { display: inline-flex; color: var(--ink-4); opacity: 0.35; }
   .empty-title { margin: 0; font-size: 14px; color: var(--ink-3); }
   .empty-open {
     display: inline-flex;

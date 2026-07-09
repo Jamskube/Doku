@@ -1,5 +1,6 @@
 <script lang="ts">
   import { app, activeTab, docHeadings, isDirty, scrollToLine, toggleSidebarView } from '../lib/stores.svelte'
+  import DokuMark from '../lib/DokuMark.svelte'
 
   const headings = $derived(docHeadings(activeTab()?.content ?? ''))
 
@@ -18,11 +19,7 @@
   <div class="inner">
     <div class="ribbon">
       <button class="logo" title="Doku" onclick={() => {}}>
-        <svg width="28" height="28" viewBox="0 0 512 512" fill="none">
-          <path d="M122 132 H275 L378 235 V285 C378 353 326 407 260 407 H122 Z" fill="none" stroke="currentColor" stroke-width="52" stroke-linejoin="round" stroke-linecap="round" />
-          <path d="M275 132 V214 H356" fill="none" stroke="currentColor" stroke-width="52" stroke-linejoin="round" stroke-linecap="round" />
-          <path d="M276 167 L330 221 H276 Z" fill="var(--cream-base)" />
-        </svg>
+        <DokuMark size={26} />
       </button>
       <div class="divider"></div>
 

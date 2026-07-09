@@ -1,14 +1,15 @@
-<svg width="1024" height="1024" viewBox="0 0 1024 1024" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
-  <title id="title">Doku</title>
-  <desc id="desc">Doku app icon: white folded-corner D on a black rounded square.</desc>
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- Transparent background -->
 
-  <!-- Black rounded app container -->
+  <!-- Black rounded app container (fills ~90% of the tile) -->
   <rect x="48" y="48" width="928" height="928" rx="200" fill="#000000"/>
 
-  <!-- White D / document mark, centered in the square -->
+  <!-- White D / document mark, recentered and scaled to sit in the middle of the square -->
   <g transform="translate(512 512) scale(1.1) translate(-529 -552)">
     <path fill="#FFFFFF" fill-rule="evenodd" clip-rule="evenodd"
       d="M332 286H520C538 286 548 293 562 307L704 449C735 480 754 532 754 586C754 716 650 818 520 818H332Q304 818 304 790V314Q304 286 332 286M424 370Q396 370 396 398V684Q396 716 428 716H520C596 716 660 655 660 578V458H552V370H424"/>
+
+    <!-- Tiny shadow under the fold -->
     <path fill="#000000" d="M660 458H724L668 472H660Z"/>
   </g>
 </svg>

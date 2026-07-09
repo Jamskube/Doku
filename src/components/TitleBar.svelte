@@ -1,6 +1,7 @@
 <script lang="ts">
   import { app, activeTab, closeTab, isDirty, toggleTheme } from '../lib/stores.svelte'
   import { closeWindow, minimizeWindow, setAlwaysOnTop, toggleMaximizeWindow } from '../lib/tauri'
+  import DokuMark from '../lib/DokuMark.svelte'
 
   let { onOpen }: { onOpen: () => void } = $props()
 
@@ -26,11 +27,7 @@
       onclick={() => (app.sidebarOpen = !app.sidebarOpen)}
     >
       <span class="layer" style:opacity={showLogo ? 1 : 0}>
-        <svg width="25" height="25" viewBox="0 0 512 512" fill="none">
-          <path d="M122 132 H275 L378 235 V285 C378 353 326 407 260 407 H122 Z" fill="none" stroke="currentColor" stroke-width="52" stroke-linejoin="round" stroke-linecap="round" />
-          <path d="M275 132 V214 H356" fill="none" stroke="currentColor" stroke-width="52" stroke-linejoin="round" stroke-linecap="round" />
-          <path d="M276 167 L330 221 H276 Z" fill="var(--cream-base)" />
-        </svg>
+        <DokuMark size={22} />
       </span>
       <span class="layer" style:opacity={showLogo ? 0 : 1}>
         <svg width="20" height="20" viewBox="-0.5 -0.5 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round">

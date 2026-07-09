@@ -1,27 +1,14 @@
-<svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
+<svg width="490" height="572" viewBox="284 266 490 572" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
   <title id="title">Doku rounded mark</title>
-  <desc id="desc">Rounded minimalist black geometric D paper-fold mark.</desc>
+  <desc id="desc">Rounded minimalist D document mark with folded top corner (no background).</desc>
 
-  <!-- Main rounded D / paper outline -->
+  <!-- D document silhouette with folded corner (currentColor for in-app theming; #000 fallback) -->
   <path
-    d="M122 132 H275 L378 235 V285 C378 353 326 407 260 407 H122 Z"
-    fill="none"
-    stroke="#000000"
-    stroke-width="58"
-    stroke-linejoin="round"
-    stroke-linecap="round"/>
+    fill="currentColor"
+    fill-rule="evenodd"
+    clip-rule="evenodd"
+    d="M332 286H520C538 286 548 293 562 307L704 449C735 480 754 532 754 586C754 716 650 818 520 818H332Q304 818 304 790V314Q304 286 332 286M424 370Q396 370 396 398V684Q396 716 428 716H520C596 716 660 655 660 578V458H552V370H424"/>
 
-  <!-- Rounded paper fold cue -->
-  <path
-    d="M275 132 V214 H356"
-    fill="none"
-    stroke="#000000"
-    stroke-width="58"
-    stroke-linejoin="round"
-    stroke-linecap="round"/>
-
-  <!-- Soft negative cut to make the fold lighter/open -->
-  <path
-    d="M276 167 L330 221 H276 Z"
-    fill="#FFFFFF"/>
+  <!-- Tiny fold cue: takes the surface color in-app (var(--cream-content)); cream fallback here -->
+  <path fill="#FDFBF5" d="M660 458H724L668 472H660Z"/>
 </svg>
