@@ -50,7 +50,7 @@
 </script>
 
 <div class="doc">
-  {#if activeTab()}
+  {#if activeTab() && !app.focus}
     {@const tab = activeTab()!}
     <div class="doc-head">
       <span class="caption">{tab.path ?? tab.name} · {isDirty(tab) ? 'modifié' : 'enregistré'}{app.sourceMode ? ' · source' : ''}</span>

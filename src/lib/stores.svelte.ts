@@ -33,6 +33,8 @@ export const app = $state({
   sidebarView: 'files' as SidebarView,
   columnWidth: 'narrow' as ColumnWidth,
   sourceMode: false,
+  // Mode focus (F9) : masque tout le chrome ; transitoire (non persisté).
+  focus: false,
   tabs: [] as DocTab[],
   activeId: 0,
   // Dossier affiché par l'explorateur ; null = suit le dossier du document actif.

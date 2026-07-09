@@ -15,6 +15,6 @@
     { "id": "1.5", "title": "Images locales (relatives + placeholder)", "verify": "image relative affichee (resolue au dossier du fichier) ; image manquante -> placeholder discret", "passes": false, "verified_by": null },
     { "id": "4.4", "title": "Resolution & navigation des wikilinks", "verify": "clic sur [[note]] avec note.md dans le dossier/sous-dossiers -> ouvre l'onglet", "passes": false, "verified_by": null },
     { "id": "6.2", "title": "Largeur de colonne reglable (3 crans)", "verify": "3 crans ~65ch/~80ch/pleine appliques immediatement + persistes", "passes": true, "verified_by": "Playwright : cycle 680/820/none via bouton doc-head, applique immediat, persiste au reload (settings) 2026-07-09" },
-    { "id": "6.3", "title": "Mode focus (masque le chrome)", "verify": "F9 masque titlebar/sidebar/barres ; Echap restaure", "passes": false, "verified_by": null }
+    { "id": "6.3", "title": "Mode focus (masque le chrome)", "verify": "F9 masque titlebar/sidebar/barres ; Echap restaure", "passes": true, "verified_by": "Playwright : F9 -> titlebar/sidebar/doc-head masques, editeur reste ; Echap restaure tout (2026-07-09)" }
   ]
 }

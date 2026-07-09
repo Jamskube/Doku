@@ -67,6 +67,16 @@
 
     const onKey = async (e: KeyboardEvent) => {
       if (dialog.open) return
+      if (e.key === 'F9') {
+        e.preventDefault()
+        app.focus = !app.focus
+        return
+      }
+      if (e.key === 'Escape' && app.focus) {
+        e.preventDefault()
+        app.focus = false
+        return
+      }
       const mod = e.ctrlKey || e.metaKey
       if (!mod) return
       const k = e.key.toLowerCase()
@@ -113,10 +123,10 @@
 </script>
 
 <div class="app">
-  <Sidebar />
+  {#if !app.focus}<Sidebar />{/if}
   <div class="main">
-    <TitleBar onOpen={openFromDialog} />
-    {#if app.banner}
+    {#if !app.focus}<TitleBar onOpen={openFromDialog} />{/if}
+    {#if app.banner && !app.focus}
       <div class="banner" role="status">
         <span class="msr" style="font-size:18px">error</span>
         <span class="banner-msg">{app.banner}</span>

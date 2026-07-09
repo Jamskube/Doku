@@ -13,7 +13,7 @@
 | 1.5 | Images locales (relatives + placeholder) | S | P1 | TODO | résoudre `![](rel.png)` au dossier du fichier via convertFileSrc ; placeholder discret si manquante |
 | 4.4 | Résolution & navigation des wikilinks | M | P1 | Review | `wikilink.ts` (`normalizeTarget`/`matchWikilink`, 7 tests) + `scanFiles` récursif ; clic → onglet ouvert (validé Playwright) ou fichier du dossier (scan disque = smoke test natif) |
 | 6.2 | Largeur de colonne réglable (3 crans) | S | P1 | ✅ Done | Variable `--doc-width` (680/820/none) pilotée par bouton doc-head ; persistée (settings) ; validé Playwright |
-| 6.3 | Mode focus (masque le chrome) | S | P1 | TODO | F9 masque titlebar/sidebar/barres ; Échap restaure |
+| 6.3 | Mode focus (masque le chrome) | S | P1 | ✅ Done | `app.focus` (transitoire) ; F9 bascule, Échap sort ; masque titlebar/sidebar/doc-head/bannière ; validé Playwright |
 
 ## Blockers
 _None_
@@ -24,6 +24,9 @@ _None_
 - Hors périmètre volontaire : 3.7 (widgets tableaux WYSIWYG, L) → futur sprint « éditeur riche »
 - Freebies acquis au S2 à formaliser à l'occasion : 6.1 (thème persistant), 8.1 (build ARM64), 8.2 (installateur + associations)
 - Rappels process (rétros) : design/UI hors stories ; smoke-tester en **release** pour tout ce qui touche fenêtre/OS ; logique pure → tests unitaires
+
+### 2026-07-09 — 6.3
+- **6.3** ✅ **Done** : `app.focus` (transitoire, non persisté). F9 bascule, Échap sort (gérés dans `onKey` avant le check des modificateurs, après le guard `dialog.open`). App masque `<TitleBar>`/`<Sidebar>`/bannière via `{#if !app.focus}` ; DocumentView masque le doc-head. Ne reste que l'éditeur. Validé Playwright : F9 → chrome absent + éditeur présent ; Échap → tout restauré.
 
 ### 2026-07-09 — 6.2
 - **6.2** ✅ **Done** : 3 crans de largeur via variable CSS `--doc-width` (narrow 680px / wide 820px / full none) consommée par `.cm-content` (editor.ts) + `.doc-head`. Bouton cycleur dans le doc-head (icônes `width_normal/wide/full`). Intégré à la couche settings (`applyColumnWidth`, persisté). Validé Playwright : cycle immédiat + persistance au reload.
