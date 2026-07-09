@@ -7,6 +7,11 @@ import { matchWikilink, normalizeTarget } from './wikilink'
 
 export type DocKind = 'md' | 'html' | 'txt'
 export type SidebarView = 'files' | 'plan' | 'history'
+export type ColumnWidth = 'narrow' | 'wide' | 'full'
+
+// Largeur de la colonne de lecture (variable CSS --doc-width, consommée par
+// l'éditeur et le doc-head). full = pas de max-width.
+const COLUMN_PX: Record<ColumnWidth, string> = { narrow: '680px', wide: '820px', full: 'none' }
 
 export interface DocTab {
   id: number
@@ -26,6 +31,7 @@ export const app = $state({
   // Masquée par défaut (app « légère » — FR-6) ; l'état est persisté (settings).
   sidebarOpen: false,
   sidebarView: 'files' as SidebarView,
+  columnWidth: 'narrow' as ColumnWidth,
   sourceMode: false,
   tabs: [] as DocTab[],
   activeId: 0,
@@ -52,22 +58,41 @@ export function loadSettings() {
       if (s.sidebarView === 'files' || s.sidebarView === 'plan' || s.sidebarView === 'history') {
         app.sidebarView = s.sidebarView
       }
+      if (s.columnWidth === 'narrow' || s.columnWidth === 'wide' || s.columnWidth === 'full') {
+        app.columnWidth = s.columnWidth
+      }
     }
   } catch {
     // settings corrompus/indisponibles : valeurs par défaut
   }
   applyTheme()
+  applyColumnWidth()
 }
 
 export function saveSettings() {
   try {
     localStorage.setItem(
       SETTINGS_KEY,
-      JSON.stringify({ theme: app.theme, sidebarOpen: app.sidebarOpen, sidebarView: app.sidebarView }),
+      JSON.stringify({
+        theme: app.theme,
+        sidebarOpen: app.sidebarOpen,
+        sidebarView: app.sidebarView,
+        columnWidth: app.columnWidth,
+      }),
     )
   } catch {
     // stockage indisponible : on ignore
   }
+}
+
+export function applyColumnWidth() {
+  document.documentElement.style.setProperty('--doc-width', COLUMN_PX[app.columnWidth])
+}
+
+export function cycleColumnWidth() {
+  const order: ColumnWidth[] = ['narrow', 'wide', 'full']
+  app.columnWidth = order[(order.indexOf(app.columnWidth) + 1) % order.length]
+  applyColumnWidth()
 }
 
 const SESSION_KEY = 'doku-session'

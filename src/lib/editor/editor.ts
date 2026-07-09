@@ -42,7 +42,7 @@ const dokuTheme = EditorView.theme({
     overflow: 'auto',
   },
   '.cm-content': {
-    maxWidth: '680px',
+    maxWidth: 'var(--doc-width, 680px)',
     margin: '0 auto',
     padding: '18px 40px 120px',
     fontSize: '18.5px',

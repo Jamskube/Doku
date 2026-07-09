@@ -2,7 +2,7 @@
   import { onMount } from 'svelte'
   import { EditorView } from '@codemirror/view'
   import { EditorState } from '@codemirror/state'
-  import { app, activeTab, editorRef, isDirty } from '../lib/stores.svelte'
+  import { app, activeTab, cycleColumnWidth, editorRef, isDirty } from '../lib/stores.svelte'
   import { baseExtensions, livePreviewComp, previewExtensions, serializeDoc, sourceExtensions } from '../lib/editor/editor'
   import DokuMark from '../lib/DokuMark.svelte'
 
@@ -53,7 +53,15 @@
   {#if activeTab()}
     {@const tab = activeTab()!}
     <div class="doc-head">
-      <span>{tab.path ?? tab.name} · {isDirty(tab) ? 'modifié' : 'enregistré'}{app.sourceMode ? ' · source' : ''}</span>
+      <span class="caption">{tab.path ?? tab.name} · {isDirty(tab) ? 'modifié' : 'enregistré'}{app.sourceMode ? ' · source' : ''}</span>
+      <button
+        class="width-btn"
+        title="Largeur de colonne"
+        aria-label="Largeur de colonne"
+        onclick={cycleColumnWidth}
+      >
+        <span class="msr" style="font-size:18px">{app.columnWidth === 'narrow' ? 'width_normal' : app.columnWidth === 'wide' ? 'width_wide' : 'width_full'}</span>
+      </button>
     </div>
   {/if}
   <div class="editor-host doku-doc" class:source-mode={app.sourceMode} bind:this={host}></div>
@@ -115,16 +123,34 @@
   }
   .doc-head {
     flex: none;
-    max-width: 680px;
+    max-width: var(--doc-width, 680px);
     width: 100%;
     margin: 0 auto;
     padding: 40px 40px 0;
+    display: flex;
+    align-items: center;
+    gap: 10px;
     font-family: var(--font-mono);
     font-size: 12px;
     color: var(--ink-4);
     letter-spacing: 0.02em;
-    user-select: text;
   }
+  .caption { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; user-select: text; }
+  .width-btn {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 26px;
+    height: 26px;
+    border: 0;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--ink-4);
+    cursor: pointer;
+    transition: background 140ms ease, color 140ms ease;
+  }
+  .width-btn:hover { background: var(--surface-hover); color: var(--ink); }
   .editor-host { flex: 1; min-height: 0; user-select: text; }
   .editor-host :global(.cm-editor) { height: 100%; }
   .editor-host.source-mode :global(.cm-content) {
