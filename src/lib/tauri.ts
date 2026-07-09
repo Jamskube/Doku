@@ -76,9 +76,10 @@ export async function onWindowCloseRequested(handler: () => Promise<boolean>): P
   if (!isTauri) return () => {}
   const { getCurrentWindow } = await import('@tauri-apps/api/window')
   const win = getCurrentWindow()
-  let allowed = false
   const unlisten = await win.onCloseRequested(async (event) => {
-    if (allowed) return
+    // On empêche toujours la fermeture native, on décide, puis on détruit la
+    // fenêtre. destroy() ne repasse PAS par onCloseRequested (pas de ré-entrance,
+    // contrairement à un close() rappelé qui peut ne pas se propager en release).
     event.preventDefault()
     let ok = false
     try {
@@ -88,10 +89,7 @@ export async function onWindowCloseRequested(handler: () => Promise<boolean>): P
       console.error('Garde de fermeture: erreur, fermeture autorisée', err)
       ok = true
     }
-    if (ok) {
-      allowed = true
-      await win.close()
-    }
+    if (ok) await win.destroy()
   })
   return unlisten
 }
