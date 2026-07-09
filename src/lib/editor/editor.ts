@@ -127,6 +127,22 @@ const sourceHighlight = HighlightStyle.define([
   { tag: tags.number, color: 'var(--warn)' },
 ])
 
+// Fin de ligne dominante d'un document. CM6 stocke tout en \n en interne
+// (state.doc.toString() renvoie toujours du \n) ; on retient la fin de ligne du
+// fichier pour la restituer à la sérialisation et préserver le round-trip.
+// Fichier à fins de ligne mixtes : normalisé vers la dominante (documenté, FR-3).
+export function detectLineEnding(text: string): '\n' | '\r\n' {
+  const crlf = (text.match(/\r\n/g) ?? []).length
+  const lf = (text.match(/(?:^|[^\r])\n/g) ?? []).length
+  return crlf > lf ? '\r\n' : '\n'
+}
+
+// Restitue le texte du document avec la fin de ligne voulue (`doc` vient de
+// state.doc.toString(), donc en \n).
+export function serializeDoc(doc: string, eol: '\n' | '\r\n'): string {
+  return eol === '\r\n' ? doc.replace(/\n/g, '\r\n') : doc
+}
+
 // Bascule WYSIWYG ↔ source (Ctrl+/) via ce Compartment.
 export const livePreviewComp = new Compartment()
 

@@ -5,6 +5,6 @@
     { "id": "3.2", "title": "Sauvegarde atomique + indicateur modifie (Ctrl+S)", "verify": "editer + Ctrl+S -> fichier ecrit via tmp+rename, badge dirty disparait", "passes": false, "verified_by": null },
     { "id": "3.4", "title": "Confirmation de fermeture non sauvee", "verify": "fermer un onglet dirty -> dialogue Sauver/Ignorer/Annuler", "passes": true, "verified_by": "Playwright : dirty+Ctrl+W -> dialogue ; Annuler/Ignorer/Sauver OK ; non-dirty ferme direct (2026-07-09)" },
     { "id": "2.2", "title": "Nouvel onglet actif + differenciateur d'homonymes", "verify": "ouvrir 2 fichiers homonymes -> dossier parent affiche en differenciateur", "passes": false, "verified_by": null },
-    { "id": "3.3", "title": "Round-trip Markdown sans perte + tests auto", "verify": "npm run test roundtrip -> corpus ouvert+sauve identique octet pour octet (hors normalisation documentee)", "passes": false, "verified_by": null }
+    { "id": "3.3", "title": "Round-trip Markdown sans perte + tests auto", "verify": "npm run test roundtrip -> corpus ouvert+sauve identique octet pour octet (hors normalisation documentee)", "passes": true, "verified_by": "npm test : 19/19 (corpus LF+CRLF byte-identique apres edition ; mixte normalise dominante) 2026-07-09" }
   ]
 }

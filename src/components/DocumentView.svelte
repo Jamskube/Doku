@@ -3,7 +3,7 @@
   import { EditorView } from '@codemirror/view'
   import { EditorState } from '@codemirror/state'
   import { app, activeTab, editorRef, isDirty } from '../lib/stores.svelte'
-  import { baseExtensions, livePreviewComp, previewExtensions, sourceExtensions } from '../lib/editor/editor'
+  import { baseExtensions, livePreviewComp, previewExtensions, serializeDoc, sourceExtensions } from '../lib/editor/editor'
   import DokuMark from '../lib/DokuMark.svelte'
 
   let { onOpen }: { onOpen: () => void } = $props()
@@ -20,7 +20,7 @@
         EditorView.updateListener.of((u) => {
           if (u.docChanged) {
             const tab = app.tabs.find((t) => t.id === tabId)
-            if (tab) tab.content = u.state.doc.toString()
+            if (tab) tab.content = serializeDoc(u.state.doc.toString(), tab.eol)
           }
         }),
       ]),

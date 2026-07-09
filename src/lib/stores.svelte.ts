@@ -1,5 +1,6 @@
 import type { EditorView } from '@codemirror/view'
 import { DEMO_TABS } from './demo'
+import { detectLineEnding } from './editor/editor'
 import { isTauri, writeTextFileAtomic } from './tauri'
 
 export type DocKind = 'md' | 'html' | 'txt'
@@ -12,6 +13,7 @@ export interface DocTab {
   kind: DocKind
   content: string
   savedContent: string
+  eol: '\n' | '\r\n'
 }
 
 let nextId = 1
@@ -79,6 +81,7 @@ export function openTab(name: string, path: string | null, content: string, kind
     kind: kind ?? kindFromName(name),
     content,
     savedContent: content,
+    eol: detectLineEnding(content),
   }
   app.tabs.push(tab)
   app.activeId = tab.id
