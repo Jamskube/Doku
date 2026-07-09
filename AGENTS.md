@@ -55,6 +55,8 @@ _Append via `/start learn <type>: <lesson>`. NEVER delete this section on update
 - [2026-07-08] CodeMirror 6 ne rend que le viewport : tout test DOM/Playwright sur l'éditeur doit d'abord scroller la cible en vue ; un conteneur scrollable externe garde son scrollTop entre `setState`
 - [2026-07-08] tauri-build exige `icons/icon.ico` même avec `bundle.active: false` — et l'erreur ne tombe qu'en toute fin de compilation (~350/370 crates)
 - [2026-07-08] Svelte 5 élague les sélecteurs CSS scopés « inutilisés » : une classe posée en JS (`classList`) est invisible pour le compilateur → toujours déclarer via `class:` dans le template (le warning `css_unused_selector` est un vrai signal)
+- [2026-07-09] CodeMirror 6 : `state.doc.toString()` renvoie **toujours** du `\n` ; le facet `lineSeparator` n'agit que sur le découpage, pas la sérialisation. Pour préserver le round-trip (fichiers CRLF), détecter la fin de ligne du fichier et la restituer soi-même (`detectLineEnding` + `serializeDoc`, `src/lib/editor/editor.ts`)
+- [2026-07-09] Icône barre des tâches Windows = **double cache** : l'icône est gravée dans l'exe **au build** (ajouter `println!("cargo:rerun-if-changed=icons/icon.ico")` dans `build.rs`, sinon `tauri dev` ne la ré-embarque pas) ET Windows cache la miniature (`ie4uinit.exe -show`, ou reset Explorer). Toujours rebuild propre + vider le cache avant de conclure
 
 ### Workarounds
 <!-- working solutions to known issues -->

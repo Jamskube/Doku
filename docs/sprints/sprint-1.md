@@ -3,7 +3,7 @@
 **Goal** : Ouvrir, éditer et sauver de vrais fichiers Markdown en natif — sans jamais perdre de données.
 **Start** : 2026-07-09
 **End** : 2026-07-16
-**Status** : Active
+**Status** : Completed (2026-07-09) — voir `retro-sprint-1.md`
 
 ## Stories
 
