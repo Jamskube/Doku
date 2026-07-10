@@ -1,6 +1,6 @@
 import { minimalSetup } from 'codemirror'
 import { EditorView, keymap } from '@codemirror/view'
-import { Compartment, EditorState, type Extension } from '@codemirror/state'
+import { Compartment, EditorState, Prec, type Extension } from '@codemirror/state'
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown'
 import { html } from '@codemirror/lang-html'
 import { languages } from '@codemirror/language-data'
@@ -173,6 +173,13 @@ export function serializeDoc(doc: string, eol: '\n' | '\r\n'): string {
 // Bascule WYSIWYG ↔ source (Ctrl+/) via ce Compartment.
 export const livePreviewComp = new Compartment()
 
+// Ctrl+/ pilote la bascule source (handler fenêtre dans App.svelte). Mais
+// `minimalSetup` embarque `defaultKeymap`, qui lie Mod-/ à `toggleComment` :
+// sans garde, presser Ctrl+/ avec l'éditeur focus commenterait la ligne courante
+// (`<!-- … -->`) et salirait le document. On neutralise Mod-/ dans l'éditeur
+// (no-op prioritaire) ; l'event remonte quand même à la fenêtre pour la bascule.
+const suppressToggleComment = Prec.highest(keymap.of([{ key: 'Mod-/', run: () => true }]))
+
 export function previewExtensions(): Extension[] {
   return [livePreview(), syntaxHighlighting(dokuHighlight)]
 }
@@ -188,7 +195,19 @@ export function baseExtensions(sourceMode: boolean, extra: Extension[] = []): Ex
     markdown({ base: markdownLanguage, codeLanguages: languages }),
     dokuTheme,
     livePreviewComp.of(sourceMode ? sourceExtensions() : previewExtensions()),
-    keymap.of([]),
+    suppressToggleComment,
+    ...extra,
+  ]
+}
+
+// Éditeur simple pour les fichiers .txt (FR-8, 5.3) : texte brut, aucun langage
+// ni live preview ni coloration — juste le retour à la ligne et le thème.
+export function txtExtensions(extra: Extension[] = []): Extension[] {
+  return [
+    minimalSetup,
+    EditorView.lineWrapping,
+    dokuTheme,
+    suppressToggleComment,
     ...extra,
   ]
 }
@@ -202,7 +221,7 @@ export function htmlSourceExtensions(extra: Extension[] = []): Extension[] {
     html(),
     dokuTheme,
     syntaxHighlighting(dokuHighlight),
-    keymap.of([]),
+    suppressToggleComment,
     ...extra,
   ]
 }
