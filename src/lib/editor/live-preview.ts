@@ -14,7 +14,7 @@ import {
 } from '@codemirror/view'
 import { convertFileSrc } from '@tauri-apps/api/core'
 import { isTauri } from '../tauri'
-import { isExternalUrl, resolveLocalImagePath } from '../images'
+import { isBlockedImageUrl, resolveLocalImagePath } from '../images'
 
 // Dossier du document courant (fourni par état, dans DocumentView) — sert à
 // résoudre les images relatives.
@@ -22,9 +22,12 @@ export const docDirFacet = Facet.define<string, string>({ combine: (v) => v[0] ?
 
 // URL affichable d'une image : externe telle quelle ; locale résolue au dossier
 // puis convertie en asset:// (natif). En navigateur : chemin brut → erreur → placeholder.
-function imageSrc(url: string, dir: string): string {
-  if (isExternalUrl(url)) return url
-  const abs = resolveLocalImagePath(url, dir)
+// Source affichable, ou null si l'image doit être bloquée (réseau/UNC → placeholder).
+function imageSrc(url: string, dir: string): string | null {
+  const u = url.trim()
+  if (isBlockedImageUrl(u)) return null
+  if (/^data:/i.test(u)) return u
+  const abs = resolveLocalImagePath(u, dir)
   return isTauri ? convertFileSrc(abs) : abs
 }
 
@@ -45,11 +48,18 @@ class ImageWidget extends WidgetType {
     // Conteneur stable géré par CM6 ; on mute son contenu à l'erreur (pas de
     // replaceWith, qui serait clobbered par la réconciliation DOM de CodeMirror).
     const wrap = document.createElement('span')
+    const src = imageSrc(this.url, this.dir)
+    if (src == null) {
+      // Image distante/UNC bloquée (hors-ligne par principe) : jamais de requête.
+      wrap.className = 'cm-lp-image-missing'
+      wrap.textContent = this.alt ? `Image distante bloquée — ${this.alt}` : 'Image distante bloquée'
+      return wrap
+    }
     wrap.className = 'cm-lp-image-wrap'
     const img = document.createElement('img')
     img.className = 'cm-lp-image'
     img.alt = this.alt
-    img.src = imageSrc(this.url, this.dir)
+    img.src = src
     img.addEventListener('error', () => {
       wrap.className = 'cm-lp-image-missing'
       wrap.textContent = this.alt ? `Image introuvable — ${this.alt}` : 'Image introuvable'

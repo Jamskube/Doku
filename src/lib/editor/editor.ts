@@ -160,7 +160,10 @@ const sourceHighlight = HighlightStyle.define([
 // Fichier à fins de ligne mixtes : normalisé vers la dominante (documenté, FR-3).
 export function detectLineEnding(text: string): '\n' | '\r\n' {
   const crlf = (text.match(/\r\n/g) ?? []).length
-  const lf = (text.match(/(?:^|[^\r])\n/g) ?? []).length
+  // Lookbehind (ne consomme pas le caractère précédent) : compte tous les \n non
+  // précédés d'un \r, y compris des \n consécutifs (lignes vides). L'ancienne
+  // forme `(?:^|[^\r])\n` consommait ce caractère → sous-comptait autour des vides.
+  const lf = (text.match(/(?<!\r)\n/g) ?? []).length
   return crlf > lf ? '\r\n' : '\n'
 }
 

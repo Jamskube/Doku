@@ -1,17 +1,24 @@
 import { describe, it, expect } from 'vitest'
-import { isExternalUrl, resolveLocalImagePath } from './images'
+import { isBlockedImageUrl, resolveLocalImagePath } from './images'
 
-describe('isExternalUrl', () => {
-  it('détecte http/https/data/blob/asset', () => {
-    expect(isExternalUrl('https://x/a.png')).toBe(true)
-    expect(isExternalUrl('http://x/a.png')).toBe(true)
-    expect(isExternalUrl('data:image/png;base64,AAAA')).toBe(true)
-    expect(isExternalUrl('asset://localhost/a.png')).toBe(true)
+describe('isBlockedImageUrl', () => {
+  it('bloque les schémas réseau et non-fichier', () => {
+    expect(isBlockedImageUrl('https://x/a.png')).toBe(true)
+    expect(isBlockedImageUrl('http://x/a.png')).toBe(true)
+    expect(isBlockedImageUrl('blob:abc')).toBe(true)
+    expect(isBlockedImageUrl('asset://localhost/a.png')).toBe(true)
+    expect(isBlockedImageUrl('file:///etc/passwd')).toBe(true)
   })
-  it('un chemin local n’est pas externe', () => {
-    expect(isExternalUrl('a.png')).toBe(false)
-    expect(isExternalUrl('assets/a.png')).toBe(false)
-    expect(isExternalUrl('C:\\x\\a.png')).toBe(false)
+  it('bloque UNC et protocole-relatif (fuite SMB/NTLM, phone-home)', () => {
+    expect(isBlockedImageUrl('\\\\attacker.tld\\s\\p.png')).toBe(true)
+    expect(isBlockedImageUrl('//attacker.tld/p.png')).toBe(true)
+  })
+  it('autorise data: inline et les fichiers locaux', () => {
+    expect(isBlockedImageUrl('data:image/png;base64,AAAA')).toBe(false)
+    expect(isBlockedImageUrl('a.png')).toBe(false)
+    expect(isBlockedImageUrl('assets/a.png')).toBe(false)
+    expect(isBlockedImageUrl('C:\\x\\a.png')).toBe(false)
+    expect(isBlockedImageUrl('/home/x/a.png')).toBe(false)
   })
 })
 

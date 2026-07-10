@@ -54,6 +54,9 @@ describe('detectLineEnding', () => {
   it('détecte CRLF', () => expect(detectLineEnding('a\r\nb\r\n')).toBe('\r\n'))
   it('document vide → LF', () => expect(detectLineEnding('')).toBe('\n'))
   it('dominante l’emporte', () => expect(detectLineEnding('a\r\nb\r\nc\n')).toBe('\r\n'))
+  it('compte les LF des lignes vides (3 CRLF < 4 LF autour de vides → LF)', () =>
+    // Régression : l'ancien regex sous-comptait les \n consécutifs et basculait à tort en CRLF.
+    expect(detectLineEnding('a\r\nb\r\nc\r\nd\n\n\n\ne')).toBe('\n'))
 })
 
 describe('serializeDoc', () => {

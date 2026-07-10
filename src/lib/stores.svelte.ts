@@ -387,8 +387,13 @@ export async function checkExternalChanges() {
   let conflict: DocTab | null = null
   for (const tab of app.tabs) {
     if (!tab.path) continue
-    const disk = await readTextFileAt(tab.path)
-    if (disk == null) continue // fichier disparu : hors périmètre 3.5 (session/fermeture)
+    let disk: string | null
+    try {
+      disk = await readTextFileAt(tab.path)
+    } catch {
+      continue // supprimé/illisible depuis : ne casse pas la boucle (readTextFile lève)
+    }
+    if (disk == null) continue
     const decision = classifyExternalChange(disk, tab)
     if (decision === 'reload') applyDiskContent(tab, disk)
     else if (decision === 'conflict' && !conflict) conflict = tab
@@ -403,7 +408,13 @@ export async function reloadPromptedTab() {
   if (!prompt) return
   const tab = app.tabs.find((t) => t.id === prompt.tabId)
   if (!tab?.path) return
-  const disk = await readTextFileAt(tab.path)
+  let disk: string | null
+  try {
+    disk = await readTextFileAt(tab.path)
+  } catch {
+    app.banner = `Impossible de recharger « ${tab.name} » : fichier illisible ou supprimé.`
+    return
+  }
   if (disk != null) applyDiskContent(tab, disk)
 }
 
