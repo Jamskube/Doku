@@ -4,7 +4,7 @@ import { detectLineEnding } from './editor/editor'
 import { baseName, isSupportedFile, joinPath, parentPath } from './explorer'
 import { detectUnsupported } from './encoding'
 import { classifyExternalChange } from './reload'
-import { isTauri, readTextFileAt, scanFiles, writeTextFileAtomic } from './tauri'
+import { isTauri, readTextFileAt, scanFiles, setAlwaysOnTop, writeTextFileAtomic } from './tauri'
 import { matchWikilink, normalizeTarget } from './wikilink'
 
 export type DocKind = 'md' | 'html' | 'txt'
@@ -40,6 +40,7 @@ let nextId = 1
 
 export const app = $state({
   theme: 'light' as 'light' | 'dark',
+  // Toujours au-dessus (FR-11) : geste momentané, non persisté (comme focus/sourceMode).
   pinned: false,
   // Masquée par défaut (app « légère » — FR-6) ; l'état est persisté (settings).
   sidebarOpen: false,
@@ -189,6 +190,14 @@ export function applyTheme() {
 export function toggleTheme() {
   app.theme = app.theme === 'dark' ? 'light' : 'dark'
   applyTheme()
+}
+
+// Épingle la fenêtre au-dessus des autres apps (FR-11). Logique partagée entre le
+// bouton de la barre de titre et le raccourci Ctrl+Maj+T. L'état visuel (app.pinned)
+// bascule de suite ; l'appel natif est asynchrone (no-op en navigateur).
+export function togglePin() {
+  app.pinned = !app.pinned
+  setAlwaysOnTop(app.pinned).catch((err) => console.error('Épinglage échoué', err))
 }
 
 loadSettings()

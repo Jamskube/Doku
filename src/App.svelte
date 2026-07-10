@@ -4,7 +4,7 @@
   import TitleBar from './components/TitleBar.svelte'
   import DocumentView from './components/DocumentView.svelte'
   import ConfirmDialog from './components/ConfirmDialog.svelte'
-  import { app, activeTab, askSave, checkExternalChanges, cycleTab, dialog, dismissReloadPrompt, initApp, isDirty, openDropped, openPath, openTab, openWikilink, reloadPromptedTab, requestCloseTab, saveSession, saveSettings, saveTab, toggleSidebarView } from './lib/stores.svelte'
+  import { app, activeTab, askSave, checkExternalChanges, cycleTab, dialog, dismissReloadPrompt, initApp, isDirty, openDropped, openPath, openTab, openWikilink, reloadPromptedTab, requestCloseTab, saveSession, saveSettings, saveTab, togglePin, toggleSidebarView } from './lib/stores.svelte'
   import { onFileDrop, onOpenFile, onWindowCloseRequested, onWindowFocus, openFileDialog } from './lib/tauri'
   import { detectUnsupported } from './lib/encoding'
 
@@ -126,6 +126,9 @@
       } else if (k === 'h' && e.shiftKey) {
         e.preventDefault()
         toggleSidebarView('history')
+      } else if (k === 't' && e.shiftKey) {
+        e.preventDefault()
+        togglePin()
       }
     }
 

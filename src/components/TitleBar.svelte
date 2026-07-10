@@ -1,18 +1,13 @@
 <script lang="ts">
-  import { app, activeTab, requestCloseTab, isDirty, toggleTheme } from '../lib/stores.svelte'
+  import { app, activeTab, requestCloseTab, isDirty, toggleTheme, togglePin } from '../lib/stores.svelte'
   import { tabDiscriminator } from '../lib/tabs'
-  import { closeWindow, minimizeWindow, setAlwaysOnTop, toggleMaximizeWindow } from '../lib/tauri'
+  import { closeWindow, minimizeWindow, toggleMaximizeWindow } from '../lib/tauri'
   import DokuMark from '../lib/DokuMark.svelte'
 
   let { onOpen }: { onOpen: () => void } = $props()
 
   let railHover = $state(false)
   const showLogo = $derived(!app.sidebarOpen && !railHover)
-
-  async function togglePin() {
-    app.pinned = !app.pinned
-    await setAlwaysOnTop(app.pinned)
-  }
 </script>
 
 <div class="titlebar">
@@ -71,7 +66,7 @@
   </div>
 
   <div class="win-controls">
-    <button class="ctrl pin" class:on={app.pinned} title="Toujours au-dessus" aria-label="Toujours au-dessus" aria-pressed={app.pinned} onclick={togglePin}>
+    <button class="ctrl pin" class:on={app.pinned} title="Toujours au-dessus (Ctrl+Maj+T)" aria-label="Toujours au-dessus" aria-pressed={app.pinned} onclick={togglePin}>
       <span class="msr" style="font-size:19px">keep</span>
     </button>
     <button class="ctrl" title="Thème sombre" aria-label="Thème sombre" aria-pressed={app.theme === 'dark'} onclick={toggleTheme}>
