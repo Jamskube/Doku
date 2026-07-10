@@ -35,6 +35,8 @@ export const app = $state({
   sourceMode: false,
   // Mode focus (F9) : masque tout le chrome ; transitoire (non persisté).
   focus: false,
+  // Ligne du titre courant (scroll-spy de la table des matières).
+  activeHeadingLine: 0,
   tabs: [] as DocTab[],
   activeId: 0,
   // Dossier affiché par l'explorateur ; null = suit le dossier du document actif.

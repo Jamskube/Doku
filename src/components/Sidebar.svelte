@@ -103,11 +103,11 @@
           {/if}
         {:else if app.sidebarView === 'plan'}
           <div class="plan">
-            {#each headings as h, i (h.line)}
+            {#each headings as h (h.line)}
               {#if h.level === 1}
-                <button class="plan-h1" class:first={i === 0} onclick={() => scrollToLine(h.line)}>{h.text}</button>
+                <button class="plan-h1" class:active={h.line === app.activeHeadingLine} onclick={() => scrollToLine(h.line)}>{h.text}</button>
               {:else}
-                <button class="plan-sub" onclick={() => scrollToLine(h.line)}>{h.text}</button>
+                <button class="plan-sub" class:active={h.line === app.activeHeadingLine} onclick={() => scrollToLine(h.line)}>{h.text}</button>
               {/if}
             {:else}
               <p class="empty">Pas de titres dans ce document</p>
@@ -260,7 +260,7 @@
     font-size: 13px;
     font-weight: 600;
   }
-  .plan-h1.first { background: var(--accent-soft); border-left-color: var(--ink); }
+  .plan-h1.active { background: var(--accent-soft); border-left-color: var(--ink); }
   .plan-h1:hover { background: var(--accent-soft); }
   .plan-sub {
     width: 100%;
@@ -276,6 +276,7 @@
     margin-top: 2px;
   }
   .plan-sub:hover { background: var(--surface-hover); color: var(--ink); }
+  .plan-sub.active { background: var(--accent-soft); color: var(--ink); }
   .empty { font-size: 12px; color: var(--ink-5); padding: 8px 12px; }
 
   .history { padding-top: 2px; }

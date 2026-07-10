@@ -2,7 +2,7 @@
   import { onMount } from 'svelte'
   import { EditorView } from '@codemirror/view'
   import { EditorState } from '@codemirror/state'
-  import { app, activeTab, cycleColumnWidth, editorRef, isDirty } from '../lib/stores.svelte'
+  import { app, activeTab, cycleColumnWidth, docHeadings, editorRef, isDirty } from '../lib/stores.svelte'
   import { baseExtensions, htmlSourceExtensions, livePreviewComp, previewExtensions, serializeDoc, sourceExtensions } from '../lib/editor/editor'
   import { docDirFacet } from '../lib/editor/live-preview'
   import { parentPath } from '../lib/explorer'
@@ -37,10 +37,30 @@
     })
   }
 
+  // Scroll-spy : titre courant = dernier titre au-dessus du haut du viewport (4.6).
+  function updateActiveHeading(v: EditorView) {
+    const headings = docHeadings(activeTab()?.content ?? '')
+    if (!headings.length) {
+      app.activeHeadingLine = 0
+      return
+    }
+    const block = v.elementAtHeight(v.scrollDOM.scrollTop + 24)
+    const topLine = v.state.doc.lineAt(block.from).number
+    let active = headings[0].line
+    for (const h of headings) {
+      if (h.line <= topLine) active = h.line
+      else break
+    }
+    app.activeHeadingLine = active
+  }
+
   onMount(() => {
     view = new EditorView({ parent: host! })
     editorRef.view = view
+    const onScroll = () => view && updateActiveHeading(view)
+    view.scrollDOM.addEventListener('scroll', onScroll, { passive: true })
     return () => {
+      view?.scrollDOM.removeEventListener('scroll', onScroll)
       view?.destroy()
       editorRef.view = null
     }
@@ -56,6 +76,7 @@
       renderedId = tab.id
     }
     view.dispatch({ effects: livePreviewComp.reconfigure(sourceMode ? sourceExtensions() : previewExtensions()) })
+    view.requestMeasure({ read: () => view && updateActiveHeading(view) })
   })
 </script>
 

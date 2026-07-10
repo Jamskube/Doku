@@ -12,7 +12,7 @@
 | 5.1 | Vue HTML rendue (sandbox) | M | P1 | ✅ Done | `<iframe sandbox="">` + CSP `default-src 'none'` injectée (`html.ts`, 4 tests) ; éditeur masqué ; validé Playwright (recette.html) |
 | 5.2 | HTML : édition source + refresh | S | P1 | ✅ Done | `@codemirror/lang-html` + tags balises dans `dokuHighlight` ; `htmlSourceExtensions` ; Ctrl+/ rendu↔source, refresh réactif ; validé Playwright |
 | 3.6 | Mode source Ctrl+/ (formaliser + vérifier) | S | P1 | TODO | socle en place (Compartment) ; vérifier curseur conservé + retour sans perte |
-| 4.6 | Table des matières (highlight au scroll) | S | P2 | TODO | panneau Plan calcule déjà `docHeadings` + `scrollToLine` ; ajouter le surlignage du titre courant au scroll |
+| 4.6 | Table des matières (highlight au scroll) | S | P2 | ✅ Done | Scroll-spy (`elementAtHeight` → titre courant) ; `app.activeHeadingLine` surligné dans le Plan ; validé Playwright |
 | 3.5 | Rechargement sur modification externe | M | P1 | TODO | watcher plugin-fs ; au focus, proposer recharger (silencieux si pas de modif locale) |
 
 ### Freebies clôturés (acquis S2/S3)
@@ -29,6 +29,9 @@ _None_
 ### 2026-07-09
 - Sprint initialisé : 5 stories neuves (4 P1, 1 P2) + 3 freebies clôturés au ledger
 - Rappels process (rétros) : design hors stories ; smoke-tester en release/natif tôt ; logique pure → tests ; privilégier le browser-testable
+
+### 2026-07-09 — 4.6
+- **4.6** ✅ **Done** : scroll-spy dans DocumentView — au scroll de l'éditeur, `elementAtHeight(scrollTop+24)` → ligne en tête de viewport → dernier titre au-dessus = `app.activeHeadingLine`. Le panneau Plan surligne ce titre (`.plan-h1.active`/`.plan-sub.active`). Recalcul aussi au changement d'onglet (`requestMeasure`). Hiérarchie H1-H3, clic `scrollToLine` et état vide étaient déjà là. Validé Playwright : scroll 700→Décisions, 1500→À faire.
 
 ### 2026-07-09 — 5.2
 - **5.2** ✅ **Done** : `@codemirror/lang-html` installé ; tags balisage ajoutés à `dokuHighlight` (tagName/attributeName/attributeValue/angleBracket — servent aussi au HTML inline dans le markdown) ; `htmlSourceExtensions()` (langage HTML, sans live preview). `makeState` branche sur `kind === 'html'`. Ctrl+/ bascule rendu (iframe) ↔ source HTML colorée ; refresh via `srcdoc` réactif au contenu. Validé Playwright : source colorée (balises/attrs/valeurs), round-trip render↔source.
