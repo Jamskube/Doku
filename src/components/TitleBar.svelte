@@ -186,7 +186,7 @@
     text-overflow: ellipsis;
     white-space: nowrap;
     font-size: 10.5px;
-    color: var(--ink-5);
+    color: var(--ink-4);
   }
   .parent::before { content: '·'; margin-right: 4px; opacity: 0.55; }
   .close {

@@ -32,8 +32,8 @@
   --cream-content: #2E2E34;
   --cream-soft: #36363D;
   --cream-tint: #3D3D44;
-  --surface: #2E2E34;
-  --surface-2: #36363D;
+  --surface: #35353B;
+  --surface-2: #3D3D45;
   --ink-rgb: 235, 237, 241;
   --ink-2: rgba(var(--ink-rgb), 0.94);
   --ink-3: rgba(var(--ink-rgb), 0.78);
@@ -64,6 +64,13 @@ body {
 a { color: inherit; text-decoration: none; }
 
 button { font-family: inherit; }
+
+/* Focus clavier visible sur tous les contrôles (le ring UA par défaut n'était pas
+   au design system AIR). :where() garde une spécificité nulle → surchargeable. */
+:where(button, a, input, select, textarea, [role='button'], [tabindex]):focus-visible {
+  outline: 2px solid var(--ink-3);
+  outline-offset: 2px;
+}
 
 ::-webkit-scrollbar { width: 9px; height: 9px; }
 ::-webkit-scrollbar-track { background: transparent; }

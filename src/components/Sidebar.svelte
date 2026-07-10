@@ -5,7 +5,8 @@
   import { DEMO_DIR } from '../lib/demo'
   import DokuMark from '../lib/DokuMark.svelte'
 
-  const headings = $derived(docHeadings(activeTab()?.content ?? ''))
+  // Plan : structure de titres du Markdown seulement (un .txt/.html n'en a pas).
+  const headings = $derived(activeTab()?.kind === 'md' ? docHeadings(activeTab()!.content) : [])
 
   // Dossier explorateur : navigation explicite, sinon dossier du document actif.
   const targetDir = $derived(app.explorerDir ?? parentPath(activeTab()?.path ?? null))
@@ -277,7 +278,7 @@
   }
   .plan-sub:hover { background: var(--surface-hover); color: var(--ink); }
   .plan-sub.active { background: var(--accent-soft); color: var(--ink); }
-  .empty { font-size: 12px; color: var(--ink-5); padding: 8px 12px; }
+  .empty { font-size: 12px; color: var(--ink-4); padding: 8px 12px; }
 
   .history { padding-top: 2px; }
   .snap { padding: 9px 12px; border-radius: 10px; }
@@ -305,5 +306,5 @@
     cursor: pointer;
   }
   .snap-actions button:hover { background: var(--surface-hover); color: var(--ink); }
-  .purge { font-size: 10.5px; color: var(--ink-5); padding: 12px 12px 0; line-height: 1.5; }
+  .purge { font-size: 10.5px; color: var(--ink-4); padding: 12px 12px 0; line-height: 1.5; }
 </style>

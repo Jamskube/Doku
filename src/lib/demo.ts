@@ -46,6 +46,17 @@ const IDEES_MD = `# Idées en vrac
 > La légèreté est une discipline, pas une absence.
 `
 
+const COURSES_TXT = `Liste de courses
+================
+
+# ceci n'est PAS un titre markdown, juste du texte
+- lait
+- pain **pas en gras**
+- café
+
+Note : les .txt s'affichent tels quels, sans rendu.
+`
+
 const RECETTE_HTML = `<!doctype html>
 <html lang="fr">
   <head><title>Recette</title></head>
@@ -60,6 +71,7 @@ export const DEMO_TABS: { name: string; path: string | null; content: string; ki
   { name: 'notes.md', path: 'G:\\Notes\\notes.md', content: NOTES_MD, kind: 'md' },
   { name: 'idées.md', path: 'G:\\Notes\\idées.md', content: IDEES_MD, kind: 'md' },
   { name: 'recette.html', path: 'G:\\Notes\\recette.html', content: RECETTE_HTML, kind: 'html' },
+  { name: 'courses.txt', path: 'G:\\Notes\\courses.txt', content: COURSES_TXT, kind: 'txt' },
 ]
 
 // Dossier de démonstration (mode navigateur) pour visualiser l'explorateur (FR-6).
@@ -69,6 +81,7 @@ export const DEMO_DIR: FsEntry[] = [
   { name: 'notes.md', isDir: false },
   { name: 'idées.md', isDir: false },
   { name: 'recette.html', isDir: false },
+  { name: 'courses.txt', isDir: false },
   { name: 'todo.md', isDir: false },
   { name: 'image.png', isDir: false },
 ]

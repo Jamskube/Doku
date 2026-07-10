@@ -3,7 +3,7 @@
   import { EditorView } from '@codemirror/view'
   import { EditorState } from '@codemirror/state'
   import { app, activeTab, cycleColumnWidth, docHeadings, editorRef, isDirty } from '../lib/stores.svelte'
-  import { baseExtensions, htmlSourceExtensions, livePreviewComp, previewExtensions, serializeDoc, sourceExtensions } from '../lib/editor/editor'
+  import { baseExtensions, htmlSourceExtensions, livePreviewComp, previewExtensions, serializeDoc, sourceExtensions, txtExtensions } from '../lib/editor/editor'
   import { docDirFacet } from '../lib/editor/live-preview'
   import { parentPath } from '../lib/explorer'
   import { sandboxDoc } from '../lib/html'
@@ -36,13 +36,19 @@
     ]
     return EditorState.create({
       doc: content,
-      extensions: tab?.kind === 'html' ? htmlSourceExtensions(extra) : baseExtensions(app.sourceMode, extra),
+      extensions:
+        tab?.kind === 'html'
+          ? htmlSourceExtensions(extra)
+          : tab?.kind === 'txt'
+            ? txtExtensions(extra)
+            : baseExtensions(app.sourceMode, extra),
     })
   }
 
   // Scroll-spy : titre courant = dernier titre au-dessus du haut du viewport (4.6).
+  // Titres seulement pour le Markdown (un .txt/.html n'a pas de structure de titres).
   function updateActiveHeading(v: EditorView) {
-    const headings = docHeadings(activeTab()?.content ?? '')
+    const headings = activeTab()?.kind === 'md' ? docHeadings(activeTab()?.content ?? '') : []
     if (!headings.length) {
       app.activeHeadingLine = 0
       return
@@ -109,9 +115,9 @@
     </div>
   {/if}
   {#if htmlRender}
-    <iframe class="html-view" title="Aperçu HTML" sandbox="" srcdoc={sandboxDoc(activeTab()!.content)}></iframe>
+    <iframe class="html-view" title="Aperçu HTML" sandbox="" srcdoc={sandboxDoc(activeTab()!.content, app.theme)}></iframe>
   {/if}
-  <div class="editor-host doku-doc" class:source-mode={app.sourceMode} class:hidden={htmlRender} bind:this={host}></div>
+  <div class="editor-host doku-doc" class:source-mode={app.sourceMode} class:txt={activeTab()?.kind === 'txt'} class:hidden={htmlRender} bind:this={host}></div>
 
   {#if !activeTab()}
     <div class="empty">
@@ -208,7 +214,8 @@
     background: var(--cream-content);
   }
   .editor-host :global(.cm-editor) { height: 100%; }
-  .editor-host.source-mode :global(.cm-content) {
+  .editor-host.source-mode :global(.cm-content),
+  .editor-host.txt :global(.cm-content) {
     font-family: var(--font-mono);
     font-size: 14px;
     line-height: 1.7;
