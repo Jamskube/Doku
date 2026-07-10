@@ -119,27 +119,7 @@
           </div>
         {:else}
           <div class="history">
-            <div class="snap current-snap">
-              <div class="snap-head">
-                <span class="snap-title">Aujourd'hui · 14:32</span>
-                <span class="pill">courant</span>
-              </div>
-            </div>
-            <div class="snap">
-              <div class="snap-title dim">Aujourd'hui · 09:15</div>
-              <div class="snap-actions">
-                <button>Aperçu</button>
-                <button>Restaurer</button>
-              </div>
-            </div>
-            <div class="snap">
-              <div class="snap-title dim">Hier · 18:40</div>
-              <div class="snap-actions">
-                <button>Aperçu</button>
-                <button>Restaurer</button>
-              </div>
-            </div>
-            <p class="purge">Purge auto : 20 versions / 30 jours.</p>
+            <p class="empty">L'historique des versions arrive bientôt.</p>
           </div>
         {/if}
       </div>
@@ -284,30 +264,4 @@
   .empty { font-size: 12px; color: var(--ink-4); padding: 8px 12px; }
 
   .history { padding-top: 2px; }
-  .snap { padding: 9px 12px; border-radius: 10px; }
-  .snap:hover { background: var(--surface-hover); }
-  .snap.current-snap { background: var(--surface-hover); margin-bottom: 3px; }
-  .snap-head { display: flex; align-items: center; justify-content: space-between; }
-  .snap-title { font-size: 12.5px; font-weight: 500; color: var(--ink); }
-  .snap-title.dim { color: var(--ink-2); margin-bottom: 7px; }
-  .pill {
-    font-family: var(--font-mono);
-    font-size: 9px;
-    padding: 2px 7px;
-    border-radius: 999px;
-    background: rgba(var(--ink-rgb), 0.10);
-    color: var(--ink-3);
-  }
-  .snap-actions { display: flex; gap: 6px; }
-  .snap-actions button {
-    font-size: 11px;
-    padding: 4px 10px;
-    border-radius: 7px;
-    border: 1px solid var(--line-2);
-    background: transparent;
-    color: var(--ink-2);
-    cursor: pointer;
-  }
-  .snap-actions button:hover { background: var(--surface-hover); color: var(--ink); }
-  .purge { font-size: 10.5px; color: var(--ink-4); padding: 12px 12px 0; line-height: 1.5; }
 </style>
