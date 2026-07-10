@@ -281,6 +281,20 @@ export async function listSnapshots(key: string): Promise<SnapshotInfo[]> {
   })
 }
 
+// Lit le contenu d'une version (restauration, 7.3). Garde parseStamp : ne lit qu'un
+// nom de snapshot datable (jamais meta.json ni un chemin détourné). null si absente.
+export async function readSnapshot(key: string, name: string): Promise<string | null> {
+  if (!isTauri) return null
+  if (!parseStamp(name)) return null
+  const { appDataDir, join } = await import('@tauri-apps/api/path')
+  const { readTextFile } = await import('@tauri-apps/plugin-fs')
+  try {
+    return await readTextFile(await join(await appDataDir(), 'snapshots', key, name))
+  } catch {
+    return null
+  }
+}
+
 // Purge un dossier snapshot (démarrage) : réconcilie l'index avec le disque et purge.
 // Fonctionne même sans meta.json (le reconstruit depuis les fichiers présents).
 // Suppression confinée à snapshots/<key>/.

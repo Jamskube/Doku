@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { app, activeTab, docHeadings, isDirty, loadSnapshotsForActive, openPath, scrollToLine, toggleSidebarView } from '../lib/stores.svelte'
+  import { app, activeTab, docHeadings, isDirty, loadSnapshotsForActive, openPath, restoreSnapshot, scrollToLine, toggleSidebarView } from '../lib/stores.svelte'
   import { baseName, joinPath, parentPath, visibleEntries, type FsEntry } from '../lib/explorer'
   import { isTauri, readDirectory } from '../lib/tauri'
   import { DEMO_DIR } from '../lib/demo'
@@ -146,10 +146,10 @@
               <p class="empty">Aucune version enregistrée pour l'instant.</p>
             {:else}
               {#each app.snapshots as snap (snap.name)}
-                <div class="snap">
+                <button class="snap" title="Restaurer cette version" onclick={() => restoreSnapshot(snap.name)}>
                   <span class="snap-date">{formatSnapshotDate(snap.time)}</span>
                   {#if snap.preview}<span class="snap-preview">{snap.preview}</span>{/if}
-                </div>
+                </button>
               {/each}
             {/if}
           </div>
@@ -300,8 +300,13 @@
     display: flex;
     flex-direction: column;
     gap: 2px;
+    width: 100%;
     padding: 7px 12px;
+    border: 0;
+    background: transparent;
     border-radius: 8px;
+    cursor: pointer;
+    text-align: left;
   }
   .snap:hover { background: var(--surface-hover); }
   .snap-date { font-size: 12px; color: var(--ink-2); font-weight: 500; }

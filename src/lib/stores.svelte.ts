@@ -5,7 +5,7 @@ import { baseName, isSupportedFile, joinPath, parentPath } from './explorer'
 import { detectUnsupported } from './encoding'
 import { classifyExternalChange } from './reload'
 import { snapshotKey, type SnapshotInfo } from './snapshot'
-import { isTauri, listSnapshots, purgeAllSnapshots, readTextFileAt, recordSnapshot, scanFiles, setAlwaysOnTop, writeTextFileAtomic } from './tauri'
+import { isTauri, listSnapshots, purgeAllSnapshots, readSnapshot, readTextFileAt, recordSnapshot, scanFiles, setAlwaysOnTop, writeTextFileAtomic } from './tauri'
 import { matchWikilink, normalizeTarget } from './wikilink'
 
 export type DocKind = 'md' | 'html' | 'txt'
@@ -427,6 +427,40 @@ export async function loadSnapshotsForActive() {
   if (req !== snapshotReq) return // onglet changé entre-temps : résultat périmé
   app.snapshots = list
   app.snapshotsFor = tab.id
+}
+
+// Restaure une version depuis l'historique (7.3). L'état courant est d'abord
+// snapshotté (réversible : même des édits non enregistrés sont préservés), puis le
+// fichier est remplacé et l'onglet rechargé (mécanisme rev, cf. 3.5).
+export async function restoreSnapshot(name: string) {
+  const tab = activeTab()
+  if (!tab?.path) return
+  const path = tab.path
+  const key = await snapshotKey(path)
+  const content = await readSnapshot(key, name)
+  if (content == null) {
+    app.banner = 'Version introuvable — elle a peut-être été purgée.'
+    void loadSnapshotsForActive()
+    return
+  }
+  if (content === tab.content) return // déjà cette version
+  // On n'archive l'état courant QUE s'il porte des modifications non enregistrées :
+  // sinon il est déjà dans l'historique (dernière save ou version en cours) et le
+  // re-snapshotter ne ferait que des doublons à chaque clic.
+  const preserved = isDirty(tab)
+  if (preserved) await recordSnapshot(key, tab.content, path, Date.now())
+  try {
+    await writeTextFileAtomic(path, content)
+  } catch (err) {
+    console.error('Restauration échouée', err)
+    app.banner = `Impossible de restaurer « ${tab.name} » (erreur d'écriture).`
+    return
+  }
+  applyDiskContent(tab, content)
+  app.banner = preserved
+    ? "Version restaurée. Vos modifications non enregistrées ont été ajoutées à l'historique."
+    : 'Version restaurée.'
+  await loadSnapshotsForActive()
 }
 
 // --- Rechargement sur modification externe (FR-3, 3.5) ---
