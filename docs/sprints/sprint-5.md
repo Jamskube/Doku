@@ -9,7 +9,7 @@
 
 | # | Story | Size | Priority | Status | Notes |
 |---|-------|------|----------|--------|-------|
-| 2.4 | Glisser-déposer de fichiers dans la fenêtre | S | P1 | TODO | événement drop Tauri/webview → openPath ; partiellement testable navigateur |
+| 2.4 | Glisser-déposer de fichiers dans la fenêtre | S | P1 | ✅ Done | `onDragDropEvent` webview (zéro Rust) → `openDropped` (openPath + garde 1.2 / bandeau si non supporté) ; overlay de dépôt ; validé natif |
 | 1.2 | Détection d'encodage & fichiers non supportés | S | P1 | ✅ Done | `detectUnsupported` (NUL + ratio U+FFFD) sur dialogue/explorateur/session ; bandeau clair, pas de crash ; PDF/images masqués en amont (voulu) ; validé natif |
 | 5.3 | Support `.txt` (éditeur simple) | S | P2 | ✅ Done | `txtExtensions` (CM6 nu, ni markdown ni live preview) branché sur `kind==='txt'` ; monospace ; Plan gated md ; validé Playwright |
 | 8.3 | Zéro requête réseau au runtime | S | P1 | TODO | monitorer le réseau à l'exécution → aucune requête (polices/assets bundlés) |
@@ -19,6 +19,9 @@
 _None_
 
 ## Progress Log
+### 2026-07-10 — 2.4
+- **2.4** ✅ **Done** (validé natif) : glisser-déposer via `onDragDropEvent` du webview Tauri (`onFileDrop`, **zéro Rust**). Chaque chemin lâché → `openDropped` : extension supportée → `openPath` (dédup onglet existant + garde binaire/encodage 1.2) ; sinon bandeau « format non pris en charge » (un dépôt est explicite, contrairement au masquage de l'explorateur). Overlay de dépôt (bordure pointillée + « Déposez le fichier pour l'ouvrir ») piloté par enter/over/leave. Validé natif : drop simple/multiple, format non supporté → bandeau, dédup.
+
 ### 2026-07-10 — 1.2
 - **1.2** ✅ **Done** (validé natif) : `detectUnsupported(content, name)` — garde octet NUL (binaire) + ratio U+FFFD > 2% (encodage non-UTF-8), module pur `encoding.ts` (6 tests). Câblé sur les 3 chemins d'ouverture : dialogue (`openFromDialog`), explorateur/wikilink/association (`openPath`, avec try/catch sur le throw UTF-8 de Tauri), restauration de session (garde + **bug latent corrigé** : un fichier illisible ne casse plus la boucle). Fichier non affichable → bandeau clair, aucun onglet-garbage. **Décision** : les formats non supportés (PDF/images) restent **masqués** en amont (dialogue + `visibleEntries`) — voulu ; PDF = v2. Validé natif : `binaire-test.txt` (NUL) et `latin1-test.txt` → bandeaux ; `.md` UTF-8 OK.
 
