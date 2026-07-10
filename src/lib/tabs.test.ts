@@ -3,7 +3,7 @@ import { parentFolder, tabDiscriminator } from './tabs'
 import type { DocTab } from './stores.svelte'
 
 function tab(id: number, name: string, path: string | null): DocTab {
-  return { id, name, path, kind: 'md', content: '', savedContent: '', eol: '\n', rev: 0 }
+  return { id, name, path, kind: 'md', content: '', savedContent: '', eol: '\n', rev: 0, heavy: false }
 }
 
 describe('parentFolder', () => {

@@ -2,7 +2,7 @@
   import { onMount } from 'svelte'
   import { EditorView } from '@codemirror/view'
   import { EditorState } from '@codemirror/state'
-  import { app, activeTab, COLUMN_PX, cycleColumnWidth, docHeadings, editorRef, isDirty } from '../lib/stores.svelte'
+  import { app, activeTab, COLUMN_PX, cycleColumnWidth, docHeadings, editorRef, forcePreview, isDirty } from '../lib/stores.svelte'
   import { baseExtensions, htmlSourceExtensions, livePreviewComp, previewExtensions, serializeDoc, sourceExtensions, txtExtensions } from '../lib/editor/editor'
   import { docDirFacet } from '../lib/editor/live-preview'
   import { parentPath } from '../lib/explorer'
@@ -41,14 +41,16 @@
           ? htmlSourceExtensions(extra)
           : tab?.kind === 'txt'
             ? txtExtensions(extra)
-            : baseExtensions(app.sourceMode, extra),
+            : baseExtensions(app.sourceMode || (tab?.heavy ?? false), extra),
     })
   }
 
   // Scroll-spy : titre courant = dernier titre au-dessus du haut du viewport (4.6).
   // Titres seulement pour le Markdown (un .txt/.html n'a pas de structure de titres).
   function updateActiveHeading(v: EditorView) {
-    const headings = activeTab()?.kind === 'md' ? docHeadings(activeTab()?.content ?? '') : []
+    const tab = activeTab()
+    // Gros fichier : pas de scroll-spy (docHeadings est O(doc), gèlerait le scroll).
+    const headings = tab?.kind === 'md' && !tab.heavy ? docHeadings(tab.content) : []
     if (!headings.length) {
       app.activeHeadingLine = 0
       return
@@ -94,7 +96,8 @@
       renderedRev = tab.rev
       revs.set(tab.id, tab.rev)
     }
-    view.dispatch({ effects: livePreviewComp.reconfigure(sourceMode ? sourceExtensions() : previewExtensions()) })
+    const useSource = sourceMode || (tab?.heavy ?? false)
+    view.dispatch({ effects: livePreviewComp.reconfigure(useSource ? sourceExtensions() : previewExtensions()) })
     view.requestMeasure({ read: () => view && updateActiveHeading(view) })
   })
 </script>
@@ -114,6 +117,13 @@
       </button>
     </div>
   {/if}
+  {#if activeTab()?.heavy && !app.focus}
+    <div class="heavy-notice" role="status">
+      <span class="msr" style="font-size:16px">bolt</span>
+      <span>Fichier volumineux — affiché en mode source pour rester fluide.</span>
+      <button class="heavy-action" onclick={() => forcePreview(activeTab()!.id)}>Afficher l'aperçu</button>
+    </div>
+  {/if}
   {#if app.focus && activeTab() && isDirty(activeTab()!)}
     <!-- Mode focus : le doc-head est masqué ; on garde un signal « non enregistré » discret. -->
     <span class="focus-dirty" title="Modifications non enregistrées" aria-label="Modifications non enregistrées"></span>
@@ -121,7 +131,7 @@
   {#if htmlRender}
     <iframe class="html-view" title="Aperçu HTML" sandbox="" srcdoc={sandboxDoc(activeTab()!.content, app.theme, COLUMN_PX[app.columnWidth])}></iframe>
   {/if}
-  <div class="editor-host doku-doc" class:source-mode={app.sourceMode} class:txt={activeTab()?.kind === 'txt'} class:hidden={htmlRender} bind:this={host}></div>
+  <div class="editor-host doku-doc" class:source-mode={app.sourceMode || activeTab()?.heavy} class:txt={activeTab()?.kind === 'txt'} class:hidden={htmlRender} bind:this={host}></div>
 
   {#if !activeTab()}
     <div class="empty">
@@ -144,6 +154,36 @@
 
 <style>
   .doc { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; background: var(--cream-content); }
+
+  .heavy-notice {
+    flex: none;
+    max-width: var(--doc-width, 680px);
+    width: 100%;
+    margin: 8px auto 0;
+    padding: 8px 12px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    border-radius: 8px;
+    background: var(--surface);
+    border: 1px solid var(--line-2);
+    color: var(--ink-3);
+    font-size: 12.5px;
+  }
+  .heavy-notice > .msr { color: var(--warn); flex: none; }
+  .heavy-notice > span:not(.msr) { flex: 1; min-width: 0; }
+  .heavy-action {
+    flex: none;
+    padding: 4px 10px;
+    border-radius: 6px;
+    border: 1px solid var(--line-2);
+    background: transparent;
+    color: var(--ink-2);
+    font-size: 12px;
+    cursor: pointer;
+    transition: background 140ms ease, color 140ms ease;
+  }
+  .heavy-action:hover { background: var(--surface-hover); color: var(--ink); }
 
   .empty {
     position: absolute;

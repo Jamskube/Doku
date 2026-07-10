@@ -26,7 +26,15 @@ export interface DocTab {
   // Incrémenté à chaque rechargement externe : signale à l'éditeur de reconstruire
   // son état pour cet onglet (le contenu a changé hors frappe utilisateur).
   rev: number
+  // Gros fichier : affiché en mode source léger + scroll-spy/plan désactivés pour
+  // rester fluide (1.6). L'utilisateur peut forcer l'aperçu via forcePreview.
+  heavy: boolean
 }
+
+// Au-delà de ce seuil (~1,5 M caractères ≈ 1,5 Mo), un Markdown est ouvert en mode
+// source léger : le scroll-spy (docHeadings O(doc) à chaque scroll) et le panneau
+// Plan sont désactivés pour éviter le gel de l'UI.
+export const HEAVY_THRESHOLD = 1_500_000
 
 let nextId = 1
 
@@ -212,6 +220,7 @@ export function openTab(name: string, path: string | null, content: string, kind
     savedContent: content,
     eol: detectLineEnding(content),
     rev: 0,
+    heavy: content.length > HEAVY_THRESHOLD,
   }
   app.tabs.push(tab)
   app.activeId = tab.id
@@ -331,6 +340,16 @@ export function scrollToLine(line: number) {
     scrollIntoView: true,
   })
   view.focus()
+}
+
+// Force l'aperçu (live preview) sur un gros fichier ouvert en mode source (1.6).
+// Bump `rev` pour que l'éditeur reconstruise son état avec les décorations.
+export function forcePreview(id: number) {
+  const tab = app.tabs.find((t) => t.id === id)
+  if (tab?.heavy) {
+    tab.heavy = false
+    tab.rev++
+  }
 }
 
 // --- Sauvegarde ---

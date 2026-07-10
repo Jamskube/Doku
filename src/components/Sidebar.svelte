@@ -5,8 +5,11 @@
   import { DEMO_DIR } from '../lib/demo'
   import DokuMark from '../lib/DokuMark.svelte'
 
-  // Plan : structure de titres du Markdown seulement (un .txt/.html n'en a pas).
-  const headings = $derived(activeTab()?.kind === 'md' ? docHeadings(activeTab()!.content) : [])
+  // Plan : titres du Markdown seulement (un .txt/.html n'en a pas), et pas pour un
+  // gros fichier (docHeadings O(doc) + DOM de milliers de titres gèlerait — 1.6).
+  const headings = $derived(
+    activeTab()?.kind === 'md' && !activeTab()!.heavy ? docHeadings(activeTab()!.content) : [],
+  )
 
   // Dossier explorateur : navigation explicite, sinon dossier du document actif.
   const targetDir = $derived(app.explorerDir ?? parentPath(activeTab()?.path ?? null))

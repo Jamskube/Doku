@@ -3,7 +3,7 @@
 **Goal** : Ouvrir plus de situations de fichiers, plus souplement — élargir et durcir l'ouverture.
 **Start** : 2026-07-10
 **End** : 2026-07-17
-**Status** : Active
+**Status** : Complete (5/5) — 2026-07-10
 
 ## Stories
 
@@ -13,12 +13,15 @@
 | 1.2 | Détection d'encodage & fichiers non supportés | S | P1 | ✅ Done | `detectUnsupported` (NUL + ratio U+FFFD) sur dialogue/explorateur/session ; bandeau clair, pas de crash ; PDF/images masqués en amont (voulu) ; validé natif |
 | 5.3 | Support `.txt` (éditeur simple) | S | P2 | ✅ Done | `txtExtensions` (CM6 nu, ni markdown ni live preview) branché sur `kind==='txt'` ; monospace ; Plan gated md ; validé Playwright |
 | 8.3 | Zéro requête réseau au runtime | S | P1 | ✅ Done | audit code + Playwright (72 req toutes localhost, 0 distant) ; CSP `connect-src 'self' ipc:` ajoutée ; validé natif |
-| 1.6 | Gros fichiers (≥ ~2 Mo) réactifs | M | P1 | TODO | pas de gel > 200 ms ; proposer bascule mode source au-delà d'un seuil |
+| 1.6 | Gros fichiers (≥ ~2 Mo) réactifs | M | P1 | ✅ Done | `heavy` (> 1,5 M chars) → mode source léger + scroll-spy/Plan gatés (docHeadings O(doc) était la cause du gel) ; notice + « Afficher l'aperçu » ; validé Playwright (doc 1,9 Mo, scroll 34ms/20) |
 
 ## Blockers
 _None_
 
 ## Progress Log
+### 2026-07-10 — 1.6
+- **1.6** ✅ **Done** : gros fichiers réactifs. Diagnostic — le live-preview est déjà viewport-scopé (peu coûteux) ; la vraie cause du gel = `updateActiveHeading` appelant `docHeadings(content)` (split O(doc)) **à chaque scroll**, + le panneau Plan O(doc). Correctif : flag `heavy` (`content.length > 1,5 M`, `HEAVY_THRESHOLD`) sur `DocTab` (openTab) → l'onglet s'ouvre en **mode source léger** (`baseExtensions(sourceMode||heavy)`, pas de widgets), le **scroll-spy et le Plan sont gatés `!heavy`**. Notice « Fichier volumineux — mode source · [Afficher l'aperçu] » → `forcePreview` (heavy=false + rev++ → rebuild). Validé Playwright avec un doc généré ~1,9 Mo : source-light (0 déco live-preview), **scroll 34 ms / 20 events** (vs O(doc) sinon), Plan vide, forcePreview bascule sans gel ; non-régression notes.md (preview + Plan 4 titres). Limite connue : la sérialisation O(doc) à la frappe reste (édition d'énorme fichier), hors périmètre gel-lecture.
+
 ### 2026-07-10 — 8.3
 - **8.3** ✅ **Done** (validé natif) : audit — aucun `fetch`/XHR/WebSocket/telemetry (JS), aucun réseau Rust (pas de reqwest/updater), plugins locaux, polices `@fontsource`/`material-symbols` en fichiers **locaux bundlés**. Preuve Playwright : usage complet → **72 requêtes toutes `localhost`, 0 hôte distant**. Durcissement : `security.csp` = `connect-src 'self' ipc: http://ipc.localhost; object-src 'none'` (bloque tout fetch/XHR/WS distant ; volontairement sans `default-src`/`script-src`/`frame-src` pour ne pas casser polices/`srcdoc`/asset-protocol/IPC). Validé natif : app pleinement fonctionnelle sous CSP.
 
