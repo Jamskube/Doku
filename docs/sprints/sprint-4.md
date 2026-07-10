@@ -11,7 +11,7 @@
 |---|-------|------|----------|--------|-------|
 | 5.1 | Vue HTML rendue (sandbox) | M | P1 | ✅ Done | `<iframe sandbox="">` + CSP `default-src 'none'` injectée (`html.ts`, 4 tests) ; éditeur masqué ; validé Playwright (recette.html) |
 | 5.2 | HTML : édition source + refresh | S | P1 | ✅ Done | `@codemirror/lang-html` + tags balises dans `dokuHighlight` ; `htmlSourceExtensions` ; Ctrl+/ rendu↔source, refresh réactif ; validé Playwright |
-| 3.6 | Mode source Ctrl+/ (formaliser + vérifier) | S | P1 | TODO | socle en place (Compartment) ; vérifier curseur conservé + retour sans perte |
+| 3.6 | Mode source Ctrl+/ (formaliser + vérifier) | S | P1 | ✅ Done | Bascule via `Compartment.reconfigure` (même `EditorState`) ; curseur conservé au caractère près, retour sans perte, pas de faux « modifié » ; validé Playwright |
 | 4.6 | Table des matières (highlight au scroll) | S | P2 | ✅ Done | Scroll-spy (`elementAtHeight` → titre courant) ; `app.activeHeadingLine` surligné dans le Plan ; validé Playwright |
 | 3.5 | Rechargement sur modification externe | M | P1 | TODO | watcher plugin-fs ; au focus, proposer recharger (silencieux si pas de modif locale) |
 
@@ -29,6 +29,9 @@ _None_
 ### 2026-07-09
 - Sprint initialisé : 5 stories neuves (4 P1, 1 P2) + 3 freebies clôturés au ledger
 - Rappels process (rétros) : design hors stories ; smoke-tester en release/natif tôt ; logique pure → tests ; privilégier le browser-testable
+
+### 2026-07-10 — 3.6
+- **3.6** ✅ **Done** : mode source formalisé. Ctrl+/ bascule `livePreviewComp.reconfigure()` sur le **même** `EditorState` (pas de `setState`/remount), d'où trois propriétés vérifiées en navigateur : (1) source monospace colorée avec markdown brut (`#`, `[[wl]]`, fences, `- [x]`), (2) **curseur conservé au caractère près** (caret « démons|tration » identique avant/après bascule — la reconfigure ne touche pas la sélection), (3) **retour WYSIWYG sans perte** (caption reste « enregistré », contenu intact). Bonus : la bascule seule ne lève pas de faux « modifié ». Régression : 63 tests + `svelte-check` 0 erreur.
 
 ### 2026-07-09 — 4.6
 - **4.6** ✅ **Done** : scroll-spy dans DocumentView — au scroll de l'éditeur, `elementAtHeight(scrollTop+24)` → ligne en tête de viewport → dernier titre au-dessus = `app.activeHeadingLine`. Le panneau Plan surligne ce titre (`.plan-h1.active`/`.plan-sub.active`). Recalcul aussi au changement d'onglet (`requestMeasure`). Hiérarchie H1-H3, clic `scrollToLine` et état vide étaient déjà là. Validé Playwright : scroll 700→Décisions, 1500→À faire.
