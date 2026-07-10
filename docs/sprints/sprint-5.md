@@ -3,7 +3,7 @@
 **Goal** : Ouvrir plus de situations de fichiers, plus souplement — élargir et durcir l'ouverture.
 **Start** : 2026-07-10
 **End** : 2026-07-17
-**Status** : Complete (5/5) — 2026-07-10
+**Status** : Completed (5/5) — 2026-07-10
 
 ## Stories
 
