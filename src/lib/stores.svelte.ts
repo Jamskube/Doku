@@ -149,7 +149,10 @@ export async function restoreSession() {
     try {
       content = await readTextFileAt(p)
     } catch {
-      continue // fichier illisible/encodage : on ne restaure pas, sans casser la boucle
+      // readTextFile lève sur un fichier supprimé (natif) : le compter comme
+      // introuvable (sinon la bannière FR-4 ne se déclenche jamais en natif).
+      missing.push(p)
+      continue
     }
     if (content == null) {
       missing.push(p)

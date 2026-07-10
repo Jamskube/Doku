@@ -35,4 +35,24 @@ describe('sanitizeHtml', () => {
     expect(out).toContain('<strong>gras</strong>')
     expect(out).toContain('<li>a</li>')
   })
+
+  it('retire <meta http-equiv=refresh> et <base> (navigation auto)', () => {
+    const out = sanitizeHtml('<meta http-equiv="refresh" content="0;url=http://evil"><base href="http://evil/">x')
+    expect(out.toLowerCase()).not.toContain('http-equiv')
+    expect(out.toLowerCase()).not.toContain('<base')
+    expect(out).not.toContain('evil')
+  })
+
+  it('retire le href d’une ancre externe (beacon au clic) mais garde le fragment', () => {
+    const ext = sanitizeHtml('<a href="http://evil/b">lien</a>')
+    expect(ext).not.toContain('http://evil')
+    expect(ext).toContain('lien')
+    const frag = sanitizeHtml('<a href="#s">ancre</a>')
+    expect(frag).toContain('href="#s"')
+  })
+
+  it('conserve le <style> (fidélité ; réseau CSS bloqué par la CSP de l’iframe)', () => {
+    const out = sanitizeHtml('<style>body{color:rebeccapurple}</style><p>x</p>')
+    expect(out).toContain('rebeccapurple')
+  })
 })

@@ -150,10 +150,14 @@ export async function onFileDrop(
   })
 }
 
+// Compteur pour un nom de tmp unique : deux sauvegardes concurrentes du même
+// fichier (Ctrl+S rapide, ou save-all à la fermeture) ne se courent pas dessus.
+let tmpSeq = 0
+
 export async function writeTextFileAtomic(path: string, content: string) {
   if (!isTauri) return
   const { writeTextFile, rename } = await import('@tauri-apps/plugin-fs')
-  const tmp = path + '.doku-tmp'
+  const tmp = `${path}.${Date.now()}-${tmpSeq++}.doku-tmp`
   await writeTextFile(tmp, content)
   await rename(tmp, path)
 }

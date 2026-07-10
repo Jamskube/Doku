@@ -1,7 +1,10 @@
-// Prépare un document HTML pour l'aperçu sandboxé (FR-8) : on injecte une CSP
-// stricte (aucun script, aucun réseau) + une feuille de base pour que le rendu
-// habite la même colonne « papier » que le reste de Doku (au lieu du défaut
-// navigateur Times/collé-à-gauche). Le rendu se fait dans un `<iframe sandbox="">`.
+// Prépare un document HTML pour l'aperçu sandboxé (FR-8) : on assainit le HTML
+// (sanitizeHtml) puis on injecte une CSP stricte (aucun script, aucun réseau) + une
+// feuille de base pour que le rendu habite la même colonne « papier » que le reste
+// de Doku (au lieu du défaut navigateur Times/collé-à-gauche). Rendu dans un
+// `<iframe sandbox="">`.
+import { sanitizeHtml } from './sanitize'
+
 const CSP =
   `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:; font-src data:">`
 
@@ -45,8 +48,11 @@ function baseStyle(theme: Theme, maxWidth: string): string {
 }
 
 export function sandboxDoc(html: string, theme: Theme = 'light', maxWidth = '680px'): string {
+  // Assainir AVANT d'injecter (sinon DOMPurify retirerait notre <meta>/<style>) :
+  // retire script/meta-refresh/base/form et neutralise les ancres externes.
+  const clean = sanitizeHtml(html)
   const inject = CSP + baseStyle(theme, maxWidth)
-  if (/<head[^>]*>/i.test(html)) return html.replace(/<head[^>]*>/i, (m) => m + inject)
-  if (/<html[^>]*>/i.test(html)) return html.replace(/<html[^>]*>/i, (m) => `${m}<head>${inject}</head>`)
-  return inject + html
+  if (/<head[^>]*>/i.test(clean)) return clean.replace(/<head[^>]*>/i, (m) => m + inject)
+  if (/<html[^>]*>/i.test(clean)) return clean.replace(/<html[^>]*>/i, (m) => `${m}<head>${inject}</head>`)
+  return inject + clean
 }

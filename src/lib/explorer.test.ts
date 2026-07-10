@@ -46,6 +46,8 @@ describe('parentPath', () => {
   it('gère un slash final', () => expect(parentPath('G:\\Notes\\sous\\')).toBe('G:\\Notes'))
   it('racine → null', () => expect(parentPath('a.md')).toBe(null))
   it('null → null', () => expect(parentPath(null)).toBe(null))
+  it('racine de lecteur Windows : « C:\\a.md » → « C:\\ »', () =>
+    expect(parentPath('C:\\a.md')).toBe('C:\\'))
 })
 
 describe('joinPath', () => {

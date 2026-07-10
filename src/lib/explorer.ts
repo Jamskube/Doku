@@ -34,7 +34,11 @@ export function parentPath(path: string | null): string | null {
   const trimmed = path.endsWith(sep) ? path.slice(0, -1) : path
   const idx = trimmed.lastIndexOf(sep)
   if (idx <= 0) return null
-  return trimmed.slice(0, idx)
+  const parent = trimmed.slice(0, idx)
+  // Racine de lecteur Windows : « C:\file » → parent « C: » est malformé
+  // (joinPath mé-détecterait le séparateur) → renvoyer la racine « C:\ ».
+  if (/^[A-Za-z]:$/.test(parent)) return parent + sep
+  return parent
 }
 
 export function joinPath(dir: string, name: string): string {
