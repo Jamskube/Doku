@@ -21,7 +21,7 @@ const dokuHighlight = HighlightStyle.define([
   { tag: tags.link, color: 'var(--ink)' },
   { tag: tags.url, color: 'var(--ink-4)' },
   { tag: tags.quote, color: 'var(--ink-3)', fontStyle: 'italic' },
-  { tag: tags.contentSeparator, color: 'var(--ink-5)' },
+  { tag: tags.contentSeparator, color: 'var(--ink-4)' },
   { tag: tags.processingInstruction, color: 'var(--ink-4)' },
   { tag: tags.meta, color: 'var(--ink-4)' },
   { tag: tags.comment, fontFamily: 'var(--font-mono)', color: 'var(--ink-4)' },
@@ -68,7 +68,7 @@ const dokuTheme = EditorView.theme({
     fontFamily: 'var(--font-mono)',
     fontSize: '13.5px',
     lineHeight: '1.7',
-    backgroundColor: 'var(--surface)',
+    backgroundColor: 'var(--code-bg)',
     padding: '0 18px',
   },
   '.cm-lp-quote': {

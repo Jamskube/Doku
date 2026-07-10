@@ -17,13 +17,16 @@ const PALETTE: Record<Theme, Record<string, string>> = {
 
 // Feuille de base : le document HTML garde la priorité (ses propres <style>
 // viennent après dans la cascade), on ne fait que fournir des défauts sains.
-function baseStyle(theme: Theme): string {
+// `maxWidth` reprend la largeur de colonne courante (--doc-width) pour que le
+// rendu s'aligne exactement sur la caption et obéisse au bouton de largeur.
+function baseStyle(theme: Theme, maxWidth: string): string {
   const p = PALETTE[theme]
   return `<style>
   :root { color-scheme: ${theme}; }
+  *, *::before, *::after { box-sizing: border-box; }
   html { background: ${p.bg}; }
   body {
-    margin: 0 auto; max-width: 680px; padding: 40px 40px 120px;
+    margin: 0 auto; max-width: ${maxWidth}; padding: 40px 40px 120px;
     font-family: 'Source Serif 4', 'Iowan Old Style', Georgia, serif;
     font-size: 18.5px; line-height: 1.78; color: ${p.ink2}; background: ${p.bg};
     -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility;
@@ -41,8 +44,8 @@ function baseStyle(theme: Theme): string {
 </style>`
 }
 
-export function sandboxDoc(html: string, theme: Theme = 'light'): string {
-  const inject = CSP + baseStyle(theme)
+export function sandboxDoc(html: string, theme: Theme = 'light', maxWidth = '680px'): string {
+  const inject = CSP + baseStyle(theme, maxWidth)
   if (/<head[^>]*>/i.test(html)) return html.replace(/<head[^>]*>/i, (m) => m + inject)
   if (/<html[^>]*>/i.test(html)) return html.replace(/<html[^>]*>/i, (m) => `${m}<head>${inject}</head>`)
   return inject + html

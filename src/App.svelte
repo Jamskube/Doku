@@ -29,10 +29,17 @@
   async function openFromDialog() {
     try {
       const file = await openFileDialog()
-      if (file) openTab(file.name, file.path, file.content)
+      if (!file) return
+      // Garde binaire minimale (un octet NUL trahit un fichier non-texte) ; la
+      // détection d'encodage complète reste la story 1.2.
+      if (file.content.includes('\u0000')) {
+        app.banner = `Impossible d'ouvrir « ${file.name} » : fichier binaire ou encodage non pris en charge.`
+        return
+      }
+      openTab(file.name, file.path, file.content)
     } catch (err) {
-      // UX d'erreur complète (encodage/binaire) : story 1.2
       console.error('Ouverture du fichier échouée', err)
+      app.banner = "Impossible d'ouvrir le fichier (erreur de lecture ou d'encodage)."
     }
   }
 
@@ -181,6 +188,7 @@
   .banner-msg { flex: 1; min-width: 0; }
   .banner-action {
     flex: none;
+    min-height: 24px;
     padding: 4px 12px;
     border-radius: 7px;
     border: 1px solid var(--line-2);
@@ -196,12 +204,13 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
+    width: 24px;
+    height: 24px;
     border: 0;
     background: transparent;
     color: var(--ink-4);
     cursor: pointer;
     border-radius: 5px;
-    padding: 3px;
   }
   .banner-close:hover { background: var(--surface-hover); color: var(--ink); }
   .stage { flex: 1; min-height: 0; display: flex; background: var(--cream-base); }

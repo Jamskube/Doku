@@ -193,9 +193,10 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 18px;
-    height: 18px;
-    border-radius: 5px;
+    width: 24px;
+    height: 24px;
+    margin-right: -4px;
+    border-radius: 6px;
     color: var(--ink-4);
     opacity: 0.45;
     transition: opacity 120ms ease, background 120ms ease, color 120ms ease;

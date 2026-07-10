@@ -2,7 +2,7 @@
   import { onMount } from 'svelte'
   import { EditorView } from '@codemirror/view'
   import { EditorState } from '@codemirror/state'
-  import { app, activeTab, cycleColumnWidth, docHeadings, editorRef, isDirty } from '../lib/stores.svelte'
+  import { app, activeTab, COLUMN_PX, cycleColumnWidth, docHeadings, editorRef, isDirty } from '../lib/stores.svelte'
   import { baseExtensions, htmlSourceExtensions, livePreviewComp, previewExtensions, serializeDoc, sourceExtensions, txtExtensions } from '../lib/editor/editor'
   import { docDirFacet } from '../lib/editor/live-preview'
   import { parentPath } from '../lib/explorer'
@@ -114,8 +114,12 @@
       </button>
     </div>
   {/if}
+  {#if app.focus && activeTab() && isDirty(activeTab()!)}
+    <!-- Mode focus : le doc-head est masqué ; on garde un signal « non enregistré » discret. -->
+    <span class="focus-dirty" title="Modifications non enregistrées" aria-label="Modifications non enregistrées"></span>
+  {/if}
   {#if htmlRender}
-    <iframe class="html-view" title="Aperçu HTML" sandbox="" srcdoc={sandboxDoc(activeTab()!.content, app.theme)}></iframe>
+    <iframe class="html-view" title="Aperçu HTML" sandbox="" srcdoc={sandboxDoc(activeTab()!.content, app.theme, COLUMN_PX[app.columnWidth])}></iframe>
   {/if}
   <div class="editor-host doku-doc" class:source-mode={app.sourceMode} class:txt={activeTab()?.kind === 'txt'} class:hidden={htmlRender} bind:this={host}></div>
 
@@ -128,6 +132,12 @@
         Ouvrir un fichier
         <span class="keys"><kbd>Ctrl</kbd><kbd>O</kbd></span>
       </button>
+      <dl class="empty-shortcuts">
+        <div><dt><kbd>Ctrl</kbd><kbd>/</kbd></dt><dd>source ↔ rendu</dd></div>
+        <div><dt><kbd>F9</kbd></dt><dd>mode focus</dd></div>
+        <div><dt><kbd>Ctrl</kbd><kbd>⇧</kbd><kbd>E</kbd></dt><dd>explorateur</dd></div>
+        <div><dt><kbd>Ctrl</kbd><kbd>⇧</kbd><kbd>P</kbd></dt><dd>plan</dd></div>
+      </dl>
     </div>
   {/if}
 </div>
@@ -164,7 +174,7 @@
   }
   .empty-open:hover { background: var(--surface-hover); color: var(--ink); border-color: var(--line-3); }
   .empty-open .keys { display: inline-flex; gap: 3px; margin-left: 4px; }
-  .empty-open kbd {
+  .empty kbd {
     font-family: var(--font-mono);
     font-size: 10.5px;
     line-height: 1;
@@ -173,6 +183,29 @@
     background: var(--surface-2);
     color: var(--ink-4);
     border: 1px solid var(--line-2);
+  }
+  .empty-shortcuts {
+    margin: 8px 0 0;
+    display: grid;
+    grid-template-columns: auto auto;
+    gap: 8px 22px;
+    font-size: 12px;
+    color: var(--ink-4);
+  }
+  .empty-shortcuts div { display: flex; align-items: center; gap: 8px; }
+  .empty-shortcuts dt { display: inline-flex; gap: 3px; }
+  .empty-shortcuts dd { margin: 0; }
+  .focus-dirty {
+    position: absolute;
+    top: 14px;
+    right: 16px;
+    z-index: 2;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--ink-3);
+    opacity: 0.55;
+    pointer-events: none;
   }
   .doc-head {
     flex: none;
