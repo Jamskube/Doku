@@ -61,10 +61,14 @@ _Append via `/start learn <type>: <lesson>`. NEVER delete this section on update
 - [2026-07-09] Certains comportements natifs (fermeture de fenêtre, `windows_subsystem`) **diffèrent entre dev (debug) et release** → smoke-tester en **build release** avant de marquer « done » une story fenêtre/OS (le bug de fermeture ci-dessus n'apparaissait qu'en release)
 - [2026-07-09] **DOMPurify est incompatible avec happy-dom** (sanitization dégradée : déstructure le HTML au lieu de le nettoyer) → tester avec **jsdom** (`// @vitest-environment jsdom`)
 - [2026-07-09] CodeMirror 6 : **ne pas muter le DOM d'un `WidgetType` via `replaceWith`** — CM6 réconcilie et clobber la modif (le widget disparaît). Retourner un **conteneur stable** (span) et muter son contenu/classe (ex. `<img>` → placeholder à l'erreur de chargement dans `live-preview.ts`)
+- [2026-07-09] La CLI Tauri v2 **auto-ajoute les features requises à `Cargo.toml`** (ex. `protocol-asset` quand `assetProtocol` est activé dans `tauri.conf.json`) lors d'un `tauri dev`/`build` → penser à committer `Cargo.toml`/`Cargo.lock` après, sinon un build neuf casse
+- [2026-07-10] Tauri `getCurrentWindow().onFocusChanged` se déclenche **au focus ET au blur** — filtrer sur `payload.focused`, sinon le handler tourne deux fois par cycle
+- [2026-07-10] Un critère PRD précis (« au focus ») peut trancher un choix d'implémentation en faveur du plus simple : pour le rechargement sur modif externe, une **relecture au focus** suffit et évite un watcher `plugin-fs` (donc zéro Rust) — lire le critère à la lettre avant de sur-concevoir
 
 ### Workarounds
 <!-- working solutions to known issues -->
 - [2026-07-08] `fs:default` (plugin-fs Tauri) ne couvre pas la lecture/écriture hors dossiers app → déclarer explicitement `fs:allow-read-text-file`, `fs:allow-write-text-file`, `fs:allow-rename` avec un scope dans `capabilities/default.json`
+- [2026-07-10] Pousser un contenu externe dans un éditeur CM6 **caché-par-onglet** (cache d'`EditorState` par onglet) sans remount : ajouter un compteur `rev` sur l'onglet, le lire dans le `$effect` Svelte, et `setState(makeState(...))` quand `rev` change (invalider aussi le cache des onglets inactifs rechargés). Le `$effect` ne re-render que sur changement d'id d'onglet — `rev` est le hook minimal pour le forcer sur un reload disque
 
 ### Performance Notes
 <!-- perf learnings -->
