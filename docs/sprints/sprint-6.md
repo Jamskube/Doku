@@ -3,7 +3,7 @@
 **Goal** : Clore le dernier epic ouvert — Epic 7 (fenêtre & versions, FR-11/FR-12) — et finir la navigation entre notes (création de wikilink).
 **Start** : 2026-07-10
 **End** : 2026-07-17
-**Status** : Active
+**Status** : Completed (4/4)
 
 ## Stories
 
@@ -12,7 +12,7 @@
 | 7.1 | Épinglage always-on-top (finir + vérif native) | S | ✅ Done | Raccourci Ctrl+Maj+T + `togglePin` centralisé ; validé natif utilisateur (2026-07-10) |
 | 7.2 | SnapshotService (copie à la save + purge auto) | M | ✅ Done | `snapshot.ts` (pur, 15 tests) + I/O confiné + panneau Historique ; critic (plan) + code-reviewer (Approve, 2 Minor corrigés) ; validé natif utilisateur (2026-07-10) |
 | 7.3 | Restauration depuis l'historique | S | ✅ Done | Clic sur une version → restaure (réversible) ; snapshot du courant seulement si modifs non enregistrées (pas de doublon) ; validé natif (2026-07-10) |
-| 4.5 | Désambiguïsation & création de wikilink | S | TODO | Cible inexistante → proposer créer `note.md` à côté ; ambiguë → menu candidats |
+| 4.5 | Désambiguïsation & création de wikilink | S | ✅ Done | Inexistant → prompt création ; homonymes → menu candidats ; validé natif (2026-07-10) |
 
 ## Hors sprint (à traiter au fil de l'eau)
 - **4.3** (non supportés grisés/masqués) : déjà satisfait *de facto* (masqués en amont via `visibleEntries`, validé par 1.2/2.4). À formaliser dans le ledger, pas de dev.
@@ -29,3 +29,4 @@ _None_
 - **7.1 ✅** : raccourci Ctrl+Maj+T + `togglePin` centralisé (store) ; validé natif utilisateur. Piège CM6 `defaultKeymap` (Shift-Mod-t) vérifié absent.
 - **7.2 ✅** : SnapshotService (ADR-0003) — copie à la save + purge 20/30j (garde-le-dernier) + panneau Historique daté/aperçu. Passe `critic` (plan) puis `code-reviewer` (Approve, 0 Crit/Major ; 2 Minor corrigés : `meta.json` atomique + réconcilié disque, horodatage synchrone). `remove` confiné à `$APPDATA/snapshots/**`. Restauration = 7.3.
 - **7.3 ✅** : restauration au clic. Correctif post-smoke : ne snapshotter l'état courant que s'il est **dirty** (sinon déjà dans l'historique) → parcourir les versions n'ajoute plus de doublons (retour utilisateur « ça pollue »). Épinglage/restauration réversibles, zéro perte. **Epic 7 clos.**
+- **4.5 ✅** : désambiguïsation & création de wikilink. Inexistant → prompt de création (garde anti-écrasement, `../` neutralisé) ; homonymes → menu de candidats. `WikilinkPrompt.svelte` (style `ConfirmDialog`). **Sprint 6 complet (4/4).**

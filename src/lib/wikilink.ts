@@ -8,13 +8,33 @@ export function normalizeTarget(name: string): string {
   return last.replace(/\.(md|markdown|txt|html?)$/i, '').trim().toLowerCase()
 }
 
-// Trouve dans une liste de fichiers celui qui correspond à la cible. Préfère
-// .md/.markdown en cas d'égalité de nom. Renvoie le chemin, ou null si absent.
-export function matchWikilink(target: string, files: { path: string; name: string }[]): string | null {
+export interface WikiCandidate {
+  path: string
+  name: string
+}
+
+// Tous les fichiers correspondant à une cible, avec préférence .md/.markdown :
+// s'il existe des .md, seuls ceux-ci sont candidats (les autres extensions sont
+// ignorées) ; sinon tous les fichiers correspondants. Sert à la désambiguïsation (4.5).
+export function wikilinkCandidates(target: string, files: WikiCandidate[]): WikiCandidate[] {
   const t = normalizeTarget(target)
-  if (!t) return null
+  if (!t) return []
   const matches = files.filter((f) => normalizeTarget(f.name) === t)
-  if (matches.length === 0) return null
-  const md = matches.find((f) => /\.(md|markdown)$/i.test(f.name))
-  return (md ?? matches[0]).path
+  const md = matches.filter((f) => /\.(md|markdown)$/i.test(f.name))
+  return md.length ? md : matches
+}
+
+// Nom de fichier à créer pour une cible inexistante : dernier segment uniquement
+// (jamais un chemin — neutralise une traversée `../`), ancre retirée, extension .md
+// ajoutée si aucune extension supportée n'est déjà écrite. '' si la cible est vide.
+export function wikilinkFileName(target: string): string {
+  const last = (target.split('#')[0].split(/[\\/]/).pop() ?? '').trim()
+  if (!last) return ''
+  return /\.(md|markdown|txt|html?)$/i.test(last) ? last : `${last}.md`
+}
+
+// Résout une cible en un seul chemin (préférence .md), ou null si absente.
+export function matchWikilink(target: string, files: WikiCandidate[]): string | null {
+  const c = wikilinkCandidates(target, files)
+  return c.length ? c[0].path : null
 }

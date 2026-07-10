@@ -4,6 +4,7 @@
   import TitleBar from './components/TitleBar.svelte'
   import DocumentView from './components/DocumentView.svelte'
   import ConfirmDialog from './components/ConfirmDialog.svelte'
+  import WikilinkPrompt from './components/WikilinkPrompt.svelte'
   import { app, activeTab, askSave, checkExternalChanges, cycleTab, dialog, dismissReloadPrompt, initApp, isDirty, openDropped, openPath, openTab, openWikilink, reloadPromptedTab, requestCloseTab, saveSession, saveSettings, saveTab, togglePin, toggleSidebarView } from './lib/stores.svelte'
   import { onFileDrop, onOpenFile, onWindowCloseRequested, onWindowFocus, openFileDialog } from './lib/tauri'
   import { detectUnsupported } from './lib/encoding'
@@ -88,7 +89,7 @@
       .catch((err) => console.error('Écoute du glisser-déposer échouée', err))
 
     const onKey = async (e: KeyboardEvent) => {
-      if (dialog.open) return
+      if (dialog.open || app.wikiPrompt) return
       if (e.key === 'F9') {
         e.preventDefault()
         app.focus = !app.focus
@@ -189,6 +190,7 @@
 </div>
 
 <ConfirmDialog />
+<WikilinkPrompt />
 
 <style>
   .app { position: relative; height: 100%; display: flex; background: var(--cream-base); }

@@ -6,7 +6,7 @@ import { detectUnsupported } from './encoding'
 import { classifyExternalChange } from './reload'
 import { snapshotKey, type SnapshotInfo } from './snapshot'
 import { isTauri, listSnapshots, purgeAllSnapshots, readSnapshot, readTextFileAt, recordSnapshot, scanFiles, setAlwaysOnTop, writeTextFileAtomic } from './tauri'
-import { matchWikilink, normalizeTarget } from './wikilink'
+import { normalizeTarget, wikilinkCandidates, wikilinkFileName } from './wikilink'
 
 export type DocKind = 'md' | 'html' | 'txt'
 export type SidebarView = 'files' | 'plan' | 'history'
@@ -37,6 +37,12 @@ export interface DocTab {
 // Plan sont désactivés pour éviter le gel de l'UI.
 export const HEAVY_THRESHOLD = 1_500_000
 
+// Wikilink cliqué sans cible unique (4.5) : soit proposer la création, soit choisir
+// parmi plusieurs candidats homonymes.
+export type WikiPrompt =
+  | { kind: 'create'; target: string; fileName: string; dir: string }
+  | { kind: 'choose'; target: string; candidates: { path: string; name: string; dir: string }[] }
+
 let nextId = 1
 
 export const app = $state({
@@ -66,6 +72,8 @@ export const app = $state({
   // panneau et après chaque save. snapshotsFor = onglet auquel la liste appartient.
   snapshots: [] as SnapshotInfo[],
   snapshotsFor: null as number | null,
+  // Wikilink ambigu ou inexistant en attente de décision (4.5).
+  wikiPrompt: null as WikiPrompt | null,
 })
 
 // Accès non réactif à la vue CM6 courante (scroll TOC, sauvegarde…)
@@ -247,9 +255,9 @@ export function openTab(name: string, path: string | null, content: string, kind
   return tab
 }
 
-// Résout et ouvre un wikilink `[[note]]` (FR-7) : d'abord un onglet déjà ouvert
-// du même nom, sinon le fichier dans le dossier du doc actif (+ sous-dossiers).
-// Cible absente → no-op (création = story 4.5).
+// Résout et ouvre un wikilink `[[note]]` (FR-7, FR-10) : d'abord un onglet déjà
+// ouvert du même nom, sinon les fichiers du dossier du doc actif (+ sous-dossiers).
+// 1 candidat → ouvre ; 2+ → menu de désambiguïsation ; 0 → proposition de création (4.5).
 export async function openWikilink(target: string) {
   const t = normalizeTarget(target)
   const open = app.tabs.find((tab) => normalizeTarget(tab.name) === t)
@@ -262,8 +270,55 @@ export async function openWikilink(target: string) {
   const files = isTauri
     ? await scanFiles(base)
     : DEMO_DIR.filter((e) => !e.isDir).map((e) => ({ name: e.name, path: joinPath(base, e.name) }))
-  const path = matchWikilink(target, files)
-  if (path) await openPath(path)
+  const candidates = wikilinkCandidates(target, files)
+  if (candidates.length === 1) {
+    await openPath(candidates[0].path)
+  } else if (candidates.length > 1) {
+    app.wikiPrompt = {
+      kind: 'choose',
+      target,
+      candidates: candidates.map((c) => ({ path: c.path, name: c.name, dir: baseName(parentPath(c.path) ?? '') })),
+    }
+  } else {
+    const fileName = wikilinkFileName(target)
+    if (fileName) app.wikiPrompt = { kind: 'create', target, fileName, dir: base }
+  }
+}
+
+// Crée la note proposée pour un wikilink inexistant (4.5), puis l'ouvre. Garde
+// anti-écrasement : si le fichier a été créé entre-temps, on l'ouvre sans l'écraser.
+export async function createWikilinkTarget() {
+  const p = app.wikiPrompt
+  app.wikiPrompt = null
+  if (p?.kind !== 'create') return
+  const path = joinPath(p.dir, p.fileName)
+  try {
+    const existing = await readTextFileAt(path)
+    if (existing != null) {
+      await openPath(path)
+      return
+    }
+  } catch {
+    // readTextFile lève sur un fichier absent : c'est le cas nominal, on le crée
+  }
+  try {
+    await writeTextFileAtomic(path, '')
+  } catch (err) {
+    console.error('Création de note échouée', err)
+    app.banner = `Impossible de créer « ${p.fileName} ».`
+    return
+  }
+  await openPath(path)
+}
+
+// Ouvre le candidat choisi dans le menu de désambiguïsation (4.5).
+export async function chooseWikilinkCandidate(path: string) {
+  app.wikiPrompt = null
+  await openPath(path)
+}
+
+export function dismissWikiPrompt() {
+  app.wikiPrompt = null
 }
 
 // Ouvre un fichier par chemin (clic dans l'explorateur). No-op en navigateur.
