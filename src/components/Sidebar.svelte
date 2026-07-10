@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { app, activeTab, docHeadings, isDirty, openPath, scrollToLine, toggleSidebarView } from '../lib/stores.svelte'
+  import { app, activeTab, docHeadings, isDirty, loadSnapshotsForActive, openPath, scrollToLine, toggleSidebarView } from '../lib/stores.svelte'
   import { baseName, joinPath, parentPath, visibleEntries, type FsEntry } from '../lib/explorer'
   import { isTauri, readDirectory } from '../lib/tauri'
   import { DEMO_DIR } from '../lib/demo'
@@ -36,6 +36,25 @@
     const full = joinPath(targetDir, entry.name)
     if (entry.isDir) app.explorerDir = full
     else openPath(full)
+  }
+
+  // Charge l'historique du fichier actif quand le panneau est ouvert ; recharge au
+  // changement d'onglet (dépendance activeTab().id). Les saves rafraîchissent via saveTab.
+  $effect(() => {
+    if (app.sidebarView === 'history' && app.sidebarOpen) {
+      void activeTab()?.id
+      void loadSnapshotsForActive()
+    }
+  })
+
+  function formatSnapshotDate(time: number): string {
+    return new Date(time).toLocaleString('fr-FR', {
+      day: 'numeric',
+      month: 'short',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    })
   }
 </script>
 
@@ -119,7 +138,20 @@
           </div>
         {:else}
           <div class="history">
-            <p class="empty">L'historique des versions arrive bientôt.</p>
+            {#if !activeTab()?.path}
+              <p class="empty">Enregistrez le document pour créer un historique.</p>
+            {:else if app.snapshotsFor !== activeTab()?.id}
+              <!-- chargement en cours -->
+            {:else if app.snapshots.length === 0}
+              <p class="empty">Aucune version enregistrée pour l'instant.</p>
+            {:else}
+              {#each app.snapshots as snap (snap.name)}
+                <div class="snap">
+                  <span class="snap-date">{formatSnapshotDate(snap.time)}</span>
+                  {#if snap.preview}<span class="snap-preview">{snap.preview}</span>{/if}
+                </div>
+              {/each}
+            {/if}
           </div>
         {/if}
       </div>
@@ -264,4 +296,20 @@
   .empty { font-size: 12px; color: var(--ink-4); padding: 8px 12px; }
 
   .history { padding-top: 2px; }
+  .snap {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 7px 12px;
+    border-radius: 8px;
+  }
+  .snap:hover { background: var(--surface-hover); }
+  .snap-date { font-size: 12px; color: var(--ink-2); font-weight: 500; }
+  .snap-preview {
+    font-size: 11.5px;
+    color: var(--ink-4);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
 </style>

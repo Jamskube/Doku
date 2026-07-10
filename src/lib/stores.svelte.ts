@@ -4,7 +4,8 @@ import { detectLineEnding } from './editor/editor'
 import { baseName, isSupportedFile, joinPath, parentPath } from './explorer'
 import { detectUnsupported } from './encoding'
 import { classifyExternalChange } from './reload'
-import { isTauri, readTextFileAt, scanFiles, setAlwaysOnTop, writeTextFileAtomic } from './tauri'
+import { snapshotKey, type SnapshotInfo } from './snapshot'
+import { isTauri, listSnapshots, purgeAllSnapshots, readTextFileAt, recordSnapshot, scanFiles, setAlwaysOnTop, writeTextFileAtomic } from './tauri'
 import { matchWikilink, normalizeTarget } from './wikilink'
 
 export type DocKind = 'md' | 'html' | 'txt'
@@ -61,6 +62,10 @@ export const app = $state({
   reloadPrompt: null as { tabId: number; name: string } | null,
   // Un fichier est glissé au-dessus de la fenêtre (overlay de dépôt, 2.4).
   dragging: false,
+  // Historique (FR-12) : versions du fichier actif, chargées à l'ouverture du
+  // panneau et après chaque save. snapshotsFor = onglet auquel la liste appartient.
+  snapshots: [] as SnapshotInfo[],
+  snapshotsFor: null as number | null,
 })
 
 // Accès non réactif à la vue CM6 courante (scroll TOC, sauvegarde…)
@@ -173,6 +178,7 @@ export async function restoreSession() {
 export function initApp() {
   if (isTauri) {
     void restoreSession()
+    void purgeAllSnapshots(Date.now()) // purge de démarrage de l'historique (ADR-0003)
     return
   }
   // Mode navigateur (design/dev) : contenu de démonstration.
@@ -369,17 +375,58 @@ export function forcePreview(id: number) {
 // Écrit un onglet sur disque (atomique). savedContent n'est marqué qu'après
 // succès (mode navigateur : no-op d'écriture). Renvoie false si rien n'a été écrit.
 export async function saveTab(tab: DocTab): Promise<boolean> {
+  // Capturés AVANT tout await : on écrit et on archive exactement cette valeur,
+  // même si l'utilisateur tape pendant l'écriture asynchrone. `now` capturé ici (et
+  // non dans la chaîne async) pour que l'horodatage suive l'ordre d'émission des saves.
+  const changed = tab.content !== tab.savedContent
+  const saved = tab.content
+  const now = Date.now()
   if (isTauri) {
     if (!tab.path) return false // « Enregistrer sous » : story ultérieure
     try {
-      await writeTextFileAtomic(tab.path, tab.content)
+      await writeTextFileAtomic(tab.path, saved)
     } catch (err) {
       console.error('Sauvegarde échouée', err)
       return false
     }
+    tab.savedContent = saved
+    // Snapshot du contenu sauvé (FR-12), seulement s'il a réellement changé.
+    // Fire-and-forget : un échec d'historique ne doit JAMAIS casser le save.
+    if (changed) {
+      const path = tab.path
+      void snapshotKey(path)
+        .then((key) => recordSnapshot(key, saved, path, now))
+        .then(() => {
+          if (app.sidebarView === 'history' && app.sidebarOpen) return loadSnapshotsForActive()
+        })
+        .catch((err) => console.error('Snapshot échoué', err))
+    }
+    return true
   }
-  tab.savedContent = tab.content
+  tab.savedContent = saved
   return true
+}
+
+// --- Historique / versions (FR-12) ---
+
+let snapshotReq = 0
+
+// Charge l'historique du fichier actif dans app.snapshots. Jeton anti-périmé : un
+// changement d'onglet pendant la lecture annule le résultat obsolète. Onglet sans
+// chemin (non enregistré) → liste vide.
+export async function loadSnapshotsForActive() {
+  const tab = activeTab()
+  const req = ++snapshotReq
+  if (!tab || !tab.path) {
+    app.snapshots = []
+    app.snapshotsFor = tab?.id ?? null
+    return
+  }
+  const key = await snapshotKey(tab.path)
+  const list = await listSnapshots(key)
+  if (req !== snapshotReq) return // onglet changé entre-temps : résultat périmé
+  app.snapshots = list
+  app.snapshotsFor = tab.id
 }
 
 // --- Rechargement sur modification externe (FR-3, 3.5) ---

@@ -1,4 +1,5 @@
 import { joinPath, type FsEntry } from './explorer'
+import { parseStamp, selectPurgeable, snapshotPreview, snapshotStamp, type SnapshotEntry, type SnapshotInfo } from './snapshot'
 
 // Garde Tauri : toutes les APIs natives passent ici, avec repli silencieux en
 // mode navigateur (dev UI). ADR-0004 : plugins officiels uniquement, écriture
@@ -160,4 +161,167 @@ export async function writeTextFileAtomic(path: string, content: string) {
   const tmp = `${path}.${Date.now()}-${tmpSeq++}.doku-tmp`
   await writeTextFile(tmp, content)
   await rename(tmp, path)
+}
+
+// --- SnapshotService (FR-12, ADR-0003) ---
+// Historique local dans %APPDATA%\<app>\snapshots\<key>\ : un fichier daté par
+// version + meta.json (index avec aperçus). Toute la logique de sélection/datation
+// est pure et testée (snapshot.ts) ; ici uniquement l'I/O plugin-fs.
+
+interface SnapshotMeta {
+  path: string
+  entries: { name: string; preview: string; size: number }[]
+}
+
+// Sérialise les opérations d'une même clé : évite la course meta.json (lost update)
+// et purge-pendant-écriture entre deux saves rapprochés du même fichier.
+const snapshotQueues = new Map<string, Promise<unknown>>()
+function enqueueSnapshot<T>(key: string, op: () => Promise<T>): Promise<T> {
+  const prev = snapshotQueues.get(key) ?? Promise.resolve()
+  const next = prev.then(op, op) // op s'exécute quel que soit le sort du précédent
+  snapshotQueues.set(key, next.catch(() => {}))
+  return next
+}
+
+// Réconcilie l'index avec le disque puis purge (garde 20 / 30 j + le plus récent,
+// et jamais `protect`). Source de vérité = les fichiers datables réellement présents
+// (readDir) : un orphelin (crash entre l'écriture du snapshot et celle de l'index)
+// finit toujours par être purgé et meta.json se resynchronise. Suppression confinée
+// au dossier — seuls des noms validés par parseStamp (jamais meta.json ni un .tmp).
+async function reconcilePurge(
+  dir: string,
+  origPath: string,
+  now: number,
+  prevEntries: SnapshotMeta['entries'],
+  protect?: string,
+): Promise<SnapshotMeta> {
+  const { join } = await import('@tauri-apps/api/path')
+  const { readDir, remove } = await import('@tauri-apps/plugin-fs')
+  let names: string[] = []
+  try {
+    names = (await readDir(dir)).filter((e) => e.isFile).map((e) => e.name)
+  } catch {
+    // dossier absent : rien à réconcilier
+  }
+  const dated: SnapshotEntry[] = names
+    .map((name) => ({ name, time: parseStamp(name)?.getTime() ?? NaN }))
+    .filter((e) => !Number.isNaN(e.time))
+  const doomed = new Set(selectPurgeable(dated, now))
+  if (protect) doomed.delete(protect) // la version qu'on vient d'écrire survit toujours
+  for (const dead of doomed) {
+    try {
+      await remove(await join(dir, dead))
+    } catch {
+      // déjà absent : on continue
+    }
+  }
+  const kept = new Map(prevEntries.map((e) => [e.name, e]))
+  const entries = dated
+    .filter((e) => !doomed.has(e.name))
+    .map((e) => kept.get(e.name) ?? { name: e.name, preview: '', size: 0 }) // orphelin : sans aperçu
+  return { path: origPath, entries }
+}
+
+// Enregistre une version (contenu venant d'être sauvé) puis purge (20 / 30 j, le
+// plus récent intouchable). Copie confinée à snapshots/<key>/ ; ne touche jamais le
+// fichier utilisateur. No-op navigateur.
+export async function recordSnapshot(key: string, content: string, origPath: string, now: number): Promise<void> {
+  if (!isTauri) return
+  await enqueueSnapshot(key, async () => {
+    const { appDataDir, join } = await import('@tauri-apps/api/path')
+    const { mkdir, exists, readTextFile, writeTextFile } = await import('@tauri-apps/plugin-fs')
+    const dir = await join(await appDataDir(), 'snapshots', key)
+    await mkdir(dir, { recursive: true })
+    const metaPath = await join(dir, 'meta.json')
+
+    let prev: SnapshotMeta['entries'] = []
+    try {
+      const parsed = JSON.parse(await readTextFile(metaPath))
+      if (parsed && Array.isArray(parsed.entries)) prev = parsed.entries
+    } catch {
+      // pas d'index encore : la réconciliation le reconstruira depuis le disque
+    }
+
+    const ext = /\.[^.\\/]+$/.exec(origPath)?.[0] ?? '.txt'
+    const stamp = snapshotStamp(new Date(now))
+    let name = `${stamp}${ext}`
+    let seq = 1
+    // Unicité même à la milliseconde (saves concurrents) — cf. tmpSeq atomique.
+    while (prev.some((e) => e.name === name) || (await exists(await join(dir, name)))) {
+      name = `${stamp}~${seq++}${ext}`
+    }
+    await writeTextFile(await join(dir, name), content)
+    prev = [...prev, { name, preview: snapshotPreview(content), size: content.length }]
+
+    // Réconcilie + purge (protège la version qu'on vient d'écrire), puis index atomique.
+    const meta = await reconcilePurge(dir, origPath, now, prev, name)
+    await writeTextFileAtomic(metaPath, JSON.stringify(meta))
+  })
+}
+
+// Liste les versions d'un fichier (depuis meta.json, aucune relecture des fichiers
+// snapshot). Trié du plus récent au plus ancien. [] si aucun historique.
+export async function listSnapshots(key: string): Promise<SnapshotInfo[]> {
+  if (!isTauri) return []
+  return enqueueSnapshot(key, async () => {
+    const { appDataDir, join } = await import('@tauri-apps/api/path')
+    const { readTextFile } = await import('@tauri-apps/plugin-fs')
+    const metaPath = await join(await appDataDir(), 'snapshots', key, 'meta.json')
+    let meta: SnapshotMeta
+    try {
+      meta = JSON.parse(await readTextFile(metaPath))
+    } catch {
+      return []
+    }
+    if (!meta || !Array.isArray(meta.entries)) return []
+    return meta.entries
+      .map((e) => ({ name: e.name, preview: e.preview ?? '', time: parseStamp(e.name)?.getTime() ?? NaN }))
+      .filter((e) => !Number.isNaN(e.time))
+      .sort((a, b) => b.time - a.time)
+  })
+}
+
+// Purge un dossier snapshot (démarrage) : réconcilie l'index avec le disque et purge.
+// Fonctionne même sans meta.json (le reconstruit depuis les fichiers présents).
+// Suppression confinée à snapshots/<key>/.
+async function purgeSnapshotKey(key: string, now: number): Promise<void> {
+  await enqueueSnapshot(key, async () => {
+    const { appDataDir, join } = await import('@tauri-apps/api/path')
+    const { readTextFile } = await import('@tauri-apps/plugin-fs')
+    const dir = await join(await appDataDir(), 'snapshots', key)
+    const metaPath = await join(dir, 'meta.json')
+    let prev: SnapshotMeta['entries'] = []
+    let origPath = ''
+    try {
+      const parsed = JSON.parse(await readTextFile(metaPath))
+      if (parsed && Array.isArray(parsed.entries)) prev = parsed.entries
+      if (parsed && typeof parsed.path === 'string') origPath = parsed.path // informatif (rattachement futur)
+    } catch {
+      // pas d'index : on réconcilie quand même depuis le disque
+    }
+    const meta = await reconcilePurge(dir, origPath, now, prev)
+    // N'écrire que si l'index a bougé (purge ou orphelin réintégré).
+    const prevNames = new Set(prev.map((e) => e.name))
+    const changed = meta.entries.length !== prev.length || meta.entries.some((e) => !prevNames.has(e.name))
+    if (changed) await writeTextFileAtomic(metaPath, JSON.stringify(meta))
+  })
+}
+
+// Purge tous les dossiers snapshots au démarrage (ADR-0003). No-op navigateur.
+export async function purgeAllSnapshots(now: number): Promise<void> {
+  if (!isTauri) return
+  const { appDataDir, join } = await import('@tauri-apps/api/path')
+  const { exists, readDir } = await import('@tauri-apps/plugin-fs')
+  const root = await join(await appDataDir(), 'snapshots')
+  if (!(await exists(root))) return
+  let dirs: FsEntry[]
+  try {
+    const raw = await readDir(root)
+    dirs = raw.map((e) => ({ name: e.name, isDir: e.isDirectory }))
+  } catch {
+    return
+  }
+  for (const d of dirs) {
+    if (d.isDir) await purgeSnapshotKey(d.name, now)
+  }
 }
