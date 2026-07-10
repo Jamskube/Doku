@@ -2,6 +2,7 @@ import type { EditorView } from '@codemirror/view'
 import { DEMO_DIR, DEMO_TABS } from './demo'
 import { detectLineEnding } from './editor/editor'
 import { baseName, joinPath, parentPath } from './explorer'
+import { detectUnsupported } from './encoding'
 import { classifyExternalChange } from './reload'
 import { isTauri, readTextFileAt, scanFiles, writeTextFileAtomic } from './tauri'
 import { matchWikilink, normalizeTarget } from './wikilink'
@@ -134,11 +135,17 @@ export async function restoreSession() {
   const paths = session?.tabs ?? []
   const missing: string[] = []
   for (const p of paths) {
-    const content = await readTextFileAt(p)
+    let content: string | null
+    try {
+      content = await readTextFileAt(p)
+    } catch {
+      continue // fichier illisible/encodage : on ne restaure pas, sans casser la boucle
+    }
     if (content == null) {
       missing.push(p)
       continue
     }
+    if (detectUnsupported(content)) continue // binaire/non-UTF-8 : ne pas restaurer
     openTab(baseName(p), p, content)
   }
   const active = session?.activePath ? app.tabs.find((t) => t.path === session!.activePath) : undefined
@@ -237,8 +244,20 @@ export async function openPath(path: string) {
     app.activeId = existing.id
     return
   }
-  const content = await readTextFileAt(path)
+  let content: string | null
+  try {
+    content = await readTextFileAt(path)
+  } catch {
+    // Tauri readTextFile lève sur UTF-8 invalide → format/encodage non supporté.
+    app.banner = `Impossible d'ouvrir « ${baseName(path)} » : lecture ou encodage non pris en charge.`
+    return
+  }
   if (content == null) return
+  const reason = detectUnsupported(content, baseName(path))
+  if (reason) {
+    app.banner = reason
+    return
+  }
   openTab(baseName(path), path, content)
 }
 

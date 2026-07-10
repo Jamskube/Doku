@@ -6,6 +6,7 @@
   import ConfirmDialog from './components/ConfirmDialog.svelte'
   import { app, activeTab, askSave, checkExternalChanges, cycleTab, dialog, dismissReloadPrompt, initApp, isDirty, openPath, openTab, openWikilink, reloadPromptedTab, requestCloseTab, saveSession, saveSettings, saveTab, toggleSidebarView } from './lib/stores.svelte'
   import { onOpenFile, onWindowCloseRequested, onWindowFocus, openFileDialog } from './lib/tauri'
+  import { detectUnsupported } from './lib/encoding'
 
   // Persiste les préférences (thème, état sidebar) à chaque changement — les lectures
   // de app.* dans saveSettings sont suivies par l'effet.
@@ -30,10 +31,9 @@
     try {
       const file = await openFileDialog()
       if (!file) return
-      // Garde binaire minimale (un octet NUL trahit un fichier non-texte) ; la
-      // détection d'encodage complète reste la story 1.2.
-      if (file.content.includes('\u0000')) {
-        app.banner = `Impossible d'ouvrir « ${file.name} » : fichier binaire ou encodage non pris en charge.`
+      const reason = detectUnsupported(file.content, file.name)
+      if (reason) {
+        app.banner = reason
         return
       }
       openTab(file.name, file.path, file.content)
