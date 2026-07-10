@@ -129,6 +129,27 @@ export async function onWindowFocus(handler: () => void): Promise<() => void> {
   })
 }
 
+// Glisser-déposer de fichiers sur la fenêtre (FR-4, 2.4). Le webview Tauri
+// intercepte le drop OS (dragDrop activé par défaut) et émet l'événement ;
+// `onDrop` reçoit les chemins lâchés, `onHover` pilote l'overlay. No-op navigateur.
+export async function onFileDrop(
+  onDrop: (paths: string[]) => void,
+  onHover: (active: boolean) => void,
+): Promise<() => void> {
+  if (!isTauri) return () => {}
+  const { getCurrentWebview } = await import('@tauri-apps/api/webview')
+  return getCurrentWebview().onDragDropEvent(({ payload }) => {
+    if (payload.type === 'drop') {
+      onHover(false)
+      onDrop(payload.paths)
+    } else if (payload.type === 'enter' || payload.type === 'over') {
+      onHover(true)
+    } else if (payload.type === 'leave') {
+      onHover(false)
+    }
+  })
+}
+
 export async function writeTextFileAtomic(path: string, content: string) {
   if (!isTauri) return
   const { writeTextFile, rename } = await import('@tauri-apps/plugin-fs')

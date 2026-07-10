@@ -4,8 +4,8 @@
   import TitleBar from './components/TitleBar.svelte'
   import DocumentView from './components/DocumentView.svelte'
   import ConfirmDialog from './components/ConfirmDialog.svelte'
-  import { app, activeTab, askSave, checkExternalChanges, cycleTab, dialog, dismissReloadPrompt, initApp, isDirty, openPath, openTab, openWikilink, reloadPromptedTab, requestCloseTab, saveSession, saveSettings, saveTab, toggleSidebarView } from './lib/stores.svelte'
-  import { onOpenFile, onWindowCloseRequested, onWindowFocus, openFileDialog } from './lib/tauri'
+  import { app, activeTab, askSave, checkExternalChanges, cycleTab, dialog, dismissReloadPrompt, initApp, isDirty, openDropped, openPath, openTab, openWikilink, reloadPromptedTab, requestCloseTab, saveSession, saveSettings, saveTab, toggleSidebarView } from './lib/stores.svelte'
+  import { onFileDrop, onOpenFile, onWindowCloseRequested, onWindowFocus, openFileDialog } from './lib/tauri'
   import { detectUnsupported } from './lib/encoding'
 
   // Persiste les préférences (thème, état sidebar) à chaque changement — les lectures
@@ -78,6 +78,15 @@
       .then((u) => (unlistenFocus = u))
       .catch((err) => console.error("Écoute du focus fenêtre échouée", err))
 
+    // Glisser-déposer de fichiers sur la fenêtre (FR-4, 2.4).
+    let unlistenDrop: (() => void) | null = null
+    onFileDrop(
+      (paths) => { for (const p of paths) void openDropped(p) },
+      (active) => { app.dragging = active },
+    )
+      .then((u) => (unlistenDrop = u))
+      .catch((err) => console.error('Écoute du glisser-déposer échouée', err))
+
     const onKey = async (e: KeyboardEvent) => {
       if (dialog.open) return
       if (e.key === 'F9') {
@@ -130,6 +139,7 @@
       unlistenClose?.()
       unlistenOpen?.()
       unlistenFocus?.()
+      unlistenDrop?.()
       window.removeEventListener('keydown', onKey)
       window.removeEventListener('doku:wikilink', onWikilink)
     }
@@ -165,13 +175,47 @@
       </div>
     </div>
   </div>
+  {#if app.dragging}
+    <div class="drop-overlay" role="presentation">
+      <div class="drop-hint">
+        <span class="msr" style="font-size:30px">file_download</span>
+        Déposez le fichier pour l'ouvrir
+      </div>
+    </div>
+  {/if}
 </div>
 
 <ConfirmDialog />
 
 <style>
-  .app { height: 100%; display: flex; background: var(--cream-base); }
+  .app { position: relative; height: 100%; display: flex; background: var(--cream-base); }
   .main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  .drop-overlay {
+    position: absolute;
+    inset: 8px;
+    z-index: 50;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 14px;
+    border: 2px dashed var(--line-3);
+    background: rgba(var(--ink-rgb), 0.06);
+    backdrop-filter: blur(1px);
+    pointer-events: none;
+  }
+  .drop-hint {
+    display: inline-flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    padding: 20px 28px;
+    border-radius: 12px;
+    background: var(--cream-content);
+    box-shadow: 0 12px 32px rgba(var(--ink-rgb), 0.18);
+    color: var(--ink-2);
+    font-size: 14px;
+  }
+  .drop-hint > .msr { color: var(--ink-3); }
   .banner {
     flex: none;
     display: flex;

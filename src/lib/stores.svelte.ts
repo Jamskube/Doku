@@ -1,7 +1,7 @@
 import type { EditorView } from '@codemirror/view'
 import { DEMO_DIR, DEMO_TABS } from './demo'
 import { detectLineEnding } from './editor/editor'
-import { baseName, joinPath, parentPath } from './explorer'
+import { baseName, isSupportedFile, joinPath, parentPath } from './explorer'
 import { detectUnsupported } from './encoding'
 import { classifyExternalChange } from './reload'
 import { isTauri, readTextFileAt, scanFiles, writeTextFileAtomic } from './tauri'
@@ -50,6 +50,8 @@ export const app = $state({
   banner: null as string | null,
   // Proposition de rechargement (modif externe + modifs locales) — non modale.
   reloadPrompt: null as { tabId: number; name: string } | null,
+  // Un fichier est glissé au-dessus de la fenêtre (overlay de dépôt, 2.4).
+  dragging: false,
 })
 
 // Accès non réactif à la vue CM6 courante (scroll TOC, sauvegarde…)
@@ -259,6 +261,18 @@ export async function openPath(path: string) {
     return
   }
   openTab(baseName(path), path, content)
+}
+
+// Ouvre un fichier glissé-déposé (2.4) : les formats non supportés (PDF, images…)
+// sont refusés avec un message clair (ils sont masqués ailleurs, mais un dépôt est
+// explicite). Le contenu binaire/non-UTF-8 est ensuite géré par openPath (1.2).
+export async function openDropped(path: string) {
+  const name = baseName(path)
+  if (!isSupportedFile(name)) {
+    app.banner = `« ${name} » : format non pris en charge.`
+    return
+  }
+  await openPath(path)
 }
 
 export function closeTab(id: number) {
