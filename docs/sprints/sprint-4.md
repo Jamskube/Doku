@@ -3,7 +3,7 @@
 **Goal** : Multi-format & finitions — ouvrir/éditer le HTML, mode source propre, table des matières, rechargement externe.
 **Start** : 2026-07-09
 **End** : 2026-07-16
-**Status** : Active
+**Status** : Complete (5/5 + 3 freebies) — 2026-07-10
 
 ## Stories
 
@@ -13,7 +13,7 @@
 | 5.2 | HTML : édition source + refresh | S | P1 | ✅ Done | `@codemirror/lang-html` + tags balises dans `dokuHighlight` ; `htmlSourceExtensions` ; Ctrl+/ rendu↔source, refresh réactif ; validé Playwright |
 | 3.6 | Mode source Ctrl+/ (formaliser + vérifier) | S | P1 | ✅ Done | Bascule via `Compartment.reconfigure` (même `EditorState`) ; curseur conservé au caractère près, retour sans perte, pas de faux « modifié » ; validé Playwright |
 | 4.6 | Table des matières (highlight au scroll) | S | P2 | ✅ Done | Scroll-spy (`elementAtHeight` → titre courant) ; `app.activeHeadingLine` surligné dans le Plan ; validé Playwright |
-| 3.5 | Rechargement sur modification externe | M | P1 | TODO | watcher plugin-fs ; au focus, proposer recharger (silencieux si pas de modif locale) |
+| 3.5 | Rechargement sur modification externe | M | P1 | ✅ Done | Détection **au focus** (relecture disque, pas de watcher → zéro Rust) ; non-dirty → reload silencieux ; dirty → bandeau [Recharger] ; logique pure `classifyExternalChange` (5 tests) ; **validé natif** |
 
 ### Freebies clôturés (acquis S2/S3)
 | # | Story | Acquis via |
@@ -29,6 +29,9 @@ _None_
 ### 2026-07-09
 - Sprint initialisé : 5 stories neuves (4 P1, 1 P2) + 3 freebies clôturés au ledger
 - Rappels process (rétros) : design hors stories ; smoke-tester en release/natif tôt ; logique pure → tests ; privilégier le browser-testable
+
+### 2026-07-10 — 3.5
+- **3.5** ✅ **Done** (validé natif par l'utilisateur) : rechargement sur modif externe **au retour du focus** (PRD FR-3 : « When Doku a le focus »), sans watcher plugin-fs → **aucun code Rust, aucune capability nouvelle** (mieux aligné ADR-0004). `onWindowFocus` (tauri.ts, via `onFocusChanged`) → `checkExternalChanges` relit chaque fichier ouvert et classe via `classifyExternalChange` (module pur `reload.ts`, 5 tests) : non-dirty + disque changé → **reload silencieux** ; dirty + disque changé → **bandeau non-modal [Recharger]** (jamais d'écrasement silencieux des modifs locales). Poussée du contenu dans l'éditeur caché-par-onglet via un compteur `rev` sur `DocTab` (DocumentView reconstruit l'état de l'onglet actif au changement de rev, invalide le cache des onglets inactifs rechargés). Régression navigateur : navigation md↔md↔html↔md OK, 0 erreur console ; 68 tests + `svelte-check` 0 erreur.
 
 ### 2026-07-10 — 3.6
 - **3.6** ✅ **Done** : mode source formalisé. Ctrl+/ bascule `livePreviewComp.reconfigure()` sur le **même** `EditorState` (pas de `setState`/remount), d'où trois propriétés vérifiées en navigateur : (1) source monospace colorée avec markdown brut (`#`, `[[wl]]`, fences, `- [x]`), (2) **curseur conservé au caractère près** (caret « démons|tration » identique avant/après bascule — la reconfigure ne touche pas la sélection), (3) **retour WYSIWYG sans perte** (caption reste « enregistré », contenu intact). Bonus : la bascule seule ne lève pas de faux « modifié ». Régression : 63 tests + `svelte-check` 0 erreur.

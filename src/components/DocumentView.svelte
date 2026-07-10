@@ -17,7 +17,10 @@
   let host: HTMLElement | undefined = $state()
   let view: EditorView | null = null
   const states = new Map<number, EditorState>()
+  // rev auquel l'état caché de chaque onglet a été construit (invalidation au reload externe).
+  const revs = new Map<number, number>()
   let renderedId = -1
+  let renderedRev = -1
 
   function makeState(tabId: number, content: string): EditorState {
     const tab = app.tabs.find((t) => t.id === tabId)
@@ -72,8 +75,18 @@
     if (!view) return
     if (tab && tab.id !== renderedId) {
       if (renderedId !== -1) states.set(renderedId, view.state)
-      view.setState(states.get(tab.id) ?? makeState(tab.id, tab.content))
+      // Cache réutilisable seulement s'il a été bâti au rev courant de l'onglet.
+      const cached = revs.get(tab.id) === tab.rev ? states.get(tab.id) : undefined
+      view.setState(cached ?? makeState(tab.id, tab.content))
       renderedId = tab.id
+      renderedRev = tab.rev
+      revs.set(tab.id, tab.rev)
+    } else if (tab && tab.rev !== renderedRev) {
+      // Onglet actif rechargé depuis le disque : reconstruire depuis le contenu frais.
+      states.delete(tab.id)
+      view.setState(makeState(tab.id, tab.content))
+      renderedRev = tab.rev
+      revs.set(tab.id, tab.rev)
     }
     view.dispatch({ effects: livePreviewComp.reconfigure(sourceMode ? sourceExtensions() : previewExtensions()) })
     view.requestMeasure({ read: () => view && updateActiveHeading(view) })

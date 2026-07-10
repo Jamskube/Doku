@@ -118,6 +118,17 @@ export async function onWindowCloseRequested(handler: () => Promise<boolean>): P
   return unlisten
 }
 
+// Notifie quand la fenêtre (re)prend le focus (retour depuis un autre programme).
+// Sert à détecter les modifications externes des fichiers ouverts (FR-3, 3.5).
+// No-op en navigateur. Renvoie un unlisten.
+export async function onWindowFocus(handler: () => void): Promise<() => void> {
+  if (!isTauri) return () => {}
+  const { getCurrentWindow } = await import('@tauri-apps/api/window')
+  return getCurrentWindow().onFocusChanged(({ payload: focused }) => {
+    if (focused) handler()
+  })
+}
+
 export async function writeTextFileAtomic(path: string, content: string) {
   if (!isTauri) return
   const { writeTextFile, rename } = await import('@tauri-apps/plugin-fs')

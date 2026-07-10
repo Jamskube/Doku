@@ -4,8 +4,8 @@
   import TitleBar from './components/TitleBar.svelte'
   import DocumentView from './components/DocumentView.svelte'
   import ConfirmDialog from './components/ConfirmDialog.svelte'
-  import { app, activeTab, askSave, cycleTab, dialog, initApp, isDirty, openPath, openTab, openWikilink, requestCloseTab, saveSession, saveSettings, saveTab, toggleSidebarView } from './lib/stores.svelte'
-  import { onOpenFile, onWindowCloseRequested, openFileDialog } from './lib/tauri'
+  import { app, activeTab, askSave, checkExternalChanges, cycleTab, dialog, dismissReloadPrompt, initApp, isDirty, openPath, openTab, openWikilink, reloadPromptedTab, requestCloseTab, saveSession, saveSettings, saveTab, toggleSidebarView } from './lib/stores.svelte'
+  import { onOpenFile, onWindowCloseRequested, onWindowFocus, openFileDialog } from './lib/tauri'
 
   // Persiste les préférences (thème, état sidebar) à chaque changement — les lectures
   // de app.* dans saveSettings sont suivies par l'effet.
@@ -65,6 +65,12 @@
       .then((u) => (unlistenOpen = u))
       .catch((err) => console.error("Écoute d'ouverture de fichier échouée", err))
 
+    // Modifications externes : au retour du focus, relire les fichiers ouverts (FR-3).
+    let unlistenFocus: (() => void) | null = null
+    onWindowFocus(() => void checkExternalChanges())
+      .then((u) => (unlistenFocus = u))
+      .catch((err) => console.error("Écoute du focus fenêtre échouée", err))
+
     const onKey = async (e: KeyboardEvent) => {
       if (dialog.open) return
       if (e.key === 'F9') {
@@ -116,6 +122,7 @@
     return () => {
       unlistenClose?.()
       unlistenOpen?.()
+      unlistenFocus?.()
       window.removeEventListener('keydown', onKey)
       window.removeEventListener('doku:wikilink', onWikilink)
     }
@@ -131,6 +138,16 @@
         <span class="msr" style="font-size:18px">error</span>
         <span class="banner-msg">{app.banner}</span>
         <button class="banner-close" onclick={() => (app.banner = null)} aria-label="Fermer">
+          <span class="msr" style="font-size:16px">close</span>
+        </button>
+      </div>
+    {/if}
+    {#if app.reloadPrompt && !app.focus}
+      <div class="banner reload" role="status">
+        <span class="msr" style="font-size:18px">sync</span>
+        <span class="banner-msg">« {app.reloadPrompt.name} » a été modifié en dehors de Doku. Vos modifications locales seront perdues au rechargement.</span>
+        <button class="banner-action" onclick={() => void reloadPromptedTab()}>Recharger</button>
+        <button class="banner-close" onclick={dismissReloadPrompt} aria-label="Ignorer">
           <span class="msr" style="font-size:16px">close</span>
         </button>
       </div>
@@ -160,7 +177,20 @@
     font-size: 12.5px;
   }
   .banner > .msr { color: var(--warn); flex: none; }
+  .banner.reload > .msr { color: var(--ink-3); }
   .banner-msg { flex: 1; min-width: 0; }
+  .banner-action {
+    flex: none;
+    padding: 4px 12px;
+    border-radius: 7px;
+    border: 1px solid var(--line-2);
+    background: var(--ink);
+    color: var(--cream-content);
+    font-size: 12px;
+    cursor: pointer;
+    transition: background 140ms ease;
+  }
+  .banner-action:hover { background: var(--ink-2); }
   .banner-close {
     flex: none;
     display: inline-flex;

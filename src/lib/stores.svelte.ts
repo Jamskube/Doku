@@ -2,6 +2,7 @@ import type { EditorView } from '@codemirror/view'
 import { DEMO_DIR, DEMO_TABS } from './demo'
 import { detectLineEnding } from './editor/editor'
 import { baseName, joinPath, parentPath } from './explorer'
+import { classifyExternalChange } from './reload'
 import { isTauri, readTextFileAt, scanFiles, writeTextFileAtomic } from './tauri'
 import { matchWikilink, normalizeTarget } from './wikilink'
 
@@ -21,6 +22,9 @@ export interface DocTab {
   content: string
   savedContent: string
   eol: '\n' | '\r\n'
+  // Incrémenté à chaque rechargement externe : signale à l'éditeur de reconstruire
+  // son état pour cet onglet (le contenu a changé hors frappe utilisateur).
+  rev: number
 }
 
 let nextId = 1
@@ -43,6 +47,8 @@ export const app = $state({
   explorerDir: null as string | null,
   // Bannière d'information transitoire (ex. fichiers de session introuvables).
   banner: null as string | null,
+  // Proposition de rechargement (modif externe + modifs locales) — non modale.
+  reloadPrompt: null as { tabId: number; name: string } | null,
 })
 
 // Accès non réactif à la vue CM6 courante (scroll TOC, sauvegarde…)
@@ -196,6 +202,7 @@ export function openTab(name: string, path: string | null, content: string, kind
     content,
     savedContent: content,
     eol: detectLineEnding(content),
+    rev: 0,
   }
   app.tabs.push(tab)
   app.activeId = tab.id
@@ -309,6 +316,47 @@ export async function saveTab(tab: DocTab): Promise<boolean> {
   }
   tab.savedContent = tab.content
   return true
+}
+
+// --- Rechargement sur modification externe (FR-3, 3.5) ---
+
+// Adopte le contenu disque dans l'onglet : redevient propre et signale l'éditeur.
+function applyDiskContent(tab: DocTab, disk: string) {
+  tab.content = disk
+  tab.savedContent = disk
+  tab.eol = detectLineEnding(disk)
+  tab.rev++
+}
+
+// Au retour du focus : relit chaque fichier ouvert et compare au disque.
+// Non-dirty → recharge silencieusement. Dirty + disque différent → propose (le
+// premier conflit rencontré ; les autres seront reproposés au focus suivant).
+export async function checkExternalChanges() {
+  let conflict: DocTab | null = null
+  for (const tab of app.tabs) {
+    if (!tab.path) continue
+    const disk = await readTextFileAt(tab.path)
+    if (disk == null) continue // fichier disparu : hors périmètre 3.5 (session/fermeture)
+    const decision = classifyExternalChange(disk, tab)
+    if (decision === 'reload') applyDiskContent(tab, disk)
+    else if (decision === 'conflict' && !conflict) conflict = tab
+  }
+  if (conflict) app.reloadPrompt = { tabId: conflict.id, name: conflict.name }
+}
+
+// Applique la proposition de rechargement (relit le disque à cet instant).
+export async function reloadPromptedTab() {
+  const prompt = app.reloadPrompt
+  app.reloadPrompt = null
+  if (!prompt) return
+  const tab = app.tabs.find((t) => t.id === prompt.tabId)
+  if (!tab?.path) return
+  const disk = await readTextFileAt(tab.path)
+  if (disk != null) applyDiskContent(tab, disk)
+}
+
+export function dismissReloadPrompt() {
+  app.reloadPrompt = null
 }
 
 // --- Modal de confirmation (Sauver / Ignorer / Annuler) ---
