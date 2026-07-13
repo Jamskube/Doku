@@ -10,14 +10,23 @@
   import { sandboxDoc } from '../lib/html'
   import { exportViaPrint } from '../lib/export/print'
   import { exportStandaloneHtml } from '../lib/export/standalone'
-  import { readImageDataUrl, saveHtmlDialog } from '../lib/tauri'
+  import { readImageDataUrl, saveHtmlDialog, saveDocxDialog } from '../lib/tauri'
   import DokuMark from '../lib/DokuMark.svelte'
 
-  function exportHtml(tab: { kind: 'md' | 'html' | 'txt'; name: string; content: string; path: string | null }) {
+  type ExportTab = { kind: 'md' | 'html' | 'txt'; name: string; content: string; path: string | null }
+
+  function exportHtml(tab: ExportTab) {
     exportStandaloneHtml(
       { kind: tab.kind, name: tab.name, content: tab.content, dir: parentPath(tab.path ?? null) ?? '' },
       { readImageDataUrl, save: saveHtmlDialog },
     ).catch((err) => console.error('Export HTML échoué', err))
+  }
+
+  // docx (~100 Ko) chargé à la demande → hors bundle principal.
+  function exportDocx(tab: ExportTab) {
+    import('../lib/export/docx')
+      .then((m) => m.exportDocx({ kind: tab.kind, name: tab.name, content: tab.content }, { save: saveDocxDialog }))
+      .catch((err) => console.error('Export DOCX échoué', err))
   }
 
   // Onglet HTML en mode rendu : aperçu sandboxé (iframe), pas l'éditeur (FR-8).
@@ -131,6 +140,14 @@
     {@const tab = activeTab()!}
     <div class="doc-head">
       <span class="caption">{tab.path ?? tab.name} · {isDirty(tab) ? 'modifié' : 'enregistré'}{app.sourceMode ? ' · source' : ''}</span>
+      <button
+        class="width-btn"
+        title="Exporter en DOCX (Word)"
+        aria-label="Exporter en DOCX"
+        onclick={() => exportDocx(tab)}
+      >
+        <span class="msr" style="font-size:18px">description</span>
+      </button>
       <button
         class="width-btn"
         title="Exporter en HTML autonome"

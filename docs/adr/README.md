@@ -13,3 +13,4 @@ Registre des décisions d'architecture. Une décision par fichier ; on ne suppri
 | [0007](./0007-recherche-index-memoire.md) | Recherche plein-texte : index en mémoire (scan-once, watcher-invalidé) | accepted | 2026-07-13 | recherche, perf, arm64 |
 | [0008](./0008-pipeline-export-pdf-window-print.md) | Export PDF : `window.print()` + `@media print` (iframe isolé) | accepted | 2026-07-13 | export, pdf, webview2, arm64, fr-2 |
 | [0009](./0009-renderer-markdown-marked.md) | Renderer Markdown → HTML pour l'export : `marked` | accepted | 2026-07-13 | export, markdown, rendu, fr-2 |
+| [0010](./0010-export-docx-lib-lazy.md) | Export DOCX : lib `docx` (lazy-loadée, marked.lexer → OOXML) | accepted | 2026-07-13 | export, docx, ooxml, fr-5 |

@@ -203,6 +203,16 @@ export async function writeTextFileAtomic(path: string, content: string) {
   await rename(tmp, path)
 }
 
+// Jumeau binaire de writeTextFileAtomic (tmp + rename) : écrire un .docx directement
+// via writeFile corromprait un fichier existant en cas d'interruption.
+export async function writeFileAtomic(path: string, bytes: Uint8Array) {
+  if (!isTauri) return
+  const { writeFile, rename } = await import('@tauri-apps/plugin-fs')
+  const tmp = `${path}.${Date.now()}-${tmpSeq++}.doku-tmp`
+  await writeFile(tmp, bytes)
+  await rename(tmp, path)
+}
+
 // --- Export HTML autonome (FR-2, 10.3) ---
 
 // Lit un fichier image (octets) et l'encode en data: URI. null en navigateur ou si
@@ -225,6 +235,17 @@ export async function saveHtmlDialog(defaultName: string, html: string): Promise
   const path = await save({ defaultPath: defaultName, filters: [{ name: 'HTML', extensions: ['html'] }] })
   if (typeof path !== 'string') return false
   await writeTextFileAtomic(path, html)
+  return true
+}
+
+// Dialogue save + écriture BINAIRE d'un .docx. Requiert la permission fs:allow-write-file.
+// false si annulé ou en navigateur.
+export async function saveDocxDialog(defaultName: string, bytes: Uint8Array): Promise<boolean> {
+  if (!isTauri) return false
+  const { save } = await import('@tauri-apps/plugin-dialog')
+  const path = await save({ defaultPath: defaultName, filters: [{ name: 'Word', extensions: ['docx'] }] })
+  if (typeof path !== 'string') return false
+  await writeFileAtomic(path, bytes)
   return true
 }
 
