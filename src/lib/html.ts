@@ -18,13 +18,14 @@ const PALETTE: Record<Theme, Record<string, string>> = {
   dark: { bg: '#2E2E34', panel: '#36363D', ink: '#EBEDF1', ink2: 'rgba(235,237,241,0.94)', ink3: 'rgba(235,237,241,0.78)', line2: 'rgba(235,237,241,0.22)', line3: 'rgba(235,237,241,0.32)' },
 }
 
-// Feuille de base : le document HTML garde la priorité (ses propres <style>
-// viennent après dans la cascade), on ne fait que fournir des défauts sains.
-// `maxWidth` reprend la largeur de colonne courante (--doc-width) pour que le
-// rendu s'aligne exactement sur la caption et obéisse au bouton de largeur.
-function baseStyle(theme: Theme, maxWidth: string): string {
+// Feuille papier « AIR » (sans balise <style>) : le document HTML garde la priorité
+// (ses propres <style> viennent après dans la cascade), on ne fait que fournir des
+// défauts sains. `maxWidth` reprend la largeur de colonne courante (--doc-width) pour
+// que le rendu s'aligne exactement sur la caption. Exportée pour être réutilisée par
+// le pipeline d'export/impression (src/lib/export/print.ts) sans dupliquer la palette.
+export function paperCss(theme: Theme, maxWidth: string): string {
   const p = PALETTE[theme]
-  return `<style>
+  return `
   :root { color-scheme: ${theme}; }
   *, *::before, *::after { box-sizing: border-box; }
   html { background: ${p.bg}; }
@@ -43,16 +44,26 @@ function baseStyle(theme: Theme, maxWidth: string): string {
   table { border-collapse: collapse; }
   th, td { border: 1px solid ${p.line2}; padding: 6px 12px; text-align: left; }
   blockquote { margin: 0; padding-left: 16px; border-left: 2px solid ${p.line3}; color: ${p.ink3}; }
-  hr { border: none; border-top: 1px solid ${p.line2}; margin: 28px 0; }
+  hr { border: none; border-top: 1px solid ${p.line2}; margin: 28px 0; }`
+}
+
+function baseStyle(theme: Theme, maxWidth: string): string {
+  return `<style>${paperCss(theme, maxWidth)}
 </style>`
+}
+
+// Injecte `injection` (CSP + <style>) au bon endroit d'un document HTML déjà assaini :
+// dans un <head> existant, sinon juste après <html>, sinon en tête. Partagé par
+// sandboxDoc (aperçu) et le pipeline d'impression.
+export function injectHead(html: string, injection: string): string {
+  if (/<head[^>]*>/i.test(html)) return html.replace(/<head[^>]*>/i, (m) => m + injection)
+  if (/<html[^>]*>/i.test(html)) return html.replace(/<html[^>]*>/i, (m) => `${m}<head>${injection}</head>`)
+  return injection + html
 }
 
 export function sandboxDoc(html: string, theme: Theme = 'light', maxWidth = '680px'): string {
   // Assainir AVANT d'injecter (sinon DOMPurify retirerait notre <meta>/<style>) :
   // retire script/meta-refresh/base/form et neutralise les ancres externes.
   const clean = sanitizeHtml(html)
-  const inject = CSP + baseStyle(theme, maxWidth)
-  if (/<head[^>]*>/i.test(clean)) return clean.replace(/<head[^>]*>/i, (m) => m + inject)
-  if (/<html[^>]*>/i.test(clean)) return clean.replace(/<html[^>]*>/i, (m) => `${m}<head>${inject}</head>`)
-  return inject + clean
+  return injectHead(clean, CSP + baseStyle(theme, maxWidth))
 }

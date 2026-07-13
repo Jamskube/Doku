@@ -8,6 +8,7 @@
   import { revealMatch, searchFlashField } from '../lib/editor/search-flash'
   import { parentPath } from '../lib/explorer'
   import { sandboxDoc } from '../lib/html'
+  import { exportViaPrint } from '../lib/export/print'
   import DokuMark from '../lib/DokuMark.svelte'
 
   // Onglet HTML en mode rendu : aperçu sandboxé (iframe), pas l'éditeur (FR-8).
@@ -121,6 +122,14 @@
     {@const tab = activeTab()!}
     <div class="doc-head">
       <span class="caption">{tab.path ?? tab.name} · {isDirty(tab) ? 'modifié' : 'enregistré'}{app.sourceMode ? ' · source' : ''}</span>
+      <button
+        class="width-btn"
+        title="Exporter en PDF (impression)"
+        aria-label="Exporter en PDF"
+        onclick={() => exportViaPrint(tab)}
+      >
+        <span class="msr" style="font-size:18px">print</span>
+      </button>
       <button
         class="width-btn"
         title="Largeur de colonne"
