@@ -92,6 +92,26 @@ const dokuTheme = EditorView.theme({
     borderBottom: '1px solid var(--line-3)',
     cursor: 'pointer',
   },
+  '.cm-lp-table': {
+    borderCollapse: 'collapse',
+    width: '100%',
+    margin: '12px 0',
+    fontFamily: 'var(--font-sans)',
+    fontSize: '14.5px',
+    cursor: 'pointer',
+  },
+  '.cm-lp-table th, .cm-lp-table td': {
+    border: '1px solid var(--line-2)',
+    padding: '7px 13px',
+    textAlign: 'left',
+    verticalAlign: 'top',
+  },
+  '.cm-lp-table th': {
+    background: 'var(--surface-hover)',
+    fontWeight: '600',
+    color: 'var(--ink)',
+  },
+  '.cm-lp-table td': { color: 'var(--ink-2)' },
   '.cm-lp-image-wrap': { display: 'block' },
   '.cm-lp-image': {
     display: 'block',
