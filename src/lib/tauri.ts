@@ -1,4 +1,6 @@
-import { joinPath, type FsEntry } from './explorer'
+import { detectUnsupported } from './encoding'
+import { isSupportedFile, joinPath, type FsEntry } from './explorer'
+import { makeSearchDoc, type SearchDoc } from './search'
 import { parseStamp, selectPurgeable, snapshotPreview, snapshotStamp, type SnapshotEntry, type SnapshotInfo } from './snapshot'
 
 // Garde Tauri : toutes les APIs natives passent ici, avec repli silencieux en
@@ -46,6 +48,43 @@ export async function scanFiles(dir: string, maxDepth = 4): Promise<{ path: stri
     }
   }
   await walk(dir, 0)
+  return out
+}
+
+// Plafond d'indexation de la recherche : au-delà, on tronque en le signalant
+// (jamais de cap silencieux — règle AGENTS.md). ~5000 notes couvrent largement
+// l'usage perso ciblé (~10²-10³ fichiers, PRD-v1.5).
+const SEARCH_FILE_CAP = 5000
+
+// Concurrence de lecture bornée : ~1000 lectures IPC simultanées saturent la file
+// et le pic mémoire sur la cible ARM (tablette). On lit par lots.
+const SEARCH_READ_BATCH = 64
+
+// Construit l'index de recherche d'un dossier (ADR-0007) : scan récursif, ne garde
+// que les formats supportés, lit chacun (par lots bornés), ignore les binaires/UTF-8
+// invalide. Coût one-time, hors budget par-recherche. [] en mode navigateur.
+export async function buildSearchIndex(dir: string, maxDepth = 4): Promise<SearchDoc[]> {
+  if (!isTauri) return []
+  const { readTextFile } = await import('@tauri-apps/plugin-fs')
+  const files = (await scanFiles(dir, maxDepth)).filter((f) => isSupportedFile(f.name))
+  if (files.length > SEARCH_FILE_CAP) {
+    console.warn(`Recherche : ${files.length} fichiers, indexation limitée aux ${SEARCH_FILE_CAP} premiers.`)
+  }
+  const capped = files.slice(0, SEARCH_FILE_CAP)
+  const readOne = async (f: { path: string; name: string }): Promise<SearchDoc | null> => {
+    try {
+      const content = await readTextFile(f.path)
+      if (detectUnsupported(content, f.name)) return null // binaire / non-UTF-8 permissif
+      return makeSearchDoc(f.path, f.name, content)
+    } catch {
+      return null // readTextFile lève sur UTF-8 invalide / illisible : on ignore
+    }
+  }
+  const out: SearchDoc[] = []
+  for (let i = 0; i < capped.length; i += SEARCH_READ_BATCH) {
+    const batch = await Promise.all(capped.slice(i, i + SEARCH_READ_BATCH).map(readOne))
+    for (const d of batch) if (d) out.push(d)
+  }
   return out
 }
 

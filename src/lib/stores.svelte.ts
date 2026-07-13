@@ -4,8 +4,9 @@ import { detectLineEnding } from './editor/editor'
 import { baseName, isSupportedFile, joinPath, parentPath } from './explorer'
 import { detectUnsupported } from './encoding'
 import { classifyExternalChange } from './reload'
+import { makeSearchDoc, searchDocs, type SearchDoc, type SearchResult } from './search'
 import { snapshotKey, type SnapshotInfo } from './snapshot'
-import { isTauri, listSnapshots, purgeAllSnapshots, readSnapshot, readTextFileAt, recordSnapshot, scanFiles, setAlwaysOnTop, writeTextFileAtomic } from './tauri'
+import { buildSearchIndex, isTauri, listSnapshots, purgeAllSnapshots, readSnapshot, readTextFileAt, recordSnapshot, scanFiles, setAlwaysOnTop, writeTextFileAtomic } from './tauri'
 import { normalizeTarget, wikilinkCandidates, wikilinkFileName } from './wikilink'
 
 export type DocKind = 'md' | 'html' | 'txt'
@@ -74,6 +75,11 @@ export const app = $state({
   snapshotsFor: null as number | null,
   // Wikilink ambigu ou inexistant en attente de décision (4.5).
   wikiPrompt: null as WikiPrompt | null,
+  // Recherche plein-texte (FR-1) : requête courante, résultats, indexation en cours.
+  // Le panneau (9.3) les consomme ; le moteur vit dans runSearch.
+  searchQuery: '',
+  searchResults: [] as SearchResult[],
+  searching: false,
 })
 
 // Accès non réactif à la vue CM6 courante (scroll TOC, sauvegarde…)
@@ -321,6 +327,92 @@ export function dismissWikiPrompt() {
   app.wikiPrompt = null
 }
 
+// --- Recherche plein-texte (FR-1, 9.2) ---
+
+// Index en mémoire du dossier courant (ADR-0007), non réactif. Reconstruit
+// paresseusement quand le dossier change ; maintenu au fil des saves/reloads.
+let searchIndex: SearchDoc[] | null = null
+let searchIndexDir: string | null = null
+// Build d'index en vol, mémoïsé par dossier : des frappes rapides avant que l'index
+// soit prêt réutilisent la MÊME promesse au lieu de relancer un scan IPC par frappe.
+let indexBuild: { dir: string | null; promise: Promise<SearchDoc[]> } | null = null
+let searchReq = 0
+
+// Dossier où chercher : celui de l'explorateur s'il est fixé, sinon celui du doc actif.
+function searchDir(): string | null {
+  return app.explorerDir ?? parentPath(activeTab()?.path ?? null)
+}
+
+function buildIndexFor(dir: string | null): Promise<SearchDoc[]> {
+  if (!isTauri) {
+    return Promise.resolve(DEMO_TABS.filter((t) => t.path).map((t) => makeSearchDoc(t.path as string, t.name, t.content)))
+  }
+  return dir ? buildSearchIndex(dir) : Promise.resolve([])
+}
+
+// Lance une recherche. (Re)construit l'index du dossier courant (une seule fois, même
+// sous des frappes rapides) puis cherche en mémoire. Jeton anti-périmé : une requête
+// plus récente annule le résultat obsolète (même garde que loadSnapshotsForActive).
+export async function runSearch(query: string) {
+  app.searchQuery = query
+  const req = ++searchReq
+  const q = query.trim()
+  if (!q) {
+    app.searchResults = []
+    app.searching = false
+    return
+  }
+  const dir = searchDir()
+  app.searching = true
+  if (searchIndex == null || searchIndexDir !== dir) {
+    if (!indexBuild || indexBuild.dir !== dir) indexBuild = { dir, promise: buildIndexFor(dir) }
+    let built: SearchDoc[]
+    try {
+      built = await indexBuild.promise
+    } catch {
+      if (req === searchReq) {
+        app.searchResults = []
+        app.searching = false
+      }
+      return
+    }
+    if (req !== searchReq) return // requête plus récente : index périmé, on abandonne
+    searchIndex = built
+    searchIndexDir = dir
+  }
+  const results = searchDocs(searchIndex, q)
+  if (req !== searchReq) return
+  app.searchResults = results
+  app.searching = false
+}
+
+export function clearSearch() {
+  searchReq++ // annule toute recherche en vol
+  app.searchQuery = ''
+  app.searchResults = []
+  app.searching = false
+}
+
+// Un chemin appartient-il à l'arbre du dossier indexé (pour capter les créations) ?
+function withinSearchDir(path: string): boolean {
+  const dir = searchIndexDir
+  if (!dir) return false
+  const sep = dir.includes('\\') ? '\\' : '/'
+  return path.startsWith(dir.endsWith(sep) ? dir : dir + sep)
+}
+
+// Reflète un changement de contenu (save, restauration, reload externe) dans l'index
+// sans le reconstruire : met à jour le document s'il y figure, sinon l'ajoute s'il
+// appartient au dossier indexé (fichier nouvellement créé). Une suppression externe
+// est captée au prochain rebuild (changement de dossier) — hit fantôme inoffensif
+// entre-temps (le clic échoue proprement via openPath).
+function invalidateSearchDoc(path: string, name: string, content: string) {
+  if (!searchIndex) return
+  const i = searchIndex.findIndex((d) => d.path === path)
+  if (i >= 0) searchIndex[i] = makeSearchDoc(path, name, content)
+  else if (withinSearchDir(path)) searchIndex.push(makeSearchDoc(path, name, content))
+}
+
 // Ouvre un fichier par chemin (clic dans l'explorateur). No-op en navigateur.
 export async function openPath(path: string) {
   const existing = app.tabs.find((t) => t.path === path)
@@ -445,6 +537,7 @@ export async function saveTab(tab: DocTab): Promise<boolean> {
       return false
     }
     tab.savedContent = saved
+    invalidateSearchDoc(tab.path, tab.name, saved) // garder l'index de recherche à jour
     // Snapshot du contenu sauvé (FR-12), seulement s'il a réellement changé.
     // Fire-and-forget : un échec d'historique ne doit JAMAIS casser le save.
     if (changed) {
@@ -526,6 +619,7 @@ function applyDiskContent(tab: DocTab, disk: string) {
   tab.savedContent = disk
   tab.eol = detectLineEnding(disk)
   tab.rev++
+  if (tab.path) invalidateSearchDoc(tab.path, tab.name, disk) // restauration / reload externe
 }
 
 // Au retour du focus : relit chaque fichier ouvert et compare au disque.
