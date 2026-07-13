@@ -1,14 +1,14 @@
 # Next session pointer
-_Updated: 2026-07-13 18:30_
+_Updated: 2026-07-13 19:45_
 
 ## Where I left off
-**Doku est v1 feature-complete** (ledger 35/35, tout le PRD v1 livré, Epic 3/4/7 clos). 3.7 (widgets tableaux) validé en natif et commité. Retro Sprint 7 faite. Le **cap v1.5 est entièrement planifié** : gate feasibility (recherche/export/PDF = GO ; copilote tranché), **ADR-0006** (copilote = Ollama sidecar CPU, NPU écarté), **PRD-v1.5**, **epics 9-12**, et **Sprint 8 initialisé** (Epic 9 Recherche, 4 stories). Rien n'est encore codé côté v1.5 — la session a été 100 % planification.
+**Doku v1 feature-complete + v1.5 bien entamée.** Sprint 8 **complet (4/4)** : la **recherche plein-texte** est livrée de bout en bout — moteur index-mémoire (ADR-0007), panneau `Ctrl+Maj+F` (as-you-type, extraits surlignés + n° de ligne), et clic-pour-sauter avec l'occurrence **encadrée** dans l'éditeur. Epic 9 clos. **Sprint 9 (Export, Epic 10) planifié et initialisé** — aucune story démarrée. **Ledger 39/43** (39 done, 4 à faire : 10.1-10.4). 123 tests verts, arbre propre, tout poussé.
 
 ## Open work
-- Branch: `main` — propre après ce wrap (planif v1.5 commitée)
+- Branch: `main` — **propre** (rien de non commité)
 - Open PRs: aucune
-- Sprint actif: **Sprint 8** (`docs/sprints/sprint-8.md`), 2026-07-13 → 2026-07-20, stories `9.1`-`9.4`, ledger 35/39
-- Plans/specs: `docs/planning/PRD-v1.5.md`, `docs/planning/epics.md` (Epics 9-12), `docs/adr/0006-*` (copilote v2)
+- Sprint actif: **Sprint 9** (`docs/sprints/sprint-9.md`), 2026-07-13 → 2026-07-20, stories `10.1`-`10.4` (Export : spike PDF, PDF, HTML autonome, DOCX stretch)
+- Specs/plans: `docs/planning/PRD-v1.5.md` (Epic 10 = FR-2/FR-5), `docs/planning/epics.md`, ADRs 0006 (copilote v2) / 0007 (recherche)
 
 ## Next concrete step
-**Démarrer la story 9.1 (spike) via `/epct`** : mesurer scan-à-la-volée vs index-en-mémoire sur ~1000 fichiers, trancher (cible < 300 ms), documenter (note/ADR) → puis coder 9.2 (moteur) sur l'approche retenue. Après Epic 9 (recherche de bout en bout) : Sprint 9 = Export (Epic 10, spike PDF `10.1`) ou Lecture PDF (Epic 11). Copilote = plus tard, écrire d'abord le PRD v2 (ADR-0006 déjà en place).
+**Démarrer le spike `10.1` (pipeline export PDF) via `/epct`.** ⚠️ Contrairement au spike 9.1 (benchmark Node exécutable en session), **10.1 exige un essai NATIF** : tester l'impression WebView2 par **dialogue (`window.print()` + `@media print`)** vs **`PrintToPdfAsync` (COM, via `with_webview()`)** sur **ARM64**, juger la fidélité + l'UX, et documenter (piège WebView2 **#5199** : le PDF peut être supprimé si la webview est disposée avant la fin d'écriture). Option pratique : **scaffolder d'abord** l'export (bouton « Exporter », feuille `@media print` masquant le chrome, sauts de page) pour que l'essai natif soit prêt à lancer, puis trancher → ADR → coder 10.2. Après Epic 10 : Sprint 10 = Lecture PDF (Epic 11, PDF.js bundlé) + coller image (Epic 12).
