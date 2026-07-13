@@ -1,5 +1,6 @@
 import { detectUnsupported } from './encoding'
 import { isSupportedFile, joinPath, type FsEntry } from './explorer'
+import { bytesToDataUrl, mimeFromExt } from './export/img-data'
 import { makeSearchDoc, type SearchDoc } from './search'
 import { parseStamp, selectPurgeable, snapshotPreview, snapshotStamp, type SnapshotEntry, type SnapshotInfo } from './snapshot'
 
@@ -200,6 +201,31 @@ export async function writeTextFileAtomic(path: string, content: string) {
   const tmp = `${path}.${Date.now()}-${tmpSeq++}.doku-tmp`
   await writeTextFile(tmp, content)
   await rename(tmp, path)
+}
+
+// --- Export HTML autonome (FR-2, 10.3) ---
+
+// Lit un fichier image (octets) et l'encode en data: URI. null en navigateur ou si
+// illisible (l'appelant omet alors l'image). Requiert la permission fs:allow-read-file.
+export async function readImageDataUrl(absPath: string): Promise<string | null> {
+  if (!isTauri) return null
+  try {
+    const { readFile } = await import('@tauri-apps/plugin-fs')
+    const bytes = await readFile(absPath)
+    return bytesToDataUrl(bytes, mimeFromExt(absPath))
+  } catch {
+    return null
+  }
+}
+
+// Dialogue « Enregistrer sous » puis écriture atomique. false si annulé ou en navigateur.
+export async function saveHtmlDialog(defaultName: string, html: string): Promise<boolean> {
+  if (!isTauri) return false
+  const { save } = await import('@tauri-apps/plugin-dialog')
+  const path = await save({ defaultPath: defaultName, filters: [{ name: 'HTML', extensions: ['html'] }] })
+  if (typeof path !== 'string') return false
+  await writeTextFileAtomic(path, html)
+  return true
 }
 
 // --- SnapshotService (FR-12, ADR-0003) ---

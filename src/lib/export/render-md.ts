@@ -15,14 +15,17 @@ import { convertFileSrc } from '@tauri-apps/api/core'
 import { isTauri } from '../tauri'
 
 const WIKILINK = /\[\[([^[\]\n]+)\]\]/g
-// ![alt](url) ou ![alt](url "titre") — url = jusqu'au premier espace/paren.
-const IMAGE = /(!\[[^\]]*\]\()([^)\s]+)((?:\s+"[^"]*")?\))/g
+// ![alt](url) ou ![alt](url "titre") — url = jusqu'au premier espace/paren (groupe 2).
+// Exporté pour que l'export autonome (standalone.ts) collecte les mêmes URLs que le rendu
+// (source unique — évite une divergence silencieuse « collectée mais non résolue »).
+export const IMAGE = /(!\[[^\]]*\]\()([^)\s]+)((?:\s+"[^"]*")?\))/g
 
-// URL affichable d'une image (miroir de live-preview::imageSrc) : bloquée (réseau/UNC)
-// → null → image SUPPRIMÉE. On neutralise à la source (pas via la CSP seule) : aucune
-// requête émise même si le HTML est réutilisé hors iframe CSP (ex. 10.3 HTML autonome).
-// data: telle quelle ; locale résolue au dossier puis asset:// en natif.
-function resolveImageUrl(url: string, dir: string): string | null {
+export type ImageResolver = (url: string, dir: string) => string | null
+
+// Résolveur par défaut (export PDF) : bloquée (réseau/UNC) → null → image SUPPRIMÉE
+// (neutralisée à la source, pas via la CSP seule) ; data: telle quelle ; locale résolue
+// au dossier puis asset:// en natif. Le standalone (10.3) injecte son propre résolveur (data:).
+function assetResolveImage(url: string, dir: string): string | null {
   const u = url.trim()
   if (isBlockedImageUrl(u)) return null
   if (/^data:/i.test(u)) return u
@@ -38,19 +41,21 @@ function escapeMarkdown(s: string): string {
 
 // NB : pré-passes appliquées à tout le source, code compris (fences/inline) — un bloc
 // documentant ces syntaxes serait réécrit. Limite connue (passe token-aware = ultérieur).
-function preprocess(md: string, dir: string): string {
+function preprocess(md: string, dir: string, resolve: ImageResolver): string {
   return md
     .replace(WIKILINK, (_m, target: string) => escapeMarkdown(target))
     .replace(IMAGE, (_m, pre: string, url: string, post: string) => {
-      const src = resolveImageUrl(url, dir)
+      const src = resolve(url, dir)
       return src === null ? '' : `${pre}${src}${post}`
     })
 }
 
 // Rend un document Markdown en HTML assaini (document complet, prêt pour injectHead).
-// `dir` = dossier du fichier, pour résoudre les images relatives.
-export function renderMarkdown(md: string, opts: { dir?: string } = {}): string {
-  const pre = preprocess(md, opts.dir ?? '')
+// `dir` = dossier du fichier (résolution des images relatives) ; `resolveImage` permet
+// à l'export autonome (10.3) d'injecter des data: URIs au lieu d'asset://.
+export function renderMarkdown(md: string, opts: { dir?: string; resolveImage?: ImageResolver } = {}): string {
+  const resolve = opts.resolveImage ?? assetResolveImage
+  const pre = preprocess(md, opts.dir ?? '', resolve)
   const html = marked.parse(pre, { gfm: true, async: false }) as string
   return sanitizeHtml(html)
 }

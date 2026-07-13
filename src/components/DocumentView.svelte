@@ -9,7 +9,16 @@
   import { parentPath } from '../lib/explorer'
   import { sandboxDoc } from '../lib/html'
   import { exportViaPrint } from '../lib/export/print'
+  import { exportStandaloneHtml } from '../lib/export/standalone'
+  import { readImageDataUrl, saveHtmlDialog } from '../lib/tauri'
   import DokuMark from '../lib/DokuMark.svelte'
+
+  function exportHtml(tab: { kind: 'md' | 'html' | 'txt'; name: string; content: string; path: string | null }) {
+    exportStandaloneHtml(
+      { kind: tab.kind, name: tab.name, content: tab.content, dir: parentPath(tab.path ?? null) ?? '' },
+      { readImageDataUrl, save: saveHtmlDialog },
+    ).catch((err) => console.error('Export HTML échoué', err))
+  }
 
   // Onglet HTML en mode rendu : aperçu sandboxé (iframe), pas l'éditeur (FR-8).
   const htmlRender = $derived(activeTab()?.kind === 'html' && !app.sourceMode)
@@ -122,6 +131,14 @@
     {@const tab = activeTab()!}
     <div class="doc-head">
       <span class="caption">{tab.path ?? tab.name} · {isDirty(tab) ? 'modifié' : 'enregistré'}{app.sourceMode ? ' · source' : ''}</span>
+      <button
+        class="width-btn"
+        title="Exporter en HTML autonome"
+        aria-label="Exporter en HTML autonome"
+        onclick={() => exportHtml(tab)}
+      >
+        <span class="msr" style="font-size:18px">html</span>
+      </button>
       <button
         class="width-btn"
         title="Exporter en PDF (impression)"

@@ -47,7 +47,7 @@ const PRINT_CSS = `
   pre, blockquote, table, img, ul, ol, li, tr { break-inside: avoid; }
   pre { white-space: pre-wrap; word-break: break-word; }`
 
-function escapeHtml(s: string): string {
+export function escapeHtml(s: string): string {
   return s
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
