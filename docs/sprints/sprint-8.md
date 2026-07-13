@@ -3,7 +3,7 @@
 **Goal** : Recherche plein-texte fonctionnelle **de bout en bout** — chercher dans un dossier de notes et sauter au résultat.
 **Start** : 2026-07-13
 **End** : 2026-07-20
-**Status** : Active
+**Status** : Completed
 
 Premier sprint du **cap v1.5** (source : `docs/planning/PRD-v1.5.md`, Epic 9). Périmètre = Epic 9 entier → à la clôture, la recherche marche complètement (chercher → résultats surlignés → clic → onglet à l'occurrence). Export et lecture PDF = sprints suivants.
 
@@ -14,7 +14,7 @@ Premier sprint du **cap v1.5** (source : `docs/planning/PRD-v1.5.md`, Epic 9). P
 | 9.1 | Spike : stratégie d'index (mémoire vs scan) | S | ✅ Done | **Index-en-mémoire** tranché par mesure (index 0,4-1,6 ms vs scan 20-50 ms/requête) → [ADR-0007](../adr/0007-recherche-index-memoire.md). Forme du SearchService cadrée pour 9.2 |
 | 9.2 | Moteur de recherche (scan dossier, casse-insensible, anti-périmé) | M | ✅ Done | `search.ts` pur (9 tests) + `buildSearchIndex` + `runSearch` (index paresseux, coalescing, req-token). `code-reviewer` Approve, 2 Majors corrigés. **Validé natif** |
 | 9.3 | Panneau de recherche (Ctrl+Maj+F, résultats surlignés) | M | ✅ Done | Panneau Sidebar, as-you-type, surlignage `<mark>` + n° de ligne, états vides. Playwright + **validé natif** |
-| 9.4 | Saut vers l'occurrence au clic | S | 🟡 Playwright | Clic → ouvre l'onglet + saut à la ligne + **occurrence sélectionnée et encadrée** (`.cm-search-flash`, box-shadow, fond 1,6 s). `col`/`length` doc-exacts, `revealMatch` via pending-reveal. **Playwright OK** (idées.md, « Coller » encadré). Flip après ton smoke natif |
+| 9.4 | Saut vers l'occurrence au clic | S | ✅ Done | Clic → ouvre l'onglet + saut à la ligne + **occurrence sélectionnée et encadrée** (`.cm-search-flash`, box-shadow, fond 1,6 s). `col`/`length` doc-exacts, `revealMatch` via pending-reveal. Playwright + **validé natif** |
 
 ## Blockers
 _None_
@@ -29,3 +29,4 @@ _None_
 - **9.3 🟡** : panneau recherche (ruban `search`, Ctrl+Maj+F → ouvre + focus input, as-you-type → `runSearch`, résultats groupés par fichier + extraits surlignés `<mark>` + n° de ligne, états vides). **Playwright (démo)** : « pdf » → notes.md:31 + idées.md:5 surlignés, casse-insensible, no-match → « Aucun résultat », clic → onglet, **0 erreur console**. svelte-check 0 err, 122 tests. **9.2 + 9.3 attendent le smoke natif** (scan d'un vrai dossier + skip binaires réels) pour flip commun. Prochain : **9.4** (saut à la ligne).
 - **9.2 + 9.3 ✅ validés natif** par l'utilisateur (recherche dans un vrai dossier). Ledger 38/39.
 - **9.4 🟡** (demande utilisateur : « m'amener à la ligne du mot + qu'il soit encadré ») : clic résultat → `openSearchHit` (pending-reveal) → ouvre l'onglet → `revealMatch` sélectionne + centre + **encadre** l'occurrence (`.cm-search-flash` box-shadow 2px `--ink-3` + fond `--accent-soft`, 1,6 s). `search.ts` : `col`/`length` (position doc exacte, 10 tests). Module `editor/search-flash.ts` (StateField). **Playwright** : clic « coller » → idées.md ouvert, mot « Coller » sélectionné (`domSelection`) + encadré (computed box-shadow), 0 erreur. svelte-check 0 err, 123 tests. **Flip après smoke natif** (juger le rendu « encadré »).
+- **9.4 ✅ validé natif** par l'utilisateur. **Sprint 8 complet (4/4). Ledger 39/39.** Recherche plein-texte livrée de bout en bout (Epic 9 clos). Prochain : `/sprint retro` → Sprint 9 (Export ou Lecture PDF).
