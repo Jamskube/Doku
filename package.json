@@ -28,7 +28,8 @@
     "docx": "^9.7.1",
     "dompurify": "^3.4.11",
     "marked": "^18.0.6",
-    "material-symbols": "^0.36.0"
+    "material-symbols": "^0.36.0",
+    "pdfjs-dist": "^6.1.200"
   },
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "^7.0.0",

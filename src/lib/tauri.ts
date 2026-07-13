@@ -67,7 +67,8 @@ const SEARCH_READ_BATCH = 64
 export async function buildSearchIndex(dir: string, maxDepth = 4): Promise<SearchDoc[]> {
   if (!isTauri) return []
   const { readTextFile } = await import('@tauri-apps/plugin-fs')
-  const files = (await scanFiles(dir, maxDepth)).filter((f) => isSupportedFile(f.name))
+  // Exclut les .pdf : supportés (ouverture/explorateur) mais binaires → non indexables en texte.
+  const files = (await scanFiles(dir, maxDepth)).filter((f) => isSupportedFile(f.name) && !/\.pdf$/i.test(f.name))
   if (files.length > SEARCH_FILE_CAP) {
     console.warn(`Recherche : ${files.length} fichiers, indexation limitée aux ${SEARCH_FILE_CAP} premiers.`)
   }
@@ -94,6 +95,18 @@ export async function readTextFileAt(path: string): Promise<string | null> {
   if (!isTauri) return null
   const { readTextFile } = await import('@tauri-apps/plugin-fs')
   return readTextFile(path)
+}
+
+// Lit les octets d'un fichier (natif) — lecture PDF (11.1). null en navigateur ou si illisible.
+// Requiert fs:allow-read-file (déjà déclarée, 10.3).
+export async function readFileBytes(path: string): Promise<Uint8Array | null> {
+  if (!isTauri) return null
+  try {
+    const { readFile } = await import('@tauri-apps/plugin-fs')
+    return await readFile(path)
+  } catch {
+    return null
+  }
 }
 
 export async function minimizeWindow() {
@@ -125,12 +138,14 @@ export async function openFileDialog(): Promise<{ path: string; name: string; co
   const { open } = await import('@tauri-apps/plugin-dialog')
   const path = await open({
     multiple: false,
-    filters: [{ name: 'Documents', extensions: ['md', 'markdown', 'txt', 'html', 'htm'] }],
+    filters: [{ name: 'Documents', extensions: ['md', 'markdown', 'txt', 'html', 'htm', 'pdf'] }],
   })
   if (typeof path !== 'string') return null
+  const name = path.split(/[\\/]/).pop() ?? path
+  // PDF : binaire lecture seule (11.1) — ne pas lire en texte ; content='' est ouvert en kind pdf.
+  if (/\.pdf$/i.test(path)) return { path, name, content: '' }
   const { readTextFile } = await import('@tauri-apps/plugin-fs')
   const content = await readTextFile(path)
-  const name = path.split(/[\\/]/).pop() ?? path
   return { path, name, content }
 }
 

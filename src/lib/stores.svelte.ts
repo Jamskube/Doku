@@ -9,7 +9,7 @@ import { snapshotKey, type SnapshotInfo } from './snapshot'
 import { buildSearchIndex, isTauri, listSnapshots, purgeAllSnapshots, readSnapshot, readTextFileAt, recordSnapshot, scanFiles, setAlwaysOnTop, writeTextFileAtomic } from './tauri'
 import { normalizeTarget, wikilinkCandidates, wikilinkFileName } from './wikilink'
 
-export type DocKind = 'md' | 'html' | 'txt'
+export type DocKind = 'md' | 'html' | 'txt' | 'pdf'
 export type SidebarView = 'files' | 'plan' | 'history' | 'search'
 export type ColumnWidth = 'narrow' | 'wide' | 'full'
 
@@ -168,6 +168,11 @@ export async function restoreSession() {
   const paths = session?.tabs ?? []
   const missing: string[] = []
   for (const p of paths) {
+    // PDF (11.1) : rouvrir sans lecture texte (sinon readTextFile lève → faux « introuvable »).
+    if (kindFromName(baseName(p)) === 'pdf') {
+      openTab(baseName(p), p, '', 'pdf')
+      continue
+    }
     let content: string | null
     try {
       content = await readTextFileAt(p)
@@ -237,6 +242,7 @@ export function kindFromName(name: string): DocKind {
   const ext = name.split('.').pop()?.toLowerCase()
   if (ext === 'html' || ext === 'htm') return 'html'
   if (ext === 'md' || ext === 'markdown') return 'md'
+  if (ext === 'pdf') return 'pdf'
   return 'txt'
 }
 
@@ -431,6 +437,12 @@ export async function openPath(path: string) {
     app.activeId = existing.id
     return
   }
+  // PDF (11.1) : document binaire lecture seule. Ne PAS lire en texte (detectUnsupported
+  // le rejetterait comme binaire) ; les octets sont chargés à l'affichage par PdfView.
+  if (kindFromName(baseName(path)) === 'pdf') {
+    openTab(baseName(path), path, '', 'pdf')
+    return
+  }
   let content: string | null
   try {
     content = await readTextFileAt(path)
@@ -533,6 +545,9 @@ export function forcePreview(id: number) {
 // Écrit un onglet sur disque (atomique). savedContent n'est marqué qu'après
 // succès (mode navigateur : no-op d'écriture). Renvoie false si rien n'a été écrit.
 export async function saveTab(tab: DocTab): Promise<boolean> {
+  // PDF : lecture seule, aucun contenu texte. Sans cette garde, Ctrl+S écrirait content=''
+  // dans le .pdf et DÉTRUIRAIT le fichier (le save n'est PAS gaté sur `changed`).
+  if (tab.kind === 'pdf') return false
   // Capturés AVANT tout await : on écrit et on archive exactement cette valeur,
   // même si l'utilisateur tape pendant l'écriture asynchrone. `now` capturé ici (et
   // non dans la chaîne async) pour que l'horodatage suive l'ordre d'émission des saves.

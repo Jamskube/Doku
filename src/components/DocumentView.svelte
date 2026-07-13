@@ -2,7 +2,7 @@
   import { onMount } from 'svelte'
   import { EditorView } from '@codemirror/view'
   import { EditorState } from '@codemirror/state'
-  import { app, activeTab, COLUMN_PX, cycleColumnWidth, docHeadings, editorRef, forcePreview, isDirty } from '../lib/stores.svelte'
+  import { app, activeTab, COLUMN_PX, cycleColumnWidth, docHeadings, editorRef, forcePreview, isDirty, type DocKind } from '../lib/stores.svelte'
   import { baseExtensions, htmlSourceExtensions, livePreviewComp, previewExtensions, serializeDoc, sourceExtensions, txtExtensions } from '../lib/editor/editor'
   import { docDirFacet } from '../lib/editor/live-preview'
   import { revealMatch, searchFlashField } from '../lib/editor/search-flash'
@@ -12,25 +12,37 @@
   import { exportStandaloneHtml } from '../lib/export/standalone'
   import { readImageDataUrl, saveHtmlDialog, saveDocxDialog } from '../lib/tauri'
   import DokuMark from '../lib/DokuMark.svelte'
+  import PdfView from './PdfView.svelte'
 
-  type ExportTab = { kind: 'md' | 'html' | 'txt'; name: string; content: string; path: string | null }
+  type ExportTab = { kind: DocKind; name: string; content: string; path: string | null }
 
   function exportHtml(tab: ExportTab) {
+    if (tab.kind === 'pdf') return
     exportStandaloneHtml(
       { kind: tab.kind, name: tab.name, content: tab.content, dir: parentPath(tab.path ?? null) ?? '' },
       { readImageDataUrl, save: saveHtmlDialog },
     ).catch((err) => console.error('Export HTML échoué', err))
   }
 
-  // docx (~100 Ko) chargé à la demande → hors bundle principal.
+  // docx (~100 Ko) chargé à la demande → hors bundle principal. Le doc est capturé AVANT
+  // l'import async (le narrowing de `kind` ne survit pas à la closure différée).
   function exportDocx(tab: ExportTab) {
+    if (tab.kind === 'pdf') return
+    const doc = { kind: tab.kind, name: tab.name, content: tab.content }
     import('../lib/export/docx')
-      .then((m) => m.exportDocx({ kind: tab.kind, name: tab.name, content: tab.content }, { save: saveDocxDialog }))
+      .then((m) => m.exportDocx(doc, { save: saveDocxDialog }))
       .catch((err) => console.error('Export DOCX échoué', err))
+  }
+
+  function exportPrint(tab: ExportTab) {
+    if (tab.kind === 'pdf') return
+    exportViaPrint({ kind: tab.kind, name: tab.name, content: tab.content, dir: parentPath(tab.path ?? null) ?? '' })
   }
 
   // Onglet HTML en mode rendu : aperçu sandboxé (iframe), pas l'éditeur (FR-8).
   const htmlRender = $derived(activeTab()?.kind === 'html' && !app.sourceMode)
+  // Onglet PDF : viewer lecture seule (11.1), pas l'éditeur.
+  const pdfRender = $derived(activeTab()?.kind === 'pdf')
 
   let { onOpen }: { onOpen: () => void } = $props()
 
@@ -139,39 +151,41 @@
   {#if activeTab() && !app.focus}
     {@const tab = activeTab()!}
     <div class="doc-head">
-      <span class="caption">{tab.path ?? tab.name} · {isDirty(tab) ? 'modifié' : 'enregistré'}{app.sourceMode ? ' · source' : ''}</span>
-      <button
-        class="width-btn"
-        title="Exporter en DOCX (Word)"
-        aria-label="Exporter en DOCX"
-        onclick={() => exportDocx(tab)}
-      >
-        <span class="msr" style="font-size:18px">description</span>
-      </button>
-      <button
-        class="width-btn"
-        title="Exporter en HTML autonome"
-        aria-label="Exporter en HTML autonome"
-        onclick={() => exportHtml(tab)}
-      >
-        <span class="msr" style="font-size:18px">html</span>
-      </button>
-      <button
-        class="width-btn"
-        title="Exporter en PDF (impression)"
-        aria-label="Exporter en PDF"
-        onclick={() => exportViaPrint({ kind: tab.kind, name: tab.name, content: tab.content, dir: parentPath(tab.path ?? null) ?? '' })}
-      >
-        <span class="msr" style="font-size:18px">print</span>
-      </button>
-      <button
-        class="width-btn"
-        title="Largeur de colonne"
-        aria-label="Largeur de colonne"
-        onclick={cycleColumnWidth}
-      >
-        <span class="msr" style="font-size:18px">{app.columnWidth === 'narrow' ? 'width_normal' : app.columnWidth === 'wide' ? 'width_wide' : 'width_full'}</span>
-      </button>
+      <span class="caption">{tab.path ?? tab.name} · {tab.kind === 'pdf' ? 'lecture seule' : isDirty(tab) ? 'modifié' : 'enregistré'}{tab.kind !== 'pdf' && app.sourceMode ? ' · source' : ''}</span>
+      {#if tab.kind !== 'pdf'}
+        <button
+          class="width-btn"
+          title="Exporter en DOCX (Word)"
+          aria-label="Exporter en DOCX"
+          onclick={() => exportDocx(tab)}
+        >
+          <span class="msr" style="font-size:18px">description</span>
+        </button>
+        <button
+          class="width-btn"
+          title="Exporter en HTML autonome"
+          aria-label="Exporter en HTML autonome"
+          onclick={() => exportHtml(tab)}
+        >
+          <span class="msr" style="font-size:18px">html</span>
+        </button>
+        <button
+          class="width-btn"
+          title="Exporter en PDF (impression)"
+          aria-label="Exporter en PDF"
+          onclick={() => exportPrint(tab)}
+        >
+          <span class="msr" style="font-size:18px">print</span>
+        </button>
+        <button
+          class="width-btn"
+          title="Largeur de colonne"
+          aria-label="Largeur de colonne"
+          onclick={cycleColumnWidth}
+        >
+          <span class="msr" style="font-size:18px">{app.columnWidth === 'narrow' ? 'width_normal' : app.columnWidth === 'wide' ? 'width_wide' : 'width_full'}</span>
+        </button>
+      {/if}
     </div>
   {/if}
   {#if activeTab()?.heavy && !app.focus}
@@ -188,7 +202,13 @@
   {#if htmlRender}
     <iframe class="html-view" title="Aperçu HTML" sandbox="" srcdoc={sandboxDoc(activeTab()!.content, app.theme, COLUMN_PX[app.columnWidth])}></iframe>
   {/if}
-  <div class="editor-host doku-doc" class:source-mode={app.sourceMode || activeTab()?.heavy} class:txt={activeTab()?.kind === 'txt'} class:hidden={htmlRender} bind:this={host}></div>
+  {#if pdfRender}
+    <!-- Keyé par id : changer d'onglet PDF remonte le viewer → pdf.destroy()/cancel au démontage. -->
+    {#key activeTab()!.id}
+      <PdfView path={activeTab()!.path ?? ''} />
+    {/key}
+  {/if}
+  <div class="editor-host doku-doc" class:source-mode={app.sourceMode || activeTab()?.heavy} class:txt={activeTab()?.kind === 'txt'} class:hidden={htmlRender || pdfRender} bind:this={host}></div>
 
   {#if !activeTab()}
     <div class="empty">

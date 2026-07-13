@@ -3,7 +3,7 @@
 
 export type FsEntry = { name: string; isDir: boolean }
 
-const SUPPORTED = ['md', 'markdown', 'txt', 'html', 'htm']
+const SUPPORTED = ['md', 'markdown', 'txt', 'html', 'htm', 'pdf']
 
 export function isSupportedFile(name: string): boolean {
   const ext = name.split('.').pop()?.toLowerCase() ?? ''

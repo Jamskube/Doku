@@ -13,15 +13,16 @@ const dir = (name: string): FsEntry => ({ name, isDir: true })
 const file = (name: string): FsEntry => ({ name, isDir: false })
 
 describe('isSupportedFile', () => {
-  it('accepte md/markdown/txt/html/htm', () => {
+  it('accepte md/markdown/txt/html/htm/pdf', () => {
     expect(isSupportedFile('a.md')).toBe(true)
     expect(isSupportedFile('a.MARKDOWN')).toBe(true)
     expect(isSupportedFile('a.html')).toBe(true)
     expect(isSupportedFile('a.txt')).toBe(true)
+    expect(isSupportedFile('a.pdf')).toBe(true) // 11.1 : PDF lecture seule
+    expect(isSupportedFile('a.PDF')).toBe(true)
   })
   it('refuse les autres', () => {
     expect(isSupportedFile('a.png')).toBe(false)
-    expect(isSupportedFile('a.pdf')).toBe(false)
     expect(isSupportedFile('sans-extension')).toBe(false)
   })
 })
