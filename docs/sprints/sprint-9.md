@@ -3,7 +3,7 @@
 **Goal** : Exporter un document hors de Doku — **PDF** (fidèle au rendu) + **HTML autonome**, DOCX en bonus.
 **Start** : 2026-07-13
 **End** : 2026-07-20
-**Status** : Active
+**Status** : Completed (Epic 10 codé 4/4 · retro `retro-sprint-9.md`) — **dette : validation native 10.3 + 10.4** (`passes:false` jusqu'au smoke natif)
 
 Deuxième sprint du cap v1.5 (source : `docs/planning/PRD-v1.5.md`, Epic 10). Périmètre = Epic 10 (Export). À la clôture, « Exporter → PDF / HTML » marche de bout en bout. Lecture PDF (Epic 11) + coller image (Epic 12) = Sprint 10.
 
