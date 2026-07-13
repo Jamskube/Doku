@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { app, activeTab, docHeadings, isDirty, loadSnapshotsForActive, openPath, restoreSnapshot, runSearch, scrollToLine, toggleSidebarView } from '../lib/stores.svelte'
+  import { app, activeTab, docHeadings, isDirty, loadSnapshotsForActive, openPath, openSearchHit, restoreSnapshot, runSearch, scrollToLine, toggleSidebarView } from '../lib/stores.svelte'
   import { baseName, joinPath, parentPath, visibleEntries, type FsEntry } from '../lib/explorer'
   import { isTauri, readDirectory } from '../lib/tauri'
   import { DEMO_DIR } from '../lib/demo'
@@ -162,13 +162,17 @@
             {:else if app.searchResults.length}
               {#each app.searchResults as result (result.path)}
                 <div class="result">
-                  <button class="result-file" title={result.path} onclick={() => openPath(result.path)}>
+                  <button
+                    class="result-file"
+                    title={result.path}
+                    onclick={() => (result.hits[0] ? openSearchHit(result.path, result.hits[0].line, result.hits[0].col, result.hits[0].length) : openPath(result.path))}
+                  >
                     <span class="msr fold">description</span>
                     <span class="label grow">{result.name}</span>
                     <span class="count">{result.count}</span>
                   </button>
                   {#each result.hits as hit (hit.line)}
-                    <button class="hit" onclick={() => openPath(result.path)}>
+                    <button class="hit" onclick={() => openSearchHit(result.path, hit.line, hit.col, hit.length)}>
                       <span class="hit-line">{hit.line}</span>
                       <span class="hit-text">{hit.snippet.slice(0, hit.start)}<mark class="hl">{hit.snippet.slice(hit.start, hit.end)}</mark>{hit.snippet.slice(hit.end)}</span>
                     </button>

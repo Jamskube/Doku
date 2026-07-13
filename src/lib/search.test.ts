@@ -52,6 +52,15 @@ describe('searchDocs', () => {
     expect(searchDocs(docs(), 'zzz-absent')).toEqual([])
   })
 
+  it('expose la position document (col + length) du match pour le saut éditeur', () => {
+    const content = 'ligne un\nvoici le TERME ici\nligne trois'
+    const [res] = searchDocs([makeSearchDoc('d.md', 'd.md', content)], 'terme')
+    const hit = res.hits[0]
+    expect(hit.line).toBe(2)
+    const lineText = content.split('\n')[hit.line - 1]
+    expect(lineText.slice(hit.col, hit.col + hit.length).toLowerCase()).toBe('terme')
+  })
+
   it('fenêtre une ligne très longue autour du match, bornes toujours exactes', () => {
     const long = 'x'.repeat(300) + ' CIBLE ' + 'y'.repeat(300)
     const [res] = searchDocs([makeSearchDoc('l.md', 'l.md', long)], 'cible')
@@ -60,6 +69,8 @@ describe('searchDocs', () => {
     expect(hit.snippet.endsWith('…')).toBe(true)
     expect(hit.snippet.length).toBeLessThanOrEqual(162) // SNIPPET_MAX + 2 ellipses
     expect(hit.snippet.slice(hit.start, hit.end)).toBe('CIBLE')
+    // col/length restent la position brute dans la ligne (≠ start fenêtré).
+    expect(long.slice(hit.col, hit.col + hit.length)).toBe('CIBLE')
   })
 
   it('borne le nombre de fichiers résultats (maxResults)', () => {

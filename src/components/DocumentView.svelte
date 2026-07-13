@@ -5,6 +5,7 @@
   import { app, activeTab, COLUMN_PX, cycleColumnWidth, docHeadings, editorRef, forcePreview, isDirty } from '../lib/stores.svelte'
   import { baseExtensions, htmlSourceExtensions, livePreviewComp, previewExtensions, serializeDoc, sourceExtensions, txtExtensions } from '../lib/editor/editor'
   import { docDirFacet } from '../lib/editor/live-preview'
+  import { revealMatch, searchFlashField } from '../lib/editor/search-flash'
   import { parentPath } from '../lib/explorer'
   import { sandboxDoc } from '../lib/html'
   import DokuMark from '../lib/DokuMark.svelte'
@@ -27,6 +28,7 @@
     const dir = parentPath(tab?.path ?? null) ?? ''
     const extra = [
       docDirFacet.of(dir),
+      searchFlashField,
       EditorView.updateListener.of((u) => {
         if (u.docChanged) {
           const t = app.tabs.find((x) => x.id === tabId)
@@ -99,6 +101,18 @@
     const useSource = sourceMode || (tab?.heavy ?? false)
     view.dispatch({ effects: livePreviewComp.reconfigure(useSource ? sourceExtensions() : previewExtensions()) })
     view.requestMeasure({ read: () => view && updateActiveHeading(view) })
+  })
+
+  // Révélation d'une occurrence de recherche (9.4). Déclaré APRÈS l'effet de switch
+  // d'onglet ci-dessus : quand un clic ouvre un onglet, le setState y tourne d'abord
+  // (contenu prêt), puis celui-ci saute + surligne. Onglet déjà actif : contenu déjà là.
+  $effect(() => {
+    const reveal = app.pendingReveal
+    if (!reveal || !view) return
+    const tab = activeTab()
+    if (!tab || tab.path !== reveal.path) return
+    revealMatch(view, reveal.line, reveal.col, reveal.length)
+    app.pendingReveal = null
   })
 </script>
 

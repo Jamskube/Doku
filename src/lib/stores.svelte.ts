@@ -80,6 +80,9 @@ export const app = $state({
   searchQuery: '',
   searchResults: [] as SearchResult[],
   searching: false,
+  // Occurrence à révéler dans l'éditeur après ouverture (clic sur un résultat, 9.4).
+  // Consommée par DocumentView une fois l'onglet monté, puis remise à null.
+  pendingReveal: null as { path: string; line: number; col: number; length: number } | null,
 })
 
 // Accès non réactif à la vue CM6 courante (scroll TOC, sauvegarde…)
@@ -391,6 +394,14 @@ export function clearSearch() {
   app.searchQuery = ''
   app.searchResults = []
   app.searching = false
+}
+
+// Ouvre le fichier d'un résultat de recherche et demande la révélation de l'occurrence
+// (saut à la ligne + cadre, 9.4). Le pending est posé AVANT l'ouverture : DocumentView
+// le consomme une fois l'onglet monté (nouvel onglet) ou immédiatement (déjà ouvert).
+export async function openSearchHit(path: string, line: number, col: number, length: number) {
+  app.pendingReveal = { path, line, col, length }
+  await openPath(path)
 }
 
 // Un chemin appartient-il à l'arbre du dossier indexé (pour capter les créations) ?

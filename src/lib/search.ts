@@ -15,9 +15,13 @@ export interface SearchDoc {
 export interface SearchHit {
   // Numéro de ligne 1-based (sert au saut vers l'occurrence — story 9.4).
   line: number
+  // Colonne 0-based du match DANS la ligne du document (≠ start, qui est relatif au
+  // snippet fenêtré) + longueur du terme : position exacte pour le saut/surlignage éditeur.
+  col: number
+  length: number
   // Extrait de contexte (la ligne, fenêtrée si très longue).
   snippet: string
-  // Bornes du terme DANS le snippet, pour le surlignage (start inclus, end exclu).
+  // Bornes du terme DANS le snippet, pour le surlignage de l'extrait (start incl., end excl.).
   start: number
   end: number
 }
@@ -60,17 +64,18 @@ function buildHit(content: string, matchIndex: number, matchLen: number): Search
   let lineEnd = content.indexOf('\n', matchIndex)
   if (lineEnd < 0) lineEnd = content.length
   const rawLine = content.slice(lineStart, lineEnd)
-  let col = matchIndex - lineStart
+  const col = matchIndex - lineStart // colonne dans la ligne du document (saut éditeur)
   let snippet = rawLine
+  let start = col // offset du terme dans le snippet (peut différer de col si fenêtré)
   if (rawLine.length > SNIPPET_MAX) {
     const winStart = Math.max(0, col - CONTEXT_BEFORE)
     const prefix = winStart > 0 ? '…' : ''
     const winEnd = winStart + SNIPPET_MAX
     const suffix = winEnd < rawLine.length ? '…' : ''
     snippet = prefix + rawLine.slice(winStart, winEnd) + suffix
-    col = col - winStart + prefix.length
+    start = col - winStart + prefix.length
   }
-  return { line: lineAt(content, lineStart), snippet, start: col, end: col + matchLen }
+  return { line: lineAt(content, lineStart), col, length: matchLen, snippet, start, end: start + matchLen }
 }
 
 // Cherche `query` (sous-chaîne, casse-insensible) dans tous les documents indexés.

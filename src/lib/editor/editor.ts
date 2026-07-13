@@ -57,6 +57,12 @@ const dokuTheme = EditorView.theme({
   },
   '.cm-line': { padding: '0' },
   '.cm-cursor': { borderLeftColor: 'var(--ink)', borderLeftWidth: '2px' },
+  // Cadre transitoire sur une occurrence de recherche atteinte au clic (9.4).
+  '.cm-search-flash': {
+    backgroundColor: 'var(--accent-soft)',
+    borderRadius: '3px',
+    boxShadow: '0 0 0 2px var(--ink-3)',
+  },
   '&.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground, .cm-selectionBackground': {
     background: 'rgba(var(--ink-rgb), 0.12)',
   },
