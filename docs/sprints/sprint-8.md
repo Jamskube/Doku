@@ -12,8 +12,8 @@ Premier sprint du **cap v1.5** (source : `docs/planning/PRD-v1.5.md`, Epic 9). P
 | # | Story | Size | Status | Notes |
 |---|---|---|---|---|
 | 9.1 | Spike : stratégie d'index (mémoire vs scan) | S | ✅ Done | **Index-en-mémoire** tranché par mesure (index 0,4-1,6 ms vs scan 20-50 ms/requête) → [ADR-0007](../adr/0007-recherche-index-memoire.md). Forme du SearchService cadrée pour 9.2 |
-| 9.2 | Moteur de recherche (scan dossier, casse-insensible, anti-périmé) | M | 🟡 Moteur fait | `search.ts` pur (9 tests) + `buildSearchIndex` (scan+skip binaires, lecture par lots) + `runSearch` (index paresseux, coalescing, req-token). `code-reviewer` Approve, 2 Majors corrigés. **Ledger flip avec 9.3** (vérif bout-en-bout via l'UI) |
-| 9.3 | Panneau de recherche (Ctrl+Maj+F, résultats surlignés) | M | 🟡 UI + Playwright | Panneau Sidebar + input as-you-type + résultats surlignés (`<mark>`) + n° de ligne + états vides. **Playwright OK** (démo). **Flip 9.2+9.3 après smoke natif** (scan réel + skip binaires) |
+| 9.2 | Moteur de recherche (scan dossier, casse-insensible, anti-périmé) | M | ✅ Done | `search.ts` pur (9 tests) + `buildSearchIndex` + `runSearch` (index paresseux, coalescing, req-token). `code-reviewer` Approve, 2 Majors corrigés. **Validé natif** |
+| 9.3 | Panneau de recherche (Ctrl+Maj+F, résultats surlignés) | M | ✅ Done | Panneau Sidebar, as-you-type, surlignage `<mark>` + n° de ligne, états vides. Playwright + **validé natif** |
 | 9.4 | Saut vers l'occurrence au clic | S | TODO | Ouvrir l'onglet + scroller sur la ligne (mécanisme scrollToLine déjà utilisé par la TOC 4.6) |
 
 ## Blockers
