@@ -1,14 +1,19 @@
 # Next session pointer
-_Updated: 2026-07-13 19:45_
+_Updated: 2026-07-13 16:10_
 
 ## Where I left off
-**Doku v1 feature-complete + v1.5 bien entamée.** Sprint 8 **complet (4/4)** : la **recherche plein-texte** est livrée de bout en bout — moteur index-mémoire (ADR-0007), panneau `Ctrl+Maj+F` (as-you-type, extraits surlignés + n° de ligne), et clic-pour-sauter avec l'occurrence **encadrée** dans l'éditeur. Epic 9 clos. **Sprint 9 (Export, Epic 10) planifié et initialisé** — aucune story démarrée. **Ledger 39/43** (39 done, 4 à faire : 10.1-10.4). 123 tests verts, arbre propre, tout poussé.
+**Cap v1.5 quasi bouclé côté code.** Sprint 9 (Export, Epic 10) **codé 4/4** — 10.1 spike PDF + 10.2 renderer MD→HTML (`marked`) **validés natif** ; 10.3 (HTML autonome) + 10.4 (DOCX `docx`) code-complete + revus. Sprint 10 (Lecture PDF + coller image) **lancé** : **spike 11.1 (lecteur PDF via PDF.js) codé + revu** (0 Critical/Major, data-safety confirmée — garde `saveTab` anti-destruction du .pdf). **3 validations natives en attente : 10.3, 10.4, 11.1** (ledger `passes:false`). Chaque story passée à EPCT → critic → code-reviewer → quick-fix → commit ; **2 bugs data-loss évités** par les revues. Ledger **41/46**, 156 tests verts, svelte-check 0 err, build OK (marked/docx/pdfjs lazy-loadés en chunks séparés).
 
 ## Open work
-- Branch: `main` — **propre** (rien de non commité)
+- Branch: `main` — **propre** (rien de non commité), poussé (`bbb2f06`)
 - Open PRs: aucune
-- Sprint actif: **Sprint 9** (`docs/sprints/sprint-9.md`), 2026-07-13 → 2026-07-20, stories `10.1`-`10.4` (Export : spike PDF, PDF, HTML autonome, DOCX stretch)
-- Specs/plans: `docs/planning/PRD-v1.5.md` (Epic 10 = FR-2/FR-5), `docs/planning/epics.md`, ADRs 0006 (copilote v2) / 0007 (recherche)
+- Sprint actif: **Sprint 10** (`docs/sprints/sprint-10.md`), 2026-07-13 → 2026-07-20 — stories `11.1` (viewer PDF, en attente validation), `11.2` (`.pdf` associations OS), `12.1` (coller image)
+- Specs/ADR: PRD-v1.5, ADR 0008-0011 (export PDF/HTML/DOCX + lecture PDF)
 
 ## Next concrete step
-**Démarrer le spike `10.1` (pipeline export PDF) via `/epct`.** ⚠️ Contrairement au spike 9.1 (benchmark Node exécutable en session), **10.1 exige un essai NATIF** : tester l'impression WebView2 par **dialogue (`window.print()` + `@media print`)** vs **`PrintToPdfAsync` (COM, via `with_webview()`)** sur **ARM64**, juger la fidélité + l'UX, et documenter (piège WebView2 **#5199** : le PDF peut être supprimé si la webview est disposée avant la fin d'écriture). Option pratique : **scaffolder d'abord** l'export (bouton « Exporter », feuille `@media print` masquant le chrome, sauts de page) pour que l'essai natif soit prêt à lancer, puis trancher → ADR → coder 10.2. Après Epic 10 : Sprint 10 = Lecture PDF (Epic 11, PDF.js bundlé) + coller image (Epic 12).
+**Solder les 3 validations natives en un seul `tauri dev`** (action retro « grouper les validations ») :
+1. **10.3** — Exporter en HTML → ouvrir le `.html` hors-ligne dans un vrai navigateur → **image inline** visible, aucun script.
+2. **10.4** — Exporter en DOCX → ouvrir le `.docx` dans Word/LibreOffice → titres/gras/listes/lien/table/code.
+3. **11.1** — Ctrl+O un vrai `.pdf` (polices embarquées) → rendu lecture seule, **scroll multi-pages**, worker offline (0 « fake worker »/violation CSP en console), 1re page < 1 s ; **⚠️ test critique : Ctrl+S sur le PDF ne doit RIEN faire** (fichier intact). Un PDF CJK dégradé = confirme la limite CMap (documentée ADR-0011).
+
+Chaque « je valide » → je flippe le ledger correspondant. Puis **enchaîner 11.2** (`.pdf` associations/explorateur — S) et **12.1** (coller image — M, réutilise `writeFileAtomic`/`fs:allow-write-file`) pour clore le Sprint 10 = **v1.5 feature-complete**. Dette technique notée : Minor `checkExternalChanges` skip pdf (perf), bundling cmap/wasm pdfjs (CJK/JPEG2000), zoom PDF.
