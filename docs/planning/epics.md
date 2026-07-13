@@ -1,8 +1,9 @@
 # Epics & Stories
 
-_Source PRD : docs/planning/PRD.md · Architecture : docs/planning/architecture.md · Décomposé le : 2026-07-09_
+_Source PRD : docs/planning/PRD.md (v1) + docs/planning/PRD-v1.5.md · Architecture : docs/planning/architecture.md · Décomposé le : 2026-07-09 (v1), 2026-07-13 (v1.5)_
 
-Backlog de la v1 (jalons M1-M4 du PRD). **Cap P0 respecté** : 10/36 stories (28 %).
+Backlog **v1** (Epics 1-8, jalons M1-M4) : ✅ **livré, feature-complete** (ledger 35/35). Cap P0 respecté : 10/36 (28 %).
+Backlog **v1.5** (Epics 9-12, source PRD-v1.5) : ⬜ à faire. Cap P0 : 3/11 (27 %).
 Légende état : ✅ fait · 🟡 amorcé (socle en place, à finir/tester) · ⬜ à faire.
 
 ---
@@ -139,11 +140,72 @@ Légende état : ✅ fait · 🟡 amorcé (socle en place, à finir/tester) · �
 
 ---
 
+# Cap v1.5 — recherche, export, lecture PDF
+
+_Source : docs/planning/PRD-v1.5.md · Décomposé le 2026-07-13. Les 2 blockers archi du gate readiness sont inscrits en **spikes** (9.1, 10.1), à trancher par la mesure avant de coder (pattern Spike S0)._
+
+## Epic 9 : Recherche plein-texte (FR-1)
+
+**Goal** : chercher un terme dans tout un dossier de notes et sauter au résultat, sans base de données.
+**Spans PRD** : PRD-v1.5 FR-1 (P0), NFR Performance (< 300 ms / ~1000 fichiers).
+**État** : ⬜ à faire.
+
+### Stories
+| # | Title | Size | Priority | Acceptance |
+|---|---|---|---|---|
+| 9.1 | Spike : stratégie d'index (mémoire vs scan à la volée) | S | P0 | Given un corpus ~1000 fichiers (~5 Mo), when je prototype scan-à-la-volée vs index-en-mémoire, then je tranche par la mesure (cible < 300 ms) et documente le choix (note/ADR) avant de coder 9.2 |
+| 9.2 | Moteur de recherche (scan dossier + sous-dossiers, casse-insensible, garde anti-périmé) | M | P0 | Given un dossier de contexte, when je lance une requête, then les fichiers correspondants sont retournés avec extraits, < 300 ms sur ~1000 fichiers ; non-supportés/binaires ignorés (`detectUnsupported`) ; requête modifiée → recherche précédente annulée (req-token) |
+| 9.3 | Panneau de recherche (raccourci Ctrl+Maj+F, saisie, résultats surlignés) | M | P0 | Given Ctrl+Maj+F, when je saisis une requête, then un panneau liste les fichiers + extraits (terme surligné) ; « Aucun résultat » clair si vide |
+| 9.4 | Saut vers l'occurrence au clic | S | P1 | Given un résultat, when je clique, then le fichier s'ouvre dans un onglet scrollé sur l'occurrence (ligne visible, terme mis en évidence) |
+
+---
+
+## Epic 10 : Export de documents (FR-2, FR-5)
+
+**Goal** : sortir un document de Doku en PDF, HTML autonome ou DOCX, hors-ligne.
+**Spans PRD** : PRD-v1.5 FR-2 (P1), FR-5 (P2 stretch).
+**État** : ⬜ à faire.
+
+### Stories
+| # | Title | Size | Priority | Acceptance |
+|---|---|---|---|---|
+| 10.1 | Spike : pipeline export PDF (`window.print` vs `PrintToPdfAsync`) | S | P1 | Given un doc rendu, when je compare l'impression WebView2 par dialogue vs `PrintToPdfAsync` (COM) sur ARM64, then je tranche fidélité/UX (piège WebView2 #5199) et documente avant de coder 10.2 |
+| 10.2 | Export PDF (feuille `@media print`, fidèle WYSIWYG) | M | P1 | Given un doc md/html affiché, when « Exporter → PDF », then PDF fidèle produit (chrome masqué, sauts de page, marges), 100 % hors-ligne |
+| 10.3 | Export HTML autonome (styles + images inline, sanitizé) | M | P1 | Given un doc affiché, when « Exporter → HTML autonome », then un seul `.html` avec styles inline (AIR) + images en `data:`, sanitizé, ouvrable hors-ligne partout |
+| 10.4 | Export DOCX (lib OOXML JS) — **stretch** | M | P2 | Given un doc Markdown, when « Exporter → DOCX », then `.docx` ouvrable dans Word (titres/gras/listes/liens/tableaux/code, fidélité raisonnable) ; éléments non mappables → texte brut sans planter. **Coupable en premier** si le cap déborde |
+
+---
+
+## Epic 11 : Lecture PDF (FR-3)
+
+**Goal** : ouvrir et lire un PDF en lecture seule dans un onglet Doku, hors-ligne.
+**Spans PRD** : PRD-v1.5 FR-3 (P1) ; concrétise le point d'extension `DocumentView`/`PdfView` (architecture.md).
+**État** : ⬜ à faire.
+
+### Stories
+| # | Title | Size | Priority | Acceptance |
+|---|---|---|---|---|
+| 11.1 | Viewer PDF.js bundlé local (lecture seule, scroll/zoom, worker sous CSP) | L | P1 | Given un `.pdf`, when ouvert, then rendu lecture seule via PDF.js bundlé (100 % hors-ligne), scroll multi-pages + zoom ; 1re page < 1 s (PDF 10 Mo) ; worker autorisé sous CSP (`worker-src 'self' blob:`) ; octets lus via plugin-fs en `Uint8Array` |
+| 11.2 | `.pdf` comme format supporté (explorateur/associations, lecture seule) | S | P1 | Given `.pdf` ajouté à `isSupportedFile`, when l'explorateur/les associations listent, then `.pdf` visible et ouvrable ; aucun mode édition proposé |
+
+---
+
+## Epic 12 : Coller intelligent — image (FR-4)
+
+**Goal** : coller une image du presse-papier directement dans une note, écrite comme fichier lié.
+**Spans PRD** : PRD-v1.5 FR-4 (P2), NFR Fiabilité (zéro-écrasement).
+**État** : ⬜ à faire.
+
+### Stories
+| # | Title | Size | Priority | Acceptance |
+|---|---|---|---|---|
+| 12.1 | Coller une image → fichier lié + insertion du lien | M | P2 | Given un doc Markdown **enregistré** en édition, when je colle (Ctrl+V) une image, then Doku l'écrit à côté (ex. `assets/`, nom unique jamais écrasant) et insère `![](chemin-relatif)` au curseur ; doc non enregistré → demande de sauver d'abord ; presse-papier texte → insertion normale ; échec écriture → message clair, aucun lien cassé |
+
+---
+
 ## Stories reportées / hors décomposition (non prêtes)
 
 Signalées ici, **pas** dans le backlog tant que le critère d'acceptation n'est pas clair (règle : pas de story sans acceptance) :
-- **Coller intelligent** (image presse-papier → fichier lié) — v1.5 (hors scope PRD)
-- **Recherche plein texte** dans le dossier — v1.5
-- **Export** md → PDF/HTML/DOCX — v1.5
-- **Lecture/annotations PDF** — v2 (l'interface DocumentView le prépare, rien de construit)
-- **Copilote IA local NPU** (Gemma 3n) — v2+, après `/gate feasibility`
+- **Annotations PDF** — v2+ (la lecture est décomposée en Epic 11 ; les annotations restent non spécifiées)
+- **Recherche & remplacement** multi-fichiers — v2 (la recherche v1.5 = lecture seule, Epic 9)
+- **Copilote IA local** (Ollama sidecar CPU) — v2, **PRD dédié à écrire** (décision figée : [ADR-0006](../adr/0006-copilote-ia-ollama-sidecar-cpu.md), NPU écarté)

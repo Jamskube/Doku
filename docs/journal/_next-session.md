@@ -1,13 +1,14 @@
 # Next session pointer
-_Updated: 2026-07-08 19:05_
+_Updated: 2026-07-13 18:30_
 
 ## Where I left off
-**L'app tourne en natif** : `npm run tauri dev` compile et lance la fenêtre Doku (sans décorations, icône D, validée visuellement par l'utilisateur). Le shell W1 est fidèle à la maquette (onglets Chrome-style sans filet — retiré à la demande —, sidebar ruban+panneau repliable à 0 px, crème/sombre) et l'éditeur CM6 live preview fonctionne (checkboxes, wikilinks, mode source Ctrl+/). Contenu = démo en mémoire ; l'ouverture/sauvegarde réelles (`Ctrl+O`/`Ctrl+S` via plugin-dialog/fs) sont câblées mais **pas encore testées en natif**.
+**Doku est v1 feature-complete** (ledger 35/35, tout le PRD v1 livré, Epic 3/4/7 clos). 3.7 (widgets tableaux) validé en natif et commité. Retro Sprint 7 faite. Le **cap v1.5 est entièrement planifié** : gate feasibility (recherche/export/PDF = GO ; copilote tranché), **ADR-0006** (copilote = Ollama sidecar CPU, NPU écarté), **PRD-v1.5**, **epics 9-12**, et **Sprint 8 initialisé** (Epic 9 Recherche, 4 stories). Rien n'est encore codé côté v1.5 — la session a été 100 % planification.
 
 ## Open work
-- Branch: main — **1 fichier non commité attendu** (`docs/journal/*` + AGENTS.md memories de cette clôture) ; tout le reste est poussé (`2e099f3`)
+- Branch: `main` — propre après ce wrap (planif v1.5 commitée)
 - Open PRs: aucune
-- Reste W1/M1 : tester ouverture/sauvegarde natives · vrai explorateur de dossier (FR-6, remplacer la démo) · SnapshotService (FR-12, ADR-0003) · widgets tableaux/images dans l'éditeur · mini-barre de sélection · écrans W3 (accueil), W4 (focus), W5 (bannières) — maquettes à faire côté Claude design (« on rajoutera des choses plus tard »)
+- Sprint actif: **Sprint 8** (`docs/sprints/sprint-8.md`), 2026-07-13 → 2026-07-20, stories `9.1`-`9.4`, ledger 35/39
+- Plans/specs: `docs/planning/PRD-v1.5.md`, `docs/planning/epics.md` (Epics 9-12), `docs/adr/0006-*` (copilote v2)
 
 ## Next concrete step
-Lancer `npm run tauri dev`, tester Ctrl+O/Ctrl+S sur de vrais fichiers (+ épinglage 📌 et drag de fenêtre), corriger ce qui accroche, puis attaquer le vrai explorateur de dossier (FR-6) — ou `/epics` pour structurer le reste de M1.
+**Démarrer la story 9.1 (spike) via `/epct`** : mesurer scan-à-la-volée vs index-en-mémoire sur ~1000 fichiers, trancher (cible < 300 ms), documenter (note/ADR) → puis coder 9.2 (moteur) sur l'approche retenue. Après Epic 9 (recherche de bout en bout) : Sprint 9 = Export (Epic 10, spike PDF `10.1`) ou Lecture PDF (Epic 11). Copilote = plus tard, écrire d'abord le PRD v2 (ADR-0006 déjà en place).
