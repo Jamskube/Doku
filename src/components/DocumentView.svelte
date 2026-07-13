@@ -126,7 +126,7 @@
         class="width-btn"
         title="Exporter en PDF (impression)"
         aria-label="Exporter en PDF"
-        onclick={() => exportViaPrint(tab)}
+        onclick={() => exportViaPrint({ kind: tab.kind, name: tab.name, content: tab.content, dir: parentPath(tab.path ?? null) ?? '' })}
       >
         <span class="msr" style="font-size:18px">print</span>
       </button>

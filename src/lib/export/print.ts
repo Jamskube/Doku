@@ -18,20 +18,23 @@
 // pendant l'impression). Le timing exact du teardown est ce que l'essai NATIF valide.
 import { paperCss, injectHead } from '../html'
 import { sanitizeHtml } from '../sanitize'
+import { renderMarkdown } from './render-md'
 
 export interface Printable {
   kind: 'md' | 'html' | 'txt'
   name: string
   content: string
+  // Dossier du fichier (résolution des images relatives au rendu Markdown).
+  dir?: string
 }
 
 // Colonne papier un peu plus large qu'à l'écran (l'A4 imprimé a de la place).
 const PRINT_WIDTH = '760px'
 
 // CSP du document d'impression : aucun réseau, styles inline autorisés (feuille papier),
-// images en data: uniquement (mêmes limites que l'aperçu .html sandboxé).
+// images en data: + asset: (fichiers locaux résolus par convertFileSrc au rendu Markdown).
 const PRINT_CSP =
-  `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:">`
+  `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data: asset: http://asset.localhost">`
 
 // Surcouche d'impression : marges de page, anti-coupure des blocs, et bascule dark→light
 // forcée (fond ET couleur du texte — imprimer clair même si l'app est en thème sombre).
@@ -53,10 +56,15 @@ function escapeHtml(s: string): string {
 
 // Construit le document HTML « papier » prêt à imprimer pour un onglet.
 // - `.html` : contenu assaini (DOMPurify) — chemin fidèle, identique à l'aperçu existant.
-// - `.txt` / `.md` : source échappée dans <pre> (le rendu MD→HTML fidèle = story 10.2).
+// - `.md`   : rendu Markdown → HTML (marked + sanitize, GFM), images locales résolues.
+// - `.txt`  : source échappée dans <pre>.
 export function buildPrintHtml(tab: Printable): string {
   const body =
-    tab.kind === 'html' ? sanitizeHtml(tab.content) : `<pre>${escapeHtml(tab.content)}</pre>`
+    tab.kind === 'html'
+      ? sanitizeHtml(tab.content)
+      : tab.kind === 'md'
+        ? renderMarkdown(tab.content, { dir: tab.dir })
+        : `<pre>${escapeHtml(tab.content)}</pre>`
   const inject = `${PRINT_CSP}<style>${paperCss('light', PRINT_WIDTH)}\n${PRINT_CSS}\n</style>`
   return injectHead(body, inject)
 }

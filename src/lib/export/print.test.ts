@@ -11,10 +11,11 @@ describe('buildPrintHtml', () => {
     expect(out).not.toContain('<script>alert(1)</script>')
   })
 
-  it('traite .md comme du texte brut échappé (rendu MD→HTML = story 10.2)', () => {
-    const out = buildPrintHtml({ kind: 'md', name: 'n.md', content: '# Titre\n<b>x</b>' })
-    expect(out).toContain('# Titre')
-    expect(out).toContain('&lt;b&gt;x&lt;/b&gt;')
+  it('rend le .md via marked (titre markdown → <h1>, pas de brut)', () => {
+    const out = buildPrintHtml({ kind: 'md', name: 'n.md', content: '# Titre' })
+    expect(out).toContain('<h1')
+    expect(out).toContain('Titre')
+    expect(out).not.toContain('# Titre')
   })
 
   it('assainit le .html (retire les <script>) via sanitizeHtml', () => {
