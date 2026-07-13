@@ -10,7 +10,7 @@ import { buildSearchIndex, isTauri, listSnapshots, purgeAllSnapshots, readSnapsh
 import { normalizeTarget, wikilinkCandidates, wikilinkFileName } from './wikilink'
 
 export type DocKind = 'md' | 'html' | 'txt'
-export type SidebarView = 'files' | 'plan' | 'history'
+export type SidebarView = 'files' | 'plan' | 'history' | 'search'
 export type ColumnWidth = 'narrow' | 'wide' | 'full'
 
 // Largeur de la colonne de lecture (variable CSS --doc-width, consommée par
@@ -96,7 +96,7 @@ export function loadSettings() {
       const s = JSON.parse(raw)
       if (s.theme === 'dark' || s.theme === 'light') app.theme = s.theme
       if (typeof s.sidebarOpen === 'boolean') app.sidebarOpen = s.sidebarOpen
-      if (s.sidebarView === 'files' || s.sidebarView === 'plan' || s.sidebarView === 'history') {
+      if (s.sidebarView === 'files' || s.sidebarView === 'plan' || s.sidebarView === 'history' || s.sidebarView === 'search') {
         app.sidebarView = s.sidebarView
       }
       if (s.columnWidth === 'narrow' || s.columnWidth === 'wide' || s.columnWidth === 'full') {

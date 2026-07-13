@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { app, activeTab, docHeadings, isDirty, loadSnapshotsForActive, openPath, restoreSnapshot, scrollToLine, toggleSidebarView } from '../lib/stores.svelte'
+  import { app, activeTab, docHeadings, isDirty, loadSnapshotsForActive, openPath, restoreSnapshot, runSearch, scrollToLine, toggleSidebarView } from '../lib/stores.svelte'
   import { baseName, joinPath, parentPath, visibleEntries, type FsEntry } from '../lib/explorer'
   import { isTauri, readDirectory } from '../lib/tauri'
   import { DEMO_DIR } from '../lib/demo'
@@ -56,6 +56,13 @@
       minute: '2-digit',
     })
   }
+
+  // Focus automatique du champ quand le panneau de recherche s'ouvre (Ctrl+Maj+F).
+  // Ne dépend que de la vue/état sidebar → non re-déclenché à chaque frappe.
+  let searchInput = $state<HTMLInputElement | null>(null)
+  $effect(() => {
+    if (app.sidebarView === 'search' && app.sidebarOpen) searchInput?.focus()
+  })
 </script>
 
 <aside class="sidebar" class:open={app.sidebarOpen}>
@@ -68,6 +75,9 @@
 
       <button class="rib" class:active={app.sidebarView === 'files' && app.sidebarOpen} title="Fichiers" aria-label="Fichiers" onclick={() => toggleSidebarView('files')}>
         <span class="msr" style="font-size:21px">folder_open</span>
+      </button>
+      <button class="rib" class:active={app.sidebarView === 'search' && app.sidebarOpen} title="Rechercher dans le dossier (Ctrl+Maj+F)" aria-label="Rechercher" onclick={() => toggleSidebarView('search')}>
+        <span class="msr" style="font-size:21px">search</span>
       </button>
       <button class="rib" class:active={app.sidebarView === 'plan' && app.sidebarOpen} title="Plan du document" aria-label="Plan" onclick={() => toggleSidebarView('plan')}>
         <span class="msr" style="font-size:21px">format_list_bulleted</span>
@@ -135,6 +145,39 @@
             {:else}
               <p class="empty">Pas de titres dans ce document</p>
             {/each}
+          </div>
+        {:else if app.sidebarView === 'search'}
+          <div class="search">
+            <input
+              class="search-input"
+              type="text"
+              placeholder="Rechercher dans le dossier…"
+              aria-label="Rechercher dans le dossier"
+              value={app.searchQuery}
+              bind:this={searchInput}
+              oninput={(e) => runSearch(e.currentTarget.value)}
+            />
+            {#if !app.searchQuery.trim()}
+              <p class="empty">Tapez pour chercher dans le dossier et ses sous-dossiers.</p>
+            {:else if app.searchResults.length}
+              {#each app.searchResults as result (result.path)}
+                <div class="result">
+                  <button class="result-file" title={result.path} onclick={() => openPath(result.path)}>
+                    <span class="msr fold">description</span>
+                    <span class="label grow">{result.name}</span>
+                    <span class="count">{result.count}</span>
+                  </button>
+                  {#each result.hits as hit (hit.line)}
+                    <button class="hit" onclick={() => openPath(result.path)}>
+                      <span class="hit-line">{hit.line}</span>
+                      <span class="hit-text">{hit.snippet.slice(0, hit.start)}<mark class="hl">{hit.snippet.slice(hit.start, hit.end)}</mark>{hit.snippet.slice(hit.end)}</span>
+                    </button>
+                  {/each}
+                </div>
+              {/each}
+            {:else if !app.searching}
+              <p class="empty">Aucun résultat.</p>
+            {/if}
           </div>
         {:else}
           <div class="history">
@@ -317,4 +360,58 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
+
+  .search { padding-top: 2px; }
+  .search-input {
+    width: 100%;
+    height: 30px;
+    margin-bottom: 8px;
+    padding: 0 10px;
+    border: 1px solid var(--line-2);
+    border-radius: 8px;
+    background: var(--cream-content);
+    color: var(--ink);
+    font-size: 13px;
+    outline: none;
+  }
+  .search-input:focus { border-color: var(--line-3); }
+  .result { margin-bottom: 6px; }
+  .result-file {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    height: 26px;
+    padding: 0 6px;
+    background: transparent;
+    border: 0;
+    border-radius: 6px;
+    cursor: pointer;
+    color: var(--ink-2);
+    text-align: left;
+  }
+  .result-file:hover { background: var(--surface-hover); color: var(--ink); }
+  .count { font-size: 11px; color: var(--ink-4); flex-shrink: 0; }
+  .hit {
+    width: 100%;
+    display: flex;
+    gap: 8px;
+    padding: 4px 8px 4px 26px;
+    background: transparent;
+    border: 0;
+    border-radius: 6px;
+    cursor: pointer;
+    text-align: left;
+    color: var(--ink-3);
+  }
+  .hit:hover { background: var(--surface-hover); }
+  .hit-line { font-size: 11px; color: var(--ink-4); flex-shrink: 0; min-width: 20px; }
+  .hit-text {
+    font-size: 12px;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .hl { background: var(--accent-soft); color: var(--ink); border-radius: 2px; padding: 0 1px; }
 </style>

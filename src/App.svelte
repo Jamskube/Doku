@@ -127,6 +127,9 @@
       } else if (k === 'h' && e.shiftKey) {
         e.preventDefault()
         toggleSidebarView('history')
+      } else if (k === 'f' && e.shiftKey) {
+        e.preventDefault()
+        toggleSidebarView('search')
       } else if (k === 't' && e.shiftKey) {
         e.preventDefault()
         togglePin()
