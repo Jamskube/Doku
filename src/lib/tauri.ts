@@ -1,6 +1,7 @@
 import { detectUnsupported } from './encoding'
 import { isSupportedFile, joinPath, type FsEntry } from './explorer'
 import { bytesToDataUrl, mimeFromExt } from './export/img-data'
+import { nextFreeName } from './paste-image'
 import { makeSearchDoc, type SearchDoc } from './search'
 import { parseStamp, selectPurgeable, snapshotPreview, snapshotStamp, type SnapshotEntry, type SnapshotInfo } from './snapshot'
 
@@ -226,6 +227,28 @@ export async function writeFileAtomic(path: string, bytes: Uint8Array) {
   const tmp = `${path}.${Date.now()}-${tmpSeq++}.doku-tmp`
   await writeFile(tmp, bytes)
   await rename(tmp, path)
+}
+
+// Écrit une image collée à côté du document (12.1). Nom unique JAMAIS écrasant : le
+// suffixe ~seq s'incrémente tant qu'un fichier existe. Toutes les écritures d'images
+// sont SÉRIALISÉES (chaîne de promesses) : deux collages dans la même seconde ne peuvent
+// pas voir le même nom libre puis se réécrire l'un sur l'autre (rename remplace la cible
+// sur Windows) — le 2e voit le fichier du 1er et prend ~1. Renvoie le nom de fichier
+// relatif à insérer, ou null (navigateur). Requiert fs:allow-exists + fs:allow-write-file.
+let imageWriteChain: Promise<unknown> = Promise.resolve()
+
+export function writePastedImage(dir: string, bytes: Uint8Array, stamp: string, ext: string): Promise<string | null> {
+  if (!isTauri) return Promise.resolve(null)
+  const run = async (): Promise<string | null> => {
+    const { join } = await import('@tauri-apps/api/path')
+    const { exists } = await import('@tauri-apps/plugin-fs')
+    const name = await nextFreeName(stamp, ext, async (n) => exists(await join(dir, n)))
+    await writeFileAtomic(await join(dir, name), bytes)
+    return name
+  }
+  const p = imageWriteChain.then(run, run)
+  imageWriteChain = p.catch(() => {})
+  return p
 }
 
 // --- Export HTML autonome (FR-2, 10.3) ---

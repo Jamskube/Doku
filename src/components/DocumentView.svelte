@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte'
   import { EditorView } from '@codemirror/view'
-  import { EditorState } from '@codemirror/state'
+  import { EditorState, type Extension } from '@codemirror/state'
   import { app, activeTab, COLUMN_PX, cycleColumnWidth, docHeadings, editorRef, forcePreview, isDirty, type DocKind } from '../lib/stores.svelte'
   import { baseExtensions, htmlSourceExtensions, livePreviewComp, previewExtensions, serializeDoc, sourceExtensions, txtExtensions } from '../lib/editor/editor'
   import { docDirFacet } from '../lib/editor/live-preview'
@@ -10,7 +10,8 @@
   import { sandboxDoc } from '../lib/html'
   import { exportViaPrint } from '../lib/export/print'
   import { exportStandaloneHtml } from '../lib/export/standalone'
-  import { readImageDataUrl, saveHtmlDialog, saveDocxDialog } from '../lib/tauri'
+  import { readImageDataUrl, saveHtmlDialog, saveDocxDialog, writePastedImage } from '../lib/tauri'
+  import { imageMarkdown, imageStamp, sniffImageExt } from '../lib/paste-image'
   import DokuMark from '../lib/DokuMark.svelte'
   import PdfView from './PdfView.svelte'
 
@@ -39,6 +40,78 @@
     exportViaPrint({ kind: tab.kind, name: tab.name, content: tab.content, dir: parentPath(tab.path ?? null) ?? '' })
   }
 
+  const MAX_PASTE_IMAGE = 25 * 1024 * 1024 // 25 Mo : garde-fou mémoire (tablette ARM)
+
+  // Coller une image (12.1). Le File doit être extrait du presse-papier SYNCHRONEMENT
+  // (clipboardData devient inerte dès le premier await) ; l'écriture + l'insertion se
+  // font ensuite en asynchrone. Retourner true = collage pris en charge (CM ne colle pas
+  // de texte) ; false = laisser CM coller le texte normalement.
+  function imagePasteHandler(tabId: number): Extension {
+    return EditorView.domEventHandlers({
+      paste(event, view) {
+        const items = event.clipboardData?.items
+        if (!items) return false
+        let file: File | null = null
+        for (let i = 0; i < items.length; i++) {
+          const it = items[i]
+          if (it.kind === 'file' && it.type.startsWith('image/')) {
+            file = it.getAsFile()
+            if (file) break
+          }
+        }
+        if (!file) return false // pas d'image exploitable → coller texte normal
+        // Tout item image/* est consommé ici (preventDefault synchrone obligatoire) ; le
+        // sniff du format vient APRÈS l'await → un format non reconnu (BMP/SVG/TIFF) est
+        // rejeté par un bandeau plutôt que recollé en texte. Tradeoff assumé, ne pas
+        // « corriger » en fall-through (le sniff ne peut pas être synchrone ici).
+        event.preventDefault()
+        void pasteImage(tabId, file, view)
+        return true
+      },
+    })
+  }
+
+  async function pasteImage(tabId: number, file: File, view: EditorView) {
+    const tab = app.tabs.find((t) => t.id === tabId)
+    if (!tab) return
+    if (!tab.path) {
+      app.banner = 'Enregistrez le document avant de coller une image.'
+      return
+    }
+    const dir = parentPath(tab.path)
+    if (!dir) {
+      app.banner = 'Impossible de localiser le dossier du document.'
+      return
+    }
+    if (file.size > MAX_PASTE_IMAGE) {
+      app.banner = 'Image trop volumineuse (max 25 Mo).'
+      return
+    }
+    const bytes = new Uint8Array(await file.arrayBuffer())
+    const ext = sniffImageExt(bytes)
+    if (!ext) {
+      app.banner = "Format d'image du presse-papier non reconnu."
+      return
+    }
+    let name: string | null
+    try {
+      name = await writePastedImage(dir, bytes, imageStamp(new Date()), ext)
+    } catch (err) {
+      console.error("Écriture de l'image collée échouée", err)
+      app.banner = "Échec de l'écriture de l'image ; aucun lien inséré."
+      return
+    }
+    if (!name) return // navigateur : no-op
+    // L'éditeur est partagé entre onglets : si l'utilisateur a changé d'onglet pendant
+    // l'écriture, NE PAS insérer le lien dans le mauvais document (le fichier est bien
+    // écrit → aucune perte).
+    if (app.activeId !== tabId) {
+      app.banner = 'Image enregistrée ; lien non inséré (onglet changé).'
+      return
+    }
+    view.dispatch(view.state.replaceSelection(imageMarkdown(name)))
+  }
+
   // Onglet HTML en mode rendu : aperçu sandboxé (iframe), pas l'éditeur (FR-8).
   const htmlRender = $derived(activeTab()?.kind === 'html' && !app.sourceMode)
   // Onglet PDF : viewer lecture seule (11.1), pas l'éditeur.
@@ -57,7 +130,7 @@
   function makeState(tabId: number, content: string): EditorState {
     const tab = app.tabs.find((t) => t.id === tabId)
     const dir = parentPath(tab?.path ?? null) ?? ''
-    const extra = [
+    const extra: Extension[] = [
       docDirFacet.of(dir),
       searchFlashField,
       EditorView.updateListener.of((u) => {
@@ -67,6 +140,8 @@
         }
       }),
     ]
+    // Coller une image (12.1) : Markdown uniquement (le lien ![]() n'a de sens qu'en md).
+    if (tab?.kind === 'md') extra.push(imagePasteHandler(tabId))
     return EditorState.create({
       doc: content,
       extensions:
