@@ -15,3 +15,4 @@ Registre des décisions d'architecture. Une décision par fichier ; on ne suppri
 | [0009](./0009-renderer-markdown-marked.md) | Renderer Markdown → HTML pour l'export : `marked` | accepted | 2026-07-13 | export, markdown, rendu, fr-2 |
 | [0010](./0010-export-docx-lib-lazy.md) | Export DOCX : lib `docx` (lazy-loadée, marked.lexer → OOXML) | accepted | 2026-07-13 | export, docx, ooxml, fr-5 |
 | [0011](./0011-lecture-pdf-pdfjs.md) | Lecture PDF : PDF.js (canvas, worker Vite, offline) | accepted | 2026-07-13 | pdf, viewer, csp, arm64, fr-3 |
+| [0012](./0012-cycle-de-vie-sidecar-ollama.md) | Cycle de vie du sidecar Ollama : instance dédiée, port éphémère, modèles isolés, spawn paresseux | accepted | 2026-07-14 | ia, sidecar, ollama, process-lifecycle, arm64, csp |
