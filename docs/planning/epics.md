@@ -3,7 +3,8 @@
 _Source PRD : docs/planning/PRD.md (v1) + docs/planning/PRD-v1.5.md · Architecture : docs/planning/architecture.md · Décomposé le : 2026-07-09 (v1), 2026-07-13 (v1.5)_
 
 Backlog **v1** (Epics 1-8, jalons M1-M4) : ✅ **livré, feature-complete** (ledger 35/35). Cap P0 respecté : 10/36 (28 %).
-Backlog **v1.5** (Epics 9-12, source PRD-v1.5) : ⬜ à faire. Cap P0 : 3/11 (27 %).
+Backlog **v1.5** (Epics 9-12, source PRD-v1.5) : ✅ **livré, feature-complete** (ledger 46/46). Cap P0 : 3/11 (27 %).
+Backlog **v2** (Epics 13-16, source PRD-v2 — copilote IA local) : ⬜ à faire. Cap P0 : **6/12 (50 %)** — dérogation assumée au seuil 40 % : la fondation (sidecar + client + panneau) est de l'infra **irréductiblement P0** (rien ne fonctionne sans elle), voir note Epic 13.
 Légende état : ✅ fait · 🟡 amorcé (socle en place, à finir/tester) · ⬜ à faire.
 
 ---
@@ -203,9 +204,75 @@ _Source : docs/planning/PRD-v1.5.md · Décomposé le 2026-07-13. Les 2 blockers
 
 ---
 
+# Cap v2 — copilote IA local
+
+_Source : docs/planning/PRD-v2.md · Architecture : docs/planning/architecture-v2-copilot.md · Décomposé le 2026-07-14. Livraison en 2 temps : **v2.0** (Epics 13-14, fondation + usages doc) puis **v2.1** (Epics 15-16, RAG + rédaction). Les 2 blockers archi (cycle de vie sidecar, stack RAG) sont traités en **ADR** ([0012](../adr/0012-cycle-de-vie-sidecar-ollama.md)) et **spikes** (13.1, 15.1), à confirmer par la mesure avant de coder (pattern Spike S0/9.1/10.1)._
+
+## Epic 13 : Moteur IA local — sidecar Ollama & modèles (FR-1, FR-2)
+
+**Goal** : Doku embarque et pilote **son propre** moteur d'inférence local, et l'utilisateur gère ses modèles (pull / choisir / purger).
+**Spans PRD** : PRD-v2 FR-1 (P0), FR-2 (P0) ; ADR-0006 (moteur), ADR-0012 (cycle de vie).
+**État** : ⬜ à faire.
+**Note P0** : les 4 stories sont P0 — c'est l'infrastructure dont **tout** le copilote dépend (pas de moteur → aucun usage). C'est la source de la dérogation au seuil P0 40 %.
+
+### Stories
+| # | Title | Size | Priority | Acceptance |
+|---|---|---|---|---|
+| 13.1 | Spike : sidecar Ollama ARM64 (externalBin, serve, generate, port éphémère) | M | P0 | Given `ollama.exe` ARM64 en `externalBin`, when Doku le lance sur un **port éphémère** et appelle `/api/generate` en **natif**, then une génération streame en local (**0 réseau**), spawn + kill vérifiés, pièges port/orphelin notés ; confirme l'hypothèse ADR-0012 **avant** de coder 13.2 |
+| 13.2 | SidecarManager (port éphémère, readiness-poll, kill, pidfile) | M | P0 | Given le copilote activé, when Doku démarre le sidecar, then port libre choisi + **readiness-poll** avant le 1er appel ; **kill** à la fermeture ; **pidfile** → sweep d'un orphelin au démarrage ; port occupé/échec → message clair, app intacte (ADR-0012) |
+| 13.3 | OllamaClient (generate stream, tags, pull, delete, annulation) | M | P0 | Given le sidecar prêt, when j'appelle le client, then `generate` streame (NDJSON) et **s'annule < 500 ms** (AbortController) ; `tags`/`pull`(progress)/`delete` exposés ; **0 requête non-`localhost`** à l'inférence |
+| 13.4 | Gestion des modèles (liste, pull+progress, actif persistant, taille/purge) | M | P0 | Given le panneau modèles, when je l'ouvre, then modèles installés (nom, taille) + **actif** ; **pull** avec progression (action explicite) ; choix actif **persistant** (settings) ; **purge** confirmée (`%APPDATA%\Doku\models`) ; 0 modèle → onboarding vers un pull |
+
+---
+
+## Epic 14 : Panneau copilote & usages sur le document (FR-3, FR-4, FR-5)
+
+**Goal** : dialoguer avec l'IA dans un panneau et l'appliquer au document ouvert (résumer, questionner).
+**Spans PRD** : PRD-v2 FR-3 (P0), FR-4 (P0), FR-5 (P1).
+**État** : ⬜ à faire. **Clôt v2.0** (copilote utilisable).
+
+### Stories
+| # | Title | Size | Priority | Acceptance |
+|---|---|---|---|---|
+| 14.1 | Panneau copilote (chat, streaming, annuler, rendu MD sanitizé) | M | P0 | Given le copilote (Ctrl+Maj+I / bouton sidebar), when j'envoie un message, then réponse **en streaming** token-par-token, **annulable** ; rendu Markdown **sanitizé** (pas de `{@html}` brut), copiable ; génération non perturbée par un changement d'onglet |
+| 14.2 | Résumer le document | M | P0 | Given un doc md/txt/html/**PDF** affiché, when « Résumer » (ou sur la sélection), then résumé streamé ; doc > fenêtre de contexte → **segmentation map-reduce** (pas de troncature silencieuse) ; PDF scanné sans texte → message clair |
+| 14.3 | Q&A sur le document courant | S | P1 | Given un doc affiché, when je pose une question, then réponse **ancrée** sur le doc ; info absente → « je ne trouve pas cela dans ce document » (pas d'invention) ; **0 requête réseau** |
+
+---
+
+## Epic 15 : Copilote sur le dossier — RAG (FR-6) — v2.1
+
+**Goal** : interroger *le sens* de tout un dossier de notes (recherche sémantique + réponse citée).
+**Spans PRD** : PRD-v2 FR-6 (P1). **Le plus gros chantier du cap** (risque n°1, isolé en v2.1).
+**État** : ⬜ à faire.
+
+### Stories
+| # | Title | Size | Priority | Acceptance |
+|---|---|---|---|---|
+| 15.1 | Spike : stack RAG (embedding local + format d'index + perf/qualité ARM) | M | P1 | Given un dossier ~10²-10³ notes, when je prototype embeddings via Ollama + un index vectoriel, then je tranche **modèle d'embedding / format / incrémental** par la mesure (qualité top-k, temps d'index, empreinte) et documente en **ADR** avant de coder 15.2 |
+| 15.2 | Index d'embeddings incrémental | L | P1 | Given un dossier de notes, when j'indexe, then chunking + embeddings **locaux** stockés (`%APPDATA%\Doku\rag`) ; ajout/modif/suppression → **ré-index incrémental** (hash) ; borné en ressources (ARM), n'empêche pas l'usage ; **0 réseau** |
+| 15.3 | Q&A dossier avec citations sources | M | P1 | Given l'index, when je pose une question en mode « dossier », then passages pertinents récupérés (top-k) + réponse **citant les notes sources** (nom cliquable → ouvre le fichier) |
+
+---
+
+## Epic 16 : Assistance à la rédaction (FR-7, FR-8) — v2.1
+
+**Goal** : améliorer le texte en place (reformuler, corriger) sans quitter la note.
+**Spans PRD** : PRD-v2 FR-7 (P1), FR-8 (P1), NFR Fiabilité (zéro perte, annulable).
+**État** : ⬜ à faire.
+
+### Stories
+| # | Title | Size | Priority | Acceptance |
+|---|---|---|---|---|
+| 16.1 | Reformuler une sélection | M | P1 | Given du texte sélectionné en édition, when « Reformuler » (variantes clarifier / raccourcir / ton), then proposition ; **accepter** → remplace (ou insère après) ; **refuser** → texte d'origine **intact** (zéro perte) |
+| 16.2 | Corriger orthographe & grammaire | S | P1 | Given un texte (sélection ou doc), when « Corriger », then version corrigée **sans changer le sens ni le Markdown** ; appliquée → relisible/**annulable** (Ctrl+Z restaure) |
+
+---
+
 ## Stories reportées / hors décomposition (non prêtes)
 
 Signalées ici, **pas** dans le backlog tant que le critère d'acceptation n'est pas clair (règle : pas de story sans acceptance) :
 - **Annotations PDF** — v2+ (la lecture est décomposée en Epic 11 ; les annotations restent non spécifiées)
 - **Recherche & remplacement** multi-fichiers — v2 (la recherche v1.5 = lecture seule, Epic 9)
-- **Copilote IA local** (Ollama sidecar CPU) — v2, **PRD dédié à écrire** (décision figée : [ADR-0006](../adr/0006-copilote-ia-ollama-sidecar-cpu.md), NPU écarté)
+- **Annotations PDF** reste v2+ (non spécifié) ; **recherche & remplacement** multi-fichiers reste v2 (non décomposé).
+- ~~Copilote IA local~~ → **décomposé** ci-dessus en Epics 13-16 (PRD-v2 + ADR-0006/0012).
