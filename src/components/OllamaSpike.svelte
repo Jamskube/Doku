@@ -9,6 +9,7 @@
 
   let port = $state<number | null>(null)
   let busy = $state(false)
+  let controller: AbortController | null = null
 
   async function ensureStarted(): Promise<number | null> {
     if (port !== null) return port
@@ -29,6 +30,7 @@
   async function test() {
     if (busy) return
     busy = true
+    controller = new AbortController()
     try {
       const p = await ensureStarted()
       if (p === null) return
@@ -37,19 +39,31 @@
         app.banner = 'IA (spike) : aucun modèle — clique « pull 0.5b » d’abord'
         return
       }
-      app.banner = `IA (spike) : génération (${models[0].name})…`
+      app.banner = `IA (spike) : génération (${models[0].name})… (clique stop pour annuler)`
       let out = ''
-      await generate(p, models[0].name, 'Dis bonjour et présente-toi en une phrase.', (t) => {
-        out += t
-        console.log('[ollama]', t)
-      })
-      app.banner = 'IA (spike) : ' + out
+      // Prompt long → laisse le temps de tester l'annulation (13.3).
+      await generate(
+        p,
+        models[0].name,
+        'Écris un paragraphe détaillé sur l’histoire de l’informatique, des origines à aujourd’hui.',
+        (t) => {
+          out += t
+          console.log('[ollama]', t)
+        },
+        controller.signal,
+      )
+      app.banner = (controller.signal.aborted ? 'IA (spike) annulée : ' : 'IA (spike) : ') + out
     } catch (e) {
       console.error('[spike ollama]', e)
       app.banner = 'IA (spike) : erreur — ' + String(e)
     } finally {
       busy = false
+      controller = null
     }
+  }
+
+  function stop() {
+    controller?.abort()
   }
 
   async function doPull() {
@@ -77,6 +91,7 @@
 
 <div class="spike">
   <button onclick={test} disabled={busy}>🧪 IA: tester</button>
+  <button onclick={stop} disabled={!busy}>🧪 stop</button>
   <button onclick={doPull} disabled={busy}>🧪 pull 0.5b</button>
 </div>
 

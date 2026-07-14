@@ -62,16 +62,21 @@ export async function listModels(port: number): Promise<OllamaModel[]> {
 }
 
 // Génère en streaming ; `onToken` reçoit chaque fragment. Renvoie le texte complet.
+// `signal` (AbortController) permet l'annulation : abort coupe le fetch → arrêt quasi-instantané
+// côté client ET serveur (Ollama stoppe la génération quand le client se déconnecte). On rend
+// alors le texte PARTIEL produit jusque-là (pas d'exception qui remonte).
 export async function generate(
   port: number,
   model: string,
   prompt: string,
   onToken: (t: string) => void,
+  signal?: AbortSignal,
 ): Promise<string> {
   const r = await api(port, '/api/generate', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ model, prompt, stream: true }),
+    signal,
   })
   if (!r.ok || !r.body) throw new Error(`generate ${r.status}`)
   const reader = r.body.getReader()
@@ -95,6 +100,9 @@ export async function generate(
       }
     }
     return out
+  } catch (e) {
+    if (signal?.aborted || (e instanceof DOMException && e.name === 'AbortError')) return out
+    throw e
   } finally {
     reader.cancel().catch(() => {})
   }
@@ -127,4 +135,14 @@ export async function pull(port: number, model: string, onProgress: (pct: number
   } finally {
     reader.cancel().catch(() => {})
   }
+}
+
+// Supprime un modèle local (purge, 13.4). DELETE /api/delete. Requiert le sidecar prêt.
+export async function deleteModel(port: number, name: string): Promise<void> {
+  const r = await api(port, '/api/delete', {
+    method: 'DELETE',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ model: name }),
+  })
+  if (!r.ok) throw new Error(`delete ${r.status}`)
 }
