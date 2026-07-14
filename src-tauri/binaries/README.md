@@ -15,12 +15,31 @@ src-tauri/binaries/ollama-aarch64-pc-windows-msvc.exe
 (Le triplet exact = `rustc -Vv` → ligne `host:`. Sur Surface Pro 11 = `aarch64-pc-windows-msvc`.)
 
 ### Où récupérer un build ARM64 Windows
-- Site Ollama : https://ollama.com/download/windows (build ARM64), ou
-- Releases GitHub : https://github.com/ollama/ollama/releases (asset Windows ARM64), ou
-- `winget install Ollama.Ollama` puis copier l'`ollama.exe` installé.
+Asset **`ollama-windows-arm64.zip`** des releases GitHub (léger, ~16 Mo, CPU-only) :
+https://github.com/ollama/ollama/releases (testé : v0.32.0).
 
-Récupère `ollama.exe`, **copie-le** ici et **renomme-le** `ollama-aarch64-pc-windows-msvc.exe`.
+### ⚠️ Ce n'est PAS un exe isolé
+Le zip contient `ollama.exe` **ET** un dossier `lib/ollama/` de DLLs d'inférence CPU
+(`ggml-cpu.dll`, `libllama.dll`, `llama-server.exe`…). `ollama.exe` charge ces DLLs
+**relativement à son propre dossier** — donc `lib/` doit rester **à côté** de l'exe.
+
+Procédure : dézippe **tout** le contenu ici (`src-tauri/binaries/`), puis renomme
+`ollama.exe` → `ollama-aarch64-pc-windows-msvc.exe`. Le renommage est sans risque
+(Ollama trouve `lib/` par le dossier de l'exe, pas par son nom). Résultat attendu :
+
+```
+src-tauri/binaries/
+  ollama-aarch64-pc-windows-msvc.exe
+  lib/ollama/  (DLLs)
+```
+
+Sanity-check : `./ollama-aarch64-pc-windows-msvc.exe --version` doit afficher la version.
 
 > Sans ce fichier, `npm run tauri dev` échoue au bundling (externalBin introuvable).
-> Le code du sidecar (spawn/port/kill) et le client TS sont là ; seule la **validation
-> native** du spike 13.1 exige ce binaire.
+> Le code du sidecar (spawn/port/kill) + le client TS sont là ; seule la **validation
+> native** du spike 13.1 exige ces binaires.
+>
+> **Dette (13.2+) — build empaqueté** : `bundle.externalBin` ne copie que l'exe, pas le
+> dossier `lib/`. Pour `tauri build`, il faudra livrer `lib/ollama/` via `bundle.resources`
+> et le placer à côté de l'exe empaqueté (ou pointer `OLLAMA_LIBRARY_PATH`). En `tauri dev`
+> l'exe tourne en place, donc `lib/` voisin suffit — le spike valide donc bien le dev.
