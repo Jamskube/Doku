@@ -113,6 +113,6 @@ Protocole, prototypes et mesures dans `spike/` (conservé comme référence et b
 ## Out of scope
 
 - PDF (lecture v2, annotations v2+) — l'interface DocumentView le prépare, rien d'autre n'est construit.
-- Copilote IA locale NPU (v2+, `/gate feasibility` dédié) — aucune provision d'archi en v1 au-delà de l'isolation des services.
+- Copilote IA locale (v2) — architecture dédiée : [architecture-v2-copilot.md](./architecture-v2-copilot.md) (Ollama sidecar, ADR-0006). Aucune provision d'archi en v1 au-delà de l'isolation des services.
 - Recherche plein texte multi-fichiers, export, coller intelligent (v1.5).
 - Sync/cloud/multi-machine, mise à jour automatique, télémétrie : jamais en v1.
