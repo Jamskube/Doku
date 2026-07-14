@@ -1,19 +1,14 @@
 # Next session pointer
-_Updated: 2026-07-13 16:10_
+_Updated: 2026-07-14 12:00_
 
 ## Where I left off
-**Cap v1.5 quasi bouclé côté code.** Sprint 9 (Export, Epic 10) **codé 4/4** — 10.1 spike PDF + 10.2 renderer MD→HTML (`marked`) **validés natif** ; 10.3 (HTML autonome) + 10.4 (DOCX `docx`) code-complete + revus. Sprint 10 (Lecture PDF + coller image) **lancé** : **spike 11.1 (lecteur PDF via PDF.js) codé + revu** (0 Critical/Major, data-safety confirmée — garde `saveTab` anti-destruction du .pdf). **3 validations natives en attente : 10.3, 10.4, 11.1** (ledger `passes:false`). Chaque story passée à EPCT → critic → code-reviewer → quick-fix → commit ; **2 bugs data-loss évités** par les revues. Ledger **41/46**, 156 tests verts, svelte-check 0 err, build OK (marked/docx/pdfjs lazy-loadés en chunks séparés).
+**Doku v1.5 feature-complete.** Sprint 10 (Epics 11-12) **clos, ledger 46/46** — 11.1 (lecteur PDF), 11.2 (association OS `.pdf`), 12.1 (coller image) livrées + validées natif. Correctif flou PDF (HiDPI : `scrollbar-gutter` + DPR). Dette S9 (10.3/10.4) soldée. Tout le PRD-v1.5 est livré (recherche + export PDF/HTML/DOCX + lecture PDF + coller image). Chaque story passée par EPCT → critic → code-reviewer → validation native ; **3 bugs data-loss HIGH interceptés** en revue. Rétro Sprint 10 écrite (`docs/sprints/retro-sprint-10.md`).
 
 ## Open work
-- Branch: `main` — **propre** (rien de non commité), poussé (`bbb2f06`)
+- Branch: `main` — **propre** (rien de non commité), poussé (`bf48190`)
 - Open PRs: aucune
-- Sprint actif: **Sprint 10** (`docs/sprints/sprint-10.md`), 2026-07-13 → 2026-07-20 — stories `11.1` (viewer PDF, en attente validation), `11.2` (`.pdf` associations OS), `12.1` (coller image)
-- Specs/ADR: PRD-v1.5, ADR 0008-0011 (export PDF/HTML/DOCX + lecture PDF)
+- Sprint actif: **aucun** (Sprint 10 Completed). Prochain cadrage = **cap v2**.
+- Dette : (1) confirmer l'association OS `.pdf` au prochain `tauri build` + install ; (2) bundling cmap/wasm pdfjs (CJK/JPEG2000) ; (3) zoom PDF ; (4) tmp-orphelin `.doku-tmp` non nettoyé (cosmétique).
 
 ## Next concrete step
-**Solder les 3 validations natives en un seul `tauri dev`** (action retro « grouper les validations ») :
-1. **10.3** — Exporter en HTML → ouvrir le `.html` hors-ligne dans un vrai navigateur → **image inline** visible, aucun script.
-2. **10.4** — Exporter en DOCX → ouvrir le `.docx` dans Word/LibreOffice → titres/gras/listes/lien/table/code.
-3. **11.1** — Ctrl+O un vrai `.pdf` (polices embarquées) → rendu lecture seule, **scroll multi-pages**, worker offline (0 « fake worker »/violation CSP en console), 1re page < 1 s ; **⚠️ test critique : Ctrl+S sur le PDF ne doit RIEN faire** (fichier intact). Un PDF CJK dégradé = confirme la limite CMap (documentée ADR-0011).
-
-Chaque « je valide » → je flippe le ledger correspondant. Puis **enchaîner 11.2** (`.pdf` associations/explorateur — S) et **12.1** (coller image — M, réutilise `writeFileAtomic`/`fs:allow-write-file`) pour clore le Sprint 10 = **v1.5 feature-complete**. Dette technique notée : Minor `checkExternalChanges` skip pdf (perf), bundling cmap/wasm pdfjs (CJK/JPEG2000), zoom PDF.
+**Cadrer le cap v2** : rétro globale v1.5 puis **PRD-v2** — le gros morceau est le **copilote IA local (Ollama sidecar CPU, ADR-0006)**. Alternative avant de coder : passer les 4 leçons de la rétro S10 en `/start learn` (netteté HiDPI, garde onglet-partagé CM6, sérialisation des écritures event, extraction clipboard synchrone) si pas déjà fait.
