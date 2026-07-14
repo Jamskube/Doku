@@ -1,8 +1,11 @@
 <script lang="ts">
+  import { untrack } from 'svelte'
   import { app, activeTab, docHeadings, isDirty, loadSnapshotsForActive, openPath, openSearchHit, restoreSnapshot, runSearch, scrollToLine, toggleSidebarView } from '../lib/stores.svelte'
   import { baseName, joinPath, parentPath, visibleEntries, type FsEntry } from '../lib/explorer'
   import { isTauri, readDirectory } from '../lib/tauri'
   import { DEMO_DIR } from '../lib/demo'
+  import { formatBytes } from '../lib/ollama'
+  import { cancelPull, copilot, pullModel, refreshModels, removeModel, setActiveModel } from '../lib/copilot.svelte'
   import DokuMark from '../lib/DokuMark.svelte'
 
   // Plan : titres du Markdown seulement (un .txt/.html n'en a pas), et pas pour un
@@ -63,6 +66,29 @@
   $effect(() => {
     if (app.sidebarView === 'search' && app.sidebarOpen) searchInput?.focus()
   })
+
+  // Copilote (13.4) : liste les modèles à l'ouverture de la vue. L'effet ne track QUE la
+  // vue/état sidebar ; `refreshModels` (qui lit ET écrit copilot.*) est `untrack`é pour ne
+  // pas s'auto-re-déclencher sur son propre écriture de `copilot.port`.
+  let pullName = $state('')
+  $effect(() => {
+    if (app.sidebarView === 'copilot' && app.sidebarOpen) {
+      untrack(() => void refreshModels())
+    }
+  })
+
+  function startPull() {
+    const name = pullName.trim()
+    if (!name) return
+    pullName = ''
+    void pullModel(name)
+  }
+
+  function confirmRemove(name: string) {
+    if (confirm(`Supprimer le modèle « ${name} » du disque ? Cette action est irréversible.`)) {
+      void removeModel(name)
+    }
+  }
 </script>
 
 <aside class="sidebar" class:open={app.sidebarOpen}>
@@ -84,6 +110,9 @@
       </button>
       <button class="rib" class:active={app.sidebarView === 'history' && app.sidebarOpen} title="Historique des versions" aria-label="Historique" onclick={() => toggleSidebarView('history')}>
         <span class="msr" style="font-size:21px">history</span>
+      </button>
+      <button class="rib" class:active={app.sidebarView === 'copilot' && app.sidebarOpen} title="Copilote IA (modèles)" aria-label="Copilote IA" onclick={() => toggleSidebarView('copilot')}>
+        <span class="msr" style="font-size:21px">smart_toy</span>
       </button>
 
       <div class="spacer"></div>
@@ -181,6 +210,54 @@
               {/each}
             {:else if !app.searching}
               <p class="empty">Aucun résultat.</p>
+            {/if}
+          </div>
+        {:else if app.sidebarView === 'copilot'}
+          <div class="copilot">
+            {#if copilot.error}
+              <p class="cop-error">{copilot.error}</p>
+            {/if}
+            <div class="cop-pull">
+              {#if copilot.pulling}
+                <div class="cop-progress">
+                  <span class="cop-prog-label" title={copilot.pulling.name}>
+                    {copilot.pulling.name} — {copilot.pulling.pct > 0 ? copilot.pulling.pct + '%' : 'préparation…'}
+                  </span>
+                  <div class="cop-bar"><div class="cop-bar-fill" style="width:{copilot.pulling.pct}%"></div></div>
+                  <button class="cop-cancel" title="Annuler le téléchargement" aria-label="Annuler le téléchargement" onclick={cancelPull}>
+                    <span class="msr" style="font-size:18px">close</span>
+                  </button>
+                </div>
+              {:else}
+                <input
+                  class="search-input"
+                  type="text"
+                  placeholder="Télécharger un modèle (ex. qwen2.5:3b)…"
+                  aria-label="Nom du modèle à télécharger"
+                  bind:value={pullName}
+                  onkeydown={(e) => { if (e.key === 'Enter') startPull() }}
+                />
+                <button class="cop-pull-btn" onclick={startPull} disabled={!pullName.trim()}>Télécharger</button>
+              {/if}
+            </div>
+
+            {#if copilot.loading}
+              <p class="empty">Démarrage du moteur IA…</p>
+            {:else if copilot.models.length === 0 && !copilot.pulling}
+              <p class="empty">Aucun modèle installé. Téléchargez-en un ci-dessus (ex. <code>qwen2.5:3b</code>) pour activer le copilote.</p>
+            {:else}
+              {#each copilot.models as m (m.name)}
+                <div class="cop-model" class:active={m.name === app.activeModel}>
+                  <button class="cop-model-pick" title="Choisir comme modèle actif" aria-pressed={m.name === app.activeModel} onclick={() => setActiveModel(m.name)}>
+                    <span class="msr fold">{m.name === app.activeModel ? 'radio_button_checked' : 'radio_button_unchecked'}</span>
+                    <span class="label grow">{m.name}</span>
+                    <span class="cop-size">{formatBytes(m.size)}</span>
+                  </button>
+                  <button class="cop-del" title="Supprimer ce modèle" aria-label={'Supprimer ' + m.name} onclick={() => confirmRemove(m.name)}>
+                    <span class="msr" style="font-size:18px">delete</span>
+                  </button>
+                </div>
+              {/each}
             {/if}
           </div>
         {:else}
@@ -418,4 +495,53 @@
     white-space: nowrap;
   }
   .hl { background: var(--accent-soft); color: var(--ink); border-radius: 2px; padding: 0 1px; }
+
+  /* Copilote (13.4) — gestion des modèles */
+  .copilot { display: flex; flex-direction: column; gap: 8px; padding: 4px 2px; }
+  .cop-error { margin: 0; font-size: 12px; color: var(--err); }
+  .cop-pull { display: flex; flex-direction: column; gap: 6px; }
+  .cop-pull-btn {
+    align-self: flex-start;
+    font-size: 12px;
+    padding: 4px 10px;
+    border: 1px solid var(--line-2);
+    border-radius: 5px;
+    background: var(--cream-content);
+    color: var(--ink);
+    cursor: pointer;
+  }
+  .cop-pull-btn:disabled { opacity: 0.5; cursor: default; }
+  .cop-progress { display: flex; align-items: center; gap: 6px; }
+  .cop-prog-label {
+    font-size: 11px;
+    color: var(--ink-4);
+    max-width: 45%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .cop-bar { flex: 1; height: 4px; background: var(--surface-hover); border-radius: 2px; overflow: hidden; }
+  .cop-bar-fill { height: 100%; background: var(--ink-3); transition: width 0.2s ease; }
+  .cop-cancel { display: flex; padding: 2px; border: 0; background: none; color: var(--ink-4); cursor: pointer; }
+  .cop-cancel:hover { color: var(--err); }
+  .cop-model { display: flex; align-items: center; border-radius: 6px; }
+  .cop-model:hover { background: var(--surface-hover); }
+  .cop-model.active { background: var(--accent-soft); }
+  .cop-model-pick {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    min-width: 0;
+    padding: 6px 8px;
+    border: 0;
+    background: none;
+    color: var(--ink);
+    text-align: left;
+    font-size: 13px;
+    cursor: pointer;
+  }
+  .cop-size { font-size: 11px; color: var(--ink-4); flex-shrink: 0; }
+  .cop-del { display: flex; padding: 4px 8px; border: 0; background: none; color: var(--ink-4); cursor: pointer; }
+  .cop-del:hover { color: var(--err); }
 </style>

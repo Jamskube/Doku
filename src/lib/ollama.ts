@@ -54,6 +54,14 @@ export interface OllamaModel {
   size: number
 }
 
+// Taille lisible (base 1000) : octets → « 397 Mo » / « 2.0 Go ».
+export function formatBytes(n: number): string {
+  if (n >= 1e9) return `${(n / 1e9).toFixed(1)} Go`
+  if (n >= 1e6) return `${Math.round(n / 1e6)} Mo`
+  if (n >= 1e3) return `${Math.round(n / 1e3)} Ko`
+  return `${n} o`
+}
+
 export async function listModels(port: number): Promise<OllamaModel[]> {
   const r = await api(port, '/api/tags')
   if (!r.ok) throw new Error(`tags ${r.status}`)
@@ -72,18 +80,19 @@ export async function generate(
   onToken: (t: string) => void,
   signal?: AbortSignal,
 ): Promise<string> {
-  const r = await api(port, '/api/generate', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ model, prompt, stream: true }),
-    signal,
-  })
-  if (!r.ok || !r.body) throw new Error(`generate ${r.status}`)
-  const reader = r.body.getReader()
-  const dec = new TextDecoder()
-  let rest = ''
   let out = ''
+  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined
   try {
+    const r = await api(port, '/api/generate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model, prompt, stream: true }),
+      signal,
+    })
+    if (!r.ok || !r.body) throw new Error(`generate ${r.status}`)
+    reader = r.body.getReader()
+    const dec = new TextDecoder()
+    let rest = ''
     for (;;) {
       const { done, value } = await reader.read()
       if (done) break
@@ -101,26 +110,34 @@ export async function generate(
     }
     return out
   } catch (e) {
+    // Annulation (même pendant la phase de connexion, avant le 1er chunk) → texte partiel.
     if (signal?.aborted || (e instanceof DOMException && e.name === 'AbortError')) return out
     throw e
   } finally {
-    reader.cancel().catch(() => {})
+    reader?.cancel().catch(() => {})
   }
 }
 
 // Télécharge un modèle — ACTION RÉSEAU EXPLICITE (seule sortie réseau autorisée, ADR-0006).
-// `onProgress` reçoit un pourcentage (0-100).
-export async function pull(port: number, model: string, onProgress: (pct: number) => void): Promise<void> {
-  const r = await api(port, '/api/pull', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ model, stream: true }),
-  })
-  if (!r.ok || !r.body) throw new Error(`pull ${r.status}`)
-  const reader = r.body.getReader()
-  const dec = new TextDecoder()
-  let rest = ''
+// `onProgress` reçoit un pourcentage (0-100). `signal` permet d'annuler le téléchargement.
+export async function pull(
+  port: number,
+  model: string,
+  onProgress: (pct: number) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined
   try {
+    const r = await api(port, '/api/pull', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model, stream: true }),
+      signal,
+    })
+    if (!r.ok || !r.body) throw new Error(`pull ${r.status}`)
+    reader = r.body.getReader()
+    const dec = new TextDecoder()
+    let rest = ''
     for (;;) {
       const { done, value } = await reader.read()
       if (done) break
@@ -132,8 +149,12 @@ export async function pull(port: number, model: string, onProgress: (pct: number
         if (line.total && line.completed) onProgress(Math.round((line.completed / line.total) * 100))
       }
     }
+  } catch (e) {
+    // Annulation (même pendant la connexion) → sortie silencieuse, rien à signaler.
+    if (signal?.aborted || (e instanceof DOMException && e.name === 'AbortError')) return
+    throw e
   } finally {
-    reader.cancel().catch(() => {})
+    reader?.cancel().catch(() => {})
   }
 }
 

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { splitNdjson } from './ollama'
+import { formatBytes, splitNdjson } from './ollama'
 
 describe('splitNdjson', () => {
   it('lignes complètes → objets + reste vide', () => {
@@ -27,4 +27,11 @@ describe('splitNdjson', () => {
     const { objects } = splitNdjson('', '\n{"a":1}\n\n')
     expect(objects).toEqual([{ a: 1 }])
   })
+})
+
+describe('formatBytes', () => {
+  it('Go (1 décimale)', () => expect(formatBytes(2_019_393_189)).toBe('2.0 Go'))
+  it('Mo (arrondi)', () => expect(formatBytes(397_000_000)).toBe('397 Mo'))
+  it('Ko', () => expect(formatBytes(1_500)).toBe('2 Ko'))
+  it('octets', () => expect(formatBytes(512)).toBe('512 o'))
 })

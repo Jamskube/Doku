@@ -10,7 +10,7 @@ import { buildSearchIndex, isTauri, listSnapshots, purgeAllSnapshots, readSnapsh
 import { normalizeTarget, wikilinkCandidates, wikilinkFileName } from './wikilink'
 
 export type DocKind = 'md' | 'html' | 'txt' | 'pdf'
-export type SidebarView = 'files' | 'plan' | 'history' | 'search'
+export type SidebarView = 'files' | 'plan' | 'history' | 'search' | 'copilot'
 export type ColumnWidth = 'narrow' | 'wide' | 'full'
 
 // Largeur de la colonne de lecture (variable CSS --doc-width, consommée par
@@ -54,6 +54,8 @@ export const app = $state({
   sidebarOpen: false,
   sidebarView: 'files' as SidebarView,
   columnWidth: 'narrow' as ColumnWidth,
+  // Modèle IA actif (copilote, 13.4) ; persisté (settings). '' = aucun choisi.
+  activeModel: '',
   sourceMode: false,
   // Mode focus (F9) : masque tout le chrome ; transitoire (non persisté).
   focus: false,
@@ -99,12 +101,13 @@ export function loadSettings() {
       const s = JSON.parse(raw)
       if (s.theme === 'dark' || s.theme === 'light') app.theme = s.theme
       if (typeof s.sidebarOpen === 'boolean') app.sidebarOpen = s.sidebarOpen
-      if (s.sidebarView === 'files' || s.sidebarView === 'plan' || s.sidebarView === 'history' || s.sidebarView === 'search') {
+      if (s.sidebarView === 'files' || s.sidebarView === 'plan' || s.sidebarView === 'history' || s.sidebarView === 'search' || s.sidebarView === 'copilot') {
         app.sidebarView = s.sidebarView
       }
       if (s.columnWidth === 'narrow' || s.columnWidth === 'wide' || s.columnWidth === 'full') {
         app.columnWidth = s.columnWidth
       }
+      if (typeof s.activeModel === 'string') app.activeModel = s.activeModel
     }
   } catch {
     // settings corrompus/indisponibles : valeurs par défaut
@@ -122,6 +125,7 @@ export function saveSettings() {
         sidebarOpen: app.sidebarOpen,
         sidebarView: app.sidebarView,
         columnWidth: app.columnWidth,
+        activeModel: app.activeModel,
       }),
     )
   } catch {
