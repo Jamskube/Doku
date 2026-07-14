@@ -1,14 +1,15 @@
 # Next session pointer
-_Updated: 2026-07-14 12:00_
+_Updated: 2026-07-14 16:20_
 
 ## Where I left off
-**Doku v1.5 feature-complete.** Sprint 10 (Epics 11-12) **clos, ledger 46/46** — 11.1 (lecteur PDF), 11.2 (association OS `.pdf`), 12.1 (coller image) livrées + validées natif. Correctif flou PDF (HiDPI : `scrollbar-gutter` + DPR). Dette S9 (10.3/10.4) soldée. Tout le PRD-v1.5 est livré (recherche + export PDF/HTML/DOCX + lecture PDF + coller image). Chaque story passée par EPCT → critic → code-reviewer → validation native ; **3 bugs data-loss HIGH interceptés** en revue. Rétro Sprint 10 écrite (`docs/sprints/retro-sprint-10.md`).
+**Cap v2 (copilote IA local) — fondation quasi complète.** Sprint 11 (Epic 13) **3/4** : le moteur Ollama en sidecar est **fonctionnel, robuste et offline**, validé en natif. 13.1 (spike GO — génération ARM64 ~120 tok/s, 100% local), 13.2 (SidecarManager : Job Object `KILL_ON_JOB_CLOSE` = kill d'arbre même au crash ; `OLLAMA_NO_CLOUD=1` = 0 egress ; lib via `resource_dir()`/`CARGO_MANIFEST_DIR`), 13.3 (OllamaClient : generate stream + annulation AbortController + delete). Ledger **49/50**. Toute l'infra risquée (Rust/sidecar/unsafe Windows) est derrière nous. Amont v2 écrit : PRD-v2, architecture-v2-copilot, ADR-0012 (amendé), epics 13-16.
 
 ## Open work
-- Branch: `main` — **propre** (rien de non commité), poussé (`bf48190`)
+- Branch: `main` — **propre** (poussé, `ebde778`)
 - Open PRs: aucune
-- Sprint actif: **aucun** (Sprint 10 Completed). Prochain cadrage = **cap v2**.
-- Dette : (1) confirmer l'association OS `.pdf` au prochain `tauri build` + install ; (2) bundling cmap/wasm pdfjs (CJK/JPEG2000) ; (3) zoom PDF ; (4) tmp-orphelin `.doku-tmp` non nettoyé (cosmétique).
+- Sprint actif: **Sprint 11** (Epic 13), reste **13.4** (UI gestion des modèles)
+- Prérequis machine : `src-tauri/binaries/ollama-aarch64-pc-windows-msvc.exe` + `lib/ollama/` en place (non commités, cf. binaries/README.md)
+- Dette : (1) valider le **packaging release** (`resource_dir()` + `bundle.resources`) au prochain `tauri build` ; (2) pare-feu sur `ollama.exe` = garantie dure 8.3 ; (3) **supprimer `OllamaSpike.svelte`** (widget DEV jetable) quand 14.1 livre l'UI réelle ; (4) CORS Ollama permissif par défaut (loopback, faible risque).
 
 ## Next concrete step
-**Cadrer le cap v2** : rétro globale v1.5 puis **PRD-v2** — le gros morceau est le **copilote IA local (Ollama sidecar CPU, ADR-0006)**. Alternative avant de coder : passer les 4 leçons de la rétro S10 en `/start learn` (netteté HiDPI, garde onglet-partagé CM6, sérialisation des écritures event, extraction clipboard synchrone) si pas déjà fait.
+**`/epct 13.4`** — UI gestion des modèles (liste + tailles + pull avec progression + modèle actif persistant en settings + purge confirmée). Le client est prêt (`ollama.ts` : listModels/pull/deleteModel). **Décision de design à trancher d'abord** : où vit le panneau modèles — sa propre vue sidebar, ou un sous-panneau du futur panneau copilote (14.1) ? Clôt l'Epic 13 = fondation copilote complète, puis Epic 14 (panneau chat + résumer + Q&A doc) = v2.0.
