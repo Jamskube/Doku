@@ -50,6 +50,12 @@
         "name": "HTML",
         "description": "Document HTML",
         "role": "Editor"
+      },
+      {
+        "ext": ["pdf"],
+        "name": "PDF",
+        "description": "Document PDF",
+        "role": "Viewer"
       }
     ]
   }
