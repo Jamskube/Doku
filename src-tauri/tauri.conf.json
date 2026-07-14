@@ -23,7 +23,7 @@
       }
     ],
     "security": {
-      "csp": "connect-src 'self' ipc: http://ipc.localhost; img-src 'self' asset: http://asset.localhost data:; object-src 'none'; worker-src 'self' blob:",
+      "csp": "connect-src 'self' ipc: http://ipc.localhost http://127.0.0.1:*; img-src 'self' asset: http://asset.localhost data:; object-src 'none'; worker-src 'self' blob:",
       "assetProtocol": {
         "enable": true,
         "scope": ["**"]
@@ -32,6 +32,7 @@
   },
   "bundle": {
     "active": true,
+    "externalBin": ["binaries/ollama"],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

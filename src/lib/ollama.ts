@@ -1,0 +1,130 @@
+// Client du sidecar Ollama (13.1, ADR-0006/0012). Le moteur tourne en local ; on le pilote
+// par l'API HTTP sur 127.0.0.1:<port éphémère> (fetch webview, autorisé par la CSP
+// connect-src). Aucune requête distante à l'inférence — SEUL `pull` sort (réseau explicite).
+// `splitNdjson` est pur et testé ; le reste est natif (invoke + fetch), validé en natif.
+import { isTauri } from './tauri'
+
+// Découpe un flux NDJSON : concatène le reliquat précédent + le chunk, renvoie les objets
+// des lignes COMPLÈTES et le reste (ligne partielle) à re-préfixer au prochain chunk.
+export function splitNdjson(prev: string, chunk: string): { objects: unknown[]; rest: string } {
+  const combined = prev + chunk
+  const parts = combined.split('\n')
+  const rest = parts.pop() ?? ''
+  const objects: unknown[] = []
+  for (const line of parts) {
+    const t = line.trim()
+    if (t) objects.push(JSON.parse(t))
+  }
+  return { objects, rest }
+}
+
+function api(port: number, path: string, init?: RequestInit): Promise<Response> {
+  return fetch(`http://127.0.0.1:${port}${path}`, init)
+}
+
+// Démarre le sidecar (idempotent côté Rust) et renvoie son port ; null en navigateur.
+export async function startOllama(): Promise<number | null> {
+  if (!isTauri) return null
+  const { invoke } = await import('@tauri-apps/api/core')
+  return await invoke<number>('start_ollama')
+}
+
+export async function stopOllama(): Promise<void> {
+  if (!isTauri) return
+  const { invoke } = await import('@tauri-apps/api/core')
+  await invoke('stop_ollama')
+}
+
+// Attend que `ollama serve` réponde (GET /api/tags 200). Poll borné.
+export async function waitReady(port: number, tries = 40, delayMs = 300): Promise<boolean> {
+  for (let i = 0; i < tries; i++) {
+    try {
+      const r = await api(port, '/api/tags')
+      if (r.ok) return true
+    } catch {
+      // pas encore en écoute
+    }
+    await new Promise((res) => setTimeout(res, delayMs))
+  }
+  return false
+}
+
+export interface OllamaModel {
+  name: string
+  size: number
+}
+
+export async function listModels(port: number): Promise<OllamaModel[]> {
+  const r = await api(port, '/api/tags')
+  if (!r.ok) throw new Error(`tags ${r.status}`)
+  const json = (await r.json()) as { models?: OllamaModel[] }
+  return json.models ?? []
+}
+
+// Génère en streaming ; `onToken` reçoit chaque fragment. Renvoie le texte complet.
+export async function generate(
+  port: number,
+  model: string,
+  prompt: string,
+  onToken: (t: string) => void,
+): Promise<string> {
+  const r = await api(port, '/api/generate', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ model, prompt, stream: true }),
+  })
+  if (!r.ok || !r.body) throw new Error(`generate ${r.status}`)
+  const reader = r.body.getReader()
+  const dec = new TextDecoder()
+  let rest = ''
+  let out = ''
+  try {
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      const parsed = splitNdjson(rest, dec.decode(value, { stream: true }))
+      rest = parsed.rest
+      for (const o of parsed.objects) {
+        const line = o as { response?: string; done?: boolean; error?: string }
+        if (line.error) throw new Error(line.error)
+        if (line.response) {
+          out += line.response
+          onToken(line.response)
+        }
+        if (line.done) return out
+      }
+    }
+    return out
+  } finally {
+    reader.cancel().catch(() => {})
+  }
+}
+
+// Télécharge un modèle — ACTION RÉSEAU EXPLICITE (seule sortie réseau autorisée, ADR-0006).
+// `onProgress` reçoit un pourcentage (0-100).
+export async function pull(port: number, model: string, onProgress: (pct: number) => void): Promise<void> {
+  const r = await api(port, '/api/pull', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ model, stream: true }),
+  })
+  if (!r.ok || !r.body) throw new Error(`pull ${r.status}`)
+  const reader = r.body.getReader()
+  const dec = new TextDecoder()
+  let rest = ''
+  try {
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      const parsed = splitNdjson(rest, dec.decode(value, { stream: true }))
+      rest = parsed.rest
+      for (const o of parsed.objects) {
+        const line = o as { total?: number; completed?: number; error?: string }
+        if (line.error) throw new Error(line.error)
+        if (line.total && line.completed) onProgress(Math.round((line.completed / line.total) * 100))
+      }
+    }
+  } finally {
+    reader.cancel().catch(() => {})
+  }
+}

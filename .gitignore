@@ -7,3 +7,5 @@ src-tauri/gen/
 Thumbs.db
 .playwright-mcp/
 .impeccable/live/sessions/
+# Binaire sidecar Ollama (~centaines de Mo) — non commité, placé localement (voir src-tauri/binaries/README.md)
+src-tauri/binaries/*.exe

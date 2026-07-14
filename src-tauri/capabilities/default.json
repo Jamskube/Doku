@@ -53,6 +53,10 @@
     {
       "identifier": "fs:scope",
       "allow": [{ "path": "**" }]
+    },
+    {
+      "identifier": "shell:allow-execute",
+      "allow": [{ "name": "binaries/ollama", "sidecar": true, "args": ["serve"] }]
     }
   ]
 }
