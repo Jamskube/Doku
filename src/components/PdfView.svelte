@@ -37,7 +37,7 @@
         // Échelle « ajustée à la largeur » calée sur la 1re page (× devicePixelRatio pour la netteté).
         const host = container!
         const first = await pageSize(pdf, 1, 1)
-        const dpr = Math.min(window.devicePixelRatio || 1, 2)
+        const dpr = Math.min(window.devicePixelRatio || 1, 3)
         const scale = ((host.clientWidth - 24) / first.width) * dpr
 
         // Rendu paresseux (IntersectionObserver) : seules les pages visibles sont rendues
@@ -99,6 +99,11 @@
     flex: 1;
     min-height: 0;
     overflow: auto;
+    /* Reserve la gouttiere de scrollbar en amont : sans ca, la scrollbar verticale
+       apparait apres coup, retrecit la largeur utile et force `max-width:100%` a
+       reechantillonner le canvas d'un facteur non-entier -> flou. clientWidth mesure
+       ici exclut deja la gouttiere, donc la largeur du canvas colle au conteneur. */
+    scrollbar-gutter: stable;
     display: flex;
     flex-direction: column;
     align-items: center;
