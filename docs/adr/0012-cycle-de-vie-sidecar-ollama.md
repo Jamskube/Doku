@@ -61,6 +61,14 @@ Le **modèle conseillé par défaut** (onboarding) n'est **pas** tranché ici : 
 - **CSP** : `connect-src` doit autoriser `http://127.0.0.1:<port>` — comme le port est dynamique, autoriser `http://127.0.0.1:*` (ou l'hôte loopback) côté CSP ; l'inférence reste locale, seul le pull sort (exception consentie, ADR-0006 / 8.3).
 - **Taille de l'installateur** (binaire Ollama embarqué) → question ouverte PRD-v2 (embarquer vs télécharger au 1er lancement).
 
+## Amendment (2026-07-14, story 13.2)
+
+À l'implémentation (spike 13.1 + SidecarManager 13.2), deux points de la Decision ont évolué **sur mesure** :
+
+- **Kill : Job Object Windows `KILL_ON_JOB_CLOSE` remplace le pidfile+sweep.** Le spike a révélé qu'`ollama.exe` spawne `llama-server.exe` en **grand-enfant** — un `kill` du seul parent le laisse orphelin. La solution retenue rattache le sidecar à un **Job Object** (`AssignProcessToJobObject`) : le noyau termine tout l'arbre dès la fermeture du dernier handle, **y compris au crash de Doku**. Cela **supersède** le pidfile+sweep prévu ici : nettoyage garanti par le noyau, **sans** la fenêtre orphelin-jusqu'au-prochain-lancement ni le **hasard de réutilisation de PID** (un PID enregistré pourrait, au lancement suivant, appartenir à un process tiers innocent que le sweep tuerait). `taskkill /F /T` du spike est également retiré.
+- **`lib/ollama` (DLLs + `llama-server.exe`) livré via `bundle.resources`**, résolu par `OLLAMA_LIBRARY_PATH` = `resource_dir()` en release (et `CARGO_MANIFEST_DIR/binaries` en dev, où le sidecar tourne depuis `target/debug`). `externalBin` ne copiait que l'exe.
+- **Egress 8.3** : `OLLAMA_NO_CLOUD=1` coupe le poll `model_recommendations` vers `ollama.com` (+ `OLLAMA_REMOTES=127.0.0.1` en ceinture). Un blocage pare-feu sur le binaire reste la garantie dure au déploiement.
+
 ## Related
 
 - [ADR-0006](./0006-copilote-ia-ollama-sidecar-cpu.md) — choix du moteur (Ollama sidecar CPU) que cette décision met en œuvre

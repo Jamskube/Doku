@@ -1,116 +1,17 @@
-// Hôte Tauri minimal — ADR-0004 : zéro logique métier ici, tout l'I/O passe
-// par les plugins officiels appelés depuis le frontend TypeScript. Rôles Rust :
-// instance unique, fenêtre, transmission du fichier d'ouverture (2.3), et — exception
-// documentée (ADR-0012) — le cycle de vie du sidecar Ollama (spawn + port + kill).
+// Hôte Tauri minimal — ADR-0004 : zéro logique métier ici, tout l'I/O passe par les plugins
+// officiels appelés depuis le frontend TypeScript. Rôles Rust : instance unique, fenêtre,
+// transmission du fichier d'ouverture (2.3), et — exception documentée (ADR-0012) — le cycle
+// de vie du sidecar Ollama, isolé dans `sidecar.rs`.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use std::net::TcpListener;
-use std::sync::Mutex;
+mod sidecar;
+
+use sidecar::OllamaState;
 use tauri::{Emitter, Listener, Manager, WindowEvent};
-use tauri_plugin_shell::process::{CommandChild, CommandEvent};
-use tauri_plugin_shell::ShellExt;
 
 // Extrait un chemin de fichier des arguments (ignore l'exe en position 0 et les flags).
 fn file_from_args(args: &[String]) -> Option<String> {
     args.iter().skip(1).find(|a| !a.starts_with('-')).cloned()
-}
-
-// État du sidecar Ollama (13.1) : le process enfant + son port. Seul « morceau de logique »
-// Rust admis (ADR-0004) = coquille spawn + port + kill.
-struct OllamaState(Mutex<Option<(CommandChild, u16)>>);
-
-// Tue TOUT l'arbre de process du sidecar. `ollama serve` spawne un sous-process
-// `llama-server.exe` (le runner du modèle) ; un kill du seul parent le laisse ORPHELIN
-// (Windows ne tue pas les descendants). `taskkill /T` tue l'arbre entier. Découverte 13.1 ;
-// dette 13.2 : envisager un Job Object (KILL_ON_JOB_CLOSE) pour survivre à un crash de Doku.
-#[cfg(windows)]
-fn kill_process_tree(pid: u32) {
-    use std::os::windows::process::CommandExt;
-    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-    let _ = std::process::Command::new("taskkill")
-        .args(["/F", "/T", "/PID", &pid.to_string()])
-        .creation_flags(CREATE_NO_WINDOW)
-        .status();
-}
-
-// Port TCP libre sur loopback : bind éphémère puis relâche (le listener est droppé à la
-// sortie). Fenêtre TOCTOU minime, acceptée en mono-utilisateur (ADR-0012).
-fn free_loopback_port() -> Result<u16, String> {
-    let listener = TcpListener::bind("127.0.0.1:0").map_err(|e| e.to_string())?;
-    listener.local_addr().map(|a| a.port()).map_err(|e| e.to_string())
-}
-
-// Démarre `ollama serve` en sidecar sur un port éphémère, modèles isolés dans
-// %APPDATA%\<app>\models (OLLAMA_MODELS), origine CORS = celle de la webview. Idempotent :
-// si déjà lancé, renvoie le port courant. Le spawn se fait HORS verrou (M3 : ne pas bloquer
-// un kill concurrent pendant le démarrage).
-#[tauri::command]
-async fn start_ollama(app: tauri::AppHandle, state: tauri::State<'_, OllamaState>) -> Result<u16, String> {
-    if let Some((_, port)) = state.0.lock().unwrap().as_ref() {
-        return Ok(*port);
-    }
-    let port = free_loopback_port()?;
-    let models = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| e.to_string())?
-        .join("models");
-    std::fs::create_dir_all(&models).map_err(|e| e.to_string())?;
-
-    // Ollama exécute un sous-process `llama-server.exe` (+ DLLs ggml) trouvé sous
-    // <OLLAMA_LIBRARY_PATH>/lib/ollama. En `tauri dev`, le sidecar tourne depuis target/debug
-    // (pas src-tauri/binaries), donc on pointe explicitement vers nos libs. SPIKE : chemin dev
-    // via CARGO_MANIFEST_DIR. DETTE 13.2 : empaqueter lib/ollama en `bundle.resources` et
-    // résoudre via `resource_dir()` pour le build empaqueté (le compile-time path est faux en prod).
-    let lib_base = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("binaries");
-
-    let (mut rx, child) = app
-        .shell()
-        .sidecar("ollama")
-        .map_err(|e| e.to_string())?
-        .args(["serve"])
-        .env("OLLAMA_HOST", format!("127.0.0.1:{port}"))
-        .env("OLLAMA_MODELS", models.to_string_lossy().to_string())
-        .env("OLLAMA_LIBRARY_PATH", lib_base.to_string_lossy().to_string())
-        .env("OLLAMA_ORIGINS", "http://tauri.localhost")
-        .spawn()
-        .map_err(|e| e.to_string())?;
-
-    // Draine les événements du sidecar : stderr = diagnostic n°1 d'un binaire ARM64 invalide
-    // ou d'un port déjà pris ; Terminated distingue « sorti » de « lent à répondre » (H3).
-    tauri::async_runtime::spawn(async move {
-        while let Some(ev) = rx.recv().await {
-            match ev {
-                CommandEvent::Stderr(b) => eprintln!("[ollama] {}", String::from_utf8_lossy(&b)),
-                CommandEvent::Stdout(b) => println!("[ollama] {}", String::from_utf8_lossy(&b)),
-                CommandEvent::Terminated(p) => {
-                    eprintln!("[ollama] terminé (code {:?})", p.code);
-                    break;
-                }
-                _ => {}
-            }
-        }
-    });
-
-    // Re-vérifie SOUS verrou : deux appels concurrents ont pu voir None et spawn chacun.
-    // Le perdant tue son enfant (sinon orphelin qui viole « kill propre »).
-    let mut guard = state.0.lock().unwrap();
-    if let Some((_, existing)) = guard.as_ref() {
-        let _ = child.kill();
-        return Ok(*existing);
-    }
-    *guard = Some((child, port));
-    Ok(port)
-}
-
-#[tauri::command]
-async fn stop_ollama(state: tauri::State<'_, OllamaState>) -> Result<(), String> {
-    let taken = state.0.lock().unwrap().take();
-    if let Some((child, _)) = taken {
-        kill_process_tree(child.pid()); // tue ollama.exe + llama-server.exe (grand-enfant)
-        let _ = child.kill();
-    }
-    Ok(())
 }
 
 fn main() {
@@ -130,18 +31,15 @@ fn main() {
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
-        .manage(OllamaState(Mutex::new(None)))
-        .invoke_handler(tauri::generate_handler![start_ollama, stop_ollama])
+        .manage(OllamaState::new().expect("création du Job Object du sidecar Ollama"))
+        .invoke_handler(tauri::generate_handler![sidecar::start_ollama, sidecar::stop_ollama])
         .on_window_event(|window, event| {
-            // Tue le sidecar à la DESTRUCTION de la fenêtre — pas sur CloseRequested : la
-            // garde « non enregistré » du frontend peut annuler la fermeture, ce qui
-            // laisserait l'app ouverte avec le moteur mort (critique M2).
+            // Arrêt du sidecar à la destruction de la fenêtre. Filet de sécurité : même si ce
+            // handler ne tourne pas (crash de Doku), la fermeture du handle du Job Object à la
+            // mort du process tue tout l'arbre (KILL_ON_JOB_CLOSE, cf. sidecar.rs).
             if let WindowEvent::Destroyed = event {
                 if let Some(state) = window.app_handle().try_state::<OllamaState>() {
-                    if let Some((child, _)) = state.0.lock().unwrap().take() {
-                        kill_process_tree(child.pid()); // ollama.exe + son runner llama-server.exe
-                        let _ = child.kill();
-                    }
+                    state.shutdown();
                 }
             }
         })

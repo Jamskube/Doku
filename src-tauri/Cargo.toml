@@ -14,6 +14,16 @@ tauri-plugin-dialog = "2"
 tauri-plugin-single-instance = "2"
 tauri-plugin-shell = "2"
 
+# Job Object Windows (13.2) : kill fiable de l'arbre du sidecar (KILL_ON_JOB_CLOSE) même au
+# crash de Doku. Version alignée sur celle déjà résolue par Tauri (pas de 2e copie).
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_System_JobObjects",
+    "Win32_System_Threading",
+] }
+
 [profile.release]
 panic = "abort"
 codegen-units = 1
