@@ -39,7 +39,11 @@ Sanity-check : `./ollama-aarch64-pc-windows-msvc.exe --version` doit afficher la
 > Le code du sidecar (spawn/port/kill) + le client TS sont là ; seule la **validation
 > native** du spike 13.1 exige ces binaires.
 >
-> **Dette (13.2+) — build empaqueté** : `bundle.externalBin` ne copie que l'exe, pas le
-> dossier `lib/`. Pour `tauri build`, il faudra livrer `lib/ollama/` via `bundle.resources`
-> et le placer à côté de l'exe empaqueté (ou pointer `OLLAMA_LIBRARY_PATH`). En `tauri dev`
-> l'exe tourne en place, donc `lib/` voisin suffit — le spike valide donc bien le dev.
+> **Découverte 13.1 — `lib/ollama` doit être trouvable au runtime.** Ollama lance un
+> sous-process `llama-server.exe` (+ DLLs ggml) sous `<OLLAMA_LIBRARY_PATH>/lib/ollama`.
+> En `tauri dev`, le sidecar tourne depuis `target/debug` (PAS `src-tauri/binaries`), donc
+> `main.rs` fixe `OLLAMA_LIBRARY_PATH` vers `src-tauri/binaries` (via `CARGO_MANIFEST_DIR`).
+>
+> **Dette (13.2) — build empaqueté** : ce chemin compile-time est faux en prod. Pour
+> `tauri build`, livrer `lib/ollama/` via `bundle.resources` et résoudre `OLLAMA_LIBRARY_PATH`
+> via `app.path().resource_dir()`. `bundle.externalBin` ne copie que l'exe, pas le dossier `lib/`.

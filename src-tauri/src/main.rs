@@ -19,6 +19,20 @@ fn file_from_args(args: &[String]) -> Option<String> {
 // Rust admis (ADR-0004) = coquille spawn + port + kill.
 struct OllamaState(Mutex<Option<(CommandChild, u16)>>);
 
+// Tue TOUT l'arbre de process du sidecar. `ollama serve` spawne un sous-process
+// `llama-server.exe` (le runner du modèle) ; un kill du seul parent le laisse ORPHELIN
+// (Windows ne tue pas les descendants). `taskkill /T` tue l'arbre entier. Découverte 13.1 ;
+// dette 13.2 : envisager un Job Object (KILL_ON_JOB_CLOSE) pour survivre à un crash de Doku.
+#[cfg(windows)]
+fn kill_process_tree(pid: u32) {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    let _ = std::process::Command::new("taskkill")
+        .args(["/F", "/T", "/PID", &pid.to_string()])
+        .creation_flags(CREATE_NO_WINDOW)
+        .status();
+}
+
 // Port TCP libre sur loopback : bind éphémère puis relâche (le listener est droppé à la
 // sortie). Fenêtre TOCTOU minime, acceptée en mono-utilisateur (ADR-0012).
 fn free_loopback_port() -> Result<u16, String> {
@@ -43,6 +57,13 @@ async fn start_ollama(app: tauri::AppHandle, state: tauri::State<'_, OllamaState
         .join("models");
     std::fs::create_dir_all(&models).map_err(|e| e.to_string())?;
 
+    // Ollama exécute un sous-process `llama-server.exe` (+ DLLs ggml) trouvé sous
+    // <OLLAMA_LIBRARY_PATH>/lib/ollama. En `tauri dev`, le sidecar tourne depuis target/debug
+    // (pas src-tauri/binaries), donc on pointe explicitement vers nos libs. SPIKE : chemin dev
+    // via CARGO_MANIFEST_DIR. DETTE 13.2 : empaqueter lib/ollama en `bundle.resources` et
+    // résoudre via `resource_dir()` pour le build empaqueté (le compile-time path est faux en prod).
+    let lib_base = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("binaries");
+
     let (mut rx, child) = app
         .shell()
         .sidecar("ollama")
@@ -50,6 +71,7 @@ async fn start_ollama(app: tauri::AppHandle, state: tauri::State<'_, OllamaState
         .args(["serve"])
         .env("OLLAMA_HOST", format!("127.0.0.1:{port}"))
         .env("OLLAMA_MODELS", models.to_string_lossy().to_string())
+        .env("OLLAMA_LIBRARY_PATH", lib_base.to_string_lossy().to_string())
         .env("OLLAMA_ORIGINS", "http://tauri.localhost")
         .spawn()
         .map_err(|e| e.to_string())?;
@@ -85,7 +107,8 @@ async fn start_ollama(app: tauri::AppHandle, state: tauri::State<'_, OllamaState
 async fn stop_ollama(state: tauri::State<'_, OllamaState>) -> Result<(), String> {
     let taken = state.0.lock().unwrap().take();
     if let Some((child, _)) = taken {
-        child.kill().map_err(|e| e.to_string())?;
+        kill_process_tree(child.pid()); // tue ollama.exe + llama-server.exe (grand-enfant)
+        let _ = child.kill();
     }
     Ok(())
 }
@@ -116,6 +139,7 @@ fn main() {
             if let WindowEvent::Destroyed = event {
                 if let Some(state) = window.app_handle().try_state::<OllamaState>() {
                     if let Some((child, _)) = state.0.lock().unwrap().take() {
+                        kill_process_tree(child.pid()); // ollama.exe + son runner llama-server.exe
                         let _ = child.kill();
                     }
                 }
