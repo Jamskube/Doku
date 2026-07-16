@@ -75,12 +75,15 @@ export async function listModels(port: number): Promise<OllamaModel[]> {
 // `signal` (AbortController) permet l'annulation : abort coupe le fetch → arrêt quasi-instantané
 // côté client ET serveur (Ollama stoppe la génération quand le client se déconnecte). On rend
 // alors le texte PARTIEL produit jusque-là (pas d'exception qui remonte).
+// `options` = options Ollama (ex. `{ num_ctx }`). Le résumé 14.2 FIXE num_ctx pour empêcher
+// la troncature silencieuse À GAUCHE d'un prompt plus long que la fenêtre par défaut du modèle.
 export async function generate(
   port: number,
   model: string,
   prompt: string,
   onToken: (t: string) => void,
   signal?: AbortSignal,
+  options?: Record<string, unknown>,
 ): Promise<string> {
   let out = ''
   let reader: ReadableStreamDefaultReader<Uint8Array> | undefined
@@ -88,7 +91,7 @@ export async function generate(
     const r = await api(port, '/api/generate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model, prompt, stream: true }),
+      body: JSON.stringify({ model, prompt, stream: true, options }),
       signal,
     })
     if (!r.ok || !r.body) throw new Error(`generate ${r.status}`)

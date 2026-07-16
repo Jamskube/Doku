@@ -3,16 +3,28 @@
 // idempotent côté Rust) → on le cache ; `ensureReady` déduplique les appels concurrents
 // (motif indexBuild de la recherche). Le modèle ACTIF (persisté) vit dans `app.activeModel`.
 import { app, type DocKind } from './stores.svelte'
-import { chat, deleteModel, listModels, pull, startOllama, waitReady, type OllamaModel } from './ollama'
-import { buildChatMessages, type ChatTurn } from './copilot-service'
+import { chat, deleteModel, generate, listModels, pull, startOllama, waitReady, type OllamaModel } from './ollama'
+import {
+  buildChatMessages,
+  buildReduceSummaryPrompt,
+  buildSegmentSummaryPrompt,
+  buildWholeSummaryPrompt,
+  segmentDoc,
+  SUMMARY_MAP_MAX_TOKENS,
+  SUMMARY_NUM_CTX,
+  type ChatTurn,
+  type SummaryMode,
+} from './copilot-service'
 
 // Un tour de conversation (14.1). `streaming` = réponse en cours (bulle en texte brut,
-// rendu Markdown à la fin) ; `failed` = carte d'erreur. Conversation éphémère (non persistée).
+// rendu Markdown à la fin) ; `failed` = carte d'erreur ; `status` = ligne de progression
+// transitoire pendant la phase « map » d'un résumé (14.2). Conversation éphémère (non persistée).
 export interface ChatMsg {
   role: 'user' | 'assistant'
   content: string
   streaming?: boolean
   failed?: boolean
+  status?: string
 }
 
 export const copilot = $state({
@@ -194,6 +206,129 @@ export async function sendChat(
       m.streaming = false
       // Annulé avant le 1er token → tour fantôme (question + réponse vide) : on retire les deux
       // (la bulle assistant vide À idx ET la question user à idx-1), pas de moitié orpheline.
+      if (m.content === '' && !m.failed) copilot.messages.splice(idx - 1, 2)
+    }
+    copilot.generating = false
+    genController = null
+  }
+}
+
+// Plafond de passes de réduction : garde-fou contre un modèle qui ne « contracterait » pas ses
+// résumés (boucle infinie théorique). Au-delà, on synthétise par groupe et on concatène — ça
+// termine et ne perd rien (jamais de troncature silencieuse).
+const MAX_REDUCE_PASSES = 3
+
+// Résume le document courant (14.2). Contrairement au chat, on n'envoie PAS le doc en un bloc
+// (troncature interdite par FR-4) : on SEGMENTE (map-reduce) via generate() single-shot, avec
+// num_ctx fixé pour qu'Ollama ne tronque pas non plus. La phase « map » affiche une progression
+// (`status`) ; la synthèse finale est streamée. `doc` = SNAPSHOT (changement d'onglet sans effet).
+// Anti-TOCTOU et boot-safety identiques à sendChat.
+export async function summarizeDoc(
+  doc: { name: string | null; text: string; kind: DocKind },
+  mode: SummaryMode = 'summary',
+): Promise<void> {
+  if (copilot.generating) return
+  const userLabel = mode === 'keypoints' ? 'Quels sont les points clés de ce document ?' : 'Résume ce document.'
+  const reply = (content: string, failed = false) => {
+    copilot.messages.push({ role: 'user', content: userLabel })
+    copilot.messages.push({ role: 'assistant', content, failed })
+  }
+
+  // Garde modèle : carte d'erreur sans démarrer le sidecar (préserve le boot-safety 14.0).
+  if (!app.activeModel) {
+    reply('Aucun modèle actif. Ouvrez la gestion des modèles (icône calques) pour en choisir ou en télécharger un.', true)
+    return
+  }
+  // Rien de valable à résumer → message clair, pas de résumé bidon (FR-4). L'extraction du texte
+  // des PDF (pdf.js) est une dette non soldée → tout PDF passe par ce message pour l'instant.
+  if (doc.kind === 'pdf') {
+    reply("Je ne peux pas encore résumer les PDF — l'extraction de leur texte arrive prochainement. Je résume les documents Markdown, texte et HTML.")
+    return
+  }
+  if (!doc.text.trim()) {
+    reply("Ce document est vide — il n'y a rien à résumer.")
+    return
+  }
+
+  copilot.generating = true
+  genController = new AbortController()
+  const signal = genController.signal
+
+  copilot.messages.push({ role: 'user', content: userLabel })
+  copilot.messages.push({ role: 'assistant', content: '', streaming: true, status: 'Lecture du document…' })
+  const idx = copilot.messages.length - 1
+  // `opts` = synthèse finale (sortie libre pour un résumé complet). `mapOpts` = phases
+  // intermédiaires (map + réductions non finales) : sortie bornée → plus rapide et pas de débordement.
+  const opts = { num_ctx: SUMMARY_NUM_CTX }
+  const mapOpts = { num_ctx: SUMMARY_NUM_CTX, num_predict: SUMMARY_MAP_MAX_TOKENS }
+  const setStatus = (s: string | undefined) => {
+    const m = copilot.messages[idx]
+    if (m) m.status = s
+  }
+  const stream = (t: string) => (copilot.messages[idx].content += t)
+
+  try {
+    const p = await ensureReady()
+    if (p === null) {
+      const m = copilot.messages[idx]
+      m.content = copilot.error || 'Le moteur IA est indisponible.'
+      m.failed = true
+      return
+    }
+    const model = app.activeModel
+
+    const segments = segmentDoc(doc.text)
+    if (segments.length <= 1) {
+      // Tient dans une fenêtre → résumé direct, streamé.
+      setStatus(undefined)
+      await generate(p, model, buildWholeSummaryPrompt(doc.text, doc.name, mode), stream, signal, opts)
+    } else {
+      // map : un résumé par segment (non streamé, avec progression).
+      const partials: string[] = []
+      for (let i = 0; i < segments.length; i++) {
+        setStatus(`Lecture du document — partie ${i + 1}/${segments.length}…`)
+        const s = await generate(p, model, buildSegmentSummaryPrompt(segments[i], i + 1, segments.length, doc.name), () => {}, signal, mapOpts)
+        if (signal.aborted) return
+        partials.push(s)
+      }
+      // reduce hiérarchique borné : réduire tant que la concaténation déborde d'une fenêtre.
+      let joined = partials.join('\n\n')
+      let passes = 0
+      while (segmentDoc(joined).length > 1 && passes < MAX_REDUCE_PASSES) {
+        setStatus('Synthèse en cours…')
+        const groups = segmentDoc(joined)
+        const reduced: string[] = []
+        for (const g of groups) {
+          const s = await generate(p, model, buildReduceSummaryPrompt(g, doc.name, mode), () => {}, signal, mapOpts)
+          if (signal.aborted) return
+          reduced.push(s)
+        }
+        joined = reduced.join('\n\n')
+        passes++
+      }
+      // Synthèse finale streamée. Normalement 1 groupe ; si le plafond de passes est atteint, on
+      // streame chaque groupe à la suite (concaténation) plutôt que d'en écarter — jamais de perte.
+      setStatus(undefined)
+      const finalGroups = segmentDoc(joined)
+      for (let i = 0; i < finalGroups.length; i++) {
+        if (i > 0) copilot.messages[idx].content += '\n\n'
+        await generate(p, model, buildReduceSummaryPrompt(finalGroups[i], doc.name, mode), stream, signal, opts)
+        if (signal.aborted) return
+      }
+    }
+  } catch (e) {
+    console.error('[copilot] summarize', e)
+    const m = copilot.messages[idx]
+    if (m) {
+      m.content = m.content || 'Le résumé a échoué. Vérifiez que le moteur est prêt, puis réessayez.'
+      m.failed = true
+    }
+  } finally {
+    const m = copilot.messages[idx]
+    if (m) {
+      m.streaming = false
+      m.status = undefined
+      // Annulé avant tout texte → tour fantôme (question + réponse vide) : on retire les deux.
       if (m.content === '' && !m.failed) copilot.messages.splice(idx - 1, 2)
     }
     copilot.generating = false

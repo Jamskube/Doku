@@ -1,5 +1,14 @@
 import { describe, it, expect } from 'vitest'
-import { buildChatMessages, buildDocContext, truncateDoc, MAX_DOC_CHARS } from './copilot-service'
+import {
+  buildChatMessages,
+  buildDocContext,
+  buildReduceSummaryPrompt,
+  buildSegmentSummaryPrompt,
+  buildWholeSummaryPrompt,
+  segmentDoc,
+  truncateDoc,
+  MAX_DOC_CHARS,
+} from './copilot-service'
 
 describe('truncateDoc', () => {
   it('laisse un texte court intact', () => {
@@ -61,5 +70,60 @@ describe('buildChatMessages', () => {
   it('demande de ne pas inventer hors du document (ancrage)', () => {
     const msgs = buildChatMessages({ ...base, history: [], question: 'x' })
     expect(msgs[0].content).toMatch(/plut[oô]t que d'inventer/i)
+  })
+})
+
+describe('segmentDoc (14.2)', () => {
+  it('un texte court reste en un seul segment', () => {
+    expect(segmentDoc('petit', 100)).toEqual(['petit'])
+  })
+  it('un texte vide ne produit aucun segment', () => {
+    expect(segmentDoc('   ', 100)).toEqual([])
+  })
+  it('segmente un long texte, chaque segment sous la limite', () => {
+    const lines = Array.from({ length: 50 }, (_, i) => `ligne numero ${i}`).join('\n')
+    const segs = segmentDoc(lines, 60)
+    expect(segs.length).toBeGreaterThan(1)
+    for (const s of segs) expect(s.length).toBeLessThanOrEqual(60)
+  })
+  it('ne perd aucun contenu (début, milieu et fin présents)', () => {
+    const body = Array.from({ length: 40 }, (_, i) => `phrase ${i} lorem ipsum`).join('\n')
+    const text = `DEBUT\n${body}\nFIN`
+    const joined = segmentDoc(text, 50).join('\n')
+    expect(joined).toContain('DEBUT')
+    expect(joined).toContain('phrase 20')
+    expect(joined).toContain('FIN')
+  })
+  it('tranche dur une ligne unique plus longue que la limite (sans rien perdre)', () => {
+    const segs = segmentDoc('x'.repeat(250), 100)
+    expect(segs.length).toBe(3)
+    for (const s of segs) expect(s.length).toBeLessThanOrEqual(100)
+    expect(segs.join('').length).toBe(250)
+  })
+})
+
+describe('prompts de résumé (14.2)', () => {
+  it('résumé direct : contient nom, texte et consigne fidèle', () => {
+    const p = buildWholeSummaryPrompt('Corps du doc.', 'notes.md', 'summary')
+    expect(p).toContain('notes.md')
+    expect(p).toContain('Corps du doc.')
+    expect(p).toMatch(/r[ée]sum/i)
+    expect(p).toMatch(/sans rien inventer/i)
+  })
+  it('mode « points clés » diffère du mode résumé', () => {
+    const a = buildWholeSummaryPrompt('t', 'd', 'summary')
+    const b = buildWholeSummaryPrompt('t', 'd', 'keypoints')
+    expect(a).not.toBe(b)
+    expect(b).toMatch(/points cl[ée]s/i)
+  })
+  it('prompt de segment indique la position (partie i/N)', () => {
+    const p = buildSegmentSummaryPrompt('seg', 2, 5, 'd')
+    expect(p).toContain('2/5')
+    expect(p).toContain('seg')
+  })
+  it("prompt de réduction interdit d'ajouter de l'info absente", () => {
+    const p = buildReduceSummaryPrompt('r1\n\nr2', 'd', 'summary')
+    expect(p).toContain('r1')
+    expect(p).toMatch(/n'ajoute aucune information/i)
   })
 })

@@ -3,7 +3,7 @@
   import { activeTab, app } from '../lib/stores.svelte'
   import { closeWindow, minimizeWindow, toggleMaximizeWindow } from '../lib/tauri'
   import { formatBytes } from '../lib/ollama'
-  import { cancelPull, copilot, newChat, pullModel, refreshModels, removeModel, sendChat, setActiveModel, stopChat } from '../lib/copilot.svelte'
+  import { cancelPull, copilot, newChat, pullModel, refreshModels, removeModel, sendChat, setActiveModel, stopChat, summarizeDoc } from '../lib/copilot.svelte'
   import { renderChatMarkdown } from '../lib/export/render-md'
 
   const SUGGESTIONS = ['gemma2:2b', 'phi3:mini', 'codellama:7b']
@@ -64,17 +64,15 @@
     }
   }
 
-  // Actions rapides de la vue vide : « Résumer »/« Points clés » envoient un message ordinaire
-  // (pas un contrat « résumé complet » — le map-reduce des longs docs est 14.2) ; « Question »
-  // donne juste le focus à la saisie.
+  // Actions rapides de la vue vide : « Résumer »/« Points clés » passent par le pipeline de
+  // résumé (14.2, segmentation map-reduce des longs docs) ; « Question » donne juste le focus.
   function quickAction(kind: 'summary' | 'question' | 'keypoints') {
     if (kind === 'question') {
       promptEl?.focus()
       return
     }
     const t = activeTab()
-    const q = kind === 'summary' ? 'Résume ce document.' : 'Quels sont les points clés de ce document ?'
-    void sendChat(q, { name: t?.name ?? null, text: t?.content ?? '', kind: t?.kind ?? 'md' })
+    void summarizeDoc({ name: t?.name ?? null, text: t?.content ?? '', kind: t?.kind ?? 'md' }, kind === 'keypoints' ? 'keypoints' : 'summary')
   }
 
   async function copyMessage(text: string) {
@@ -299,7 +297,12 @@
                     </button>
                   {/if}
                 </div>
-                {#if m.streaming && m.content === ''}
+                {#if m.streaming && m.status}
+                  <!-- Résumé (14.2) : progression de la phase map avant que la synthèse ne streame. -->
+                  <div class="cop-status">
+                    <span class="msr breathe" style="font-size:16px;color:var(--ink-4)">auto_stories</span>{m.status}
+                  </div>
+                {:else if m.streaming && m.content === ''}
                   <div class="cop-skel-wrap">
                     <div class="doku-skel" style="height:11px;width:92%"></div>
                     <div class="doku-skel" style="height:11px;width:100%;animation-delay:0.15s"></div>
@@ -541,6 +544,7 @@
   .cop-copy { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; border: 0; border-radius: 6px; background: transparent; color: var(--ink-4); cursor: pointer; }
   .cop-copy:hover { background: var(--surface-hover); color: var(--ink); }
   .cop-skel-wrap { display: flex; flex-direction: column; gap: 8px; padding-top: 2px; }
+  .cop-status { display: flex; align-items: center; gap: 7px; font-size: 12.5px; color: var(--ink-4); padding-top: 2px; }
   .cop-md-plain { font-size: 13px; line-height: 1.65; color: var(--ink-2); white-space: pre-wrap; overflow-wrap: anywhere; }
 
   /* Rendu Markdown assaini (contenu injecté via {@html} → styles :global) */

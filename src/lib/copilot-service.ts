@@ -53,3 +53,90 @@ export function buildChatMessages(p: {
     { role: 'user', content: p.question },
   ]
 }
+
+// --- Résumé (14.2) : segmentation map-reduce des longs docs -----------------
+// Le PRD (FR-4) interdit la troncature silencieuse. Un doc trop long pour la fenêtre du modèle
+// est donc DÉCOUPÉ (map : un résumé par segment ; reduce : synthèse des résumés), jamais coupé.
+export type SummaryMode = 'summary' | 'keypoints'
+
+// Fenêtre de contexte IMPOSÉE au modèle pour le résumé. On la FIXE (au lieu du défaut Ollama,
+// souvent 2048/4096) car un prompt plus long que num_ctx est tronqué À GAUCHE côté serveur — la
+// troncature silencieuse que FR-4 proscrit, juste déplacée d'une couche. `generate` la relaie.
+// On la choisit GÉNÉREUSE : une note normale doit tenir en UNE passe (rapide) ; le map-reduce,
+// coûteux sur CPU (N appels séquentiels), ne se déclenche que pour les documents vraiment longs.
+export const SUMMARY_NUM_CTX = 16384
+// Taille max d'un segment. Le budget num_ctx est en TOKENS mais on segmente en CARACTÈRES. Pire
+// cas (CJK) ≈ 1 token/caractère → on garde SEGMENT_CHARS ≤ num_ctx − marge (prompt + sortie),
+// donc un segment ne peut jamais déborder num_ctx quel que soit le script. Le latin (~0,25
+// token/car) tient très à l'aise : une note jusqu'à ~14k car (~3,5k tokens) = une seule passe.
+export const SEGMENT_CHARS = 14000
+// Plafond de génération de la phase MAP (résumé d'un segment). Un résumé partiel doit être bref :
+// on le borne pour (1) accélérer nettement — le petit modèle a tendance à délayer — et (2)
+// garantir input + sortie < num_ctx (pas de débordement → pas de context-shift qui tronquerait).
+export const SUMMARY_MAP_MAX_TOKENS = 512
+
+function sliceEvery(s: string, n: number): string[] {
+  const out: string[] = []
+  for (let i = 0; i < s.length; i += n) out.push(s.slice(i, i + n))
+  return out
+}
+
+// Découpe un texte en segments de longueur <= max SANS rien perdre (le contraire de tronquer) :
+// on empile les lignes et on ouvre un nouveau segment dès que la suivante déborderait ; une
+// ligne unique plus longue que max (rare : minifié, base64) est tranchée dur. Chaque caractère
+// du document se retrouve dans exactement un segment.
+export function segmentDoc(text: string, max = SEGMENT_CHARS): string[] {
+  if (text.length <= max) return text.trim() ? [text] : []
+  const segments: string[] = []
+  let buf = ''
+  const flush = () => {
+    if (buf.trim()) segments.push(buf)
+    buf = ''
+  }
+  for (const rawLine of text.split('\n')) {
+    const pieces = rawLine.length > max ? sliceEvery(rawLine, max) : [rawLine]
+    for (const piece of pieces) {
+      if (buf && buf.length + piece.length + 1 > max) flush()
+      buf = buf ? buf + '\n' + piece : piece
+    }
+  }
+  flush()
+  return segments
+}
+
+const SUMMARY_SYS =
+  "Tu es Doku-San, l'assistant local de l'éditeur Doku. Tu résumes en français, fidèlement, " +
+  "sans rien inventer ni ajouter d'information absente du texte fourni."
+
+// Résumé direct quand le document tient dans une seule fenêtre.
+export function buildWholeSummaryPrompt(text: string, name: string | null, mode: SummaryMode = 'summary'): string {
+  const title = name ?? 'sans titre'
+  const task =
+    mode === 'keypoints'
+      ? 'Dégage les POINTS CLÉS du document sous forme de puces courtes.'
+      : 'Rédige un résumé concis et fidèle du document (court paragraphe ou puces).'
+  return `${SUMMARY_SYS}\n\n${task} Document « ${title} » :\n"""\n${text}\n"""`
+}
+
+// Phase map : résume UN segment d'un document plus grand (pas d'intro ni de conclusion).
+export function buildSegmentSummaryPrompt(segment: string, index: number, total: number, name: string | null): string {
+  const title = name ?? 'sans titre'
+  return (
+    `${SUMMARY_SYS}\n\nVoici la partie ${index}/${total} du document « ${title} ». ` +
+    "Résume fidèlement le contenu de CETTE partie en puces courtes, sans introduction ni conclusion " +
+    `(ce n'est qu'un fragment) :\n"""\n${segment}\n"""`
+  )
+}
+
+// Phase reduce : fusionne des résumés partiels (dans l'ordre) en une synthèse unique.
+export function buildReduceSummaryPrompt(partials: string, name: string | null, mode: SummaryMode = 'summary'): string {
+  const title = name ?? 'sans titre'
+  const task =
+    mode === 'keypoints'
+      ? 'Fusionne-les en une liste unique des POINTS CLÉS (puces courtes), sans répétition.'
+      : 'Rédige à partir d\'eux un résumé global unique, cohérent et fidèle (court paragraphe ou puces), sans répétition.'
+  return (
+    `${SUMMARY_SYS}\n\nVoici, dans l'ordre, des résumés partiels du document « ${title} ». ` +
+    `${task} N'ajoute aucune information qui n'y figure pas :\n"""\n${partials}\n"""`
+  )
+}
