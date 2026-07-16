@@ -15,7 +15,7 @@
 
 | # | Story | Size | Status | Notes |
 |---|-------|------|--------|-------|
-| 14.0 | Coquille panneau droit (`aside`) + chorégraphie chrome + relocalisation UI modèles (13.4) | M | TODO | **Shell**, à faire en premier. Panneau `aside` 344px, bouton collapse (coin haut-droit du doc), état `chatOpen`, migration des contrôles `— ▢ ✕` header↔chat, coins du doc `14px` selon ouvert/fermé, animation `doku-panel-in`. **Déplace** la vue modèles de la sidebar gauche vers le panneau droit (page `layers`). Risque shell (gotchas fermeture fenêtre dev/release, S2). Maquette : `docs/design/w2-copilot/`. |
+| 14.0 | Coquille panneau droit (`aside`) + chorégraphie chrome + relocalisation UI modèles (13.4) | M | ✅ Done | Validé natif 2026-07-16. `CopilotPanel.svelte` : aside 344px « Doku-San », bouton collapse, chrome migré (contrôles fenêtre titlebar↔panneau), coin doc `with-copilot`, `doku-panel-in`. Modèles relocalisés (vue `layers`) ; coquille chat statique (streaming → 14.1). Boot-safety : aucun spawn Ollama au démarrage. critic (HIGH corrigé) + code-reviewer Approve. |
 | 14.1 | Panneau copilote (chat, streaming, annuler, rendu MD sanitizé) | M | TODO | **Chat** dans la coquille 14.0. Consomme `copilot.svelte.ts` (13.4). Streaming token-par-token + **stop**, rendu MD via `renderMarkdown` + `sanitizeHtml` (ADR-0009, réutilisé export), bouton copier, saisie « imbriquée ». États onboarding/empty/streaming/conversation/error. Puces `+ Contexte` = **coquille désactivée** (multi-docs → Epic 15). **Supprime `OllamaSpike.svelte`**. |
 | 14.2 | Résumer le document (md/txt/html/PDF, map-reduce si > contexte) | M | TODO | **Risque n°1.** Segmentation map-reduce obligatoire — le PRD interdit la **troncature silencieuse**. PDF scanné sans texte → message clair. |
 | 14.3 | Q&A sur le document courant (ancrée, « je ne trouve pas ») | S | TODO | Réponse ancrée sur le doc ; info absente → refus explicite, pas d'invention. 0 requête réseau. |
@@ -48,3 +48,6 @@ _None_
 - **2 décisions** (AskUserQuestion) : (A) suivre la maquette au pixel = panneau droit + chrome mobile ; (B) « coquille visuelle maintenant, câblage plus tard » = doc courant seul en v2.0, contexte multi-docs → Epic 15.
 - **Découpage ajusté** : **14.0** créée (coquille + chrome + relocalisation modèles) en tête, distincte de **14.1** (chat). Motif : ne pas laisser 14.1 gonfler en silence sous le poids du shell (leçon rétro S11). Ledger : +1 entrée (57 features).
 - **Sprint 12 = 7 stories** (14.0/14.1/14.2/14.3/13.5 cœur + 16.1/16.2 stretch). Toujours dans la cible recalibrée 6-8.
+
+### 2026-07-16 — 14.0 validée natif (checkpoint 20 % franchi)
+Coquille du panneau copilote droit livrée et validée en natif : ouverture/fermeture animée, chrome migré proprement (close-guard intact), coin du doc, gestion des modèles relocalisée et fonctionnelle, boot sans spawn Ollama. Ledger **51/57**. La fondation UI est prête → 14.1 (chat streaming) remplit la coquille et supprime `OllamaSpike.svelte`.
