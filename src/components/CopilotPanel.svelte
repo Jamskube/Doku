@@ -3,7 +3,8 @@
   import { activeTab, app } from '../lib/stores.svelte'
   import { closeWindow, minimizeWindow, toggleMaximizeWindow } from '../lib/tauri'
   import { formatBytes } from '../lib/ollama'
-  import { cancelPull, copilot, pullModel, refreshModels, removeModel, setActiveModel } from '../lib/copilot.svelte'
+  import { cancelPull, copilot, newChat, pullModel, refreshModels, removeModel, sendChat, setActiveModel, stopChat } from '../lib/copilot.svelte'
+  import { renderChatMarkdown } from '../lib/export/render-md'
 
   const SUGGESTIONS = ['gemma2:2b', 'phi3:mini', 'codellama:7b']
 
@@ -39,6 +40,63 @@
       void removeModel(name)
     }
   }
+
+  // --- Chat (14.1) ---
+  let draft = $state('')
+  let promptEl = $state<HTMLTextAreaElement | null>(null)
+  let scroller = $state<HTMLElement | null>(null)
+  let atBottom = true // ne pas voler le scroll si l'utilisateur est remonté relire
+
+  // Envoie le brouillon ; capture un SNAPSHOT du doc courant (le contexte ne change pas si
+  // l'utilisateur change d'onglet pendant la génération).
+  function send() {
+    const q = draft.trim()
+    if (!q || copilot.generating) return
+    draft = ''
+    const t = activeTab()
+    void sendChat(q, { name: t?.name ?? null, text: t?.content ?? '', kind: t?.kind ?? 'md' })
+  }
+
+  function onPromptKey(e: KeyboardEvent) {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault()
+      send()
+    }
+  }
+
+  // Actions rapides de la vue vide : « Résumer »/« Points clés » envoient un message ordinaire
+  // (pas un contrat « résumé complet » — le map-reduce des longs docs est 14.2) ; « Question »
+  // donne juste le focus à la saisie.
+  function quickAction(kind: 'summary' | 'question' | 'keypoints') {
+    if (kind === 'question') {
+      promptEl?.focus()
+      return
+    }
+    const t = activeTab()
+    const q = kind === 'summary' ? 'Résume ce document.' : 'Quels sont les points clés de ce document ?'
+    void sendChat(q, { name: t?.name ?? null, text: t?.content ?? '', kind: t?.kind ?? 'md' })
+  }
+
+  async function copyMessage(text: string) {
+    try {
+      await navigator.clipboard.writeText(text)
+    } catch (e) {
+      console.error('[copilot] copy', e)
+    }
+  }
+
+  function onScroll() {
+    if (scroller) atBottom = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 40
+  }
+
+  // Suit le bas pendant le streaming, mais seulement si l'utilisateur y était déjà.
+  $effect(() => {
+    const n = copilot.messages.length
+    const tail = copilot.messages[n - 1]?.content
+    void n
+    void tail
+    if (atBottom && scroller) scroller.scrollTop = scroller.scrollHeight
+  })
 </script>
 
 <aside class="cop-panel">
@@ -69,7 +127,7 @@
 
   <!-- Corps : carte arrondie qui démarre sous l'en-tête -->
   <div class="cop-card">
-    <div class="cop-scroll">
+    <div class="cop-scroll" bind:this={scroller} onscroll={onScroll}>
       {#if app.copilotView === 'models'}
         {#if copilot.error}
           <p class="cop-msg err">{copilot.error}</p>
@@ -197,28 +255,71 @@
             </section>
           </div>
         {/if}
-      {:else}
-        <!-- Vue chat : coquille statique (14.0). Câblage streaming = 14.1. -->
+      {:else if copilot.messages.length === 0}
+        <!-- Conversation vide : accueil + actions rapides sur le document courant -->
         <div class="cop-chat-empty">
           <div class="cop-empty-title">Bonjour.</div>
           <p class="cop-empty-sub">Posez une question, ou lancez une action sur le document ouvert.</p>
           <div class="cop-actions">
-            <button class="cop-action" disabled>
+            <button class="cop-action" onclick={() => quickAction('summary')}>
               <span class="msr" style="font-size:19px;color:var(--ink-4)">summarize</span><span class="grow">Résumer ce document</span><span class="msr" style="font-size:16px;color:var(--ink-5)">arrow_forward</span>
             </button>
-            <button class="cop-action" disabled>
+            <button class="cop-action" onclick={() => quickAction('question')}>
               <span class="msr" style="font-size:19px;color:var(--ink-4)">quiz</span><span class="grow">Poser une question dessus</span><span class="msr" style="font-size:16px;color:var(--ink-5)">arrow_forward</span>
             </button>
-            <button class="cop-action" disabled>
+            <button class="cop-action" onclick={() => quickAction('keypoints')}>
               <span class="msr" style="font-size:19px;color:var(--ink-4)">key</span><span class="grow">Extraire les points clés</span><span class="msr" style="font-size:16px;color:var(--ink-5)">arrow_forward</span>
             </button>
           </div>
-          <p class="cop-soon">Le chat arrive bientôt (14.1).</p>
+        </div>
+      {:else}
+        <!-- Conversation -->
+        <div class="cop-conv">
+          {#each copilot.messages as m, i (i)}
+            {#if m.role === 'user'}
+              <div class="cop-user"><div class="cop-user-bubble">{m.content}</div></div>
+            {:else if m.failed}
+              <div class="cop-err-card">
+                <span class="msr" style="font-size:20px;color:var(--err);flex:0 0 auto">error</span>
+                <div>
+                  <div class="cop-err-title">La génération a échoué</div>
+                  <p class="cop-err-msg">{m.content}</p>
+                  <button class="cop-err-btn" onclick={() => (app.copilotView = 'models')}>Vérifier le moteur</button>
+                </div>
+              </div>
+            {:else}
+              <div class="cop-asst">
+                <div class="cop-asst-head">
+                  <span class="msr" class:breathe={m.streaming} style="font-size:16px;color:var(--ink-4)">spa</span>
+                  <span class="cop-asst-name">Doku-San</span>
+                  <div class="grow"></div>
+                  {#if !m.streaming}
+                    <button class="cop-copy" title="Copier" aria-label="Copier la réponse" onclick={() => copyMessage(m.content)}>
+                      <span class="msr" style="font-size:15px">content_copy</span>
+                    </button>
+                  {/if}
+                </div>
+                {#if m.streaming && m.content === ''}
+                  <div class="cop-skel-wrap">
+                    <div class="doku-skel" style="height:11px;width:92%"></div>
+                    <div class="doku-skel" style="height:11px;width:100%;animation-delay:0.15s"></div>
+                    <div class="doku-skel" style="height:11px;width:78%;animation-delay:0.3s"></div>
+                  </div>
+                {:else if m.streaming}
+                  <!-- Streaming : texte brut (aucun parse par token) — rendu Markdown à la fin. -->
+                  <div class="cop-md-plain">{m.content}</div>
+                {:else}
+                  <!-- Réponse terminée : Markdown assaini (allowlist, 0 réseau). -->
+                  <div class="cop-md">{@html renderChatMarkdown(m.content)}</div>
+                {/if}
+              </div>
+            {/if}
+          {/each}
         </div>
       {/if}
     </div>
 
-    <!-- Zone de saisie « imbriquée » (coquille désactivée en 14.0) -->
+    <!-- Zone de saisie « imbriquée » (chat réel, 14.1) -->
     {#if app.copilotView === 'chat'}
       <div class="cop-input-wrap">
         <div class="cop-input">
@@ -226,12 +327,35 @@
             <span class="cop-ctx-chip">
               <span class="msr" style="font-size:14px;color:var(--ink-4)">description</span>{activeTab()?.name ?? 'aucun document'}
             </span>
-            <button class="cop-ctx-add" disabled><span class="msr" style="font-size:14px">add</span>Contexte</button>
+            <button class="cop-ctx-add" disabled title="Contexte multi-documents — à venir">
+              <span class="msr" style="font-size:14px">add</span>Contexte
+            </button>
+            {#if copilot.messages.length > 0}
+              <button class="cop-newchat" title="Nouvelle conversation" aria-label="Nouvelle conversation" onclick={newChat}>
+                <span class="msr" style="font-size:15px">refresh</span>
+              </button>
+            {/if}
           </div>
           <div class="cop-input-field">
             <button class="cop-input-attach" disabled aria-label="Joindre"><span class="msr" style="font-size:20px">add</span></button>
-            <div class="cop-input-ph">Posez une question sur ce document…</div>
-            <button class="cop-input-send" disabled aria-label="Envoyer"><span class="msr" style="font-size:19px">arrow_upward</span></button>
+            <textarea
+              class="cop-input-ta"
+              bind:this={promptEl}
+              bind:value={draft}
+              rows="1"
+              placeholder="Posez une question sur ce document…"
+              aria-label="Message au copilote"
+              onkeydown={onPromptKey}
+            ></textarea>
+            {#if copilot.generating}
+              <button class="cop-input-send" title="Arrêter" aria-label="Arrêter la génération" onclick={stopChat}>
+                <span class="msr" style="font-size:17px;font-variation-settings:'FILL' 1">stop</span>
+              </button>
+            {:else}
+              <button class="cop-input-send" title="Envoyer" aria-label="Envoyer" disabled={!draft.trim()} onclick={send}>
+                <span class="msr" style="font-size:19px">arrow_upward</span>
+              </button>
+            {/if}
           </div>
         </div>
         <div class="cop-disclaimer">Doku peut se tromper — vérifiez les informations importantes.</div>
@@ -392,7 +516,7 @@
   }
   .cop-chip:hover { background: var(--surface-hover); color: var(--ink); }
 
-  /* Chat (coquille) */
+  /* Chat — accueil */
   .cop-chat-empty { padding: 20px 4px 8px; }
   .cop-empty-title { font-size: 16px; font-weight: 600; color: var(--ink); margin-bottom: 4px; }
   .cop-empty-sub { font-size: 12.5px; line-height: 1.55; color: var(--ink-4); margin-bottom: 18px; }
@@ -400,27 +524,72 @@
   .cop-action {
     display: flex; align-items: center; gap: 10px; width: 100%; padding: 11px 12px;
     background: var(--cream-content); border: 1px solid var(--line-1); border-radius: 11px;
-    color: var(--ink-2); font-family: var(--font-sans); font-size: 13px; text-align: left; cursor: default;
+    color: var(--ink-2); font-family: var(--font-sans); font-size: 13px; text-align: left; cursor: pointer;
   }
-  .cop-action[disabled] { opacity: 0.55; }
-  .cop-soon { margin: 16px 0 0; text-align: center; font-size: 11px; color: var(--ink-5); }
+  .cop-action:hover { background: var(--surface-2); border-color: var(--line-2); }
 
-  /* Saisie imbriquée (désactivée) */
+  /* Chat — conversation */
+  .cop-conv { padding: 14px 2px 8px; display: flex; flex-direction: column; gap: 16px; }
+  .cop-user { display: flex; justify-content: flex-end; padding-left: 36px; }
+  .cop-user-bubble {
+    background: var(--surface-2); border: 1px solid var(--line-1); border-radius: 13px 13px 4px 13px;
+    padding: 8px 11px; font-size: 13px; line-height: 1.5; color: var(--ink); white-space: pre-wrap; overflow-wrap: anywhere;
+  }
+  .cop-asst-head { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; }
+  .cop-asst-name { font-size: 11px; color: var(--ink-4); font-weight: 500; }
+  .msr.breathe { animation: doku-breathe 1.8s ease-in-out infinite; }
+  .cop-copy { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; border: 0; border-radius: 6px; background: transparent; color: var(--ink-4); cursor: pointer; }
+  .cop-copy:hover { background: var(--surface-hover); color: var(--ink); }
+  .cop-skel-wrap { display: flex; flex-direction: column; gap: 8px; padding-top: 2px; }
+  .cop-md-plain { font-size: 13px; line-height: 1.65; color: var(--ink-2); white-space: pre-wrap; overflow-wrap: anywhere; }
+
+  /* Rendu Markdown assaini (contenu injecté via {@html} → styles :global) */
+  .cop-md { font-size: 13px; line-height: 1.65; color: var(--ink-2); overflow-wrap: anywhere; }
+  .cop-md :global(p) { margin: 0 0 10px; }
+  .cop-md :global(> *:last-child) { margin-bottom: 0; }
+  .cop-md :global(ul), .cop-md :global(ol) { padding-left: 18px; margin: 0 0 12px; display: flex; flex-direction: column; gap: 5px; }
+  .cop-md :global(h1), .cop-md :global(h2), .cop-md :global(h3) { font-size: 14px; font-weight: 600; color: var(--ink); margin: 12px 0 6px; }
+  .cop-md :global(a) { color: var(--ink); text-decoration: underline; }
+  .cop-md :global(code) { background: var(--code-bg); border-radius: 4px; padding: 1px 4px; font-family: var(--font-mono); font-size: 11.5px; }
+  .cop-md :global(pre) { background: var(--code-bg); border-radius: 8px; padding: 10px 12px; overflow-x: auto; margin: 0 0 10px; }
+  .cop-md :global(pre code) { background: none; padding: 0; }
+  .cop-md :global(blockquote) { border-left: 2px solid var(--line-2); padding-left: 10px; color: var(--ink-3); margin: 0 0 10px; }
+  .cop-md :global(table) { width: 100%; border-collapse: collapse; font-size: 12px; border: 1px solid var(--line-1); border-radius: 8px; overflow: hidden; margin: 0 0 10px; }
+  .cop-md :global(th) { background: var(--surface-2); text-align: left; padding: 5px 9px; color: var(--ink); font-weight: 600; border-bottom: 1px solid var(--line-1); }
+  .cop-md :global(td) { padding: 5px 9px; color: var(--ink-2); border-bottom: 1px solid var(--line-1); }
+
+  /* Carte d'erreur (génération échouée) */
+  .cop-err-card { display: flex; gap: 11px; padding: 13px; border: 1px solid var(--line-2); border-radius: 12px; background: var(--cream-content); }
+  .cop-err-title { font-size: 13px; font-weight: 600; color: var(--ink); margin-bottom: 3px; }
+  .cop-err-msg { font-size: 12px; line-height: 1.5; color: var(--ink-4); margin: 0 0 11px; }
+  .cop-err-btn { height: 30px; padding: 0 12px; background: transparent; color: var(--ink-3); border: 1px solid var(--line-2); border-radius: 8px; font-family: var(--font-sans); font-size: 12px; cursor: pointer; }
+  .cop-err-btn:hover { background: var(--surface-hover); color: var(--ink); }
+
+  /* Saisie imbriquée */
   .cop-input-wrap { flex-shrink: 0; padding: 8px 13px 12px; }
-  .cop-input { border-radius: 19px; overflow: hidden; border: 1px solid var(--line-2); display: flex; flex-direction: column; opacity: 0.75; }
+  .cop-input { border-radius: 19px; overflow: hidden; border: 1px solid var(--line-2); display: flex; flex-direction: column; }
   .cop-input-ctx { background: var(--cream-tint); padding: 10px 13px 22px; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
   .cop-ctx-chip {
     display: inline-flex; align-items: center; gap: 5px; height: 24px; padding: 0 8px;
     background: var(--cream-content); border: 1px solid var(--line-2); border-radius: 8px; font-size: 11.5px; color: var(--ink-2);
+    max-width: 60%; overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
   }
   .cop-ctx-add {
     display: inline-flex; align-items: center; gap: 3px; height: 24px; padding: 0 9px;
     background: transparent; border: 1px dashed var(--line-3); border-radius: 8px;
-    font-family: var(--font-sans); font-size: 11.5px; color: var(--ink-4); cursor: default;
+    font-family: var(--font-sans); font-size: 11.5px; color: var(--ink-4); cursor: default; opacity: 0.6;
   }
+  .cop-newchat { margin-left: auto; display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; border: 0; border-radius: 6px; background: transparent; color: var(--ink-4); cursor: pointer; }
+  .cop-newchat:hover { background: var(--cream-content); color: var(--ink); }
   .cop-input-field { margin-top: -15px; background: var(--cream-content); border-radius: 15px 15px 0 0; padding: 11px 12px 12px; display: flex; align-items: flex-end; gap: 8px; }
-  .cop-input-attach { width: 30px; height: 30px; flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; background: transparent; border: 0; border-radius: 9px; color: var(--ink-4); cursor: default; }
-  .cop-input-ph { flex: 1; min-width: 0; font-size: 13px; color: var(--ink-5); padding: 6px 0; line-height: 1.4; }
-  .cop-input-send { width: 30px; height: 30px; flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; background: var(--ink); border: 0; border-radius: 50%; color: var(--cream-content); cursor: default; opacity: 0.6; }
+  .cop-input-attach { width: 30px; height: 30px; flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; background: transparent; border: 0; border-radius: 9px; color: var(--ink-5); cursor: default; }
+  .cop-input-ta {
+    flex: 1; min-width: 0; border: 0; background: transparent; outline: none; resize: none;
+    font-family: var(--font-sans); font-size: 13px; line-height: 1.4; color: var(--ink); padding: 6px 0; max-height: 120px;
+  }
+  .cop-input-ta::placeholder { color: var(--ink-5); }
+  .cop-input-send { width: 30px; height: 30px; flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; background: var(--ink); border: 0; border-radius: 50%; color: var(--cream-content); cursor: pointer; }
+  .cop-input-send:hover { background: var(--ink-2); }
+  .cop-input-send:disabled { opacity: 0.4; cursor: default; }
   .cop-disclaimer { text-align: center; font-size: 10.5px; color: var(--ink-5); margin-top: 9px; }
 </style>

@@ -9,7 +9,7 @@
 // La sortie brute de marked (raw HTML inclus) est ensuite assainie par DOMPurify, puis
 // destinée à un iframe sandboxé + CSP `default-src 'none'` (défense en profondeur).
 import { marked } from 'marked'
-import { sanitizeHtml } from '../sanitize'
+import { sanitizeHtml, sanitizeChatHtml } from '../sanitize'
 import { isBlockedImageUrl, resolveLocalImagePath } from '../images'
 import { convertFileSrc } from '@tauri-apps/api/core'
 import { isTauri } from '../tauri'
@@ -58,4 +58,12 @@ export function renderMarkdown(md: string, opts: { dir?: string; resolveImage?: 
   const pre = preprocess(md, opts.dir ?? '', resolve)
   const html = marked.parse(pre, { gfm: true, async: false }) as string
   return sanitizeHtml(html)
+}
+
+// Rend une réponse LLM (Markdown → fragment HTML assaini) pour une bulle de chat (14.1).
+// Pas de pré-passe image/wikilink : le contexte est une réponse de modèle, pas un document
+// à images locales, et `sanitizeChatHtml` (allowlist) retire de toute façon tout <img>.
+export function renderChatMarkdown(md: string): string {
+  const html = marked.parse(md, { gfm: true, async: false }) as string
+  return sanitizeChatHtml(html)
 }

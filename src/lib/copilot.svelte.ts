@@ -2,8 +2,18 @@
 // (même motif que `app` dans stores.svelte.ts). Le port du sidecar est stable (start_ollama
 // idempotent côté Rust) → on le cache ; `ensureReady` déduplique les appels concurrents
 // (motif indexBuild de la recherche). Le modèle ACTIF (persisté) vit dans `app.activeModel`.
-import { app } from './stores.svelte'
-import { deleteModel, listModels, pull, startOllama, waitReady, type OllamaModel } from './ollama'
+import { app, type DocKind } from './stores.svelte'
+import { chat, deleteModel, listModels, pull, startOllama, waitReady, type OllamaModel } from './ollama'
+import { buildChatMessages, type ChatTurn } from './copilot-service'
+
+// Un tour de conversation (14.1). `streaming` = réponse en cours (bulle en texte brut,
+// rendu Markdown à la fin) ; `failed` = carte d'erreur. Conversation éphémère (non persistée).
+export interface ChatMsg {
+  role: 'user' | 'assistant'
+  content: string
+  streaming?: boolean
+  failed?: boolean
+}
 
 export const copilot = $state({
   port: null as number | null,
@@ -12,10 +22,13 @@ export const copilot = $state({
   models: [] as OllamaModel[],
   pulling: null as { name: string; pct: number } | null,
   error: '',
+  messages: [] as ChatMsg[],
+  generating: false,
 })
 
 let readyPromise: Promise<number | null> | null = null
 let pullController: AbortController | null = null
+let genController: AbortController | null = null
 let refreshToken = 0
 
 // Démarre le sidecar (idempotent) et renvoie son port ; null en navigateur / échec. Un appel
@@ -117,4 +130,84 @@ export async function removeModel(name: string): Promise<void> {
 
 export function setActiveModel(name: string): void {
   app.activeModel = name
+}
+
+// Envoie un message au copilote et streame la réponse (14.1). `doc` = SNAPSHOT du document
+// courant capturé À L'ENVOI → un changement d'onglet pendant la génération ne la perturbe pas.
+// Anti-TOCTOU : `generating`/`genController` posés SYNCHRONEMENT avant tout `await` (deux
+// envois rapprochés ne peuvent pas s'entrelacer). Aucun spawn moteur si pas de modèle actif.
+export async function sendChat(
+  question: string,
+  doc: { name: string | null; text: string; kind: DocKind },
+): Promise<void> {
+  const q = question.trim()
+  if (!q || copilot.generating) return
+
+  // Garde modèle : carte d'erreur sans démarrer le sidecar (préserve le boot-safety 14.0).
+  if (!app.activeModel) {
+    copilot.messages.push({ role: 'user', content: q })
+    copilot.messages.push({
+      role: 'assistant',
+      content: 'Aucun modèle actif. Ouvrez la gestion des modèles (icône calques) pour en choisir ou en télécharger un.',
+      failed: true,
+    })
+    return
+  }
+
+  copilot.generating = true
+  genController = new AbortController()
+  const signal = genController.signal
+  // Historique = paires user→assistant RÉUSSIES uniquement (une question à réponse échouée
+  // ou vide est écartée → jamais deux tours `user` consécutifs envoyés à /api/chat).
+  const history: ChatTurn[] = []
+  for (let k = 0; k < copilot.messages.length; k++) {
+    const m = copilot.messages[k]
+    if (m.role === 'assistant' && !m.failed && m.content) {
+      const prev = copilot.messages[k - 1]
+      if (prev?.role === 'user') history.push({ role: 'user', content: prev.content })
+      history.push({ role: 'assistant', content: m.content })
+    }
+  }
+
+  copilot.messages.push({ role: 'user', content: q })
+  copilot.messages.push({ role: 'assistant', content: '', streaming: true })
+  const idx = copilot.messages.length - 1 // index stable (generating sérialise les envois)
+
+  try {
+    const p = await ensureReady()
+    if (p === null) {
+      copilot.messages[idx].content = copilot.error || 'Le moteur IA est indisponible.'
+      copilot.messages[idx].failed = true
+      return
+    }
+    const messages = buildChatMessages({ docName: doc.name, docText: doc.text, kind: doc.kind, history, question: q })
+    // Mutation via l'index (élément proxifié du $state array) → réactif ; muter la ref locale
+    // poussée ne le serait PAS (piège $state profond de Svelte 5).
+    await chat(p, app.activeModel, messages, (t) => (copilot.messages[idx].content += t), signal)
+  } catch (e) {
+    console.error('[copilot] chat', e)
+    copilot.messages[idx].content = copilot.messages[idx].content || 'La génération a échoué. Vérifiez que le moteur est prêt, puis réessayez.'
+    copilot.messages[idx].failed = true
+  } finally {
+    const m = copilot.messages[idx]
+    if (m) {
+      m.streaming = false
+      // Annulé avant le 1er token → tour fantôme (question + réponse vide) : on retire les deux
+      // (la bulle assistant vide À idx ET la question user à idx-1), pas de moitié orpheline.
+      if (m.content === '' && !m.failed) copilot.messages.splice(idx - 1, 2)
+    }
+    copilot.generating = false
+    genController = null
+  }
+}
+
+// Interrompt la génération en cours (abort → texte partiel conservé, < 500 ms côté serveur).
+export function stopChat(): void {
+  genController?.abort()
+}
+
+// Nouvelle conversation : annule d'abord une génération en cours, puis vide l'historique.
+export function newChat(): void {
+  genController?.abort()
+  copilot.messages = []
 }

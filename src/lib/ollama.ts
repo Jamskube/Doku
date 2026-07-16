@@ -69,7 +69,9 @@ export async function listModels(port: number): Promise<OllamaModel[]> {
   return json.models ?? []
 }
 
-// Génère en streaming ; `onToken` reçoit chaque fragment. Renvoie le texte complet.
+// Complétion single-shot en streaming (/api/generate). Primitive conservée pour les usages
+// SANS conversation (ex. « résumer » 14.2, reformuler/corriger 16.x) ; le chat multi-tours
+// utilise `chat()` (/api/chat). `onToken` reçoit chaque fragment. Renvoie le texte complet.
 // `signal` (AbortController) permet l'annulation : abort coupe le fetch → arrêt quasi-instantané
 // côté client ET serveur (Ollama stoppe la génération quand le client se déconnecte). On rend
 // alors le texte PARTIEL produit jusque-là (pas d'exception qui remonte).
@@ -111,6 +113,56 @@ export async function generate(
     return out
   } catch (e) {
     // Annulation (même pendant la phase de connexion, avant le 1er chunk) → texte partiel.
+    if (signal?.aborted || (e instanceof DOMException && e.name === 'AbortError')) return out
+    throw e
+  } finally {
+    reader?.cancel().catch(() => {})
+  }
+}
+
+// Chat multi-tours (14.1) — /api/chat, messages à rôles (system/user/assistant). Streaming
+// NDJSON : chaque ligne porte `message.content` (fragment). Même annulation que `generate`
+// (AbortSignal coupe client ET serveur ; texte partiel rendu sans exception). Préféré à
+// `generate` pour le dialogue : les rôles évitent la dérive de complétion (faux tours).
+export async function chat(
+  port: number,
+  model: string,
+  messages: { role: string; content: string }[],
+  onToken: (t: string) => void,
+  signal?: AbortSignal,
+): Promise<string> {
+  let out = ''
+  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined
+  try {
+    const r = await api(port, '/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model, messages, stream: true }),
+      signal,
+    })
+    if (!r.ok || !r.body) throw new Error(`chat ${r.status}`)
+    reader = r.body.getReader()
+    const dec = new TextDecoder()
+    let rest = ''
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      const parsed = splitNdjson(rest, dec.decode(value, { stream: true }))
+      rest = parsed.rest
+      for (const o of parsed.objects) {
+        const line = o as { message?: { content?: string }; done?: boolean; error?: string }
+        if (line.error) throw new Error(line.error)
+        const piece = line.message?.content
+        if (piece) {
+          out += piece
+          onToken(piece)
+        }
+        if (line.done) return out
+      }
+    }
+    return out
+  } catch (e) {
+    // Annulation (même pendant la connexion) → texte partiel produit jusque-là.
     if (signal?.aborted || (e instanceof DOMException && e.name === 'AbortError')) return out
     throw e
   } finally {

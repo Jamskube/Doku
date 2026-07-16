@@ -14,7 +14,6 @@
   import { imageMarkdown, imageStamp, sniffImageExt } from '../lib/paste-image'
   import DokuMark from '../lib/DokuMark.svelte'
   import PdfView from './PdfView.svelte'
-  import OllamaSpike from './OllamaSpike.svelte'
 
   type ExportTab = { kind: DocKind; name: string; content: string; path: string | null }
 
@@ -224,10 +223,6 @@
 </script>
 
 <div class="doc">
-  {#if import.meta.env.DEV}
-    <!-- SPIKE 13.1 : widget de test Ollama, DEV uniquement (retiré en prod). À supprimer en 14.1. -->
-    <OllamaSpike />
-  {/if}
   {#if activeTab() && !app.focus}
     {@const tab = activeTab()!}
     <div class="doc-head">
