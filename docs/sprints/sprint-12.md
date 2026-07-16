@@ -7,13 +7,16 @@
 
 1er sprint au **format recalibré** (rétro S11) : **1 semaine / 6-8 stories** au lieu de 2 semaines / 3-4. Source : `docs/planning/PRD-v2.md` (FR-3, FR-4, FR-5 → Epic 14 ; FR-7, FR-8 → Epic 16). À la clôture : le copilote est **utilisable** (chat streamé, résumé, Q&A ancrée) et le sidecar est **prouvé en release installée**.
 
-**Design hors sprint** : l'UI du panneau copilote (14.1) est itérée séparément (préférence actée en rétro S1). Les stories consomment la maquette validée ; elles ne la conçoivent pas.
+**Design hors sprint** : l'UI du panneau copilote a été itérée séparément avec Claude Design (préférence actée en rétro S1). **Maquette hifi livrée et vendorée** dans `docs/design/w2-copilot/` (6 états × 2 thèmes + README de handoff). Décisions de cadrage (2026-07-16) : **(A)** on suit la maquette au pixel = **panneau `aside` à droite** (pas la vue sidebar gauche du plan initial), avec bouton *collapse* et chorégraphie du chrome ; **(B)** *coquille visuelle maintenant, câblage plus tard* = on dessine tout (puces `+ Contexte`, « Doku-San », débit `t/s`) mais seul le **doc courant** est branché en v2.0 ; le **contexte multi-docs part en Epic 15 (RAG)**.
+
+> **Impact de la maquette sur le découpage** : le panneau droit change le shell (`App.svelte`/`TitleBar.svelte` : contrôles fenêtre qui migrent, coins du document qui s'arrondissent) et **relocalise l'UI modèles de 13.4** (sidebar gauche → panneau droit, derrière l'icône `layers`). C'est un bloc structurel distinct du chat → scindé en **14.0** (coquille + chrome + relocalisation) pour ne pas laisser 14.1 gonfler en silence (leçon rétro S11). La *logique* validée en 13.4 (`copilot.svelte.ts`, pull/purge/actif) est réutilisée telle quelle ; seul son emplacement d'affichage bouge.
 
 ## Stories
 
 | # | Story | Size | Status | Notes |
 |---|-------|------|--------|-------|
-| 14.1 | Panneau copilote (chat, streaming, annuler, rendu MD sanitizé) | M | TODO | Consomme le store `copilot.svelte.ts` (13.4). **Supprime `OllamaSpike.svelte`** (widget DEV jetable). Rendu MD via `renderMarkdown` + `sanitizeHtml` (ADR-0009, réutilisé de l'export). **Attend la maquette** (design hors sprint). |
+| 14.0 | Coquille panneau droit (`aside`) + chorégraphie chrome + relocalisation UI modèles (13.4) | M | TODO | **Shell**, à faire en premier. Panneau `aside` 344px, bouton collapse (coin haut-droit du doc), état `chatOpen`, migration des contrôles `— ▢ ✕` header↔chat, coins du doc `14px` selon ouvert/fermé, animation `doku-panel-in`. **Déplace** la vue modèles de la sidebar gauche vers le panneau droit (page `layers`). Risque shell (gotchas fermeture fenêtre dev/release, S2). Maquette : `docs/design/w2-copilot/`. |
+| 14.1 | Panneau copilote (chat, streaming, annuler, rendu MD sanitizé) | M | TODO | **Chat** dans la coquille 14.0. Consomme `copilot.svelte.ts` (13.4). Streaming token-par-token + **stop**, rendu MD via `renderMarkdown` + `sanitizeHtml` (ADR-0009, réutilisé export), bouton copier, saisie « imbriquée ». États onboarding/empty/streaming/conversation/error. Puces `+ Contexte` = **coquille désactivée** (multi-docs → Epic 15). **Supprime `OllamaSpike.svelte`**. |
 | 14.2 | Résumer le document (md/txt/html/PDF, map-reduce si > contexte) | M | TODO | **Risque n°1.** Segmentation map-reduce obligatoire — le PRD interdit la **troncature silencieuse**. PDF scanné sans texte → message clair. |
 | 14.3 | Q&A sur le document courant (ancrée, « je ne trouve pas ») | S | TODO | Réponse ancrée sur le doc ; info absente → refus explicite, pas d'invention. 0 requête réseau. |
 | 13.5 | Packaging release du sidecar (build ARM64 + install) | S | TODO | **Solde 2 dettes** : `resource_dir()`/`bundle.resources` jamais prouvés en release (S11) + association `.pdf` validée « sur confiance » (S10). |
@@ -26,6 +29,7 @@ _None_
 ## Checkpoints STOP/GO
 | ~% | Critère | Si STOP |
 |---|---|---|
+| 20 % (14.0) | Panneau droit s'ouvre/ferme proprement (chrome migré, coins OK) **en release aussi** ; modèles relocalisés fonctionnels | Bug shell fenêtre → figer le chrome (repli « chrome figé ») plutôt que bloquer le sprint |
 | 30 % (14.1) | Chat streamé + annulable dans le panneau, rendu MD sanitizé | Revoir le store copilote (13.4) avant d'empiler les usages |
 | 50 % (13.5) | Doku **installé** génère (lib chargée via `resource_dir`) + double-clic `.pdf` ouvre | Bug de packaging → traiter en priorité : sans ça, v2 n'est pas distribuable |
 | 80 % (14.2-14.3) | Résumé d'un doc > fenêtre de contexte **sans troncature silencieuse** ; Q&A refuse d'inventer | Livrer 14.1+14.3, reporter 14.2 (map-reduce = story à part entière) |
@@ -38,3 +42,9 @@ _None_
 - **Epic 16 remontée en stretch** : le PRD-v2 la séquence en v2.1 (avec le RAG), mais 16.1/16.2 réutilisent exactement le `generate` de 14.1 et **ne dépendent pas de l'Epic 15**. Les remonter isole le RAG (spike + L, le gros chantier risqué) dans un Sprint 13 dédié → **v2 bouclée en 2 sprints**.
 - **Correction du décompte de la rétro S11** : il reste **8** stories v2 (Epic 14 : 3 · Epic 15 : 3 · Epic 16 : 2), pas ~12 (c'était le total des Epics 13-16, dont l'Epic 13 déjà livrée).
 - Design du panneau copilote traité **hors sprint** (Claude Design) ; 14.1 démarre une fois la maquette arrêtée.
+
+### 2026-07-16 (soir) — maquette livrée, cadrage design
+- **Maquette hifi reçue et vendorée** (`docs/design/w2-copilot/`, 6 états × 2 thèmes + handoff). Le design diverge du plan : **panneau `aside` droit** (au lieu de la vue sidebar gauche), avec bouton collapse et chorégraphie du chrome, et **relocalise l'UI modèles de 13.4**.
+- **2 décisions** (AskUserQuestion) : (A) suivre la maquette au pixel = panneau droit + chrome mobile ; (B) « coquille visuelle maintenant, câblage plus tard » = doc courant seul en v2.0, contexte multi-docs → Epic 15.
+- **Découpage ajusté** : **14.0** créée (coquille + chrome + relocalisation modèles) en tête, distincte de **14.1** (chat). Motif : ne pas laisser 14.1 gonfler en silence sous le poids du shell (leçon rétro S11). Ledger : +1 entrée (57 features).
+- **Sprint 12 = 7 stories** (14.0/14.1/14.2/14.3/13.5 cœur + 16.1/16.2 stretch). Toujours dans la cible recalibrée 6-8.

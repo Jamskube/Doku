@@ -231,6 +231,7 @@ _Source : docs/planning/PRD-v2.md · Architecture : docs/planning/architecture-v
 **Goal** : dialoguer avec l'IA dans un panneau et l'appliquer au document ouvert (résumer, questionner).
 **Spans PRD** : PRD-v2 FR-3 (P0), FR-4 (P0), FR-5 (P1).
 **État** : ⬜ à faire. **Clôt v2.0** (copilote utilisable).
+**Design (2026-07-16)** : maquette hifi Claude Design vendorée dans `docs/design/w2-copilot/`. Le copilote est un **panneau `aside` à DROITE** de la fenêtre (bouton collapse en haut-droite du doc), **pas** la vue sidebar gauche initialement supposée. Il **héberge aussi la gestion des modèles** (13.4 relocalisée, page `layers`). Story **14.0** (coquille + chrome + relocalisation) ajoutée en tête au Sprint 12, distincte de 14.1 (chat). Cadrage : doc courant seul en v2.0 ; puces `+ Contexte` multi-docs = coquille désactivée → câblage en Epic 15.
 
 ### Stories
 | # | Title | Size | Priority | Acceptance |
