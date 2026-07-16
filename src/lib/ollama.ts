@@ -194,15 +194,28 @@ export async function pull(
     reader = r.body.getReader()
     const dec = new TextDecoder()
     let rest = ''
+    // Un pull comporte PLUSIEURS couches (blobs), chacune avec son propre `total`. Agréger sur
+    // toutes les couches vues (clé = digest) → % global monotone ; sinon la barre repart à 0 %
+    // à chaque nouvelle couche et « boucle » (0→100 par blob).
+    const layers = new Map<string, { completed: number; total: number }>()
     for (;;) {
       const { done, value } = await reader.read()
       if (done) break
       const parsed = splitNdjson(rest, dec.decode(value, { stream: true }))
       rest = parsed.rest
       for (const o of parsed.objects) {
-        const line = o as { total?: number; completed?: number; error?: string }
+        const line = o as { digest?: string; total?: number; completed?: number; error?: string }
         if (line.error) throw new Error(line.error)
-        if (line.total && line.completed) onProgress(Math.round((line.completed / line.total) * 100))
+        if (line.digest && line.total) {
+          layers.set(line.digest, { completed: line.completed ?? 0, total: line.total })
+          let completed = 0
+          let total = 0
+          for (const l of layers.values()) {
+            completed += l.completed
+            total += l.total
+          }
+          if (total > 0) onProgress(Math.round((completed / total) * 100))
+        }
       }
     }
   } catch (e) {
