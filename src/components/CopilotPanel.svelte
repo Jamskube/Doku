@@ -1,13 +1,13 @@
 <script lang="ts">
   import { untrack } from 'svelte'
-  import { activeTab, app } from '../lib/stores.svelte'
+  import { activeTab, app, editorSel } from '../lib/stores.svelte'
   import { closeWindow, minimizeWindow, toggleMaximizeWindow } from '../lib/tauri'
   import { formatBytes } from '../lib/ollama'
-  import { cancelPull, copilot, newChat, pullModel, refreshModels, removeModel, sendChat, setActiveModel, stopChat, summarizeDoc } from '../lib/copilot.svelte'
+  import { acceptRephrase, cancelPull, copilot, newChat, pullModel, refreshModels, rejectRephrase, removeModel, rephraseSelection, sendChat, setActiveModel, stopChat, summarizeDoc } from '../lib/copilot.svelte'
   import { MAX_DOC_CHARS } from '../lib/copilot-service'
   import { renderChatMarkdown } from '../lib/export/render-md'
 
-  const SUGGESTIONS = ['gemma2:2b', 'phi3:mini', 'codellama:7b']
+  const SUGGESTIONS = ['qwen2.5:1.5b-instruct-q4_0', 'qwen2.5:3b-instruct-q4_0', 'hf.co/LiquidAI/LFM2-2.6B-GGUF:Q4_0']
 
   // Vue Modèles : liste à l'ouverture (intention explicite). L'effet ne track QUE la vue —
   // `refreshModels` (lit ET écrit copilot.*) est `untrack`é pour ne pas s'auto-re-déclencher.
@@ -83,6 +83,15 @@
     void summarizeDoc({ name: t?.name ?? null, text: t?.content ?? '', kind: t?.kind ?? 'md' }, kind === 'keypoints' ? 'keypoints' : 'summary')
   }
 
+  // Reformuler (16.1) : la barre n'apparaît qu'avec une sélection non vide dans un document
+  // éditable (pas un PDF). Réutilise le pipeline generate() — proposition, puis Accepter/Refuser.
+  const selLen = $derived(editorSel.text.trim().length)
+  const canRephrase = $derived(selLen > 0 && activeTab()?.kind !== 'pdf' && !copilot.generating)
+
+  function rephrase(mode: 'clarify' | 'shorten' | 'tone') {
+    void rephraseSelection(mode)
+  }
+
   async function copyMessage(text: string) {
     try {
       await navigator.clipboard.writeText(text)
@@ -153,11 +162,11 @@
             </div>
             <div class="cop-reco">
               <div class="cop-reco-head">
-                <span class="cop-mono">qwen2.5:3b</span>
+                <span class="cop-mono">qwen2.5:1.5b · Q4_0</span>
                 <span class="cop-badge">conseillé</span>
               </div>
-              <div class="cop-reco-sub">1,9 Go · léger, rapide, idéal pour les notes</div>
-              <button class="cop-btn-fill" onclick={() => startPull('qwen2.5:3b')}>
+              <div class="cop-reco-sub">935 Mo · ultra-léger, discret, optimisé ARM</div>
+              <button class="cop-btn-fill" onclick={() => startPull('qwen2.5:1.5b-instruct-q4_0')}>
                 <span class="msr" style="font-size:17px">download</span>Télécharger ce modèle
               </button>
             </div>
@@ -296,8 +305,8 @@
             {:else}
               <div class="cop-asst">
                 <div class="cop-asst-head">
-                  <span class="msr" class:breathe={m.streaming} style="font-size:16px;color:var(--ink-4)">spa</span>
-                  <span class="cop-asst-name">Doku-San</span>
+                  <span class="msr" class:breathe={m.streaming} style="font-size:16px;color:var(--ink-4)">{m.rephrase ? 'edit_note' : 'spa'}</span>
+                  <span class="cop-asst-name">{m.rephrase ? 'Proposition' : 'Doku-San'}</span>
                   <div class="grow"></div>
                   {#if !m.streaming}
                     <button class="cop-copy" title="Copier" aria-label="Copier la réponse" onclick={() => copyMessage(m.content)}>
@@ -305,7 +314,34 @@
                     </button>
                   {/if}
                 </div>
-                {#if m.streaming && m.status}
+                {#if m.rephrase}
+                  <!-- Reformulation (16.1) : le texte proposé remplacera la sélection → affiché tel
+                       quel (pas de rendu Markdown) pour montrer exactement ce qui sera inséré. -->
+                  {#if m.streaming && m.content === ''}
+                    <div class="cop-skel-wrap">
+                      <div class="doku-skel" style="height:11px;width:88%"></div>
+                      <div class="doku-skel" style="height:11px;width:96%;animation-delay:0.15s"></div>
+                    </div>
+                  {:else}
+                    <div class="cop-proposal">{m.content}</div>
+                    {#if m.rephrase.state === 'pending' && !m.streaming}
+                      <div class="cop-prop-acts">
+                        <button class="cop-prop-btn accept" onclick={() => acceptRephrase(i)}>
+                          <span class="msr" style="font-size:15px">check</span>Accepter
+                        </button>
+                        <button class="cop-prop-btn" onclick={() => rejectRephrase(i)}>
+                          <span class="msr" style="font-size:15px">close</span>Refuser
+                        </button>
+                      </div>
+                    {:else if m.rephrase.state === 'applied'}
+                      <div class="cop-prop-note ok"><span class="msr" style="font-size:14px">check_circle</span>Appliqué au document.</div>
+                    {:else if m.rephrase.state === 'rejected'}
+                      <div class="cop-prop-note"><span class="msr" style="font-size:14px">do_not_disturb_on</span>Refusé — texte d'origine conservé.</div>
+                    {:else if m.rephrase.state === 'stale'}
+                      <div class="cop-prop-note warn"><span class="msr" style="font-size:14px">warning</span>Le document a changé — remplacement annulé (texte d'origine intact).</div>
+                    {/if}
+                  {/if}
+                {:else if m.streaming && m.status}
                   <!-- Résumé (14.2) : progression de la phase map avant que la synthèse ne streame. -->
                   <div class="cop-status">
                     <span class="msr breathe" style="font-size:16px;color:var(--ink-4)">auto_stories</span>{m.status}
@@ -333,6 +369,17 @@
     <!-- Zone de saisie « imbriquée » (chat réel, 14.1) -->
     {#if app.copilotView === 'chat'}
       <div class="cop-input-wrap">
+        {#if canRephrase}
+          <!-- Reformuler la sélection (16.1) : contextuel, n'apparaît qu'avec une sélection. -->
+          <div class="cop-rephrase-bar">
+            <span class="cop-rephrase-lbl"><span class="msr" style="font-size:15px">edit_note</span>Sélection · {selLen} car.</span>
+            <div class="cop-rephrase-acts">
+              <button class="cop-rephrase-btn" title="Rendre plus clair" onclick={() => rephrase('clarify')}>Clarifier</button>
+              <button class="cop-rephrase-btn" title="Rendre plus court" onclick={() => rephrase('shorten')}>Raccourcir</button>
+              <button class="cop-rephrase-btn" title="Ton plus neutre et professionnel" onclick={() => rephrase('tone')}>Ton</button>
+            </div>
+          </div>
+        {/if}
         <div class="cop-input">
           <div class="cop-input-ctx">
             <span class="cop-ctx-chip">
@@ -614,4 +661,37 @@
   .cop-input-send:hover { background: var(--ink-2); }
   .cop-input-send:disabled { opacity: 0.4; cursor: default; }
   .cop-disclaimer { text-align: center; font-size: 10.5px; color: var(--ink-5); margin-top: 9px; }
+
+  /* Reformuler — barre de sélection (16.1) */
+  .cop-rephrase-bar {
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+    margin-bottom: 8px; padding: 8px 10px;
+    background: var(--accent-soft); border: 1px solid var(--line-2); border-radius: 12px;
+  }
+  .cop-rephrase-lbl { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; color: var(--ink-3); }
+  .cop-rephrase-acts { display: flex; gap: 6px; margin-left: auto; }
+  .cop-rephrase-btn {
+    height: 26px; padding: 0 11px; border: 1px solid var(--line-2); border-radius: 8px;
+    background: var(--cream-content); color: var(--ink-2);
+    font-family: var(--font-sans); font-size: 11.5px; font-weight: 500; cursor: pointer;
+  }
+  .cop-rephrase-btn:hover { background: var(--surface-hover); color: var(--ink); border-color: var(--line-3); }
+
+  /* Reformuler — carte proposition (16.1) */
+  .cop-proposal {
+    font-size: 13px; line-height: 1.6; color: var(--ink); white-space: pre-wrap; overflow-wrap: anywhere;
+    padding: 10px 12px; background: var(--surface-2); border: 1px solid var(--line-2); border-radius: 10px;
+  }
+  .cop-prop-acts { display: flex; gap: 7px; margin-top: 9px; }
+  .cop-prop-btn {
+    display: inline-flex; align-items: center; gap: 5px; height: 30px; padding: 0 13px;
+    border: 1px solid var(--line-2); border-radius: 9px; background: var(--cream-content); color: var(--ink-2);
+    font-family: var(--font-sans); font-size: 12px; font-weight: 500; cursor: pointer;
+  }
+  .cop-prop-btn:hover { background: var(--surface-hover); color: var(--ink); }
+  .cop-prop-btn.accept { background: var(--ink); color: var(--cream-content); border-color: var(--ink); }
+  .cop-prop-btn.accept:hover { background: var(--ink-2); }
+  .cop-prop-note { display: inline-flex; align-items: center; gap: 6px; margin-top: 9px; font-size: 12px; color: var(--ink-4); }
+  .cop-prop-note.ok { color: var(--ok); }
+  .cop-prop-note.warn { color: var(--warn, #9a6a2c); }
 </style>

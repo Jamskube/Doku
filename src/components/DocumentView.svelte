@@ -2,7 +2,7 @@
   import { onMount } from 'svelte'
   import { EditorView } from '@codemirror/view'
   import { EditorState, type Extension } from '@codemirror/state'
-  import { app, activeTab, COLUMN_PX, cycleColumnWidth, docHeadings, editorRef, forcePreview, isDirty, type DocKind } from '../lib/stores.svelte'
+  import { app, activeTab, COLUMN_PX, cycleColumnWidth, docHeadings, editorRef, editorSel, forcePreview, isDirty, type DocKind } from '../lib/stores.svelte'
   import { baseExtensions, htmlSourceExtensions, livePreviewComp, previewExtensions, serializeDoc, sourceExtensions, txtExtensions } from '../lib/editor/editor'
   import { docDirFacet } from '../lib/editor/live-preview'
   import { revealMatch, searchFlashField } from '../lib/editor/search-flash'
@@ -138,6 +138,14 @@
           const t = app.tabs.find((x) => x.id === tabId)
           if (t) t.content = serializeDoc(u.state.doc.toString(), t.eol)
         }
+        // Publie la sélection courante (16.1) : le copilote propose « Reformuler » quand
+        // `text` est non vide. Sur édition, les bornes bougent → on republie aussi.
+        if (u.selectionSet || u.docChanged) {
+          const s = u.state.selection.main
+          editorSel.from = s.from
+          editorSel.to = s.to
+          editorSel.text = s.empty ? '' : u.state.sliceDoc(s.from, s.to)
+        }
       }),
     ]
     // Coller une image (12.1) : Markdown uniquement (le lien ![]() n'a de sens qu'en md).
@@ -207,6 +215,12 @@
     const useSource = sourceMode || (tab?.heavy ?? false)
     view.dispatch({ effects: livePreviewComp.reconfigure(useSource ? sourceExtensions() : previewExtensions()) })
     view.requestMeasure({ read: () => view && updateActiveHeading(view) })
+    // Resync de la sélection publiée (16.1) : setState (changement d'onglet/reload) ne déclenche
+    // pas toujours selectionSet — on lit l'état courant pour éviter une sélection périmée.
+    const sel = view.state.selection.main
+    editorSel.from = sel.from
+    editorSel.to = sel.to
+    editorSel.text = sel.empty ? '' : view.state.sliceDoc(sel.from, sel.to)
   })
 
   // Révélation d'une occurrence de recherche (9.4). Déclaré APRÈS l'effet de switch

@@ -3,6 +3,7 @@ import {
   buildChatMessages,
   buildDocContext,
   buildReduceSummaryPrompt,
+  buildRephrasePrompt,
   buildSegmentSummaryPrompt,
   buildWholeSummaryPrompt,
   segmentDoc,
@@ -131,5 +132,26 @@ describe('prompts de résumé (14.2)', () => {
     const p = buildReduceSummaryPrompt('r1\n\nr2', 'd', 'summary')
     expect(p).toContain('r1')
     expect(p).toMatch(/n'ajoute aucune information/i)
+  })
+})
+
+describe('buildRephrasePrompt (16.1)', () => {
+  it('inclut le passage et exige uniquement le texte reformulé, à sens et Markdown conservés', () => {
+    const p = buildRephrasePrompt('Le chat dort sur le canapé.', 'clarify')
+    expect(p).toContain('Le chat dort sur le canapé.')
+    expect(p).toMatch(/UNIQUEMENT/)
+    expect(p).toMatch(/même sens/i)
+    expect(p).toMatch(/Markdown/)
+  })
+  it('les trois variantes produisent des consignes distinctes', () => {
+    const c = buildRephrasePrompt('t', 'clarify')
+    const s = buildRephrasePrompt('t', 'shorten')
+    const t = buildRephrasePrompt('t', 'tone')
+    expect(c).not.toBe(s)
+    expect(s).not.toBe(t)
+    expect(c).not.toBe(t)
+    expect(s).toMatch(/court|concis/i)
+    expect(t).toMatch(/ton/i)
+    expect(c).toMatch(/clair/i)
   })
 })

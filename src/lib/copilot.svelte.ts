@@ -2,11 +2,12 @@
 // (même motif que `app` dans stores.svelte.ts). Le port du sidecar est stable (start_ollama
 // idempotent côté Rust) → on le cache ; `ensureReady` déduplique les appels concurrents
 // (motif indexBuild de la recherche). Le modèle ACTIF (persisté) vit dans `app.activeModel`.
-import { app, type DocKind } from './stores.svelte'
+import { app, editorRef, type DocKind } from './stores.svelte'
 import { chat, deleteModel, generate, listModels, pull, startOllama, waitReady, type OllamaModel } from './ollama'
 import {
   buildChatMessages,
   buildReduceSummaryPrompt,
+  buildRephrasePrompt,
   buildSegmentSummaryPrompt,
   buildWholeSummaryPrompt,
   COPILOT_NUM_CTX,
@@ -14,6 +15,7 @@ import {
   segmentDoc,
   SUMMARY_MAP_MAX_TOKENS,
   type ChatTurn,
+  type RephraseMode,
   type SummaryMode,
 } from './copilot-service'
 
@@ -26,6 +28,12 @@ export interface ChatMsg {
   streaming?: boolean
   failed?: boolean
   status?: string
+  // Reformulation (16.1) : proposition liée à une sélection de l'éditeur. `state` pilote les
+  // boutons Accepter/Refuser ; `tabId` + `from/to/original` appliquent le remplacement ET
+  // détectent une cible périmée — mauvais onglet OU doc modifié entre-temps (`stale` → on n'écrit
+  // rien, zéro perte). L'éditeur CM6 étant PARTAGÉ entre onglets, `tabId` est indispensable :
+  // sans lui, accepter après un changement d'onglet réécrirait le mauvais document.
+  rephrase?: { tabId: number; from: number; to: number; original: string; state: 'pending' | 'applied' | 'rejected' | 'stale' }
 }
 
 export const copilot = $state({
@@ -337,6 +345,103 @@ export async function summarizeDoc(
     copilot.generating = false
     genController = null
   }
+}
+
+// Reformule la sélection courante de l'éditeur (16.1, FR-7). Streame une PROPOSITION — n'écrit
+// RIEN dans le document — portant les bornes de la sélection ; l'utilisateur l'accepte (remplace)
+// ou la refuse (texte d'origine intact). Anti-TOCTOU et boot-safety identiques à sendChat.
+export async function rephraseSelection(mode: RephraseMode): Promise<void> {
+  if (copilot.generating) return
+  const view = editorRef.view
+  if (!view) return
+  const sel = view.state.selection.main
+  if (sel.empty) return
+  const from = sel.from
+  const to = sel.to
+  const original = view.state.sliceDoc(from, to)
+  const tabId = app.activeId // onglet cible figé à la proposition (éditeur partagé entre onglets)
+  const label = mode === 'shorten' ? 'Raccourcir la sélection' : mode === 'tone' ? 'Changer le ton de la sélection' : 'Clarifier la sélection'
+
+  // Garde modèle : carte d'erreur sans démarrer le sidecar (préserve le boot-safety 14.0).
+  if (!app.activeModel) {
+    copilot.messages.push({ role: 'user', content: label })
+    copilot.messages.push({
+      role: 'assistant',
+      content: 'Aucun modèle actif. Ouvrez la gestion des modèles (icône calques) pour en choisir ou en télécharger un.',
+      failed: true,
+    })
+    return
+  }
+
+  copilot.generating = true
+  genController = new AbortController()
+  const signal = genController.signal
+
+  copilot.messages.push({ role: 'user', content: label })
+  copilot.messages.push({ role: 'assistant', content: '', streaming: true, rephrase: { tabId, from, to, original, state: 'pending' } })
+  const idx = copilot.messages.length - 1
+
+  try {
+    const p = await ensureReady()
+    if (p === null) {
+      const m = copilot.messages[idx]
+      m.content = copilot.error || 'Le moteur IA est indisponible.'
+      m.failed = true
+      m.rephrase = undefined
+      return
+    }
+    // Mutation via l'index (élément proxifié du $state array) → réactif (piège $state profond).
+    await generate(p, app.activeModel, buildRephrasePrompt(original, mode), (t) => (copilot.messages[idx].content += t), signal, {
+      num_ctx: COPILOT_NUM_CTX,
+      temperature: COPILOT_TEMPERATURE,
+    })
+  } catch (e) {
+    console.error('[copilot] rephrase', e)
+    const m = copilot.messages[idx]
+    m.content = m.content || 'La reformulation a échoué. Vérifiez que le moteur est prêt, puis réessayez.'
+    m.failed = true
+    m.rephrase = undefined
+  } finally {
+    const m = copilot.messages[idx]
+    if (m) {
+      m.streaming = false
+      // Le texte proposé remplacera la sélection → on nettoie les espaces de bord (préambule
+      // éventuel non géré ici : l'utilisateur relit avant d'appliquer).
+      m.content = m.content.trim()
+      // Annulé avant tout token → tour fantôme (question + bulle vide) : on retire les deux.
+      if (m.content === '' && !m.failed) copilot.messages.splice(idx - 1, 2)
+    }
+    copilot.generating = false
+    genController = null
+  }
+}
+
+// Applique une proposition (16.1) : remplace la sélection d'origine par le texte proposé.
+// Garde ZÉRO PERTE : si le document a changé sous la proposition (la région ne contient plus le
+// texte d'origine), on n'écrit RIEN et on signale (`stale`). Remplacement = transaction CM
+// unique → annulable par Ctrl+Z.
+export function acceptRephrase(idx: number): void {
+  const m = copilot.messages[idx]
+  if (!m?.rephrase || m.rephrase.state !== 'pending' || m.streaming) return
+  const view = editorRef.view
+  const { tabId, from, to, original } = m.rephrase
+  const proposed = m.content
+  if (!view || !proposed) return
+  // Cible périmée : mauvais onglet (éditeur partagé) OU région modifiée depuis la proposition.
+  // Dans les deux cas on N'ÉCRIT RIEN (zéro perte) et on signale.
+  if (app.activeId !== tabId || to > view.state.doc.length || view.state.sliceDoc(from, to) !== original) {
+    m.rephrase.state = 'stale'
+    return
+  }
+  view.dispatch({ changes: { from, to, insert: proposed }, selection: { anchor: from + proposed.length } })
+  view.focus()
+  m.rephrase.state = 'applied'
+}
+
+// Refuse une proposition : ne touche PAS au document (texte d'origine conservé).
+export function rejectRephrase(idx: number): void {
+  const m = copilot.messages[idx]
+  if (m?.rephrase && m.rephrase.state === 'pending') m.rephrase.state = 'rejected'
 }
 
 // Interrompt la génération en cours (abort → texte partiel conservé, < 500 ms côté serveur).

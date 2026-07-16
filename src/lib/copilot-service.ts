@@ -165,3 +165,27 @@ export function buildReduceSummaryPrompt(partials: string, name: string | null, 
     `${task} N'ajoute aucune information qui n'y figure pas :\n"""\n${partials}\n"""`
   )
 }
+
+// --- Reformulation (16.1) : réécrit un passage SÉLECTIONNÉ, sans en changer le sens ---------
+// Assistance à la rédaction (FR-7). La sortie REMPLACE la sélection dans l'éditeur → le modèle
+// ne doit renvoyer QUE le texte réécrit (aucun préambule, guillemet ni commentaire), sinon on
+// insérerait du parasite. Zéro invention : même sens, même langue, même mise en forme Markdown.
+export type RephraseMode = 'clarify' | 'shorten' | 'tone'
+
+const REPHRASE_TASK: Record<RephraseMode, string> = {
+  clarify: 'en le rendant plus clair et plus facile à lire (phrases simples et directes)',
+  shorten: "en le rendant plus court et plus concis, sans perdre l'information importante",
+  tone: 'en adoptant un ton plus neutre et professionnel',
+}
+
+export function buildRephrasePrompt(text: string, mode: RephraseMode): string {
+  return (
+    "Tu es Doku-San, l'assistant d'écriture local de l'éditeur Doku. Reformule le passage " +
+    `ci-dessous ${REPHRASE_TASK[mode]}.\n` +
+    'Règles STRICTES :\n' +
+    "- Garde exactement le même sens ; n'ajoute aucune information nouvelle.\n" +
+    "- Conserve la langue d'origine et la mise en forme Markdown (titres, listes, gras, liens, code).\n" +
+    '- Réponds UNIQUEMENT avec le texte reformulé — sans préambule, sans guillemets, sans commentaire.\n' +
+    `\nPassage :\n"""\n${text}\n"""`
+  )
+}

@@ -98,6 +98,11 @@ export const app = $state({
 // Accès non réactif à la vue CM6 courante (scroll TOC, sauvegarde…)
 export const editorRef: { view: EditorView | null } = { view: null }
 
+// Sélection courante de l'éditeur (16.1) — publiée par DocumentView à chaque changement de
+// sélection. Le copilote s'en sert pour proposer « Reformuler » : la barre d'action n'apparaît
+// que quand `text` est non vide. Réactif ($state, même motif que `app`).
+export const editorSel = $state({ from: 0, to: 0, text: '' })
+
 const SETTINGS_KEY = 'doku-settings'
 
 // Préférences persistées (thème, état sidebar) — localStorage, survit aux
