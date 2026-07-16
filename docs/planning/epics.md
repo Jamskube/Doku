@@ -4,7 +4,7 @@ _Source PRD : docs/planning/PRD.md (v1) + docs/planning/PRD-v1.5.md · Architect
 
 Backlog **v1** (Epics 1-8, jalons M1-M4) : ✅ **livré, feature-complete** (ledger 35/35). Cap P0 respecté : 10/36 (28 %).
 Backlog **v1.5** (Epics 9-12, source PRD-v1.5) : ✅ **livré, feature-complete** (ledger 46/46). Cap P0 : 3/11 (27 %).
-Backlog **v2** (Epics 13-16, source PRD-v2 — copilote IA local) : ⬜ à faire. Cap P0 : **6/12 (50 %)** — dérogation assumée au seuil 40 % : la fondation (sidecar + client + panneau) est de l'infra **irréductiblement P0** (rien ne fonctionne sans elle), voir note Epic 13.
+Backlog **v2** (Epics 13-16, source PRD-v2 — copilote IA local) : 🟡 **Epic 13 livrée** (ledger 50/50, fondation copilote) ; Epics 14-16 à faire (**8 stories**). Cap P0 : **7/13 (54 %)** — dérogation assumée au seuil 40 % : la fondation (sidecar + client + panneau) est de l'infra **irréductiblement P0** (rien ne fonctionne sans elle), voir note Epic 13.
 Légende état : ✅ fait · 🟡 amorcé (socle en place, à finir/tester) · ⬜ à faire.
 
 ---
@@ -212,8 +212,8 @@ _Source : docs/planning/PRD-v2.md · Architecture : docs/planning/architecture-v
 
 **Goal** : Doku embarque et pilote **son propre** moteur d'inférence local, et l'utilisateur gère ses modèles (pull / choisir / purger).
 **Spans PRD** : PRD-v2 FR-1 (P0), FR-2 (P0) ; ADR-0006 (moteur), ADR-0012 (cycle de vie).
-**État** : ⬜ à faire.
-**Note P0** : les 4 stories sont P0 — c'est l'infrastructure dont **tout** le copilote dépend (pas de moteur → aucun usage). C'est la source de la dérogation au seuil P0 40 %.
+**État** : ✅ **livrée** (13.1-13.4 validées natif, Sprint 11) — génération ARM64 ~120 tok/s CPU, Job Object crash-kill, hors-ligne, gestion des modèles. **13.5** (packaging release) ajoutée au Sprint 12.
+**Note P0** : les 5 stories sont P0 — c'est l'infrastructure dont **tout** le copilote dépend (pas de moteur → aucun usage). C'est la source de la dérogation au seuil P0 40 %.
 
 ### Stories
 | # | Title | Size | Priority | Acceptance |
@@ -222,6 +222,7 @@ _Source : docs/planning/PRD-v2.md · Architecture : docs/planning/architecture-v
 | 13.2 | SidecarManager (port éphémère, readiness-poll, kill, pidfile) | M | P0 | Given le copilote activé, when Doku démarre le sidecar, then port libre choisi + **readiness-poll** avant le 1er appel ; **kill** à la fermeture ; **pidfile** → sweep d'un orphelin au démarrage ; port occupé/échec → message clair, app intacte (ADR-0012) |
 | 13.3 | OllamaClient (generate stream, tags, pull, delete, annulation) | M | P0 | Given le sidecar prêt, when j'appelle le client, then `generate` streame (NDJSON) et **s'annule < 500 ms** (AbortController) ; `tags`/`pull`(progress)/`delete` exposés ; **0 requête non-`localhost`** à l'inférence |
 | 13.4 | Gestion des modèles (liste, pull+progress, actif persistant, taille/purge) | M | P0 | Given le panneau modèles, when je l'ouvre, then modèles installés (nom, taille) + **actif** ; **pull** avec progression (action explicite) ; choix actif **persistant** (settings) ; **purge** confirmée (`%APPDATA%\Doku\models`) ; 0 modèle → onboarding vers un pull |
+| 13.5 | Packaging release du sidecar (build ARM64 + install) | S | P0 | Given `npm run tauri build` puis l'installateur exécuté, when je lance **Doku installé** (hors dev), then le copilote génère — `lib/ollama` embarqué via `bundle.resources` et résolu par `resource_dir()` (chemin release **jamais prouvé**, S11) ; and un double-clic sur un `.pdf` l'ouvre en lecture seule (association `.pdf` validée « sur confiance » en S10). Ajoutée hors décomposition initiale (Sprint 12) pour solder les 2 dettes « à confirmer au prochain build+install » |
 
 ---
 

@@ -31,7 +31,7 @@
 | Action | Priority |
 |--------|----------|
 | **Tout spike qui lance un process inclut « l'arbre meurt » dans son done** (pas seulement le parent) — corollaire de l'action S10 sur les critères de spike, qui s'était limitée au rendu graphique. Généraliser : un spike doit énumérer ce qu'il **ne** couvre **pas**. | High |
-| **Recalibrer la vélocité** — ✅ **décidé en rétro (2026-07-16)** : les sprints passent à **1 semaine / 6-8 stories** (v2 = ~12 stories restantes sur Epics 14-16 → 2 sprints, pas 3). Le sprint reste une unité de cohérence livrable, pas un calendrier. Applicable dès le Sprint 12. | High |
+| **Recalibrer la vélocité** — ✅ **décidé en rétro (2026-07-16)** : les sprints passent à **1 semaine / 6-8 stories**. Le sprint reste une unité de cohérence livrable, pas un calendrier. Applicable dès le Sprint 12. _(Rectificatif à la planif du S12 : il reste **8** stories v2 — Epic 14 : 3 · Epic 15 : 3 · Epic 16 : 2 — et non ~12 comme écrit ici initialement ; les 12 étaient le total des Epics 13-16, Epic 13 incluse. Soit **2 sprints** pour boucler v2.)_ | High |
 | **Faire le `tauri build` release au prochain sprint** et solder les 2 dettes d'un coup : packaging `lib/ollama` (`resource_dir`) + association `.pdf` (S10). Ne pas laisser une 3e dette « à confirmer à l'install » s'accumuler. | High |
 | **Amender ADR-0004** (ou noter la frontière dans ADR-0012) : « Rust minimal » = plomberie hôte (fenêtre, process, OS), la logique métier reste en TS. `sidecar.rs` est conforme — l'écrire noir sur blanc avant qu'un futur ajout Rust s'en réclame abusivement. | Medium |
 | **Avant de diagnostiquer un comportement natif inchangé, vérifier que le binaire a recompilé** (`Compiling` vs `Finished 0.49s`). | Medium |
