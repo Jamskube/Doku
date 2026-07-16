@@ -16,7 +16,7 @@
 | # | Story | Size | Status | Notes |
 |---|-------|------|--------|-------|
 | 14.0 | Coquille panneau droit (`aside`) + chorégraphie chrome + relocalisation UI modèles (13.4) | M | ✅ Done | Validé natif 2026-07-16. `CopilotPanel.svelte` : aside 344px « Doku-San », bouton collapse, chrome migré (contrôles fenêtre titlebar↔panneau), coin doc `with-copilot`, `doku-panel-in`. Modèles relocalisés (vue `layers`) ; coquille chat statique (streaming → 14.1). Boot-safety : aucun spawn Ollama au démarrage. critic (HIGH corrigé) + code-reviewer Approve. |
-| 14.1 | Panneau copilote (chat, streaming, annuler, rendu MD sanitizé) | M | TODO | **Chat** dans la coquille 14.0. Consomme `copilot.svelte.ts` (13.4). Streaming token-par-token + **stop**, rendu MD via `renderMarkdown` + `sanitizeHtml` (ADR-0009, réutilisé export), bouton copier, saisie « imbriquée ». États onboarding/empty/streaming/conversation/error. Puces `+ Contexte` = **coquille désactivée** (multi-docs → Epic 15). **Supprime `OllamaSpike.svelte`**. |
+| 14.1 | Panneau copilote (chat, streaming, annuler, rendu MD sanitizé) | M | ✅ Done | Validé natif 2026-07-16. Chat streamé (`chat()` /api/chat), stop < 500 ms, rendu MD via **`sanitizeChatHtml` allowlist** (0 réseau, contenu LLM non fiable en webview principale) + CSP durcie, copiable, 3 actions câblées. `OllamaSpike` supprimé. critic (Block → 3 HIGH réseau corrigés) + code-reviewer Approve. |
 | 14.2 | Résumer le document (md/txt/html/PDF, map-reduce si > contexte) | M | TODO | **Risque n°1.** Segmentation map-reduce obligatoire — le PRD interdit la **troncature silencieuse**. PDF scanné sans texte → message clair. |
 | 14.3 | Q&A sur le document courant (ancrée, « je ne trouve pas ») | S | TODO | Réponse ancrée sur le doc ; info absente → refus explicite, pas d'invention. 0 requête réseau. |
 | 13.5 | Packaging release du sidecar (build ARM64 + install) | S | TODO | **Solde 2 dettes** : `resource_dir()`/`bundle.resources` jamais prouvés en release (S11) + association `.pdf` validée « sur confiance » (S10). |
@@ -51,3 +51,6 @@ _None_
 
 ### 2026-07-16 — 14.0 validée natif (checkpoint 20 % franchi)
 Coquille du panneau copilote droit livrée et validée en natif : ouverture/fermeture animée, chrome migré proprement (close-guard intact), coin du doc, gestion des modèles relocalisée et fonctionnelle, boot sans spawn Ollama. Ledger **51/57**. La fondation UI est prête → 14.1 (chat streaming) remplit la coquille et supprime `OllamaSpike.svelte`.
+
+### 2026-07-16 — 14.1 validée natif (checkpoint 30 % franchi)
+Le **chat copilote streaming** est vivant : réponse token-par-token, stop < 500 ms, rendu Markdown à la fin, actions rapides, non perturbé par un changement d'onglet. `OllamaSpike` supprimé. Ledger **52/57**. Le durcissement sécurité est le fait marquant : le critic a renvoyé **Block** (contenu LLM rendu dans la webview principale sans `default-src` = 3 vecteurs réseau), corrigé par une **allowlist DOMPurify** + CSP durcie + `/api/chat`, avec un test de non-régression réseau. Reste au sprint : 14.2 (résumer map-reduce), 14.3 (Q&A ancrée), 13.5 (packaging release), 16.1/16.2 (stretch).
