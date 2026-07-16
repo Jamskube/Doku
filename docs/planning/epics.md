@@ -263,13 +263,23 @@ _Source : docs/planning/PRD-v2.md · Architecture : docs/planning/architecture-v
 
 **Goal** : améliorer le texte en place (reformuler, corriger) sans quitter la note.
 **Spans PRD** : PRD-v2 FR-7 (P1), FR-8 (P1), NFR Fiabilité (zéro perte, annulable).
-**État** : ⬜ à faire.
+**État** : 🟨 16.1 ✅ (2026-07-16, natif — proposition/accepter/refuser, garde zéro-perte onglet+région) ; reste 16.2.
 
 ### Stories
 | # | Title | Size | Priority | Acceptance |
 |---|---|---|---|---|
 | 16.1 | Reformuler une sélection | M | P1 | Given du texte sélectionné en édition, when « Reformuler » (variantes clarifier / raccourcir / ton), then proposition ; **accepter** → remplace (ou insère après) ; **refuser** → texte d'origine **intact** (zéro perte) |
 | 16.2 | Corriger orthographe & grammaire | S | P1 | Given un texte (sélection ou doc), when « Corriger », then version corrigée **sans changer le sens ni le Markdown** ; appliquée → relisible/**annulable** (Ctrl+Z restaure) |
+
+---
+
+## Epic 17 : Backend d'inférence NPU (perf) — v2.2 (piste)
+
+**Goal** : exploiter le NPU Hexagon du Snapdragon X (aujourd'hui inutilisé, Ollama = CPU-only) pour effondrer le **prefill** (~18× sur NPU : les ~45 s avant le 1er token du chat/Q&A/résumé → ~1-2 s). **Attention** : en **décodage**, le NPU est *plus lent* que le CPU en Q4_0 (benchmark : NPU 19,5 t/s < CPU Q4_0 36,3 t/s) → le gain NPU est **étroit (prefill seul)**.
+**Spans PRD** : NFR Performance ; **NFR Confidentialité (0 réseau) = contrainte dure**.
+**État** : ⬜ piste à prototyper (voir mémoire `piste-backend-npu`), **urgence rétrogradée**. Décidé le 2026-07-16 : d'abord épuiser le levier **CPU + Q4_0 + vrai 4B** ; NPU seulement si le prefill des longs docs reste bloquant. **Après** la v2.0.
+**Direction** : **Microsoft Foundry Local** (ONNX Runtime + execution provider QNN), lancé en **sidecar** comme ollama.exe, **API HTTP compatible OpenAI** (`/v1/chat/completions`), 100 % local, licence propre. Modèle : vrai 4B texte FR (Qwen3-4B / Ministral-3). **Exclus : OmniNeural-4B / Nexa** (anglais + activation en ligne obligatoire = casse le 0-réseau).
+**Coût pressenti** : nouveau sidecar à empaqueter + adaptateur client (`ollama.ts` parle l'API native Ollama → écrire un client OpenAI) + gestion modèles ONNX + **re-preuve du 0-réseau** + re-packaging ARM64. Prototyper/mesurer sur ce Snapdragon X **Plus** avant de s'engager ; viser une **abstraction** de la couche d'inférence (Ollama ⇄ Foundry) plutôt qu'un remplacement sec.
 
 ---
 
