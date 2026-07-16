@@ -4,6 +4,7 @@
   import { closeWindow, minimizeWindow, toggleMaximizeWindow } from '../lib/tauri'
   import { formatBytes } from '../lib/ollama'
   import { cancelPull, copilot, newChat, pullModel, refreshModels, removeModel, sendChat, setActiveModel, stopChat, summarizeDoc } from '../lib/copilot.svelte'
+  import { MAX_DOC_CHARS } from '../lib/copilot-service'
   import { renderChatMarkdown } from '../lib/export/render-md'
 
   const SUGGESTIONS = ['gemma2:2b', 'phi3:mini', 'codellama:7b']
@@ -46,6 +47,13 @@
   let promptEl = $state<HTMLTextAreaElement | null>(null)
   let scroller = $state<HTMLElement | null>(null)
   let atBottom = true // ne pas voler le scroll si l'utilisateur est remonté relire
+
+  // Doc courant tronqué en Q&A (14.3) : signal DÉTERMINISTE à l'utilisateur (ne dépend pas du
+  // modèle) — un « je ne trouve pas » peut alors venir de la partie non lue, pas d'une absence.
+  const docTruncated = $derived.by(() => {
+    const t = activeTab()
+    return !!t && t.kind !== 'pdf' && t.content.length > MAX_DOC_CHARS
+  })
 
   // Envoie le brouillon ; capture un SNAPSHOT du doc courant (le contexte ne change pas si
   // l'utilisateur change d'onglet pendant la génération).
@@ -330,6 +338,11 @@
             <span class="cop-ctx-chip">
               <span class="msr" style="font-size:14px;color:var(--ink-4)">description</span>{activeTab()?.name ?? 'aucun document'}
             </span>
+            {#if docTruncated}
+              <span class="cop-ctx-warn" title="Document trop long : seul son début est lu par le copilote. Une réponse « je ne trouve pas » peut concerner la partie non lue.">
+                <span class="msr" style="font-size:13px">warning</span>lecture partielle
+              </span>
+            {/if}
             <button class="cop-ctx-add" disabled title="Contexte multi-documents — à venir">
               <span class="msr" style="font-size:14px">add</span>Contexte
             </button>
@@ -582,6 +595,11 @@
     display: inline-flex; align-items: center; gap: 3px; height: 24px; padding: 0 9px;
     background: transparent; border: 1px dashed var(--line-3); border-radius: 8px;
     font-family: var(--font-sans); font-size: 11.5px; color: var(--ink-4); cursor: default; opacity: 0.6;
+  }
+  .cop-ctx-warn {
+    display: inline-flex; align-items: center; gap: 4px; height: 24px; padding: 0 8px;
+    background: rgba(180, 130, 60, 0.12); border: 1px solid rgba(180, 130, 60, 0.3); border-radius: 8px;
+    font-size: 11px; color: var(--warn, #9a6a2c); white-space: nowrap; cursor: help;
   }
   .cop-newchat { margin-left: auto; display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; border: 0; border-radius: 6px; background: transparent; color: var(--ink-4); cursor: pointer; }
   .cop-newchat:hover { background: var(--cream-content); color: var(--ink); }

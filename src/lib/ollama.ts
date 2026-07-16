@@ -133,6 +133,7 @@ export async function chat(
   messages: { role: string; content: string }[],
   onToken: (t: string) => void,
   signal?: AbortSignal,
+  options?: Record<string, unknown>,
 ): Promise<string> {
   let out = ''
   let reader: ReadableStreamDefaultReader<Uint8Array> | undefined
@@ -140,7 +141,7 @@ export async function chat(
     const r = await api(port, '/api/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model, messages, stream: true }),
+      body: JSON.stringify({ model, messages, stream: true, options }),
       signal,
     })
     if (!r.ok || !r.body) throw new Error(`chat ${r.status}`)

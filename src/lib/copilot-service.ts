@@ -29,13 +29,24 @@ export function buildDocContext(name: string | null, content: string, kind: DocK
   if (kind === 'pdf') return `Document « ${title} » (PDF — texte non extractible pour l'instant).`
   const { text, truncated } = truncateDoc(content)
   if (!text.trim()) return `Document « ${title} » (vide).`
-  return `Document « ${title} » :\n"""\n${truncated ? text + '\n[… document tronqué …]' : text}\n"""`
+  const body = `Document « ${title} » :\n"""\n${text}\n"""`
+  // Troncature signalée EXPLICITEMENT au modèle (pas silencieuse, FR-4) : un « je ne trouve pas »
+  // peut alors venir du fait qu'on n'a lu qu'une partie, pas d'une absence réelle.
+  return truncated
+    ? `${body}\n(Ce document est long : seul son début est fourni ci-dessus ; la suite n'a pas été lue.)`
+    : body
 }
 
+// Phrase de refus EXACTE quand l'info est absente du document (ancrage 14.3). Donnée telle quelle
+// au modèle pour maximiser l'obéissance d'un petit modèle, et testée en couche pure.
+export const REFUSAL_PHRASE = 'Je ne trouve pas cette information dans ce document.'
+
 const SYSTEM_BASE =
-  "Tu es Doku-San, l'assistant local intégré à l'éditeur Doku. Réponds en français, de manière " +
-  'concise et fidèle au document fourni. Si l\'information demandée n\'est pas dans le document, ' +
-  'dis-le clairement plutôt que d\'inventer.'
+  "Tu es Doku-San, l'assistant local intégré à l'éditeur Doku. Réponds toujours en français, de " +
+  'manière concise. Tes réponses se fondent UNIQUEMENT sur le document fourni ci-dessous, jamais ' +
+  'sur des connaissances extérieures. Si la réponse ne figure pas dans le document, réponds ' +
+  `exactement « ${REFUSAL_PHRASE} » sans rien inventer ni compléter. Si le document est signalé ` +
+  "comme tronqué, précise que tu n'en as lu qu'une partie."
 
 // CopilotService : messages /api/chat (system = cadre + contexte doc, puis l'historique, puis
 // la question). Les rôles évitent la dérive de complétion d'un prompt concaténé single-turn.
@@ -64,7 +75,9 @@ export type SummaryMode = 'summary' | 'keypoints'
 // troncature silencieuse que FR-4 proscrit, juste déplacée d'une couche. `generate` la relaie.
 // On la choisit GÉNÉREUSE : une note normale doit tenir en UNE passe (rapide) ; le map-reduce,
 // coûteux sur CPU (N appels séquentiels), ne se déclenche que pour les documents vraiment longs.
-export const SUMMARY_NUM_CTX = 16384
+// Partagée par le chat (14.3) : le doc + l'ancrage restent en contexte sur plusieurs tours, et
+// chat/résumé utilisent la même fenêtre → pas de rechargement de modèle en va-et-vient.
+export const COPILOT_NUM_CTX = 16384
 // Taille max d'un segment. Le budget num_ctx est en TOKENS mais on segmente en CARACTÈRES. Pire
 // cas (CJK) ≈ 1 token/caractère → on garde SEGMENT_CHARS ≤ num_ctx − marge (prompt + sortie),
 // donc un segment ne peut jamais déborder num_ctx quel que soit le script. Le latin (~0,25

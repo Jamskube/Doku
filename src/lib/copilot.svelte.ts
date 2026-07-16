@@ -9,9 +9,9 @@ import {
   buildReduceSummaryPrompt,
   buildSegmentSummaryPrompt,
   buildWholeSummaryPrompt,
+  COPILOT_NUM_CTX,
   segmentDoc,
   SUMMARY_MAP_MAX_TOKENS,
-  SUMMARY_NUM_CTX,
   type ChatTurn,
   type SummaryMode,
 } from './copilot-service'
@@ -193,9 +193,11 @@ export async function sendChat(
       return
     }
     const messages = buildChatMessages({ docName: doc.name, docText: doc.text, kind: doc.kind, history, question: q })
+    // num_ctx fixé (14.3) : le doc + la consigne d'ancrage doivent rester en contexte sur plusieurs
+    // tours ; au défaut Ollama (4096) l'historique les évincerait par troncature gauche silencieuse.
     // Mutation via l'index (élément proxifié du $state array) → réactif ; muter la ref locale
     // poussée ne le serait PAS (piège $state profond de Svelte 5).
-    await chat(p, app.activeModel, messages, (t) => (copilot.messages[idx].content += t), signal)
+    await chat(p, app.activeModel, messages, (t) => (copilot.messages[idx].content += t), signal, { num_ctx: COPILOT_NUM_CTX })
   } catch (e) {
     console.error('[copilot] chat', e)
     copilot.messages[idx].content = copilot.messages[idx].content || 'La génération a échoué. Vérifiez que le moteur est prêt, puis réessayez.'
@@ -259,8 +261,8 @@ export async function summarizeDoc(
   const idx = copilot.messages.length - 1
   // `opts` = synthèse finale (sortie libre pour un résumé complet). `mapOpts` = phases
   // intermédiaires (map + réductions non finales) : sortie bornée → plus rapide et pas de débordement.
-  const opts = { num_ctx: SUMMARY_NUM_CTX }
-  const mapOpts = { num_ctx: SUMMARY_NUM_CTX, num_predict: SUMMARY_MAP_MAX_TOKENS }
+  const opts = { num_ctx: COPILOT_NUM_CTX }
+  const mapOpts = { num_ctx: COPILOT_NUM_CTX, num_predict: SUMMARY_MAP_MAX_TOKENS }
   const setStatus = (s: string | undefined) => {
     const m = copilot.messages[idx]
     if (m) m.status = s

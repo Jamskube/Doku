@@ -8,6 +8,7 @@ import {
   segmentDoc,
   truncateDoc,
   MAX_DOC_CHARS,
+  REFUSAL_PHRASE,
 } from './copilot-service'
 
 describe('truncateDoc', () => {
@@ -35,10 +36,10 @@ describe('buildDocContext', () => {
   it('signale un document vide', () => {
     expect(buildDocContext('vide.txt', '   ', 'txt')).toMatch(/vide/i)
   })
-  it('ajoute un marqueur de troncature sur un long doc', () => {
+  it('signale explicitement la troncature sur un long doc (pas silencieux)', () => {
     const long = 'x'.repeat(MAX_DOC_CHARS + 500)
     const ctx = buildDocContext('gros.md', long, 'md')
-    expect(ctx).toContain('[… document tronqué …]')
+    expect(ctx).toMatch(/seul son début est fourni|n'a pas été lue/i)
   })
   it('gère un nom absent', () => {
     expect(buildDocContext(null, 'a', 'md')).toContain('sans titre')
@@ -67,9 +68,11 @@ describe('buildChatMessages', () => {
     expect(msgs[2].content).toBe('Bonjour')
   })
 
-  it('demande de ne pas inventer hors du document (ancrage)', () => {
+  it('ancre la réponse sur le seul document et donne la phrase de refus exacte (14.3)', () => {
     const msgs = buildChatMessages({ ...base, history: [], question: 'x' })
-    expect(msgs[0].content).toMatch(/plut[oô]t que d'inventer/i)
+    expect(msgs[0].content).toMatch(/uniquement/i)
+    expect(msgs[0].content).toContain(REFUSAL_PHRASE)
+    expect(msgs[0].content).toMatch(/jamais sur des connaissances extérieures/i)
   })
 })
 

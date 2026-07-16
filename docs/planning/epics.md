@@ -248,6 +248,8 @@ _Source : docs/planning/PRD-v2.md · Architecture : docs/planning/architecture-v
 **Spans PRD** : PRD-v2 FR-6 (P1). **Le plus gros chantier du cap** (risque n°1, isolé en v2.1).
 **État** : ⬜ à faire.
 
+> **Décision 2026-07-16** : la Q&A « lit tout » sur un **document unique plus grand que la fenêtre de contexte** est déléguée ici (même mécanique chunk+embeddings+top-k que le dossier), plutôt que d'agrandir la fenêtre (repli qui plafonne au max du modèle et ralentit chaque question sur CPU). En v2.0, 14.3 lit le doc jusqu'au seuil et **signale honnêtement** la lecture partielle (badge). → prévoir en 15.3 un mode « document courant » en plus du mode « dossier ».
+
 ### Stories
 | # | Title | Size | Priority | Acceptance |
 |---|---|---|---|---|
