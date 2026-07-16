@@ -1,15 +1,15 @@
 # Next session pointer
-_Updated: 2026-07-14 16:55_
+_Updated: 2026-07-16 12:20_
 
 ## Where I left off
-**Cap v2 (copilote IA local) — Epic 13 codé 4/4, il reste UNE validation native.** Le moteur Ollama en sidecar est complet et robuste (13.1-13.3 validés natif : génération ARM64 ~120 tok/s, Job Object crash-kill, offline `OLLAMA_NO_CLOUD`, client generate/pull/delete + annulation). **13.4 (vue sidebar « Copilote » : gestion des modèles — liste/tailles, pull+progression+annuler, purge, modèle actif persistant) est CODE-COMPLETE + revu (critic + code-reviewer Approve, Major `ensureReady` corrigé) mais PAS encore validé natif** → ledger **49/50**. Amont v2 écrit : PRD-v2, architecture-v2-copilot, ADR-0012 (amendé), epics 13-16.
+**Cap v2 (copilote IA local) — v2.0 aux deux tiers.** Sprint 11 clos (Epic 13, moteur), rétro faite, **vélocité recalibrée** (sprints 1 semaine / 6-8 stories). **Sprint 12 en cours** (v2.0 : panneau + usages doc) : la maquette hifi Claude Design est vendorée (`docs/design/w2-copilot/`), le copilote est un **panneau `aside` droit « Doku-San »**. **14.0** (coquille + chrome + relocalisation des modèles) et **14.1** (chat streaming, rendu Markdown en allowlist stricte = 0 réseau, annulable) sont **livrées et validées natif**. Ledger **52/57**.
 
 ## Open work
-- Branch: `main` — **propre** (poussé, `05a859a`)
+- Branch: `main` — **propre** (poussé, `02a1fef`)
 - Open PRs: aucune
-- Sprint actif: **Sprint 11** (Epic 13), reste la **validation native de 13.4**
-- Prérequis machine : `src-tauri/binaries/ollama-aarch64-pc-windows-msvc.exe` + `lib/ollama/` en place (non commités)
-- Dette : (1) **valider 13.4 en natif** (ouvrir la vue Copilote → liste modèles, pull, purge, actif persistant) → flipper ledger 50/50 ; (2) packaging release (`resource_dir`) au prochain `tauri build` ; (3) pare-feu `ollama.exe` = garantie dure 8.3 ; (4) **supprimer `OllamaSpike.svelte`** (widget DEV) en 14.1 ; (5) réconcilier `app.activeModel` persisté vs modèles présents (pour 14.1 `generate`).
+- Sprint actif: **Sprint 12** (v2.0), reste **14.2 / 14.3 / 13.5** (cœur) + **16.1 / 16.2** (stretch)
+- Prérequis machine : `src-tauri/binaries/ollama-*.exe` + `lib/ollama/` en place (non commités)
+- Dette : (1) **13.5** packaging release — `resource_dir()`/`bundle.resources` jamais prouvés en install + association `.pdf` (S10) → **au prochain `tauri build`** ; (2) pare-feu `ollama.exe` = garantie dure 8.3 ; (3) extraction texte PDF (pdf.js `getTextContent`) pour Q&A/résumé sur PDF (14.2/14.3) ; (4) contexte multi-docs (`+ Contexte`) = coquille désactivée → Epic 15 (RAG) ; (5) débit `t/s` de la carte modèle actif = à mesurer.
 
 ## Next concrete step
-**Valider 13.4 en natif** (vue Copilote dans `tauri dev`) → flipper le ledger (**50/50, Epic 13 clos = fondation copilote complète**). Puis **`/epct 14.1`** — panneau copilote (chat streaming + annuler, au-dessus de la section Modèles dans la même vue), première story de l'Epic 14 (v2.0 : chat + résumer + Q&A doc), qui **remplace et supprime** `OllamaSpike.svelte`.
+**`/epct 14.2`** — « Résumer le document » avec **segmentation map-reduce** des longs docs (pas de troncature silencieuse ; PDF scanné sans texte → message clair). Réutilise `generate()` (single-shot) + `copilot-service.ts`. Alternatives : `/epct 13.5` (packaging release, indépendant, solde 2 dettes) ou `/epct 14.3` (Q&A ancrée, refus d'inventer).
