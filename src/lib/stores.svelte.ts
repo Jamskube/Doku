@@ -10,7 +10,11 @@ import { buildSearchIndex, isTauri, listSnapshots, purgeAllSnapshots, readSnapsh
 import { normalizeTarget, wikilinkCandidates, wikilinkFileName } from './wikilink'
 
 export type DocKind = 'md' | 'html' | 'txt' | 'pdf'
-export type SidebarView = 'files' | 'plan' | 'history' | 'search' | 'copilot'
+export type SidebarView = 'files' | 'plan' | 'history' | 'search'
+// Vue interne du panneau copilote droit (14.0). Transitoire : boot toujours en
+// 'chat' (coquille statique, ne démarre PAS le moteur) ; 'models' déclenche
+// ensureReady à l'ouverture (intention explicite) — évite un spawn Ollama au boot.
+export type CopilotView = 'chat' | 'models'
 export type ColumnWidth = 'narrow' | 'wide' | 'full'
 
 // Largeur de la colonne de lecture (variable CSS --doc-width, consommée par
@@ -56,6 +60,10 @@ export const app = $state({
   columnWidth: 'narrow' as ColumnWidth,
   // Modèle IA actif (copilote, 13.4) ; persisté (settings). '' = aucun choisi.
   activeModel: '',
+  // Panneau copilote droit (14.0) : ouvert/fermé, persisté (settings) comme sidebarOpen.
+  copilotOpen: false,
+  // Vue interne du panneau (transitoire, non persistée) : boot toujours 'chat'.
+  copilotView: 'chat' as CopilotView,
   sourceMode: false,
   // Mode focus (F9) : masque tout le chrome ; transitoire (non persisté).
   focus: false,
@@ -101,13 +109,14 @@ export function loadSettings() {
       const s = JSON.parse(raw)
       if (s.theme === 'dark' || s.theme === 'light') app.theme = s.theme
       if (typeof s.sidebarOpen === 'boolean') app.sidebarOpen = s.sidebarOpen
-      if (s.sidebarView === 'files' || s.sidebarView === 'plan' || s.sidebarView === 'history' || s.sidebarView === 'search' || s.sidebarView === 'copilot') {
+      if (s.sidebarView === 'files' || s.sidebarView === 'plan' || s.sidebarView === 'history' || s.sidebarView === 'search') {
         app.sidebarView = s.sidebarView
       }
       if (s.columnWidth === 'narrow' || s.columnWidth === 'wide' || s.columnWidth === 'full') {
         app.columnWidth = s.columnWidth
       }
       if (typeof s.activeModel === 'string') app.activeModel = s.activeModel
+      if (typeof s.copilotOpen === 'boolean') app.copilotOpen = s.copilotOpen
     }
   } catch {
     // settings corrompus/indisponibles : valeurs par défaut
@@ -126,6 +135,7 @@ export function saveSettings() {
         sidebarView: app.sidebarView,
         columnWidth: app.columnWidth,
         activeModel: app.activeModel,
+        copilotOpen: app.copilotOpen,
       }),
     )
   } catch {

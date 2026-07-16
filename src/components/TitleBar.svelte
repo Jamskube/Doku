@@ -72,16 +72,19 @@
     <button class="ctrl" title="Thème sombre" aria-label="Thème sombre" aria-pressed={app.theme === 'dark'} onclick={toggleTheme}>
       <span class="msr" style="font-size:18px">{app.theme === 'dark' ? 'light_mode' : 'dark_mode'}</span>
     </button>
-    <div class="sep"></div>
-    <button class="ctrl wide" title="Réduire" aria-label="Réduire" onclick={minimizeWindow}>
-      <span class="msr" style="font-size:18px">remove</span>
-    </button>
-    <button class="ctrl wide" title="Agrandir" aria-label="Agrandir" onclick={toggleMaximizeWindow}>
-      <span class="msr" style="font-size:15px">crop_square</span>
-    </button>
-    <button class="ctrl wide close-win" title="Fermer" aria-label="Fermer" onclick={closeWindow}>
-      <span class="msr" style="font-size:18px">close</span>
-    </button>
+    {#if !app.copilotOpen}
+      <!-- Panneau copilote ouvert → ces contrôles migrent dans son en-tête (maquette w2). -->
+      <div class="sep"></div>
+      <button class="ctrl wide" title="Réduire" aria-label="Réduire" onclick={minimizeWindow}>
+        <span class="msr" style="font-size:18px">remove</span>
+      </button>
+      <button class="ctrl wide" title="Agrandir" aria-label="Agrandir" onclick={toggleMaximizeWindow}>
+        <span class="msr" style="font-size:15px">crop_square</span>
+      </button>
+      <button class="ctrl wide close-win" title="Fermer" aria-label="Fermer" onclick={closeWindow}>
+        <span class="msr" style="font-size:18px">close</span>
+      </button>
+    {/if}
   </div>
 </div>
 
