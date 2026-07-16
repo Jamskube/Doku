@@ -49,12 +49,15 @@ describe('buildDocContext', () => {
 describe('buildChatMessages', () => {
   const base = { docName: 'notes.md', docText: 'Le ciel est bleu.', kind: 'md' as const }
 
-  it('place un system (cadre + contexte doc), puis la question', () => {
+  it('place un system (cadre + contexte doc), puis la question + un rappel d\'ancrage', () => {
     const msgs = buildChatMessages({ ...base, history: [], question: 'Quelle couleur ?' })
     expect(msgs[0].role).toBe('system')
     expect(msgs[0].content).toContain('Doku-San')
     expect(msgs[0].content).toContain('Le ciel est bleu.')
-    expect(msgs[msgs.length - 1]).toEqual({ role: 'user', content: 'Quelle couleur ?' })
+    const last = msgs[msgs.length - 1]
+    expect(last.role).toBe('user')
+    expect(last.content).toContain('Quelle couleur ?')
+    expect(last.content).toMatch(/uniquement d'après le document/i) // rappel collé à la question
   })
 
   it('intercale l\'historique entre le system et la question, dans l\'ordre', () => {

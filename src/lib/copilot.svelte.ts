@@ -10,6 +10,7 @@ import {
   buildSegmentSummaryPrompt,
   buildWholeSummaryPrompt,
   COPILOT_NUM_CTX,
+  COPILOT_TEMPERATURE,
   segmentDoc,
   SUMMARY_MAP_MAX_TOKENS,
   type ChatTurn,
@@ -197,7 +198,7 @@ export async function sendChat(
     // tours ; au défaut Ollama (4096) l'historique les évincerait par troncature gauche silencieuse.
     // Mutation via l'index (élément proxifié du $state array) → réactif ; muter la ref locale
     // poussée ne le serait PAS (piège $state profond de Svelte 5).
-    await chat(p, app.activeModel, messages, (t) => (copilot.messages[idx].content += t), signal, { num_ctx: COPILOT_NUM_CTX })
+    await chat(p, app.activeModel, messages, (t) => (copilot.messages[idx].content += t), signal, { num_ctx: COPILOT_NUM_CTX, temperature: COPILOT_TEMPERATURE })
   } catch (e) {
     console.error('[copilot] chat', e)
     copilot.messages[idx].content = copilot.messages[idx].content || 'La génération a échoué. Vérifiez que le moteur est prêt, puis réessayez.'
@@ -261,8 +262,8 @@ export async function summarizeDoc(
   const idx = copilot.messages.length - 1
   // `opts` = synthèse finale (sortie libre pour un résumé complet). `mapOpts` = phases
   // intermédiaires (map + réductions non finales) : sortie bornée → plus rapide et pas de débordement.
-  const opts = { num_ctx: COPILOT_NUM_CTX }
-  const mapOpts = { num_ctx: COPILOT_NUM_CTX, num_predict: SUMMARY_MAP_MAX_TOKENS }
+  const opts = { num_ctx: COPILOT_NUM_CTX, temperature: COPILOT_TEMPERATURE }
+  const mapOpts = { num_ctx: COPILOT_NUM_CTX, temperature: COPILOT_TEMPERATURE, num_predict: SUMMARY_MAP_MAX_TOKENS }
   const setStatus = (s: string | undefined) => {
     const m = copilot.messages[idx]
     if (m) m.status = s

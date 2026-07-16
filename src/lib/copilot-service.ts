@@ -41,6 +41,18 @@ export function buildDocContext(name: string | null, content: string, kind: DocK
 // au modèle pour maximiser l'obéissance d'un petit modèle, et testée en couche pure.
 export const REFUSAL_PHRASE = 'Je ne trouve pas cette information dans ce document.'
 
+// Rappel d'ancrage COLLÉ à la question (14.3). Un petit modèle attend surtout les tokens proches
+// de la génération → répéter la contrainte ici, en plus du system, réduit nettement la dérive
+// vers ses connaissances internes (ex. répondre « ça prend plusieurs mois » alors que le doc dit
+// « 100 à 160 jours »). Ajouté au message envoyé, PAS à la question affichée à l'utilisateur.
+export const GROUNDING_REMINDER =
+  `(Réponds uniquement d'après le document ci-dessus. N'utilise aucune connaissance extérieure ; ` +
+  `si l'information n'y figure pas, réponds « ${REFUSAL_PHRASE} ».)`
+
+// Température basse pour les usages ancrés (chat/résumé) : le défaut (~0,8) rend le modèle
+// « créatif » et favorise l'hallucination ; ~0,2 le maintient fidèle au texte fourni.
+export const COPILOT_TEMPERATURE = 0.2
+
 const SYSTEM_BASE =
   "Tu es Doku-San, l'assistant local intégré à l'éditeur Doku. Réponds toujours en français, de " +
   'manière concise. Tes réponses se fondent UNIQUEMENT sur le document fourni ci-dessous, jamais ' +
@@ -61,7 +73,7 @@ export function buildChatMessages(p: {
   return [
     { role: 'system', content: system },
     ...p.history.map((t) => ({ role: t.role, content: t.content }) as OllamaMessage),
-    { role: 'user', content: p.question },
+    { role: 'user', content: `${p.question}\n\n${GROUNDING_REMINDER}` },
   ]
 }
 
