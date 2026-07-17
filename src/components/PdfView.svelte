@@ -114,7 +114,7 @@
   .pdf-view :global(canvas.pdf-page) {
     display: block;
     max-width: 100%;
-    box-shadow: 0 1px 6px rgba(var(--ink-rgb), 0.14);
+    box-shadow: 0 1px 6px rgba(var(--shadow-rgb), 0.14);
     border-radius: 2px;
     background: #fff;
   }

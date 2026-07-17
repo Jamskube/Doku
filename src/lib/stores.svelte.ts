@@ -15,10 +15,11 @@ export type SidebarView = 'files' | 'plan' | 'history' | 'search'
 // 'chat' (coquille statique, ne démarre PAS le moteur) ; 'models' déclenche
 // ensureReady à l'ouverture (intention explicite) — évite un spawn Ollama au boot.
 export type CopilotView = 'chat' | 'models'
+export type CopilotProvider = 'ollama' | 'openai'
 export type ColumnWidth = 'narrow' | 'wide' | 'full'
 
 // Largeur de la colonne de lecture (variable CSS --doc-width, consommée par
-// l'éditeur et le doc-head). full = pas de max-width.
+// l'éditeur). full = pas de max-width.
 export const COLUMN_PX: Record<ColumnWidth, string> = { narrow: '680px', wide: '820px', full: 'none' }
 
 export interface DocTab {
@@ -60,8 +61,12 @@ export const app = $state({
   columnWidth: 'narrow' as ColumnWidth,
   // Modèle IA actif (copilote, 13.4) ; persisté (settings). '' = aucun choisi.
   activeModel: '',
+  // Ollama reste le fournisseur local par défaut ; OpenAI est une option cloud explicite.
+  copilotProvider: 'ollama' as CopilotProvider,
   // Panneau copilote droit (14.0) : ouvert/fermé, persisté (settings) comme sidebarOpen.
   copilotOpen: false,
+  // Vue copilote pleine page : transitoire, revient en vue partagée à la fermeture du panneau.
+  copilotExpanded: false,
   // Vue interne du panneau (transitoire, non persistée) : boot toujours 'chat'.
   copilotView: 'chat' as CopilotView,
   sourceMode: false,
@@ -121,6 +126,7 @@ export function loadSettings() {
         app.columnWidth = s.columnWidth
       }
       if (typeof s.activeModel === 'string') app.activeModel = s.activeModel
+      if (s.copilotProvider === 'ollama' || s.copilotProvider === 'openai') app.copilotProvider = s.copilotProvider
       if (typeof s.copilotOpen === 'boolean') app.copilotOpen = s.copilotOpen
     }
   } catch {
@@ -140,6 +146,7 @@ export function saveSettings() {
         sidebarView: app.sidebarView,
         columnWidth: app.columnWidth,
         activeModel: app.activeModel,
+        copilotProvider: app.copilotProvider,
         copilotOpen: app.copilotOpen,
       }),
     )
@@ -150,12 +157,6 @@ export function saveSettings() {
 
 export function applyColumnWidth() {
   document.documentElement.style.setProperty('--doc-width', COLUMN_PX[app.columnWidth])
-}
-
-export function cycleColumnWidth() {
-  const order: ColumnWidth[] = ['narrow', 'wide', 'full']
-  app.columnWidth = order[(order.indexOf(app.columnWidth) + 1) % order.length]
-  applyColumnWidth()
 }
 
 const SESSION_KEY = 'doku-session'

@@ -5,21 +5,21 @@ _verbes en **popover à la sélection** · proposition en **aperçu dans l'édit
 _**Décision** : « Corriger » (16.2) intégré d'emblée comme 4ᵉ verbe — un seul chantier pour toute l'assistance d'écriture._
 
 ## 1. Résumé
-La reformulation quitte le panneau pour vivre **là où vit le texte** : une barre de verbes flottante
+La reformulation quitte le panneau pour vivre **là où vit le texte** : un menu contextuel vertical
 apparaît à la sélection, la proposition s'affiche **en place** (aperçu type suggestion/track-changes,
 document **intact** jusqu'à Accepter), en **diff mot à mot**. Le panneau Doku-San redevient une pure
 surface de conversation. Aboutissement de « un geste pour le quotidien » : la décision se prend à
 l'endroit exact où elle s'applique.
 
 ## 2. Action utilisateur primaire
-Sélectionner → un verbe (**Clarifier / Raccourcir / Ton neutre / Corriger**) → **voir ce qui change**
+Sélectionner → ouvrir **Réécrire avec Doku-San** → un verbe (**Clarifier / Raccourcir / Ton neutre / Corriger**) → **voir ce qui change**
 → Accepter (ou Refuser, Esc). Zéro trajet vers le panneau.
 
 ## 3. Direction visuelle
 Registre **product / Restrained** (PRODUCT.md) : popover et aperçu parlent le vocabulaire papier
 existant — carte `--cream-content`, filet `--line-2`, ombre discrète, rayons 8-12. Diff avec les
 tokens texte : suppressions barrées `--err-text` doux, ajouts fond `--accent-soft`/vert doux.
-Ancres : barre de sélection **Medium**, **suggested edits Google Docs** (aperçu en place), calme
+Ancres : menu de sélection **Codex**, **suggested edits Google Docs** (aperçu en place), calme
 d'**iA Writer**. Aucun élément persistant — le chrome continue de s'effacer.
 
 ## 4. Portée
@@ -29,8 +29,9 @@ Taille **story M/L** — remplace l'UI 16.1 et **absorbe 16.2** (Corriger = 4ᵉ
 
 ## 5. Stratégie de layout
 Deux étages éphémères ancrés à la sélection :
-1. **Barre de verbes** — pilule horizontale (4 verbes), positionnée au-dessus/dessous de la
-   sélection selon l'espace (`view.coordsAtPos` + flip), repositionnée au scroll, jamais pendant le drag.
+1. **Menu d'actions** — carte verticale compacte avec Copier / Couper / Coller, puis une entrée
+   **Réécrire avec Doku-San** qui déploie les verbes en place. Positionnée au-dessus/dessous de la
+   sélection selon l'espace (`view.coordsAtPos` + flip), masquée au scroll, jamais pendant le drag.
 2. **Aperçu en place** — la plage sélectionnée est recouverte par une **décoration CM6** (le
    document n'est JAMAIS modifié avant Accepter) rendant le diff, mini-barre Accepter/Refuser collée
    dessous. Multi-paragraphe : suivre les frontières de lignes (gotchas AGENTS.md : StateField pour
@@ -40,7 +41,8 @@ Le popover échappe au clipping du scroller (position fixed/portal).
 ## 6. États clés
 | État | Ce que l'utilisateur voit |
 |---|---|
-| Sélection stable (mouseup) | Barre de verbes, apparition ~150 ms ; jamais pendant le drag |
+| Sélection stable (mouseup) | Menu Copier / Couper / Coller / Réécrire, apparition ~120–150 ms ; jamais pendant le drag |
+| Réécrire déployé | Clarifier / Raccourcir / Ton neutre révélés sous l'entrée, sans ouvrir le chat |
 | Génération | Aperçu recouvre la sélection, texte proposé streame (teinté), « Esc pour annuler » ; Esc = abort + restaure la vue |
 | Proposition prête | **Diff mot à mot** + Accepter (plein) / Refuser ; focus sur Accepter (Esc = Refuser) |
 | Accepté | Remplacement en UNE transaction CM (Ctrl+Z restaure), bref flash discret, tout disparaît |
@@ -51,8 +53,8 @@ Le popover échappe au clipping du scroller (position fixed/portal).
 | Reduced motion | Fondus instantanés, pas de flash |
 
 ## 7. Modèle d'interaction
-`selectionSet` stable → barre. Clic verbe → streaming en place. Clic ailleurs **pendant** une
-proposition = ne détruit rien (persiste jusqu'à décision/Esc/édition du doc). Clavier : barre
+`selectionSet` stable → menu. Clic verbe → streaming en place. Clic ailleurs **pendant** une
+proposition = ne détruit rien (persiste jusqu'à décision/Esc/édition du doc). Clavier : menu
 focusable, Esc ferme à chaque étage.
 
 ## 8. Contenu
@@ -71,6 +73,9 @@ seul le rendu déménage de CopilotPanel vers l'overlay éditeur.
 ## 10. Décisions posées
 - **Pas de journal des reformulations dans le panneau** : l'éditeur est la scène, le panneau reste
   conversation. Barre « Sélection » + cartes Proposition du panneau **supprimées** à la livraison.
+- **Menu vertical confirmé le 2026-07-17** : actions d'édition et raccourcis d'abord ; l'entrée
+  Doku-San conserve le compteur de caractères et déploie ses verbes en place. Apparence identique
+  en thèmes clair et sombre.
 - **Diff affiché seulement à la fin** du streaming (un diff sur texte partiel ment) ; pendant le
   flux : texte proposé brut teinté.
 - **Corriger (16.2) intégré d'emblée** — le critère ledger 16.2 (« corrigée sans changer le sens ni

@@ -2,43 +2,17 @@
   import { onMount } from 'svelte'
   import { EditorView } from '@codemirror/view'
   import { EditorState, type Extension } from '@codemirror/state'
-  import { app, activeTab, COLUMN_PX, cycleColumnWidth, docHeadings, editorRef, editorSel, forcePreview, isDirty, type DocKind } from '../lib/stores.svelte'
+  import { app, activeTab, COLUMN_PX, docHeadings, editorRef, editorSel, forcePreview, isDirty } from '../lib/stores.svelte'
   import { baseExtensions, htmlSourceExtensions, livePreviewComp, previewExtensions, serializeDoc, sourceExtensions, txtExtensions } from '../lib/editor/editor'
   import { docDirFacet } from '../lib/editor/live-preview'
   import { revealMatch, searchFlashField } from '../lib/editor/search-flash'
   import { parentPath } from '../lib/explorer'
   import { sandboxDoc } from '../lib/html'
-  import { exportViaPrint } from '../lib/export/print'
-  import { exportStandaloneHtml } from '../lib/export/standalone'
-  import { readImageDataUrl, saveHtmlDialog, saveDocxDialog, writePastedImage } from '../lib/tauri'
+  import { writePastedImage } from '../lib/tauri'
   import { imageMarkdown, imageStamp, sniffImageExt } from '../lib/paste-image'
+  import { copilot, rephraseSelection } from '../lib/copilot.svelte'
   import DokuMark from '../lib/DokuMark.svelte'
   import PdfView from './PdfView.svelte'
-
-  type ExportTab = { kind: DocKind; name: string; content: string; path: string | null }
-
-  function exportHtml(tab: ExportTab) {
-    if (tab.kind === 'pdf') return
-    exportStandaloneHtml(
-      { kind: tab.kind, name: tab.name, content: tab.content, dir: parentPath(tab.path ?? null) ?? '' },
-      { readImageDataUrl, save: saveHtmlDialog },
-    ).catch((err) => console.error('Export HTML échoué', err))
-  }
-
-  // docx (~100 Ko) chargé à la demande → hors bundle principal. Le doc est capturé AVANT
-  // l'import async (le narrowing de `kind` ne survit pas à la closure différée).
-  function exportDocx(tab: ExportTab) {
-    if (tab.kind === 'pdf') return
-    const doc = { kind: tab.kind, name: tab.name, content: tab.content }
-    import('../lib/export/docx')
-      .then((m) => m.exportDocx(doc, { save: saveDocxDialog }))
-      .catch((err) => console.error('Export DOCX échoué', err))
-  }
-
-  function exportPrint(tab: ExportTab) {
-    if (tab.kind === 'pdf') return
-    exportViaPrint({ kind: tab.kind, name: tab.name, content: tab.content, dir: parentPath(tab.path ?? null) ?? '' })
-  }
 
   const MAX_PASTE_IMAGE = 25 * 1024 * 1024 // 25 Mo : garde-fou mémoire (tablette ARM)
 
@@ -126,6 +100,123 @@
   const revs = new Map<number, number>()
   let renderedId = -1
   let renderedRev = -1
+  let selectionMenu = $state<{ left: number; top: number } | null>(null)
+  let selectionMenuExpanded = $state(false)
+  let selectionMenuEl: HTMLElement | undefined = $state()
+  let selectionMenuTimer: ReturnType<typeof setTimeout> | undefined
+
+  function hideSelectionMenu() {
+    clearTimeout(selectionMenuTimer)
+    selectionMenu = null
+    selectionMenuExpanded = false
+  }
+
+  function positionSelectionMenu(currentView: EditorView, expanded = selectionMenuExpanded) {
+    const sel = currentView.state.selection.main
+    if (sel.empty || copilot.generating || activeTab()?.kind === 'pdf') {
+      selectionMenu = null
+      return
+    }
+    const start = currentView.coordsAtPos(sel.from)
+    const end = currentView.coordsAtPos(sel.to)
+    if (!start || !end) {
+      selectionMenu = null
+      return
+    }
+
+    const menuWidth = 264
+    const menuHeight = expanded ? 306 : 180
+    const viewportMargin = 12
+    const gap = 8
+    const anchorX = end.left
+    const editorRect = currentView.dom.getBoundingClientRect()
+    const selectionTop = Math.min(start.top, end.top)
+    const selectionBottom = Math.max(start.bottom, end.bottom)
+    const viewportMaxLeft = window.innerWidth - menuWidth - viewportMargin
+    const editorMinLeft = Math.max(viewportMargin, editorRect.left + viewportMargin)
+    const editorMaxLeft = Math.min(viewportMaxLeft, editorRect.right - menuWidth - viewportMargin)
+    const minLeft = editorMaxLeft >= editorMinLeft ? editorMinLeft : viewportMargin
+    const maxLeft = editorMaxLeft >= editorMinLeft ? editorMaxLeft : viewportMaxLeft
+    const left = Math.min(Math.max(anchorX - menuWidth / 2, minLeft), maxLeft)
+    const above = selectionTop - menuHeight - gap
+    const top = above >= 48 ? above : Math.min(selectionBottom + gap, window.innerHeight - menuHeight - viewportMargin)
+    selectionMenu = { left, top }
+    selectionMenuTimer = undefined
+  }
+
+  function publishSelection(currentView: EditorView) {
+    const sel = currentView.state.selection.main
+    editorSel.from = sel.from
+    editorSel.to = sel.to
+    editorSel.text = sel.empty ? '' : currentView.state.sliceDoc(sel.from, sel.to)
+    clearTimeout(selectionMenuTimer)
+    if (sel.empty || !editorSel.text.trim()) {
+      selectionMenu = null
+      selectionMenuExpanded = false
+      return
+    }
+    selectionMenuTimer = setTimeout(() => positionSelectionMenu(currentView), 120)
+  }
+
+  function toggleRewriteOptions() {
+    selectionMenuExpanded = !selectionMenuExpanded
+    if (view) positionSelectionMenu(view, selectionMenuExpanded)
+  }
+
+  async function copySelection() {
+    const text = editorSel.text
+    if (!text) return
+    try {
+      await navigator.clipboard.writeText(text)
+      hideSelectionMenu()
+    } catch {
+      view?.focus()
+    }
+  }
+
+  async function cutSelection() {
+    if (!view) return
+    const { from, to } = view.state.selection.main
+    const text = view.state.sliceDoc(from, to)
+    if (!text) return
+    try {
+      await navigator.clipboard.writeText(text)
+      view.dispatch({
+        changes: { from, to, insert: '' },
+        selection: { anchor: from },
+        userEvent: 'delete.cut',
+      })
+      view.focus()
+      hideSelectionMenu()
+    } catch {
+      view.focus()
+    }
+  }
+
+  async function pasteClipboard() {
+    if (!view) return
+    try {
+      const text = await navigator.clipboard.readText()
+      if (!text) return
+      const { from, to } = view.state.selection.main
+      view.dispatch({
+        changes: { from, to, insert: text },
+        selection: { anchor: from + text.length },
+        userEvent: 'input.paste',
+      })
+      view.focus()
+      hideSelectionMenu()
+    } catch {
+      view.focus()
+    }
+  }
+
+  function runSelectionAction(mode: 'clarify' | 'shorten' | 'tone') {
+    hideSelectionMenu()
+    app.copilotOpen = true
+    app.copilotView = 'chat'
+    void rephraseSelection(mode)
+  }
 
   function makeState(tabId: number, content: string): EditorState {
     const tab = app.tabs.find((t) => t.id === tabId)
@@ -141,10 +232,7 @@
         // Publie la sélection courante (16.1) : le copilote propose « Reformuler » quand
         // `text` est non vide. Sur édition, les bornes bougent → on republie aussi.
         if (u.selectionSet || u.docChanged) {
-          const s = u.state.selection.main
-          editorSel.from = s.from
-          editorSel.to = s.to
-          editorSel.text = s.empty ? '' : u.state.sliceDoc(s.from, s.to)
+          publishSelection(u.view)
         }
       }),
     ]
@@ -184,10 +272,37 @@
   onMount(() => {
     view = new EditorView({ parent: host! })
     editorRef.view = view
-    const onScroll = () => view && updateActiveHeading(view)
+    const onScroll = () => {
+      selectionMenu = null
+      if (view) updateActiveHeading(view)
+    }
+    const onSelectionIntent = () => {
+      if (!view) return
+      publishSelection(view)
+    }
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target as Node | null
+      if (selectionMenuEl?.contains(target)) return
+      if (view?.dom.contains(target)) return
+      hideSelectionMenu()
+    }
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && selectionMenu) hideSelectionMenu()
+    }
     view.scrollDOM.addEventListener('scroll', onScroll, { passive: true })
+    view.dom.addEventListener('pointerup', onSelectionIntent)
+    view.dom.addEventListener('keyup', onSelectionIntent)
+    window.addEventListener('resize', hideSelectionMenu)
+    document.addEventListener('pointerdown', onPointerDown)
+    document.addEventListener('keydown', onKeyDown)
     return () => {
+      clearTimeout(selectionMenuTimer)
       view?.scrollDOM.removeEventListener('scroll', onScroll)
+      view?.dom.removeEventListener('pointerup', onSelectionIntent)
+      view?.dom.removeEventListener('keyup', onSelectionIntent)
+      window.removeEventListener('resize', hideSelectionMenu)
+      document.removeEventListener('pointerdown', onPointerDown)
+      document.removeEventListener('keydown', onKeyDown)
       view?.destroy()
       editorRef.view = null
     }
@@ -221,6 +336,11 @@
     editorSel.from = sel.from
     editorSel.to = sel.to
     editorSel.text = sel.empty ? '' : view.state.sliceDoc(sel.from, sel.to)
+    selectionMenu = null
+  })
+
+  $effect(() => {
+    if (copilot.generating || app.copilotExpanded || htmlRender || pdfRender) hideSelectionMenu()
   })
 
   // Révélation d'une occurrence de recherche (9.4). Déclaré APRÈS l'effet de switch
@@ -237,46 +357,6 @@
 </script>
 
 <div class="doc">
-  {#if activeTab() && !app.focus}
-    {@const tab = activeTab()!}
-    <div class="doc-head">
-      <span class="caption">{tab.path ?? tab.name} · {tab.kind === 'pdf' ? 'lecture seule' : isDirty(tab) ? 'modifié' : 'enregistré'}{tab.kind !== 'pdf' && app.sourceMode ? ' · source' : ''}</span>
-      {#if tab.kind !== 'pdf'}
-        <button
-          class="width-btn"
-          title="Exporter en DOCX (Word)"
-          aria-label="Exporter en DOCX"
-          onclick={() => exportDocx(tab)}
-        >
-          <span class="msr" style="font-size:18px">description</span>
-        </button>
-        <button
-          class="width-btn"
-          title="Exporter en HTML autonome"
-          aria-label="Exporter en HTML autonome"
-          onclick={() => exportHtml(tab)}
-        >
-          <span class="msr" style="font-size:18px">html</span>
-        </button>
-        <button
-          class="width-btn"
-          title="Exporter en PDF (impression)"
-          aria-label="Exporter en PDF"
-          onclick={() => exportPrint(tab)}
-        >
-          <span class="msr" style="font-size:18px">print</span>
-        </button>
-        <button
-          class="width-btn"
-          title="Largeur de colonne"
-          aria-label="Largeur de colonne"
-          onclick={cycleColumnWidth}
-        >
-          <span class="msr" style="font-size:18px">{app.columnWidth === 'narrow' ? 'width_normal' : app.columnWidth === 'wide' ? 'width_wide' : 'width_full'}</span>
-        </button>
-      {/if}
-    </div>
-  {/if}
   {#if activeTab()?.heavy && !app.focus}
     <div class="heavy-notice" role="status">
       <span class="msr" style="font-size:16px">bolt</span>
@@ -285,7 +365,7 @@
     </div>
   {/if}
   {#if app.focus && activeTab() && isDirty(activeTab()!)}
-    <!-- Mode focus : le doc-head est masqué ; on garde un signal « non enregistré » discret. -->
+    <!-- Mode focus : les onglets sont masqués ; on garde un signal « non enregistré » discret. -->
     <span class="focus-dirty" title="Modifications non enregistrées" aria-label="Modifications non enregistrées"></span>
   {/if}
   {#if htmlRender}
@@ -298,6 +378,61 @@
     {/key}
   {/if}
   <div class="editor-host doku-doc" class:source-mode={app.sourceMode || activeTab()?.heavy} class:txt={activeTab()?.kind === 'txt'} class:hidden={htmlRender || pdfRender} bind:this={host}></div>
+
+  {#if selectionMenu}
+    <div
+      class="selection-menu"
+      class:expanded={selectionMenuExpanded}
+      bind:this={selectionMenuEl}
+      style="left:{selectionMenu.left}px;top:{selectionMenu.top}px"
+      role="menu"
+      aria-label="Actions sur la sélection"
+    >
+      <button class="selection-menu-action" role="menuitem" onclick={copySelection}>
+        <span class="msr">content_copy</span><span class="selection-menu-label">Copier</span><kbd>Ctrl+C</kbd>
+      </button>
+      <button class="selection-menu-action" role="menuitem" onclick={cutSelection}>
+        <span class="msr">content_cut</span><span class="selection-menu-label">Couper</span><kbd>Ctrl+X</kbd>
+      </button>
+      <button class="selection-menu-action" role="menuitem" onclick={pasteClipboard}>
+        <span class="msr">content_paste</span><span class="selection-menu-label">Coller</span><kbd>Ctrl+V</kbd>
+      </button>
+      <div class="selection-menu-sep"></div>
+      <button
+        class="selection-menu-action selection-menu-rewrite"
+        class:open={selectionMenuExpanded}
+        role="menuitem"
+        aria-haspopup="true"
+        aria-expanded={selectionMenuExpanded}
+        onclick={toggleRewriteOptions}
+      >
+        <span class="selection-menu-spark"><span class="msr">auto_awesome</span></span>
+        <span class="selection-menu-label">Réécrire avec Doku-San</span>
+        <span class="selection-menu-count">{editorSel.text.trim().length} car.</span>
+        <span class="msr selection-menu-chevron">chevron_right</span>
+      </button>
+      <div
+        class="selection-rewrite-options"
+        class:open={selectionMenuExpanded}
+        role="group"
+        aria-label="Options de réécriture"
+        aria-hidden={!selectionMenuExpanded}
+        inert={!selectionMenuExpanded}
+      >
+        <div class="selection-rewrite-inner">
+          <button class="selection-menu-action selection-menu-subaction" role="menuitem" onclick={() => runSelectionAction('clarify')}>
+            <span class="msr">auto_fix_high</span><span>Clarifier</span>
+          </button>
+          <button class="selection-menu-action selection-menu-subaction" role="menuitem" onclick={() => runSelectionAction('shorten')}>
+            <span class="msr">compress</span><span>Raccourcir</span>
+          </button>
+          <button class="selection-menu-action selection-menu-subaction" role="menuitem" onclick={() => runSelectionAction('tone')}>
+            <span class="msr">tune</span><span>Adopter un ton neutre</span>
+          </button>
+        </div>
+      </div>
+    </div>
+  {/if}
 
   {#if !activeTab()}
     <div class="empty">
@@ -413,36 +548,6 @@
     opacity: 0.55;
     pointer-events: none;
   }
-  .doc-head {
-    flex: none;
-    max-width: var(--doc-width, 680px);
-    width: 100%;
-    margin: 0 auto;
-    padding: 40px 40px 0;
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    font-family: var(--font-mono);
-    font-size: 12px;
-    color: var(--ink-4);
-    letter-spacing: 0.02em;
-  }
-  .caption { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; user-select: text; }
-  .width-btn {
-    flex: none;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 26px;
-    height: 26px;
-    border: 0;
-    border-radius: 6px;
-    background: transparent;
-    color: var(--ink-4);
-    cursor: pointer;
-    transition: background 140ms ease, color 140ms ease;
-  }
-  .width-btn:hover { background: var(--surface-hover); color: var(--ink); }
   .editor-host { flex: 1; min-height: 0; user-select: text; }
   .editor-host.hidden { display: none; }
   .html-view {
@@ -453,6 +558,105 @@
     background: var(--cream-content);
   }
   .editor-host :global(.cm-editor) { height: 100%; }
+
+  .selection-menu {
+    position: fixed;
+    z-index: 30;
+    width: 264px;
+    padding: 6px;
+    border: 1px solid var(--line-2);
+    border-radius: 14px;
+    background: var(--cream-tint);
+    box-shadow:
+      0 0 0 1px var(--elevation-ring-soft),
+      0 12px 30px rgba(var(--shadow-rgb), 0.16);
+    color: var(--ink-2);
+    font-family: var(--font-sans);
+    user-select: none;
+    animation: selection-menu-in 160ms cubic-bezier(0.22, 1, 0.36, 1);
+  }
+  .selection-menu-count {
+    margin-left: auto;
+    font-size: 10px;
+    font-weight: 400;
+    color: var(--ink-5);
+    font-variant-numeric: tabular-nums;
+  }
+  .selection-menu-sep { height: 1px; margin: 5px 7px; background: var(--line-1); }
+  .selection-menu-action {
+    width: 100%;
+    height: 40px;
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    padding: 0 9px;
+    border: 0;
+    border-radius: 9px;
+    background: transparent;
+    color: var(--ink-2);
+    font-family: var(--font-sans);
+    font-size: 12.5px;
+    text-align: left;
+    cursor: pointer;
+    transition: background 140ms ease, color 140ms ease, scale 100ms ease;
+  }
+  .selection-menu-action .msr { width: 19px; font-size: 17px; color: var(--ink-4); }
+  .selection-menu-label { flex: 1; min-width: 0; white-space: nowrap; }
+  .selection-menu-action kbd {
+    margin-left: auto;
+    color: var(--ink-5);
+    font-family: var(--font-sans);
+    font-size: 10px;
+    font-weight: 400;
+  }
+  .selection-menu-action:hover { background: var(--surface-hover); color: var(--ink); }
+  .selection-menu-action:hover .msr { color: var(--ink-2); }
+  .selection-menu-action:focus-visible { outline: 2px solid var(--line-3); outline-offset: -2px; }
+  .selection-menu-action:active { scale: 0.96; }
+  .selection-menu-rewrite { padding-left: 7px; }
+  .selection-menu-spark {
+    width: 23px;
+    height: 23px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 7px;
+    background: var(--surface-2);
+    color: var(--ink-3);
+  }
+  .selection-menu-spark .msr { width: auto; font-size: 14px; }
+  .selection-menu-chevron {
+    width: 16px !important;
+    font-size: 16px !important;
+    transition: transform 180ms cubic-bezier(0.2, 0, 0, 1);
+  }
+  .selection-menu-rewrite.open .selection-menu-chevron { transform: rotate(90deg); }
+  .selection-rewrite-options {
+    display: grid;
+    grid-template-rows: 0fr;
+    opacity: 0;
+    transition:
+      grid-template-rows 190ms cubic-bezier(0.2, 0, 0, 1),
+      opacity 130ms ease-in;
+  }
+  .selection-rewrite-options.open { grid-template-rows: 1fr; opacity: 1; }
+  .selection-rewrite-inner { min-height: 0; overflow: hidden; }
+  .selection-menu-subaction {
+    height: 38px;
+    padding-left: 39px;
+    font-size: 12px;
+  }
+  .selection-menu-subaction .msr { width: 17px; font-size: 16px; }
+
+  @keyframes selection-menu-in {
+    from { opacity: 0; transform: translateY(4px) scale(0.98); }
+    to { opacity: 1; transform: translateY(0) scale(1); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .selection-menu { animation: none; }
+    .selection-rewrite-options,
+    .selection-menu-chevron { transition: none; }
+  }
   .editor-host.source-mode :global(.cm-content),
   .editor-host.txt :global(.cm-content) {
     font-family: var(--font-mono);

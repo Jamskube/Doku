@@ -46,7 +46,7 @@
     background: var(--cream-content);
     border: 1px solid var(--line-2);
     border-radius: 14px;
-    box-shadow: 0 18px 48px rgba(var(--ink-rgb), 0.28);
+    box-shadow: 0 18px 48px rgba(var(--shadow-rgb), 0.28);
     padding: 22px 22px 18px;
   }
   .title {

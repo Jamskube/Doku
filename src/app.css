@@ -7,8 +7,12 @@
   --cream-tint: #EFEAE0;
   --surface: #FBF7ED;
   --surface-2: #F4EFE2;
+  --composer-bg: #FFFFFF;
   --code-bg: #F1ECDF;
   --ink-rgb: 28, 26, 22;
+  --shadow-rgb: 28, 26, 22;
+  --elevation-ring: rgba(var(--shadow-rgb), 0.08);
+  --elevation-ring-soft: rgba(var(--shadow-rgb), 0.03);
   --ink: rgb(var(--ink-rgb));
   --ink-2: rgba(var(--ink-rgb), 0.90);
   --ink-3: rgba(var(--ink-rgb), 0.75);
@@ -22,6 +26,8 @@
   --ok: #6BA47B;
   --warn: #D4A23E;
   --err: #C45F4F;
+  --window-close: #CF2F3A;
+  --window-close-active: #B5232D;
   /* Variantes TEXTE des couleurs d'état : --ok/--warn/--err sont calibrées comme fonds/points
      (trop claires en texte sur crème : 1,7-4,0:1). Tout texte porteur de sens ≤ 14px doit
      utiliser *-text (≥ 4,5:1 sur --cream-content ET --surface-2). */
@@ -41,8 +47,12 @@
   --cream-tint: #3D3D44;
   --surface: #35353B;
   --surface-2: #3D3D45;
+  --composer-bg: var(--surface-2);
   --code-bg: #3A3A43;
   --ink-rgb: 235, 237, 241;
+  --shadow-rgb: 0, 0, 0;
+  --elevation-ring: rgba(255, 255, 255, 0.07);
+  --elevation-ring-soft: rgba(255, 255, 255, 0.045);
   --ink-2: rgba(var(--ink-rgb), 0.94);
   --ink-3: rgba(var(--ink-rgb), 0.78);
   --ink-4: rgba(var(--ink-rgb), 0.62);
@@ -55,6 +65,8 @@
   --ok-text: #8FC9A0;
   --warn-text: #DFB35F;
   --err-text: #E08D7B;
+  --window-close: #D93641;
+  --window-close-active: #BE2731;
 }
 
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -117,7 +129,6 @@ button { font-family: inherit; }
 }
 
 /* Animations du copilote (panneau droit — maquette docs/design/w2-copilot) */
-@keyframes doku-panel-in { from { opacity: 0; transform: translateX(14px); } to { opacity: 1; transform: translateX(0); } }
 @keyframes doku-shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
 @keyframes doku-orbit { to { transform: rotate(360deg); } }
 @keyframes doku-breathe { 0%, 100% { opacity: 0.45; transform: scale(0.9); } 50% { opacity: 1; transform: scale(1.08); } }
