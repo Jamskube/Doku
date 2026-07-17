@@ -2,7 +2,7 @@
 // (même motif que `app` dans stores.svelte.ts). Le port du sidecar est stable (start_ollama
 // idempotent côté Rust) → on le cache ; `ensureReady` déduplique les appels concurrents
 // (motif indexBuild de la recherche). Le modèle ACTIF (persisté) vit dans `app.activeModel`.
-import { app, editorRef, type DocKind } from './stores.svelte'
+import { activeTab, app, editorRef, editorSel, type DocKind } from './stores.svelte'
 import { chat, deleteModel, generate, listModels, pull, startOllama, waitReady, type OllamaModel } from './ollama'
 import {
   buildChatMessages,
@@ -27,7 +27,14 @@ export interface ChatMsg {
   content: string
   streaming?: boolean
   failed?: boolean
+  // État de CONFIGURATION (pas un échec de génération) : aucun modèle actif. Rendu en carte
+  // neutre « Aucun modèle actif » avec un bouton vers la vue Modèles — pas en carte d'erreur
+  // rouge (rien n'a échoué, rien n'a même été tenté).
+  config?: boolean
   status?: string
+  // Posé sur une carte `failed` : ce qu'il faut rejouer pour « Réessayer » (la question, le mode
+  // de résumé ou la variante de reformulation). Le document est re-capturé au moment du retry.
+  retry?: { kind: 'chat'; question: string } | { kind: 'summary'; mode: SummaryMode } | { kind: 'rephrase'; mode: RephraseMode }
   // Reformulation (16.1) : proposition liée à une sélection de l'éditeur. `state` pilote les
   // boutons Accepter/Refuser ; `tabId` + `from/to/original` appliquent le remplacement ET
   // détectent une cible périmée — mauvais onglet OU doc modifié entre-temps (`stale` → on n'écrit
@@ -41,7 +48,7 @@ export const copilot = $state({
   ready: false,
   loading: false,
   models: [] as OllamaModel[],
-  pulling: null as { name: string; pct: number } | null,
+  pulling: null as { name: string; pct: number; done: number; total: number } | null,
   error: '',
   messages: [] as ChatMsg[],
   generating: false,
@@ -110,18 +117,29 @@ export async function pullModel(name: string): Promise<void> {
   const p = await ensureReady()
   if (p === null) return
   pullController = new AbortController()
-  copilot.pulling = { name: model, pct: 0 }
+  copilot.pulling = { name: model, pct: 0, done: 0, total: 0 }
   copilot.error = ''
   try {
     await pull(
       p,
       model,
-      (pct) => {
-        if (copilot.pulling) copilot.pulling.pct = pct
+      (pct, done, total) => {
+        if (copilot.pulling) {
+          copilot.pulling.pct = pct
+          copilot.pulling.done = done
+          copilot.pulling.total = total
+        }
       },
       pullController.signal,
     )
     await refreshModels()
+    // Premier modèle installé → on l'ACTIVE automatiquement (sinon le parcours d'onboarding se
+    // termine sur une bibliothèque au point éteint, et la première question échoue « sans
+    // raison »). Conditions : ne jamais voler la place d'un modèle déjà actif, et n'activer que
+    // si le modèle EST dans la liste rafraîchie (un pull annulé sort silencieusement d'ici —
+    // sans ce contrôle on activerait un modèle à moitié téléchargé).
+    const installed = copilot.models.find((m) => m.name === model || m.name === `${model}:latest`)
+    if (!app.activeModel && installed) app.activeModel = installed.name
   } catch (e) {
     console.error('[copilot] pull', e)
     copilot.error = `Échec du téléchargement de ${model}.`
@@ -164,13 +182,13 @@ export async function sendChat(
   const q = question.trim()
   if (!q || copilot.generating) return
 
-  // Garde modèle : carte d'erreur sans démarrer le sidecar (préserve le boot-safety 14.0).
+  // Garde modèle : carte de CONFIG sans démarrer le sidecar (préserve le boot-safety 14.0).
   if (!app.activeModel) {
     copilot.messages.push({ role: 'user', content: q })
     copilot.messages.push({
       role: 'assistant',
-      content: 'Aucun modèle actif. Ouvrez la gestion des modèles (icône calques) pour en choisir ou en télécharger un.',
-      failed: true,
+      content: 'Choisissez ou téléchargez un modèle pour utiliser le copilote — tout reste sur votre machine.',
+      config: true,
     })
     return
   }
@@ -183,7 +201,8 @@ export async function sendChat(
   const history: ChatTurn[] = []
   for (let k = 0; k < copilot.messages.length; k++) {
     const m = copilot.messages[k]
-    if (m.role === 'assistant' && !m.failed && m.content) {
+    // `config` écarté aussi : la carte « Aucun modèle actif » est de l'UI, pas un tour de dialogue.
+    if (m.role === 'assistant' && !m.failed && !m.config && m.content) {
       const prev = copilot.messages[k - 1]
       if (prev?.role === 'user') history.push({ role: 'user', content: prev.content })
       history.push({ role: 'assistant', content: m.content })
@@ -191,7 +210,9 @@ export async function sendChat(
   }
 
   copilot.messages.push({ role: 'user', content: q })
-  copilot.messages.push({ role: 'assistant', content: '', streaming: true })
+  // `status` couvre le démarrage moteur + le PREFILL (ingestion du doc, longue sur CPU) : sans
+  // lui, le skeleton muet se lit comme un blocage. Effacé au 1er token (voir stream ci-dessous).
+  copilot.messages.push({ role: 'assistant', content: '', streaming: true, status: 'Doku-San lit le document…' })
   const idx = copilot.messages.length - 1 // index stable (generating sérialise les envois)
 
   try {
@@ -199,6 +220,7 @@ export async function sendChat(
     if (p === null) {
       copilot.messages[idx].content = copilot.error || 'Le moteur IA est indisponible.'
       copilot.messages[idx].failed = true
+      copilot.messages[idx].retry = { kind: 'chat', question: q }
       return
     }
     const messages = buildChatMessages({ docName: doc.name, docText: doc.text, kind: doc.kind, history, question: q })
@@ -206,15 +228,28 @@ export async function sendChat(
     // tours ; au défaut Ollama (4096) l'historique les évincerait par troncature gauche silencieuse.
     // Mutation via l'index (élément proxifié du $state array) → réactif ; muter la ref locale
     // poussée ne le serait PAS (piège $state profond de Svelte 5).
-    await chat(p, app.activeModel, messages, (t) => (copilot.messages[idx].content += t), signal, { num_ctx: COPILOT_NUM_CTX, temperature: COPILOT_TEMPERATURE })
+    await chat(
+      p,
+      app.activeModel,
+      messages,
+      (t) => {
+        const m = copilot.messages[idx]
+        m.status = undefined // 1er token : le prefill est fini, le texte prend le relais
+        m.content += t
+      },
+      signal,
+      { num_ctx: COPILOT_NUM_CTX, temperature: COPILOT_TEMPERATURE },
+    )
   } catch (e) {
     console.error('[copilot] chat', e)
     copilot.messages[idx].content = copilot.messages[idx].content || 'La génération a échoué. Vérifiez que le moteur est prêt, puis réessayez.'
     copilot.messages[idx].failed = true
+    copilot.messages[idx].retry = { kind: 'chat', question: q }
   } finally {
     const m = copilot.messages[idx]
     if (m) {
       m.streaming = false
+      m.status = undefined
       // Annulé avant le 1er token → tour fantôme (question + réponse vide) : on retire les deux
       // (la bulle assistant vide À idx ET la question user à idx-1), pas de moitié orpheline.
       if (m.content === '' && !m.failed) copilot.messages.splice(idx - 1, 2)
@@ -240,14 +275,14 @@ export async function summarizeDoc(
 ): Promise<void> {
   if (copilot.generating) return
   const userLabel = mode === 'keypoints' ? 'Quels sont les points clés de ce document ?' : 'Résume ce document.'
-  const reply = (content: string, failed = false) => {
+  const reply = (content: string, flags: { failed?: boolean; config?: boolean } = {}) => {
     copilot.messages.push({ role: 'user', content: userLabel })
-    copilot.messages.push({ role: 'assistant', content, failed })
+    copilot.messages.push({ role: 'assistant', content, ...flags })
   }
 
-  // Garde modèle : carte d'erreur sans démarrer le sidecar (préserve le boot-safety 14.0).
+  // Garde modèle : carte de CONFIG sans démarrer le sidecar (préserve le boot-safety 14.0).
   if (!app.activeModel) {
-    reply('Aucun modèle actif. Ouvrez la gestion des modèles (icône calques) pour en choisir ou en télécharger un.', true)
+    reply('Choisissez ou téléchargez un modèle pour utiliser le copilote — tout reste sur votre machine.', { config: true })
     return
   }
   // Rien de valable à résumer → message clair, pas de résumé bidon (FR-4). L'extraction du texte
@@ -276,7 +311,13 @@ export async function summarizeDoc(
     const m = copilot.messages[idx]
     if (m) m.status = s
   }
-  const stream = (t: string) => (copilot.messages[idx].content += t)
+  // Le statut tient JUSQU'AU 1er token (l'effacer avant le generate laisserait un skeleton muet
+  // pendant tout le prefill — long sur CPU) ; le flux de texte prend alors le relais.
+  const stream = (t: string) => {
+    const m = copilot.messages[idx]
+    m.status = undefined
+    m.content += t
+  }
 
   try {
     const p = await ensureReady()
@@ -284,14 +325,14 @@ export async function summarizeDoc(
       const m = copilot.messages[idx]
       m.content = copilot.error || 'Le moteur IA est indisponible.'
       m.failed = true
+      m.retry = { kind: 'summary', mode }
       return
     }
     const model = app.activeModel
 
     const segments = segmentDoc(doc.text)
     if (segments.length <= 1) {
-      // Tient dans une fenêtre → résumé direct, streamé.
-      setStatus(undefined)
+      // Tient dans une fenêtre → résumé direct, streamé (le statut initial couvre le prefill).
       await generate(p, model, buildWholeSummaryPrompt(doc.text, doc.name, mode), stream, signal, opts)
     } else {
       // map : un résumé par segment (non streamé, avec progression).
@@ -319,7 +360,8 @@ export async function summarizeDoc(
       }
       // Synthèse finale streamée. Normalement 1 groupe ; si le plafond de passes est atteint, on
       // streame chaque groupe à la suite (concaténation) plutôt que d'en écarter — jamais de perte.
-      setStatus(undefined)
+      // Le statut reste affiché pendant le prefill de la synthèse ; `stream` l'efface au 1er token.
+      setStatus('Synthèse en cours…')
       const finalGroups = segmentDoc(joined)
       for (let i = 0; i < finalGroups.length; i++) {
         if (i > 0) copilot.messages[idx].content += '\n\n'
@@ -333,6 +375,7 @@ export async function summarizeDoc(
     if (m) {
       m.content = m.content || 'Le résumé a échoué. Vérifiez que le moteur est prêt, puis réessayez.'
       m.failed = true
+      m.retry = { kind: 'summary', mode }
     }
   } finally {
     const m = copilot.messages[idx]
@@ -362,13 +405,13 @@ export async function rephraseSelection(mode: RephraseMode): Promise<void> {
   const tabId = app.activeId // onglet cible figé à la proposition (éditeur partagé entre onglets)
   const label = mode === 'shorten' ? 'Raccourcir la sélection' : mode === 'tone' ? 'Changer le ton de la sélection' : 'Clarifier la sélection'
 
-  // Garde modèle : carte d'erreur sans démarrer le sidecar (préserve le boot-safety 14.0).
+  // Garde modèle : carte de CONFIG sans démarrer le sidecar (préserve le boot-safety 14.0).
   if (!app.activeModel) {
     copilot.messages.push({ role: 'user', content: label })
     copilot.messages.push({
       role: 'assistant',
-      content: 'Aucun modèle actif. Ouvrez la gestion des modèles (icône calques) pour en choisir ou en télécharger un.',
-      failed: true,
+      content: 'Choisissez ou téléchargez un modèle pour utiliser le copilote — tout reste sur votre machine.',
+      config: true,
     })
     return
   }
@@ -388,6 +431,7 @@ export async function rephraseSelection(mode: RephraseMode): Promise<void> {
       m.content = copilot.error || 'Le moteur IA est indisponible.'
       m.failed = true
       m.rephrase = undefined
+      m.retry = { kind: 'rephrase', mode }
       return
     }
     // Mutation via l'index (élément proxifié du $state array) → réactif (piège $state profond).
@@ -401,6 +445,7 @@ export async function rephraseSelection(mode: RephraseMode): Promise<void> {
     m.content = m.content || 'La reformulation a échoué. Vérifiez que le moteur est prêt, puis réessayez.'
     m.failed = true
     m.rephrase = undefined
+    m.retry = { kind: 'rephrase', mode }
   } finally {
     const m = copilot.messages[idx]
     if (m) {
@@ -442,6 +487,28 @@ export function acceptRephrase(idx: number): void {
 export function rejectRephrase(idx: number): void {
   const m = copilot.messages[idx]
   if (m?.rephrase && m.rephrase.state === 'pending') m.rephrase.state = 'rejected'
+}
+
+// Rejoue une génération échouée (bouton « Réessayer » de la carte d'erreur). Retire la paire
+// échouée (question + carte) puis re-dispatche l'action d'origine avec un SNAPSHOT FRAIS du
+// document courant — l'utilisateur a pu corriger la cause (moteur redémarré, doc modifié).
+export function retryGeneration(idx: number): void {
+  const m = copilot.messages[idx]
+  if (!m?.retry || copilot.generating) return
+  const r = m.retry
+  // Reformulation : la sélection d'origine a probablement disparu (l'échec l'a désélectionnée).
+  // Sans sélection, rejouer serait un no-op silencieux → on guide au lieu de faire disparaître.
+  if (r.kind === 'rephrase' && !editorSel.text.trim()) {
+    m.content = 'Sélectionnez à nouveau le passage à reformuler, puis relancez depuis la barre « Sélection ».'
+    m.retry = undefined
+    return
+  }
+  copilot.messages.splice(idx - 1, 2)
+  const t = activeTab()
+  const doc = { name: t?.name ?? null, text: t?.content ?? '', kind: t?.kind ?? ('md' as DocKind) }
+  if (r.kind === 'chat') void sendChat(r.question, doc)
+  else if (r.kind === 'summary') void summarizeDoc(doc, r.mode)
+  else void rephraseSelection(r.mode)
 }
 
 // Interrompt la génération en cours (abort → texte partiel conservé, < 500 ms côté serveur).

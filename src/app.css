@@ -22,6 +22,12 @@
   --ok: #6BA47B;
   --warn: #D4A23E;
   --err: #C45F4F;
+  /* Variantes TEXTE des couleurs d'état : --ok/--warn/--err sont calibrées comme fonds/points
+     (trop claires en texte sur crème : 1,7-4,0:1). Tout texte porteur de sens ≤ 14px doit
+     utiliser *-text (≥ 4,5:1 sur --cream-content ET --surface-2). */
+  --ok-text: #38714B;
+  --warn-text: #8A5F26;
+  --err-text: #A9412F;
   --font-sans: 'Geist', -apple-system, BlinkMacSystemFont, sans-serif;
   --font-mono: 'Geist Mono', ui-monospace, monospace;
   --font-serif: 'Source Serif 4 Variable', 'Iowan Old Style', Georgia, serif;
@@ -46,6 +52,9 @@
   --line-3: rgba(var(--ink-rgb), 0.32);
   --surface-hover: rgba(var(--ink-rgb), 0.08);
   --accent-soft: rgba(var(--ink-rgb), 0.10);
+  --ok-text: #8FC9A0;
+  --warn-text: #DFB35F;
+  --err-text: #E08D7B;
 }
 
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }

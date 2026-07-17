@@ -3,11 +3,19 @@
   import { activeTab, app, editorSel } from '../lib/stores.svelte'
   import { closeWindow, minimizeWindow, toggleMaximizeWindow } from '../lib/tauri'
   import { formatBytes } from '../lib/ollama'
-  import { acceptRephrase, cancelPull, copilot, newChat, pullModel, refreshModels, rejectRephrase, removeModel, rephraseSelection, sendChat, setActiveModel, stopChat, summarizeDoc } from '../lib/copilot.svelte'
+  import { acceptRephrase, cancelPull, copilot, newChat, pullModel, refreshModels, rejectRephrase, removeModel, rephraseSelection, retryGeneration, sendChat, setActiveModel, stopChat, summarizeDoc } from '../lib/copilot.svelte'
   import { MAX_DOC_CHARS } from '../lib/copilot-service'
   import { renderChatMarkdown } from '../lib/export/render-md'
 
-  const SUGGESTIONS = ['qwen2.5:1.5b-instruct-q4_0', 'qwen2.5:3b-instruct-q4_0', 'hf.co/LiquidAI/LFM2-2.6B-GGUF:Q4_0']
+  // Modèle conseillé (carte d'onboarding) + suggestions. Toujours des tags -q4_0 explicites
+  // (repacking ARM). Dans l'onboarding, le conseillé est déjà en carte → chips sans lui.
+  const RECO_MODEL = 'qwen2.5:1.5b-instruct-q4_0'
+  const SUGGESTIONS = [RECO_MODEL, 'qwen2.5:3b-instruct-q4_0', 'hf.co/LiquidAI/LFM2-2.6B-GGUF:Q4_0']
+  const ALT_SUGGESTIONS = SUGGESTIONS.filter((s) => s !== RECO_MODEL)
+  // Chips de la bibliothèque : masquer les modèles déjà installés (cliquer re-téléchargerait).
+  const installableSuggestions = $derived(
+    SUGGESTIONS.filter((s) => !copilot.models.some((m) => m.name === s || m.name === `${s}:latest`)),
+  )
 
   // Vue Modèles : liste à l'ouverture (intention explicite). L'effet ne track QUE la vue —
   // `refreshModels` (lit ET écrit copilot.*) est `untrack`é pour ne pas s'auto-re-déclencher.
@@ -36,10 +44,14 @@
     void pullModel(model)
   }
 
-  function confirmRemove(name: string) {
-    if (confirm(`Supprimer le modèle « ${name} » du disque ? Cette action est irréversible.`)) {
-      void removeModel(name)
-    }
+  // Suppression d'un modèle : confirmation INLINE dans la ligne (pas de confirm() natif qui
+  // casse l'univers de l'app, pas de modale — registre produit). La ligne se transforme en
+  // question Annuler/Supprimer ; le modèle ACTIF est signalé explicitement.
+  let confirmDelete = $state<string | null>(null)
+
+  function doRemove(name: string) {
+    confirmDelete = null
+    void removeModel(name)
   }
 
   // --- Chat (14.1) ---
@@ -114,6 +126,35 @@
   })
 </script>
 
+<!-- Section « Ajouter un modèle » : rendue dans la bibliothèque ET dès l'onboarding
+     (l'utilisateur ne doit jamais être captif de la seule recommandation). -->
+{#snippet addSection(chips: string[])}
+  <section>
+    <div class="cop-label">AJOUTER</div>
+    <div class="cop-add">
+      <span class="msr" style="font-size:18px;color:var(--ink-4)">search</span>
+      <input
+        class="cop-add-input"
+        type="text"
+        placeholder="nom du modèle…"
+        aria-label="Nom du modèle à télécharger"
+        bind:value={pullName}
+        onkeydown={(e) => { if (e.key === 'Enter') startPull() }}
+      />
+      <button class="cop-btn-sm" onclick={() => startPull()} disabled={!pullName.trim()}>Télécharger</button>
+    </div>
+    {#if chips.length > 0}
+      <div class="cop-chips">
+        {#each chips as s (s)}
+          <button class="cop-chip" onclick={() => startPull(s)}>
+            <span class="msr" style="font-size:14px;color:var(--ink-4)">add</span>{s}
+          </button>
+        {/each}
+      </div>
+    {/if}
+  </section>
+{/snippet}
+
 <aside class="cop-panel">
   <!-- En-tête : contrôles panneau + contrôles fenêtre (draggable, motif TitleBar) -->
   <header class="cop-head" data-tauri-drag-region>
@@ -145,7 +186,12 @@
     <div class="cop-scroll" bind:this={scroller} onscroll={onScroll}>
       {#if app.copilotView === 'models'}
         {#if copilot.error}
-          <p class="cop-msg err">{copilot.error}</p>
+          <div class="cop-msg err row">
+            <span class="grow-wrap">{copilot.error}</span>
+            <button class="cop-dismiss" title="Masquer" aria-label="Masquer l'erreur" onclick={() => (copilot.error = '')}>
+              <span class="msr" style="font-size:15px">close</span>
+            </button>
+          </div>
         {/if}
 
         {#if copilot.loading}
@@ -166,10 +212,15 @@
                 <span class="cop-badge">conseillé</span>
               </div>
               <div class="cop-reco-sub">935 Mo · ultra-léger, discret, optimisé ARM</div>
-              <button class="cop-btn-fill" onclick={() => startPull('qwen2.5:1.5b-instruct-q4_0')}>
+              <button class="cop-btn-fill" onclick={() => startPull(RECO_MODEL)}>
                 <span class="msr" style="font-size:17px">download</span>Télécharger ce modèle
               </button>
             </div>
+          </div>
+          <!-- Jordan (onboarding) ne doit pas être captif de la seule reco : la section Ajouter
+               est disponible dès le premier écran (chips sans le conseillé, déjà en carte). -->
+          <div class="cop-sections">
+            {@render addSection(ALT_SUGGESTIONS)}
           </div>
         {:else}
           <div class="cop-sections">
@@ -181,9 +232,10 @@
                 <div class="cop-hero">
                   <div class="cop-hero-head">
                     <div class="cop-hero-icon"><span class="msr" style="font-size:23px">layers</span></div>
+                    <!-- Pas de tag « Modèle actif » sous le nom : le label de section + la
+                         pastille le disent déjà (« actif » 3× dans une carte = bruit). -->
                     <div class="cop-hero-name">
                       <div class="cop-mono lg">{activeInstalled.name}</div>
-                      <div class="cop-hero-tag">Modèle actif</div>
                     </div>
                     <span class="cop-pill"><span class="cop-dot breathe"></span>Actif</span>
                   </div>
@@ -213,16 +265,30 @@
               <div class="cop-lib">
                 {#each copilot.models as m (m.name)}
                   {@const isActive = m.name === app.activeModel}
-                  <div class="cop-row" class:active={isActive}>
-                    <button class="cop-row-pick" title="Choisir comme modèle actif" aria-pressed={isActive} onclick={() => setActiveModel(m.name)}>
-                      <span class="cop-dot" class:on={isActive}></span>
-                      <span class="cop-mono grow">{m.name}</span>
-                      <span class="cop-size">{formatBytes(m.size)}</span>
-                    </button>
-                    <button class="cop-del" title="Supprimer" aria-label={'Supprimer ' + m.name} onclick={() => confirmRemove(m.name)}>
-                      <span class="msr" style="font-size:17px">delete</span>
-                    </button>
-                  </div>
+                  {#if confirmDelete === m.name}
+                    <div class="cop-row confirm">
+                      <span class="cop-confirm-txt">
+                        {isActive
+                          ? "C'est le modèle actif. Le supprimer du disque ? Action irréversible."
+                          : `Supprimer « ${m.name} » du disque ? Action irréversible.`}
+                      </span>
+                      <div class="cop-confirm-acts">
+                        <button class="cop-err-btn" onclick={() => (confirmDelete = null)}>Annuler</button>
+                        <button class="cop-err-btn danger" onclick={() => doRemove(m.name)}>Supprimer</button>
+                      </div>
+                    </div>
+                  {:else}
+                    <div class="cop-row" class:active={isActive}>
+                      <button class="cop-row-pick" title="Choisir comme modèle actif" aria-pressed={isActive} onclick={() => setActiveModel(m.name)}>
+                        <span class="cop-dot" class:on={isActive}></span>
+                        <span class="cop-mono grow">{m.name}</span>
+                        <span class="cop-size">{formatBytes(m.size)}</span>
+                      </button>
+                      <button class="cop-del" title="Supprimer" aria-label={'Supprimer ' + m.name} onclick={() => (confirmDelete = m.name)}>
+                        <span class="msr" style="font-size:17px">delete</span>
+                      </button>
+                    </div>
+                  {/if}
                 {/each}
               </div>
             </section>
@@ -235,7 +301,11 @@
                   <div class="cop-dl-head">
                     <span class="msr orbit" style="font-size:18px">progress_activity</span>
                     <span class="cop-mono grow" title={copilot.pulling.name}>{copilot.pulling.name}</span>
-                    <span class="cop-size">{copilot.pulling.pct > 0 ? copilot.pulling.pct + ' %' : '…'}</span>
+                    <!-- Octets + % : sur un pull multi-Go, « 395 Mo / 935 Mo » distingue une
+                         progression réelle d'un blocage. -->
+                    <span class="cop-size">
+                      {copilot.pulling.total > 0 ? `${formatBytes(copilot.pulling.done)} / ${formatBytes(copilot.pulling.total)}` : '…'}
+                    </span>
                     <button class="cop-del" title="Annuler" aria-label="Annuler le téléchargement" onclick={cancelPull}>
                       <span class="msr" style="font-size:16px">close</span>
                     </button>
@@ -246,41 +316,20 @@
             {/if}
 
             <!-- Ajouter -->
-            <section>
-              <div class="cop-label">AJOUTER</div>
-              <div class="cop-add">
-                <span class="msr" style="font-size:18px;color:var(--ink-4)">search</span>
-                <input
-                  class="cop-add-input"
-                  type="text"
-                  placeholder="nom du modèle…"
-                  aria-label="Nom du modèle à télécharger"
-                  bind:value={pullName}
-                  onkeydown={(e) => { if (e.key === 'Enter') startPull() }}
-                />
-                <button class="cop-btn-sm" onclick={() => startPull()} disabled={!pullName.trim()}>Obtenir</button>
-              </div>
-              <div class="cop-chips">
-                {#each SUGGESTIONS as s (s)}
-                  <button class="cop-chip" onclick={() => startPull(s)}>
-                    <span class="msr" style="font-size:14px;color:var(--ink-4)">add</span>{s}
-                  </button>
-                {/each}
-              </div>
-            </section>
+            {@render addSection(installableSuggestions)}
           </div>
         {/if}
       {:else if copilot.messages.length === 0}
         <!-- Conversation vide : accueil + actions rapides sur le document courant -->
         <div class="cop-chat-empty">
           <div class="cop-empty-title">Bonjour.</div>
-          <p class="cop-empty-sub">Posez une question, ou lancez une action sur le document ouvert.</p>
+          <p class="cop-empty-sub">Posez une question ou lancez une action sur le document ouvert.</p>
           <div class="cop-actions">
             <button class="cop-action" onclick={() => quickAction('summary')}>
               <span class="msr" style="font-size:19px;color:var(--ink-4)">summarize</span><span class="grow">Résumer ce document</span><span class="msr" style="font-size:16px;color:var(--ink-5)">arrow_forward</span>
             </button>
             <button class="cop-action" onclick={() => quickAction('question')}>
-              <span class="msr" style="font-size:19px;color:var(--ink-4)">quiz</span><span class="grow">Poser une question dessus</span><span class="msr" style="font-size:16px;color:var(--ink-5)">arrow_forward</span>
+              <span class="msr" style="font-size:19px;color:var(--ink-4)">quiz</span><span class="grow">Poser une question sur ce document</span><span class="msr" style="font-size:16px;color:var(--ink-5)">arrow_forward</span>
             </button>
             <button class="cop-action" onclick={() => quickAction('keypoints')}>
               <span class="msr" style="font-size:19px;color:var(--ink-4)">key</span><span class="grow">Extraire les points clés</span><span class="msr" style="font-size:16px;color:var(--ink-5)">arrow_forward</span>
@@ -293,13 +342,29 @@
           {#each copilot.messages as m, i (i)}
             {#if m.role === 'user'}
               <div class="cop-user"><div class="cop-user-bubble">{m.content}</div></div>
+            {:else if m.config}
+              <!-- État de CONFIG (aucun modèle actif) : carte neutre, pas une erreur — rien n'a
+                   échoué. Le bouton fait le travail (pas de « icône calques » à traduire). -->
+              <div class="cop-err-card" role="status">
+                <span class="msr" style="font-size:20px;color:var(--ink-3);flex:0 0 auto">layers</span>
+                <div>
+                  <div class="cop-err-title">Aucun modèle actif</div>
+                  <p class="cop-err-msg">{m.content}</p>
+                  <button class="cop-err-btn" onclick={() => (app.copilotView = 'models')}>Choisir un modèle</button>
+                </div>
+              </div>
             {:else if m.failed}
-              <div class="cop-err-card">
+              <div class="cop-err-card" role="alert">
                 <span class="msr" style="font-size:20px;color:var(--err);flex:0 0 auto">error</span>
                 <div>
                   <div class="cop-err-title">La génération a échoué</div>
                   <p class="cop-err-msg">{m.content}</p>
-                  <button class="cop-err-btn" onclick={() => (app.copilotView = 'models')}>Vérifier le moteur</button>
+                  <div class="cop-err-acts">
+                    {#if m.retry}
+                      <button class="cop-err-btn primary" onclick={() => retryGeneration(i)}>Réessayer</button>
+                    {/if}
+                    <button class="cop-err-btn" onclick={() => (app.copilotView = 'models')}>Vérifier le moteur</button>
+                  </div>
                 </div>
               </div>
             {:else}
@@ -334,16 +399,16 @@
                         </button>
                       </div>
                     {:else if m.rephrase.state === 'applied'}
-                      <div class="cop-prop-note ok"><span class="msr" style="font-size:14px">check_circle</span>Appliqué au document.</div>
+                      <div class="cop-prop-note ok" role="status"><span class="msr" style="font-size:14px">check_circle</span>Appliqué au document.</div>
                     {:else if m.rephrase.state === 'rejected'}
-                      <div class="cop-prop-note"><span class="msr" style="font-size:14px">do_not_disturb_on</span>Refusé — texte d'origine conservé.</div>
+                      <div class="cop-prop-note" role="status"><span class="msr" style="font-size:14px">do_not_disturb_on</span>Refusé — texte d'origine conservé.</div>
                     {:else if m.rephrase.state === 'stale'}
-                      <div class="cop-prop-note warn"><span class="msr" style="font-size:14px">warning</span>Le document a changé — remplacement annulé (texte d'origine intact).</div>
+                      <div class="cop-prop-note warn" role="status"><span class="msr" style="font-size:14px">warning</span>Le document a changé — remplacement annulé (texte d'origine intact).</div>
                     {/if}
                   {/if}
                 {:else if m.streaming && m.status}
-                  <!-- Résumé (14.2) : progression de la phase map avant que la synthèse ne streame. -->
-                  <div class="cop-status">
+                  <!-- Progression (prefill/map) — role=status : annoncée au lecteur d'écran. -->
+                  <div class="cop-status" role="status">
                     <span class="msr breathe" style="font-size:16px;color:var(--ink-4)">auto_stories</span>{m.status}
                   </div>
                 {:else if m.streaming && m.content === ''}
@@ -376,17 +441,26 @@
             <div class="cop-rephrase-acts">
               <button class="cop-rephrase-btn" title="Rendre plus clair" onclick={() => rephrase('clarify')}>Clarifier</button>
               <button class="cop-rephrase-btn" title="Rendre plus court" onclick={() => rephrase('shorten')}>Raccourcir</button>
-              <button class="cop-rephrase-btn" title="Ton plus neutre et professionnel" onclick={() => rephrase('tone')}>Ton</button>
+              <button class="cop-rephrase-btn" title="Ton plus neutre et professionnel" onclick={() => rephrase('tone')}>Ton neutre</button>
             </div>
           </div>
         {/if}
         <div class="cop-input">
           <div class="cop-input-ctx">
+            <!-- Le nom passe dans un enfant flex .grow : text-overflow ne s'applique pas au
+                 conteneur inline-flex lui-même (les noms longs se coupaient net, sans «…»). -->
             <span class="cop-ctx-chip">
-              <span class="msr" style="font-size:14px;color:var(--ink-4)">description</span>{activeTab()?.name ?? 'aucun document'}
+              <span class="msr" style="font-size:14px;color:var(--ink-4)">description</span><span class="grow">{activeTab()?.name ?? 'aucun document'}</span>
             </span>
             {#if docTruncated}
-              <span class="cop-ctx-warn" title="Document trop long : seul son début est lu par le copilote. Une réponse « je ne trouve pas » peut concerner la partie non lue.">
+              <!-- role=note + aria-label : l'explication complète est annoncée au lecteur
+                   d'écran (le title ne sert qu'au survol souris). -->
+              <span
+                class="cop-ctx-warn"
+                role="note"
+                title="Document trop long : seul son début est lu par le copilote. Une réponse « je ne trouve pas » peut concerner la partie non lue."
+                aria-label="Lecture partielle : document trop long, seul son début est lu par le copilote."
+              >
                 <span class="msr" style="font-size:13px">warning</span>lecture partielle
               </span>
             {/if}
@@ -394,8 +468,10 @@
               <span class="msr" style="font-size:14px">add</span>Contexte
             </button>
             {#if copilot.messages.length > 0}
+              <!-- add_comment, pas refresh : « refresh » se lit « régénérer » alors que l'action
+                   EFFACE la conversation — le glyphe doit dire la vérité. -->
               <button class="cop-newchat" title="Nouvelle conversation" aria-label="Nouvelle conversation" onclick={newChat}>
-                <span class="msr" style="font-size:15px">refresh</span>
+                <span class="msr" style="font-size:15px">add_comment</span>
               </button>
             {/if}
           </div>
@@ -406,8 +482,8 @@
               bind:this={promptEl}
               bind:value={draft}
               rows="1"
-              placeholder="Posez une question sur ce document…"
-              aria-label="Message au copilote"
+              placeholder="Votre question…"
+              aria-label="Poser une question sur ce document"
               onkeydown={onPromptKey}
             ></textarea>
             {#if copilot.generating}
@@ -481,7 +557,7 @@
   }
   .cop-scroll { flex: 1; min-height: 0; overflow-y: auto; padding: 0 13px; }
   .cop-msg { margin: 14px 4px; font-size: 12.5px; color: var(--ink-4); }
-  .cop-msg.err { color: var(--err); }
+  .cop-msg.err { color: var(--err-text); }
 
   .cop-mono { font-family: var(--font-mono); font-size: 12.5px; color: var(--ink); font-weight: 500; }
   .cop-mono.lg { font-size: 15px; line-height: 1.2; }
@@ -511,7 +587,7 @@
   .cop-sections { padding: 8px 2px; display: flex; flex-direction: column; gap: 20px; }
   .cop-label { font-size: 10.5px; color: var(--ink-4); font-weight: 600; letter-spacing: 0.06em; margin-bottom: 9px; }
   .cop-label.row { display: flex; align-items: baseline; justify-content: space-between; }
-  .cop-count { font-size: 11px; color: var(--ink-5); white-space: nowrap; letter-spacing: 0; }
+  .cop-count { font-size: 11px; color: var(--ink-4); white-space: nowrap; letter-spacing: 0; }
 
   /* Carte héro */
   .cop-hero { border-radius: 18px; overflow: hidden; border: 1px solid var(--line-2); }
@@ -521,7 +597,6 @@
     background: var(--surface-2); border: 1px solid var(--line-2); display: flex; align-items: center; justify-content: center; color: var(--ink);
   }
   .cop-hero-name { min-width: 0; flex: 1; }
-  .cop-hero-tag { font-size: 11.5px; color: var(--ink-4); margin-top: 2px; }
   .cop-hero-stats { margin-top: -16px; background: var(--surface-2); border-radius: 16px 16px 0 0; padding: 15px 16px; display: flex; }
   .cop-stat { flex: 1; text-align: center; }
   .cop-stat .cop-mono { font-size: 15px; }
@@ -529,7 +604,7 @@
   .cop-stat-sep { width: 1px; background: var(--line-2); }
   .cop-pill {
     display: inline-flex; align-items: center; gap: 5px; height: 23px; padding: 0 9px 0 8px; border-radius: 999px;
-    background: rgba(107, 164, 123, 0.16); color: var(--ok); font-size: 11px; font-weight: 600;
+    background: rgba(107, 164, 123, 0.16); color: var(--ok-text); font-size: 11px; font-weight: 600;
   }
   .cop-dot { width: 8px; height: 8px; flex: 0 0 auto; border-radius: 50%; border: 1.5px solid var(--line-3); }
   .cop-pill .cop-dot { width: 6px; height: 6px; background: var(--ok); border: 0; }
@@ -564,7 +639,8 @@
     flex: 1; min-width: 0; border: 0; background: transparent; outline: none;
     font-family: var(--font-mono); font-size: 12.5px; color: var(--ink);
   }
-  .cop-add-input::placeholder { color: var(--ink-5); }
+  .cop-add-input::placeholder { color: var(--ink-4); }
+  .cop-add:focus-within { border-color: var(--line-3); }
   .cop-btn-sm {
     height: 28px; padding: 0 13px; background: var(--ink); color: var(--cream-content); border: 0; border-radius: 8px;
     font-family: var(--font-sans); font-size: 12px; font-weight: 500; cursor: pointer;
@@ -598,10 +674,13 @@
     background: var(--surface-2); border: 1px solid var(--line-1); border-radius: 13px 13px 4px 13px;
     padding: 8px 11px; font-size: 13px; line-height: 1.5; color: var(--ink); white-space: pre-wrap; overflow-wrap: anywhere;
   }
+  /* Le contenu de la conversation doit être COPIABLE (le body global est en user-select:none) :
+     sans ça, une question échouée ne peut même pas être re-copiée pour la retaper. */
+  .cop-user-bubble, .cop-md, .cop-md-plain, .cop-proposal, .cop-err-msg { user-select: text; }
   .cop-asst-head { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; }
   .cop-asst-name { font-size: 11px; color: var(--ink-4); font-weight: 500; }
   .msr.breathe { animation: doku-breathe 1.8s ease-in-out infinite; }
-  .cop-copy { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; border: 0; border-radius: 6px; background: transparent; color: var(--ink-4); cursor: pointer; }
+  .cop-copy { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border: 0; border-radius: 7px; background: transparent; color: var(--ink-4); cursor: pointer; }
   .cop-copy:hover { background: var(--surface-hover); color: var(--ink); }
   .cop-skel-wrap { display: flex; flex-direction: column; gap: 8px; padding-top: 2px; }
   .cop-status { display: flex; align-items: center; gap: 7px; font-size: 12.5px; color: var(--ink-4); padding-top: 2px; }
@@ -618,7 +697,9 @@
   .cop-md :global(pre) { background: var(--code-bg); border-radius: 8px; padding: 10px 12px; overflow-x: auto; margin: 0 0 10px; }
   .cop-md :global(pre code) { background: none; padding: 0; }
   .cop-md :global(blockquote) { border-left: 2px solid var(--line-2); padding-left: 10px; color: var(--ink-3); margin: 0 0 10px; }
-  .cop-md :global(table) { width: 100%; border-collapse: collapse; font-size: 12px; border: 1px solid var(--line-1); border-radius: 8px; overflow: hidden; margin: 0 0 10px; }
+  /* border-collapse ignore border-radius → separate + spacing 0 (mêmes hairlines, coins ronds réels) */
+  .cop-md :global(table) { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 12px; border: 1px solid var(--line-1); border-radius: 8px; overflow: hidden; margin: 0 0 10px; }
+  .cop-md :global(tr:last-child td) { border-bottom: 0; }
   .cop-md :global(th) { background: var(--surface-2); text-align: left; padding: 5px 9px; color: var(--ink); font-weight: 600; border-bottom: 1px solid var(--line-1); }
   .cop-md :global(td) { padding: 5px 9px; color: var(--ink-2); border-bottom: 1px solid var(--line-1); }
 
@@ -626,12 +707,30 @@
   .cop-err-card { display: flex; gap: 11px; padding: 13px; border: 1px solid var(--line-2); border-radius: 12px; background: var(--cream-content); }
   .cop-err-title { font-size: 13px; font-weight: 600; color: var(--ink); margin-bottom: 3px; }
   .cop-err-msg { font-size: 12px; line-height: 1.5; color: var(--ink-4); margin: 0 0 11px; }
+  .cop-err-acts { display: flex; gap: 7px; }
   .cop-err-btn { height: 30px; padding: 0 12px; background: transparent; color: var(--ink-3); border: 1px solid var(--line-2); border-radius: 8px; font-family: var(--font-sans); font-size: 12px; cursor: pointer; }
   .cop-err-btn:hover { background: var(--surface-hover); color: var(--ink); }
+  .cop-err-btn.primary { background: var(--ink); color: var(--cream-content); border-color: var(--ink); }
+  .cop-err-btn.primary:hover { background: var(--ink-2); }
+  .cop-err-btn.danger { background: var(--err); color: #fff; border-color: var(--err); }
+  .cop-err-btn.danger:hover { filter: brightness(0.92); }
+
+  /* Confirmation inline de suppression (remplace le confirm() natif) */
+  .cop-row.confirm { flex-direction: column; align-items: stretch; gap: 9px; padding: 11px 12px; background: var(--surface-2); }
+  .cop-confirm-txt { font-size: 12px; line-height: 1.5; color: var(--ink-2); overflow-wrap: anywhere; }
+  .cop-confirm-acts { display: flex; gap: 6px; justify-content: flex-end; }
+
+  /* Bannière d'erreur (vue modèles) avec dismiss */
+  .cop-msg.row { display: flex; align-items: flex-start; gap: 8px; }
+  .grow-wrap { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+  .cop-dismiss { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; flex: 0 0 auto; border: 0; border-radius: 7px; background: transparent; color: var(--ink-4); cursor: pointer; }
+  .cop-dismiss:hover { background: var(--surface-hover); color: var(--ink); }
 
   /* Saisie imbriquée */
   .cop-input-wrap { flex-shrink: 0; padding: 8px 13px 12px; }
   .cop-input { border-radius: 19px; overflow: hidden; border: 1px solid var(--line-2); display: flex; flex-direction: column; }
+  /* Focus clavier visible sur le champ composite (le textarea interne a outline:none) */
+  .cop-input:focus-within { border-color: var(--line-3); }
   .cop-input-ctx { background: var(--cream-tint); padding: 10px 13px 22px; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
   .cop-ctx-chip {
     display: inline-flex; align-items: center; gap: 5px; height: 24px; padding: 0 8px;
@@ -646,21 +745,22 @@
   .cop-ctx-warn {
     display: inline-flex; align-items: center; gap: 4px; height: 24px; padding: 0 8px;
     background: rgba(180, 130, 60, 0.12); border: 1px solid rgba(180, 130, 60, 0.3); border-radius: 8px;
-    font-size: 11px; color: var(--warn, #9a6a2c); white-space: nowrap; cursor: help;
+    font-size: 11px; color: var(--warn-text); white-space: nowrap; cursor: help;
   }
-  .cop-newchat { margin-left: auto; display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; border: 0; border-radius: 6px; background: transparent; color: var(--ink-4); cursor: pointer; }
+  .cop-newchat { margin-left: auto; display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border: 0; border-radius: 7px; background: transparent; color: var(--ink-4); cursor: pointer; }
   .cop-newchat:hover { background: var(--cream-content); color: var(--ink); }
   .cop-input-field { margin-top: -15px; background: var(--cream-content); border-radius: 15px 15px 0 0; padding: 11px 12px 12px; display: flex; align-items: flex-end; gap: 8px; }
   .cop-input-attach { width: 30px; height: 30px; flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; background: transparent; border: 0; border-radius: 9px; color: var(--ink-5); cursor: default; }
   .cop-input-ta {
     flex: 1; min-width: 0; border: 0; background: transparent; outline: none; resize: none;
     font-family: var(--font-sans); font-size: 13px; line-height: 1.4; color: var(--ink); padding: 6px 0; max-height: 120px;
+    field-sizing: content; /* auto-grow : les lignes Shift+Entrée restent visibles (WebView2 OK) */
   }
-  .cop-input-ta::placeholder { color: var(--ink-5); }
+  .cop-input-ta::placeholder { color: var(--ink-4); }
   .cop-input-send { width: 30px; height: 30px; flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; background: var(--ink); border: 0; border-radius: 50%; color: var(--cream-content); cursor: pointer; }
   .cop-input-send:hover { background: var(--ink-2); }
   .cop-input-send:disabled { opacity: 0.4; cursor: default; }
-  .cop-disclaimer { text-align: center; font-size: 10.5px; color: var(--ink-5); margin-top: 9px; }
+  .cop-disclaimer { text-align: center; font-size: 11px; color: var(--ink-4); margin-top: 9px; }
 
   /* Reformuler — barre de sélection (16.1) */
   .cop-rephrase-bar {
@@ -692,6 +792,6 @@
   .cop-prop-btn.accept { background: var(--ink); color: var(--cream-content); border-color: var(--ink); }
   .cop-prop-btn.accept:hover { background: var(--ink-2); }
   .cop-prop-note { display: inline-flex; align-items: center; gap: 6px; margin-top: 9px; font-size: 12px; color: var(--ink-4); }
-  .cop-prop-note.ok { color: var(--ok); }
-  .cop-prop-note.warn { color: var(--warn, #9a6a2c); }
+  .cop-prop-note.ok { color: var(--ok-text); }
+  .cop-prop-note.warn { color: var(--warn-text); }
 </style>

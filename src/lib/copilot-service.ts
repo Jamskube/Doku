@@ -45,9 +45,13 @@ export const REFUSAL_PHRASE = 'Je ne trouve pas cette information dans ce docume
 // de la génération → répéter la contrainte ici, en plus du system, réduit nettement la dérive
 // vers ses connaissances internes (ex. répondre « ça prend plusieurs mois » alors que le doc dit
 // « 100 à 160 jours »). Ajouté au message envoyé, PAS à la question affichée à l'utilisateur.
+// ATTENTION à ne pas sur-ancrer : l'interdit porte sur INVENTER des informations, pas sur
+// travailler le texte — un « vérifie l'orthographe » doit être traité, pas refusé (dérive
+// constatée : le modèle répondait la phrase de refus à toute demande de tâche).
 export const GROUNDING_REMINDER =
-  `(Réponds uniquement d'après le document ci-dessus. N'utilise aucune connaissance extérieure ; ` +
-  `si l'information n'y figure pas, réponds « ${REFUSAL_PHRASE} ».)`
+  `(Travaille uniquement sur le document ci-dessus, sans inventer d'information qui n'y figure pas. ` +
+  `Si on te demande une information absente du document, réponds « ${REFUSAL_PHRASE} ». ` +
+  `Les tâches sur le texte — orthographe, clarté, résumé, comptage — sont bienvenues.)`
 
 // Température basse pour les usages ancrés (chat/résumé) : le défaut (~0,8) rend le modèle
 // « créatif » et favorise l'hallucination ; ~0,2 le maintient fidèle au texte fourni.

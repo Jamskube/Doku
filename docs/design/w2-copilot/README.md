@@ -156,9 +156,12 @@ Barre de sélection du proto → prop `initialView` : `onboarding | empty | stre
 ### 1. Onboarding (aucun modèle) — `screens/01-onboarding-*`
 Centré : tuile 54×54 (`--surface-2`, rayon 15) avec l'icône assistant, titre
 **« Activez votre copilote »**, texte expliquant que tout tourne **en local**. Carte modèle
-conseillé `qwen2.5:3b` (nom mono + badge « conseillé », « 1,9 Go · léger, rapide »), bouton plein
+conseillé (nom mono + badge « conseillé » + taille/qualités), bouton plein
 `--ink` **« Télécharger ce modèle »** (icône `download`). Lien souligné « Voir d'autres modèles »
 → état Modèles.
+> **Modèle conseillé canonique (2026-07-17)** : `qwen2.5:1.5b-instruct-q4_0` (935 Mo) — décision
+> deep-research + philosophie « gadget » ; la maquette illustrait `qwen2.5:3b`, périmé. En
+> implémentation, la section AJOUTER remplace le lien « Voir d'autres modèles » (même intention).
 
 ### 2. Conversation vide — `screens/02-empty-*`
 Titre **« Bonjour. »**, sous‑texte, puis 3 **actions document** en liste (cartes cliquables

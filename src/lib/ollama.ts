@@ -56,7 +56,8 @@ export interface OllamaModel {
 
 // Taille lisible (base 1000) : octets → « 397 Mo » / « 2.0 Go ».
 export function formatBytes(n: number): string {
-  if (n >= 1e9) return `${(n / 1e9).toFixed(1)} Go`
+  // Virgule décimale : on affiche du français (« 1,9 Go », pas « 1.9 Go »).
+  if (n >= 1e9) return `${(n / 1e9).toFixed(1).replace('.', ',')} Go`
   if (n >= 1e6) return `${Math.round(n / 1e6)} Mo`
   if (n >= 1e3) return `${Math.round(n / 1e3)} Ko`
   return `${n} o`
@@ -179,7 +180,7 @@ export async function chat(
 export async function pull(
   port: number,
   model: string,
-  onProgress: (pct: number) => void,
+  onProgress: (pct: number, completed: number, total: number) => void,
   signal?: AbortSignal,
 ): Promise<void> {
   let reader: ReadableStreamDefaultReader<Uint8Array> | undefined
@@ -214,7 +215,9 @@ export async function pull(
             completed += l.completed
             total += l.total
           }
-          if (total > 0) onProgress(Math.round((completed / total) * 100))
+          // Octets relayés en plus du % : sur un pull multi-Go, « 395 Mo / 935 Mo » distingue
+          // une progression réelle d'un blocage (le % seul ne le dit pas).
+          if (total > 0) onProgress(Math.round((completed / total) * 100), completed, total)
         }
       }
     }
