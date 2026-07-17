@@ -1,10 +1,11 @@
 <script lang="ts">
   import { untrack } from 'svelte'
-  import { activeTab, app, editorSel } from '../lib/stores.svelte'
+  import { activeTab, app } from '../lib/stores.svelte'
   import { closeWindow, minimizeWindow, toggleMaximizeWindow } from '../lib/tauri'
   import { formatBytes } from '../lib/ollama'
-  import { acceptRephrase, cancelPull, copilot, newChat, pullModel, refreshModels, rejectRephrase, removeModel, rephraseSelection, retryGeneration, sendChat, setActiveModel, stopChat, summarizeDoc } from '../lib/copilot.svelte'
+  import { acceptRephrase, beginOpenAiAuth, cancelOpenAiConnection, cancelPull, copilot, disconnectOpenAiAccount, newChat, pullModel, refreshModels, refreshOpenAiStatus, rejectRephrase, removeModel, retryGeneration, sendChat, setActiveModel, setCopilotProvider, stopChat, summarizeDoc } from '../lib/copilot.svelte'
   import { MAX_DOC_CHARS } from '../lib/copilot-service'
+  import { openOpenAiAuthPage, OPENAI_MODEL } from '../lib/openai'
   import { renderChatMarkdown } from '../lib/export/render-md'
 
   // Modèle conseillé (carte d'onboarding) + suggestions. Toujours des tags -q4_0 explicites
@@ -21,9 +22,11 @@
   // `refreshModels` (lit ET écrit copilot.*) est `untrack`é pour ne pas s'auto-re-déclencher.
   // La vue « chat » ne démarre JAMAIS le moteur (coquille statique) → aucun spawn au boot.
   let pullName = $state('')
+  let authCodeCopied = $state(false)
   $effect(() => {
     if (app.copilotOpen && app.copilotView === 'models') {
-      untrack(() => void refreshModels())
+      if (app.copilotProvider === 'openai') untrack(() => void refreshOpenAiStatus())
+      else untrack(() => void refreshModels())
     }
   })
 
@@ -44,6 +47,14 @@
     void pullModel(model)
   }
 
+  async function copyOpenAiCode() {
+    const code = copilot.openAiAuth?.userCode
+    if (!code) return
+    await navigator.clipboard.writeText(code)
+    authCodeCopied = true
+    setTimeout(() => (authCodeCopied = false), 1600)
+  }
+
   // Suppression d'un modèle : confirmation INLINE dans la ligne (pas de confirm() natif qui
   // casse l'univers de l'app, pas de modale — registre produit). La ligne se transforme en
   // question Annuler/Supprimer ; le modèle ACTIF est signalé explicitement.
@@ -58,7 +69,10 @@
   let draft = $state('')
   let promptEl = $state<HTMLTextAreaElement | null>(null)
   let scroller = $state<HTMLElement | null>(null)
+  let composerFace = $state<'question' | 'context'>('question')
   let atBottom = true // ne pas voler le scroll si l'utilisateur est remonté relire
+
+  const numberFormatter = new Intl.NumberFormat('fr-FR')
 
   // Doc courant tronqué en Q&A (14.3) : signal DÉTERMINISTE à l'utilisateur (ne dépend pas du
   // modèle) — un « je ne trouve pas » peut alors venir de la partie non lue, pas d'une absence.
@@ -66,6 +80,44 @@
     const t = activeTab()
     return !!t && t.kind !== 'pdf' && t.content.length > MAX_DOC_CHARS
   })
+
+  const contextDetails = $derived.by(() => {
+    const t = activeTab()
+    if (!t) return { count: 0, name: 'Aucun document actif', meta: 'Le chat ne reçoit aucun contenu.', state: 'Vide' }
+    if (t.kind === 'pdf') {
+      return { count: 1, name: t.name, meta: 'PDF · texte non extractible pour l’instant', state: 'Métadonnées' }
+    }
+    const format = t.kind === 'md' ? 'Markdown' : t.kind === 'html' ? 'HTML' : 'Texte'
+    const readableChars = Math.min(t.content.length, MAX_DOC_CHARS)
+    return {
+      count: 1,
+      name: t.name,
+      meta: `${format} · ${numberFormatter.format(readableChars)} caractères transmis`,
+      state: docTruncated ? 'Lecture partielle' : 'Document entier',
+    }
+  })
+
+  function showComposerFace(face: 'question' | 'context', focus = false) {
+    composerFace = face
+    if (!focus) return
+    requestAnimationFrame(() => {
+      if (face === 'question') promptEl?.focus()
+      else document.getElementById('cop-context-tab')?.focus()
+    })
+  }
+
+  function onComposerTabKey(e: KeyboardEvent, face: 'question' | 'context') {
+    const switchKey = e.key === 'ArrowUp' || e.key === 'ArrowDown' || e.key === 'ArrowLeft' || e.key === 'ArrowRight'
+    if (switchKey) {
+      e.preventDefault()
+      const next = face === 'question' ? 'context' : 'question'
+      composerFace = next
+      requestAnimationFrame(() => document.getElementById(next === 'question' ? 'cop-question-tab' : 'cop-context-tab')?.focus())
+    } else if (e.key === 'Escape' && face === 'context') {
+      e.preventDefault()
+      showComposerFace('question', true)
+    }
+  }
 
   // Envoie le brouillon ; capture un SNAPSHOT du doc courant (le contexte ne change pas si
   // l'utilisateur change d'onglet pendant la génération).
@@ -93,15 +145,6 @@
     }
     const t = activeTab()
     void summarizeDoc({ name: t?.name ?? null, text: t?.content ?? '', kind: t?.kind ?? 'md' }, kind === 'keypoints' ? 'keypoints' : 'summary')
-  }
-
-  // Reformuler (16.1) : la barre n'apparaît qu'avec une sélection non vide dans un document
-  // éditable (pas un PDF). Réutilise le pipeline generate() — proposition, puis Accepter/Refuser.
-  const selLen = $derived(editorSel.text.trim().length)
-  const canRephrase = $derived(selLen > 0 && activeTab()?.kind !== 'pdf' && !copilot.generating)
-
-  function rephrase(mode: 'clarify' | 'shorten' | 'tone') {
-    void rephraseSelection(mode)
   }
 
   async function copyMessage(text: string) {
@@ -155,16 +198,45 @@
   </section>
 {/snippet}
 
-<aside class="cop-panel">
+<aside
+  class="cop-panel"
+  class:open={app.copilotOpen}
+  class:expanded={app.copilotExpanded}
+  aria-hidden={!app.copilotOpen}
+  inert={!app.copilotOpen}
+>
   <!-- En-tête : contrôles panneau + contrôles fenêtre (draggable, motif TitleBar) -->
   <header class="cop-head" data-tauri-drag-region>
-    <span class="cop-title" data-tauri-drag-region>Doku-San</span>
+    <div class="cop-identity" data-tauri-drag-region>
+      <span class="cop-mark" data-tauri-drag-region>
+        <span class="msr" style="font-size:15px" data-tauri-drag-region>spa</span>
+      </span>
+      <span class="cop-title" data-tauri-drag-region>Doku-San</span>
+      <span class="cop-local" class:cloud={app.copilotProvider === 'openai'} data-tauri-drag-region>
+        {app.copilotProvider === 'openai' ? 'cloud' : 'local'}
+      </span>
+    </div>
     <div class="cop-head-spacer" data-tauri-drag-region></div>
+    <button
+      class="cop-ic"
+      class:active={app.copilotExpanded}
+      title={app.copilotExpanded ? 'Réduire le chat' : 'Agrandir le chat'}
+      aria-label={app.copilotExpanded ? 'Réduire le chat' : 'Agrandir le chat'}
+      aria-pressed={app.copilotExpanded}
+      onclick={() => (app.copilotExpanded = !app.copilotExpanded)}
+    >
+      <span class="msr" style="font-size:17px">{app.copilotExpanded ? 'close_fullscreen' : 'open_in_full'}</span>
+    </button>
     {#if app.copilotView === 'models'}
       <button class="cop-ic" title="Retour au chat" aria-label="Retour au chat" onclick={() => (app.copilotView = 'chat')}>
         <span class="msr" style="font-size:19px">arrow_back</span>
       </button>
     {:else}
+      {#if copilot.messages.length > 0}
+        <button class="cop-ic" title="Nouvelle conversation" aria-label="Nouvelle conversation" onclick={newChat}>
+          <span class="msr" style="font-size:19px">add_comment</span>
+        </button>
+      {/if}
       <button class="cop-ic" title="Gérer les modèles" aria-label="Gérer les modèles" onclick={() => (app.copilotView = 'models')}>
         <span class="msr" style="font-size:19px">layers</span>
       </button>
@@ -185,6 +257,113 @@
   <div class="cop-card">
     <div class="cop-scroll" bind:this={scroller} onscroll={onScroll}>
       {#if app.copilotView === 'models'}
+        <div class="cop-provider-switch" role="tablist" aria-label="Fournisseur de Doku-San">
+          <button
+            class:active={app.copilotProvider === 'ollama'}
+            role="tab"
+            aria-selected={app.copilotProvider === 'ollama'}
+            onclick={() => setCopilotProvider('ollama')}
+          >
+            <span class="msr">memory</span>
+            <span><strong>Sur cet appareil</strong><small>Ollama · privé</small></span>
+          </button>
+          <button
+            class:active={app.copilotProvider === 'openai'}
+            role="tab"
+            aria-selected={app.copilotProvider === 'openai'}
+            onclick={() => setCopilotProvider('openai')}
+          >
+            <span class="msr">cloud</span>
+            <span><strong>OpenAI</strong><small>Compte ChatGPT · cloud</small></span>
+          </button>
+        </div>
+
+        {#if app.copilotProvider === 'openai'}
+          <div class="cop-openai-view">
+            <div class="cop-cloud-hero">
+              <div class="cop-cloud-head">
+                <span class="cop-cloud-icon"><span class="msr">cloud</span></span>
+                <span class="cop-cloud-name">
+                  <strong>{OPENAI_MODEL}</strong>
+                  <small>GPT‑5.6 Luna · raisonnement faible</small>
+                </span>
+                {#if copilot.openAiChecking}
+                  <span class="cop-cloud-status checking">Vérification…</span>
+                {:else if copilot.openAiAuthenticated && copilot.openAiPreferredAvailable === false}
+                  <span class="cop-cloud-status unavailable">Luna indisponible</span>
+                {:else if copilot.openAiAuthenticated}
+                  <span class="cop-cloud-status ready"><span class="cop-dot breathe"></span>Connecté</span>
+                {:else if copilot.openAiAuthPhase === 'waiting'}
+                  <span class="cop-cloud-status checking">En attente…</span>
+                {:else}
+                  <span class="cop-cloud-status">À connecter</span>
+                {/if}
+              </div>
+              <div class="cop-cloud-foot">
+                <span><b>GPT‑5.6</b><small>LUNA</small></span>
+                <i></i>
+                <span><b>OpenAI</b><small>FOURNISSEUR</small></span>
+              </div>
+            </div>
+
+            {#if copilot.openAiAuthenticated}
+              <div class:warn={copilot.openAiPreferredAvailable === false} class="cop-cloud-note ok" role="status">
+                <span class="msr">{copilot.openAiPreferredAvailable === false ? 'warning' : 'verified_user'}</span>
+                <span>
+                  <strong>{copilot.openAiPreferredAvailable === false ? 'GPT‑5.6 Luna n’est pas disponible' : 'Compte OpenAI connecté'}</strong>
+                  <small>
+                    {copilot.openAiPreferredAvailable === false
+                      ? 'Cet abonnement ne propose pas Luna dans Codex. Doku ne lancera aucune génération avec un autre modèle à votre insu.'
+                      : 'La session est protégée par Windows. Aucune clé API n’est demandée ni enregistrée.'}
+                  </small>
+                </span>
+              </div>
+              {#if copilot.openAiStatusError}
+                <p class="cop-auth-error" role="status">{copilot.openAiStatusError}</p>
+              {/if}
+              <button class="cop-btn-quiet" onclick={() => void disconnectOpenAiAccount()}>
+                <span class="msr">logout</span>Déconnecter le compte
+              </button>
+            {:else if copilot.openAiAuthPhase === 'waiting' && copilot.openAiAuth}
+              <section class="cop-cloud-setup cop-auth-wait" aria-live="polite">
+                <span class="cop-auth-mark"><span class="msr">open_in_browser</span></span>
+                <h3>Validez dans votre navigateur</h3>
+                <p>Connectez-vous à OpenAI, puis saisissez ce code sur la page officielle.</p>
+                <button class="cop-auth-code" title="Copier le code" onclick={() => void copyOpenAiCode()}>
+                  <span>{copilot.openAiAuth.userCode}</span>
+                  <span class="msr">{authCodeCopied ? 'check' : 'content_copy'}</span>
+                </button>
+                <div class="cop-auth-actions">
+                  <button class="cop-btn-fill" onclick={() => void openOpenAiAuthPage(copilot.openAiAuth!.verificationUrl)}>
+                    <span class="msr">open_in_new</span>Ouvrir OpenAI
+                  </button>
+                  <button class="cop-btn-quiet" onclick={() => void cancelOpenAiConnection()}>Annuler</button>
+                </div>
+                <div class="cop-auth-pending"><span></span>En attente de votre validation…</div>
+                {#if copilot.openAiAuthError}<p class="cop-auth-error" role="status">{copilot.openAiAuthError}</p>{/if}
+              </section>
+            {:else}
+              <section class="cop-cloud-setup">
+                <h3>Connecter votre compte OpenAI</h3>
+                <p>Utilisez votre abonnement ChatGPT/Codex comme moteur de Doku-San. La connexion se fait sur la page officielle OpenAI.</p>
+                <ol>
+                  <li><span class="msr">key_off</span><p><strong>Aucune clé API</strong><small>Doku ne vous demandera jamais d’en créer une.</small></p></li>
+                  <li><span class="msr">verified_user</span><p><strong>Validation par OpenAI</strong><small>Votre mot de passe ne transite jamais par Doku.</small></p></li>
+                  <li><span class="msr">lock</span><p><strong>Session protégée</strong><small>Les jetons restent dans le coffre Windows.</small></p></li>
+                </ol>
+                <button class="cop-btn-fill" onclick={() => void beginOpenAiAuth()} disabled={copilot.openAiAuthPhase === 'starting'}>
+                  <span class="msr">login</span>{copilot.openAiAuthPhase === 'starting' ? 'Connexion…' : 'Se connecter avec OpenAI'}
+                </button>
+                {#if copilot.openAiAuthError}<p class="cop-auth-error" role="status">{copilot.openAiAuthError}</p>{/if}
+              </section>
+            {/if}
+
+            <div class="cop-cloud-privacy">
+              <span class="msr">info</span>
+              <p><strong>Envoi volontaire vers le cloud.</strong> Quand OpenAI est actif, la question et le contexte affiché sont transmis au service Codex. Le mode Ollama reste entièrement local.</p>
+            </div>
+          </div>
+        {:else}
         {#if copilot.error}
           <div class="cop-msg err row">
             <span class="grow-wrap">{copilot.error}</span>
@@ -319,20 +498,28 @@
             {@render addSection(installableSuggestions)}
           </div>
         {/if}
+        {/if}
       {:else if copilot.messages.length === 0}
         <!-- Conversation vide : accueil + actions rapides sur le document courant -->
         <div class="cop-chat-empty">
-          <div class="cop-empty-title">Bonjour.</div>
-          <p class="cop-empty-sub">Posez une question ou lancez une action sur le document ouvert.</p>
+          <div class="cop-empty-mark" aria-hidden="true"><span class="msr">spa</span></div>
+          <div class="cop-empty-title">Bonjour, que puis-je faire&nbsp;?</div>
+          <p class="cop-empty-sub">Discutez avec votre document ou partez d’une suggestion.</p>
           <div class="cop-actions">
             <button class="cop-action" onclick={() => quickAction('summary')}>
-              <span class="msr" style="font-size:19px;color:var(--ink-4)">summarize</span><span class="grow">Résumer ce document</span><span class="msr" style="font-size:16px;color:var(--ink-5)">arrow_forward</span>
+              <span class="cop-action-icon"><span class="msr">summarize</span></span>
+              <span class="cop-action-copy"><strong>Résumer le document</strong><small>Obtenir l’essentiel en quelques points</small></span>
+              <span class="msr cop-action-arrow">arrow_forward</span>
             </button>
             <button class="cop-action" onclick={() => quickAction('question')}>
-              <span class="msr" style="font-size:19px;color:var(--ink-4)">quiz</span><span class="grow">Poser une question sur ce document</span><span class="msr" style="font-size:16px;color:var(--ink-5)">arrow_forward</span>
+              <span class="cop-action-icon"><span class="msr">chat_bubble</span></span>
+              <span class="cop-action-copy"><strong>Poser une question</strong><small>Interroger le contenu du document</small></span>
+              <span class="msr cop-action-arrow">arrow_forward</span>
             </button>
             <button class="cop-action" onclick={() => quickAction('keypoints')}>
-              <span class="msr" style="font-size:19px;color:var(--ink-4)">key</span><span class="grow">Extraire les points clés</span><span class="msr" style="font-size:16px;color:var(--ink-5)">arrow_forward</span>
+              <span class="cop-action-icon"><span class="msr">key</span></span>
+              <span class="cop-action-copy"><strong>Extraire les points clés</strong><small>Repérer les idées et décisions importantes</small></span>
+              <span class="msr cop-action-arrow">arrow_forward</span>
             </button>
           </div>
         </div>
@@ -346,11 +533,13 @@
               <!-- État de CONFIG (aucun modèle actif) : carte neutre, pas une erreur — rien n'a
                    échoué. Le bouton fait le travail (pas de « icône calques » à traduire). -->
               <div class="cop-err-card" role="status">
-                <span class="msr" style="font-size:20px;color:var(--ink-3);flex:0 0 auto">layers</span>
+                <span class="msr" style="font-size:20px;color:var(--ink-3);flex:0 0 auto">{m.config === 'openai' ? 'cloud_off' : 'layers'}</span>
                 <div>
-                  <div class="cop-err-title">Aucun modèle actif</div>
+                  <div class="cop-err-title">{m.config === 'openai' ? 'Compte OpenAI non connecté' : 'Aucun modèle actif'}</div>
                   <p class="cop-err-msg">{m.content}</p>
-                  <button class="cop-err-btn" onclick={() => (app.copilotView = 'models')}>Choisir un modèle</button>
+                  <button class="cop-err-btn" onclick={() => (app.copilotView = 'models')}>
+                    {m.config === 'openai' ? 'Connecter OpenAI' : 'Choisir un modèle'}
+                  </button>
                 </div>
               </div>
             {:else if m.failed}
@@ -363,7 +552,7 @@
                     {#if m.retry}
                       <button class="cop-err-btn primary" onclick={() => retryGeneration(i)}>Réessayer</button>
                     {/if}
-                    <button class="cop-err-btn" onclick={() => (app.copilotView = 'models')}>Vérifier le moteur</button>
+                    <button class="cop-err-btn" onclick={() => (app.copilotView = 'models')}>Vérifier le fournisseur</button>
                   </div>
                 </div>
               </div>
@@ -434,70 +623,139 @@
     <!-- Zone de saisie « imbriquée » (chat réel, 14.1) -->
     {#if app.copilotView === 'chat'}
       <div class="cop-input-wrap">
-        {#if canRephrase}
-          <!-- Reformuler la sélection (16.1) : contextuel, n'apparaît qu'avec une sélection. -->
-          <div class="cop-rephrase-bar">
-            <span class="cop-rephrase-lbl"><span class="msr" style="font-size:15px">edit_note</span>Sélection · {selLen} car.</span>
-            <div class="cop-rephrase-acts">
-              <button class="cop-rephrase-btn" title="Rendre plus clair" onclick={() => rephrase('clarify')}>Clarifier</button>
-              <button class="cop-rephrase-btn" title="Rendre plus court" onclick={() => rephrase('shorten')}>Raccourcir</button>
-              <button class="cop-rephrase-btn" title="Ton plus neutre et professionnel" onclick={() => rephrase('tone')}>Ton neutre</button>
-            </div>
-          </div>
-        {/if}
-        <div class="cop-input">
-          <div class="cop-input-ctx">
-            <!-- Le nom passe dans un enfant flex .grow : text-overflow ne s'applique pas au
-                 conteneur inline-flex lui-même (les noms longs se coupaient net, sans «…»). -->
-            <span class="cop-ctx-chip">
-              <span class="msr" style="font-size:14px;color:var(--ink-4)">description</span><span class="grow">{activeTab()?.name ?? 'aucun document'}</span>
-            </span>
-            {#if docTruncated}
-              <!-- role=note + aria-label : l'explication complète est annoncée au lecteur
-                   d'écran (le title ne sert qu'au survol souris). -->
-              <span
-                class="cop-ctx-warn"
-                role="note"
-                title="Document trop long : seul son début est lu par le copilote. Une réponse « je ne trouve pas » peut concerner la partie non lue."
-                aria-label="Lecture partielle : document trop long, seul son début est lu par le copilote."
-              >
-                <span class="msr" style="font-size:13px">warning</span>lecture partielle
-              </span>
-            {/if}
-            <button class="cop-ctx-add" disabled title="Contexte multi-documents — à venir">
-              <span class="msr" style="font-size:14px">add</span>Contexte
+        <div class="cop-composer-shell" role="tablist" aria-label="Question et contexte" aria-orientation="vertical">
+          {#if composerFace === 'question'}
+            <button
+              id="cop-context-tab"
+              class="cop-composer-back"
+              type="button"
+              role="tab"
+              aria-selected="false"
+              aria-controls="cop-context-panel"
+              tabindex="-1"
+              onclick={() => showComposerFace('context')}
+              onkeydown={(e) => onComposerTabKey(e, 'context')}
+            >
+              <span class="cop-composer-back-icon"><span class="msr">layers</span></span>
+              <span class="cop-composer-back-label">Contexte</span>
+              <span class="cop-composer-note">{contextDetails.count} document{contextDetails.count === 1 ? '' : 's'}</span>
+              <span class="msr cop-composer-switch">swap_vert</span>
             </button>
-            {#if copilot.messages.length > 0}
-              <!-- add_comment, pas refresh : « refresh » se lit « régénérer » alors que l'action
-                   EFFACE la conversation — le glyphe doit dire la vérité. -->
-              <button class="cop-newchat" title="Nouvelle conversation" aria-label="Nouvelle conversation" onclick={newChat}>
-                <span class="msr" style="font-size:15px">add_comment</span>
-              </button>
-            {/if}
-          </div>
-          <div class="cop-input-field">
-            <button class="cop-input-attach" disabled aria-label="Joindre"><span class="msr" style="font-size:20px">add</span></button>
-            <textarea
-              class="cop-input-ta"
-              bind:this={promptEl}
-              bind:value={draft}
-              rows="1"
-              placeholder="Votre question…"
-              aria-label="Poser une question sur ce document"
-              onkeydown={onPromptKey}
-            ></textarea>
-            {#if copilot.generating}
-              <button class="cop-input-send" title="Arrêter" aria-label="Arrêter la génération" onclick={stopChat}>
-                <span class="msr" style="font-size:17px;font-variation-settings:'FILL' 1">stop</span>
-              </button>
-            {:else}
-              <button class="cop-input-send" title="Envoyer" aria-label="Envoyer" disabled={!draft.trim()} onclick={send}>
-                <span class="msr" style="font-size:19px">arrow_upward</span>
-              </button>
-            {/if}
-          </div>
+          {:else}
+            <button
+              id="cop-question-tab"
+              class="cop-composer-back"
+              type="button"
+              role="tab"
+              aria-selected="false"
+              aria-controls="cop-question-panel"
+              tabindex="-1"
+              onclick={() => showComposerFace('question', true)}
+              onkeydown={(e) => onComposerTabKey(e, 'question')}
+            >
+              <span class="cop-composer-back-icon"><span class="msr">chat_bubble</span></span>
+              <span class="cop-composer-back-label">Question</span>
+              {#if draft.trim()}<span class="cop-composer-note">Brouillon conservé</span>{/if}
+              <span class="msr cop-composer-switch">swap_vert</span>
+            </button>
+          {/if}
+
+          {#key composerFace}
+            <section class="cop-composer-front">
+              {#if composerFace === 'question'}
+                <span
+                  id="cop-question-tab"
+                  class="cop-composer-active-label"
+                  role="tab"
+                  aria-selected="true"
+                  aria-controls="cop-question-panel"
+                >
+                  Question
+                </span>
+              {:else}
+                <button
+                  id="cop-context-tab"
+                  class="cop-composer-front-tab"
+                  type="button"
+                  role="tab"
+                  aria-selected="true"
+                  aria-controls="cop-context-panel"
+                  tabindex="0"
+                  onclick={() => showComposerFace('context')}
+                  onkeydown={(e) => onComposerTabKey(e, 'context')}
+                >
+                  <span class="msr">layers</span>
+                  <span>Contexte</span>
+                  <span class="cop-composer-note">{contextDetails.count} document{contextDetails.count === 1 ? '' : 's'}</span>
+                </button>
+              {/if}
+
+              <div class="cop-composer-panels">
+                <div
+                  id="cop-question-panel"
+                  class="cop-composer-panel cop-question-drawer"
+                  class:active={composerFace === 'question'}
+                  role="tabpanel"
+                  aria-labelledby="cop-question-tab"
+                  aria-hidden={composerFace !== 'question'}
+                  inert={composerFace !== 'question'}
+                >
+                  <button class="cop-input-attach" disabled aria-label="Joindre"><span class="msr" style="font-size:20px">add</span></button>
+                  <textarea
+                    class="cop-input-ta"
+                    bind:this={promptEl}
+                    bind:value={draft}
+                    rows="1"
+                    placeholder="Demandez à Doku-San…"
+                    aria-label="Poser une question sur ce document"
+                    onkeydown={onPromptKey}
+                  ></textarea>
+                  {#if copilot.generating}
+                    <button class="cop-input-send" title="Arrêter" aria-label="Arrêter la génération" onclick={stopChat}>
+                      <span class="msr" style="font-size:17px;font-variation-settings:'FILL' 1">stop</span>
+                    </button>
+                  {:else}
+                    <button class="cop-input-send" title="Envoyer" aria-label="Envoyer" disabled={!draft.trim()} onclick={send}>
+                      <span class="msr" style="font-size:19px">arrow_upward</span>
+                    </button>
+                  {/if}
+                </div>
+
+                <div
+                  id="cop-context-panel"
+                  class="cop-composer-panel cop-context-drawer"
+                  class:active={composerFace === 'context'}
+                  role="tabpanel"
+                  aria-labelledby="cop-context-tab"
+                  aria-hidden={composerFace !== 'context'}
+                  inert={composerFace !== 'context'}
+                >
+                  <span class="cop-context-icon" aria-hidden="true"><span class="msr">description</span></span>
+                  <span class="cop-context-copy">
+                    <strong>{contextDetails.name}</strong>
+                    <small>{contextDetails.meta}</small>
+                  </span>
+                  <span
+                    class="cop-context-state"
+                    class:warn={docTruncated}
+                    role={docTruncated ? 'note' : undefined}
+                    title={docTruncated ? 'Document trop long : seul son début est transmis au copilote.' : contextDetails.state}
+                  >
+                    {#if docTruncated}<span class="msr">warning</span>{/if}
+                    {contextDetails.state}
+                  </span>
+                  <button class="cop-context-add" disabled title="Contexte multi-documents — à venir" aria-label="Ajouter un document au contexte, bientôt disponible">
+                    <span class="msr">add</span>
+                  </button>
+                </div>
+              </div>
+            </section>
+          {/key}
         </div>
-        <div class="cop-disclaimer">Doku peut se tromper — vérifiez les informations importantes.</div>
+        <div class="cop-disclaimer">
+          {app.copilotProvider === 'openai' ? 'OpenAI · contexte envoyé au cloud' : 'Local · rien ne quitte cet appareil'}
+          <span>·</span> Doku peut se tromper.
+        </div>
       </div>
     {/if}
   </div>
@@ -505,12 +763,62 @@
 
 <style>
   .cop-panel {
-    flex: 0 0 344px;
+    --copilot-width: min(400px, calc(100vw - 40px));
+    flex: 0 0 0;
+    width: 0;
+    max-width: 0;
+    min-width: 0;
     height: 100%;
     display: flex;
     flex-direction: column;
     background: var(--cream-base);
-    animation: doku-panel-in 200ms cubic-bezier(0.22, 1, 0.36, 1);
+    overflow: hidden;
+    opacity: 0;
+    transform: translateX(22px);
+    visibility: hidden;
+    pointer-events: none;
+    contain: layout paint;
+    transition:
+      flex-grow 240ms cubic-bezier(0.4, 0, 1, 1),
+      flex-basis 240ms cubic-bezier(0.4, 0, 1, 1),
+      width 240ms cubic-bezier(0.4, 0, 1, 1),
+      max-width 240ms cubic-bezier(0.4, 0, 1, 1),
+      opacity 130ms ease-in,
+      transform 200ms cubic-bezier(0.4, 0, 1, 1),
+      visibility 0s linear 240ms;
+  }
+  .cop-panel.open {
+    flex-basis: var(--copilot-width);
+    width: var(--copilot-width);
+    max-width: var(--copilot-width);
+    opacity: 1;
+    transform: translateX(0);
+    visibility: visible;
+    pointer-events: auto;
+    transition:
+      flex-grow 240ms cubic-bezier(0.4, 0, 1, 1),
+      flex-basis 240ms cubic-bezier(0.4, 0, 1, 1),
+      width 240ms cubic-bezier(0.4, 0, 1, 1),
+      max-width 240ms cubic-bezier(0.4, 0, 1, 1),
+      opacity 130ms ease-in,
+      transform 200ms cubic-bezier(0.4, 0, 1, 1),
+      visibility 0s;
+  }
+  .cop-panel.open.expanded {
+    flex-grow: 1;
+    width: auto;
+    max-width: none;
+  }
+  .cop-panel > .cop-head,
+  .cop-panel > .cop-card {
+    width: var(--copilot-width);
+    min-width: var(--copilot-width);
+    align-self: flex-end;
+  }
+  .cop-panel.expanded > .cop-head,
+  .cop-panel.expanded > .cop-card {
+    width: 100%;
+    min-width: 0;
   }
 
   /* En-tête */
@@ -519,11 +827,22 @@
     flex-shrink: 0;
     display: flex;
     align-items: center;
-    gap: 6px;
-    padding: 0 2px 0 15px;
+    gap: 5px;
+    padding: 0 2px 0 10px;
     user-select: none;
   }
-  .cop-title { font-size: 12.5px; font-weight: 600; color: var(--ink-2); }
+  .cop-identity { display: flex; align-items: center; gap: 7px; min-width: 0; }
+  .cop-mark {
+    width: 24px; height: 24px; display: inline-flex; align-items: center; justify-content: center;
+    border: 1px solid var(--line-1); border-radius: 8px; background: var(--cream-content); color: var(--ink-3);
+  }
+  .cop-title { font-size: 12.5px; font-weight: 600; color: var(--ink-2); white-space: nowrap; }
+  .cop-local {
+    height: 18px; display: inline-flex; align-items: center; padding: 0 6px;
+    border-radius: 999px; background: var(--accent-soft); color: var(--ink-4);
+    font-size: 9.5px; font-weight: 500; letter-spacing: 0.02em;
+  }
+  .cop-local.cloud { background: rgba(82, 119, 178, 0.14); color: var(--ink-3); }
   .cop-head-spacer { flex: 1; align-self: stretch; }
   .cop-sep { width: 1px; height: 16px; background: var(--line-2); margin: 0 4px; }
   .cop-ic,
@@ -536,13 +855,20 @@
     background: transparent;
     color: var(--ink-3);
     cursor: pointer;
+    transition: color 140ms ease, background 140ms ease, transform 100ms ease;
   }
   .cop-ic { width: 28px; height: 28px; border-radius: 7px; color: var(--ink-4); }
-  .cop-win { width: 38px; }
+  .cop-win { width: 38px; border-radius: 7px; }
   .cop-win.close { width: 40px; }
   .cop-ic:hover,
   .cop-win:hover { background: var(--surface-hover); color: var(--ink); }
-  .cop-win.close:hover { background: var(--err); color: #fff; }
+  .cop-ic:active,
+  .cop-win:active { background: var(--accent-soft); transform: translateY(1px); }
+  .cop-ic:focus-visible,
+  .cop-win:focus-visible { outline: 1px solid var(--line-3); outline-offset: -2px; background: var(--surface-hover); }
+  .cop-ic.active { background: var(--accent-soft); color: var(--ink); }
+  .cop-win.close:hover { background: var(--window-close); color: #fff; }
+  .cop-win.close:active { background: var(--window-close-active); color: #fff; }
 
   /* Corps */
   .cop-card {
@@ -555,9 +881,103 @@
     border-radius: 0 14px 0 0;
     overflow: hidden;
   }
-  .cop-scroll { flex: 1; min-height: 0; overflow-y: auto; padding: 0 13px; }
+  .cop-panel.expanded .cop-card { border-radius: 14px 14px 0 0; }
+  .cop-scroll { flex: 1; min-height: 0; overflow-y: auto; padding: 0 18px; }
+  .cop-panel.expanded .cop-scroll {
+    padding-inline: max(24px, calc((100% - 760px) / 2));
+  }
   .cop-msg { margin: 14px 4px; font-size: 12.5px; color: var(--ink-4); }
   .cop-msg.err { color: var(--err-text); }
+
+  /* Fournisseur : un choix binaire familier, distinct de la bibliothèque de modèles. */
+  .cop-provider-switch {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 4px; margin: 12px 2px 16px; padding: 4px;
+    border-radius: 13px; background: var(--surface-2);
+  }
+  .cop-provider-switch button {
+    min-width: 0; min-height: 48px; display: flex; align-items: center; gap: 9px; padding: 7px 10px;
+    border: 1px solid transparent; border-radius: 10px; background: transparent; color: var(--ink-4);
+    font-family: var(--font-sans); text-align: left; cursor: pointer;
+  }
+  .cop-provider-switch button:hover { color: var(--ink); background: var(--surface-hover); }
+  .cop-provider-switch button.active { border-color: var(--line-1); background: var(--cream-content); color: var(--ink); }
+  .cop-provider-switch button:focus-visible { outline: 2px solid var(--line-3); outline-offset: 1px; }
+  .cop-provider-switch .msr { flex: 0 0 auto; font-size: 18px; }
+  .cop-provider-switch button > span:last-child { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+  .cop-provider-switch strong { overflow: hidden; font-size: 11.5px; font-weight: 600; white-space: nowrap; text-overflow: ellipsis; }
+  .cop-provider-switch small { font-size: 9.5px; color: var(--ink-4); white-space: nowrap; }
+
+  .cop-openai-view { padding: 0 2px 24px; display: flex; flex-direction: column; gap: 16px; }
+  .cop-cloud-hero { overflow: hidden; border: 1px solid var(--line-2); border-radius: 18px; }
+  .cop-cloud-head { display: flex; align-items: center; gap: 11px; padding: 14px 14px 28px; background: var(--cream-content); }
+  .cop-cloud-icon {
+    width: 42px; height: 42px; flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center;
+    border: 1px solid var(--line-2); border-radius: 12px; background: var(--surface-2); color: var(--ink-2);
+  }
+  .cop-cloud-icon .msr { font-size: 21px; }
+  .cop-cloud-name { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+  .cop-cloud-name strong { overflow: hidden; font-family: var(--font-mono); font-size: 13px; color: var(--ink); white-space: nowrap; text-overflow: ellipsis; }
+  .cop-cloud-name small { font-size: 10.5px; color: var(--ink-4); }
+  .cop-cloud-status {
+    height: 23px; flex: 0 0 auto; display: inline-flex; align-items: center; gap: 5px; padding: 0 9px;
+    border-radius: 999px; background: var(--surface-2); color: var(--ink-4); font-size: 10.5px; font-weight: 600;
+  }
+  .cop-cloud-status.ready { background: rgba(107, 164, 123, 0.16); color: var(--ok-text); }
+  .cop-cloud-status.unavailable { background: rgba(180, 130, 60, 0.12); color: var(--warn-text); }
+  .cop-cloud-status.checking { font-weight: 500; }
+  .cop-cloud-status .cop-dot { width: 6px; height: 6px; border: 0; background: var(--ok); }
+  .cop-cloud-foot { margin-top: -16px; display: flex; align-items: stretch; padding: 14px; border-radius: 16px 16px 0 0; background: var(--surface-2); }
+  .cop-cloud-foot > span { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 3px; }
+  .cop-cloud-foot b { font-family: var(--font-mono); font-size: 13px; font-weight: 600; color: var(--ink); }
+  .cop-cloud-foot small { font-size: 9.5px; color: var(--ink-4); letter-spacing: 0.04em; }
+  .cop-cloud-foot i { width: 1px; background: var(--line-2); }
+
+  .cop-cloud-note, .cop-cloud-privacy { display: flex; align-items: flex-start; gap: 10px; padding: 11px 12px; border-radius: 11px; background: var(--surface-2); }
+  .cop-cloud-note > .msr, .cop-cloud-privacy > .msr { flex: 0 0 auto; margin-top: 1px; font-size: 17px; color: var(--ink-3); }
+  .cop-cloud-note > span:last-child { display: flex; flex-direction: column; gap: 3px; }
+  .cop-cloud-note strong { font-size: 12px; color: var(--ink); }
+  .cop-cloud-note small { font-size: 10.5px; line-height: 1.45; color: var(--ink-4); }
+  .cop-cloud-note.ok > .msr { color: var(--ok-text); }
+  .cop-cloud-note.warn > .msr { color: var(--warn-text); }
+  .cop-cloud-setup { padding: 2px 4px 0; }
+  .cop-cloud-setup h3 { margin: 0 0 6px; font-size: 14px; font-weight: 600; color: var(--ink); }
+  .cop-cloud-setup > p { margin: 0 0 15px; font-size: 11.5px; line-height: 1.55; color: var(--ink-4); }
+  .cop-cloud-setup ol { margin: 0 0 14px; padding: 0; list-style: none; display: flex; flex-direction: column; }
+  .cop-cloud-setup li { display: flex; gap: 10px; padding: 9px 0; border-top: 1px solid var(--line-1); }
+  .cop-cloud-setup li > span { width: 22px; height: 22px; flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; border-radius: 7px; background: var(--surface-2); font-family: var(--font-mono); font-size: 10px; color: var(--ink-3); }
+  .cop-cloud-setup li > span.msr { font-family: 'Material Symbols Rounded'; font-size: 15px; }
+  .cop-cloud-setup li p { margin: 0; display: flex; flex-direction: column; gap: 2px; }
+  .cop-cloud-setup li strong { font-size: 11.5px; font-weight: 600; color: var(--ink-2); }
+  .cop-cloud-setup li small { font-size: 10.5px; line-height: 1.4; color: var(--ink-4); }
+  .cop-cloud-setup .cop-btn-fill .msr { font-size: 16px; }
+  .cop-cloud-setup .cop-btn-fill:disabled { opacity: 0.55; cursor: default; }
+  .cop-btn-quiet {
+    width: 100%; min-height: 34px; display: inline-flex; align-items: center; justify-content: center; gap: 7px;
+    border: 1px solid var(--line-2); border-radius: 9px; background: transparent; color: var(--ink-3);
+    font-family: var(--font-sans); font-size: 11.5px; cursor: pointer;
+  }
+  .cop-btn-quiet:hover { background: var(--surface-hover); color: var(--ink); }
+  .cop-btn-quiet:focus-visible, .cop-auth-code:focus-visible { outline: 2px solid var(--line-3); outline-offset: 2px; }
+  .cop-btn-quiet .msr { font-size: 15px; }
+  .cop-auth-wait { display: flex; flex-direction: column; align-items: center; text-align: center; }
+  .cop-auth-mark {
+    width: 38px; height: 38px; margin-bottom: 10px; display: inline-flex; align-items: center; justify-content: center;
+    border-radius: 11px; background: var(--surface-2); color: var(--ink-3);
+  }
+  .cop-auth-mark .msr { font-size: 20px; }
+  .cop-auth-code {
+    width: 100%; min-height: 52px; margin: 1px 0 12px; padding: 0 14px; display: flex; align-items: center; justify-content: center; gap: 12px;
+    border: 1px solid var(--line-2); border-radius: 12px; background: var(--cream-content); color: var(--ink); cursor: pointer;
+  }
+  .cop-auth-code > span:first-child { font-family: var(--font-mono); font-size: 20px; font-weight: 600; letter-spacing: 0.12em; }
+  .cop-auth-code .msr { font-size: 16px; color: var(--ink-4); }
+  .cop-auth-actions { width: 100%; display: grid; grid-template-columns: 1fr auto; gap: 7px; }
+  .cop-auth-actions .cop-btn-quiet { width: auto; padding-inline: 13px; }
+  .cop-auth-pending { margin-top: 12px; display: inline-flex; align-items: center; gap: 7px; font-size: 10.5px; color: var(--ink-4); }
+  .cop-auth-pending > span { width: 6px; height: 6px; border-radius: 50%; background: var(--ink-4); animation: doku-breathe 1.6s ease-in-out infinite; }
+  .cop-auth-error { margin: 10px 0 0; font-size: 10.5px; line-height: 1.45; color: var(--err-text); text-align: left; }
+  .cop-cloud-privacy p { margin: 0; font-size: 10.5px; line-height: 1.5; color: var(--ink-4); }
+  .cop-cloud-privacy strong { color: var(--ink-3); font-weight: 600; }
 
   .cop-mono { font-family: var(--font-mono); font-size: 12.5px; color: var(--ink); font-weight: 500; }
   .cop-mono.lg { font-size: 15px; line-height: 1.2; }
@@ -656,38 +1076,66 @@
   .cop-chip:hover { background: var(--surface-hover); color: var(--ink); }
 
   /* Chat — accueil */
-  .cop-chat-empty { padding: 20px 4px 8px; }
-  .cop-empty-title { font-size: 16px; font-weight: 600; color: var(--ink); margin-bottom: 4px; }
-  .cop-empty-sub { font-size: 12.5px; line-height: 1.55; color: var(--ink-4); margin-bottom: 18px; }
-  .cop-actions { display: flex; flex-direction: column; gap: 6px; }
-  .cop-action {
-    display: flex; align-items: center; gap: 10px; width: 100%; padding: 11px 12px;
-    background: var(--cream-content); border: 1px solid var(--line-1); border-radius: 11px;
-    color: var(--ink-2); font-family: var(--font-sans); font-size: 13px; text-align: left; cursor: pointer;
+  .cop-chat-empty {
+    min-height: 100%; padding: 32px 2px 68px; display: flex; flex-direction: column;
+    justify-content: center; align-items: center; text-align: center;
   }
-  .cop-action:hover { background: var(--surface-2); border-color: var(--line-2); }
+  .cop-empty-mark {
+    width: 42px; height: 42px; display: flex; align-items: center; justify-content: center;
+    margin-bottom: 17px; border-radius: 14px; background: var(--ink); color: var(--cream-content);
+    box-shadow: 0 8px 22px rgba(var(--shadow-rgb), 0.12);
+  }
+  .cop-empty-mark .msr { font-size: 21px; }
+  .cop-empty-title { font-size: 17px; line-height: 1.3; font-weight: 600; color: var(--ink); margin-bottom: 6px; text-wrap: balance; }
+  .cop-empty-sub { max-width: 31ch; font-size: 12.5px; line-height: 1.55; color: var(--ink-4); margin-bottom: 23px; text-wrap: pretty; }
+  .cop-actions {
+    width: 100%; display: flex; flex-direction: column; overflow: hidden;
+    border: 1px solid var(--line-1); border-radius: 15px; background: var(--cream-content); text-align: left;
+  }
+  .cop-action {
+    display: flex; align-items: center; gap: 11px; width: 100%; min-height: 60px; padding: 9px 12px;
+    background: transparent; border: 0; color: var(--ink-2); font-family: var(--font-sans); text-align: left; cursor: pointer;
+    transition: background 160ms ease, color 160ms ease;
+  }
+  .cop-action + .cop-action { border-top: 1px solid var(--line-1); }
+  .cop-action:hover { background: var(--surface-hover); color: var(--ink); }
+  .cop-action-icon {
+    width: 32px; height: 32px; flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center;
+    border-radius: 10px; background: var(--surface-2); color: var(--ink-3);
+  }
+  .cop-action-icon .msr { font-size: 17px; }
+  .cop-action-copy { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+  .cop-action-copy strong { font-size: 12.5px; line-height: 1.3; font-weight: 550; color: var(--ink-2); }
+  .cop-action-copy small { font-size: 10.5px; line-height: 1.35; color: var(--ink-4); }
+  .cop-action-arrow { flex: 0 0 auto; font-size: 16px; color: var(--ink-5); transition: transform 160ms ease, color 160ms ease; }
+  .cop-action:hover .cop-action-arrow { transform: translateX(2px); color: var(--ink-3); }
 
   /* Chat — conversation */
-  .cop-conv { padding: 14px 2px 8px; display: flex; flex-direction: column; gap: 16px; }
-  .cop-user { display: flex; justify-content: flex-end; padding-left: 36px; }
+  .cop-conv { padding: 20px 2px 18px; display: flex; flex-direction: column; gap: 26px; }
+  .cop-user { display: flex; justify-content: flex-end; padding-left: 44px; }
   .cop-user-bubble {
-    background: var(--surface-2); border: 1px solid var(--line-1); border-radius: 13px 13px 4px 13px;
-    padding: 8px 11px; font-size: 13px; line-height: 1.5; color: var(--ink); white-space: pre-wrap; overflow-wrap: anywhere;
+    max-width: 100%; background: var(--surface-2); border: 0; border-radius: 17px 17px 5px 17px;
+    padding: 9px 13px; font-size: 13px; line-height: 1.55; color: var(--ink); white-space: pre-wrap; overflow-wrap: anywhere;
   }
   /* Le contenu de la conversation doit être COPIABLE (le body global est en user-select:none) :
      sans ça, une question échouée ne peut même pas être re-copiée pour la retaper. */
   .cop-user-bubble, .cop-md, .cop-md-plain, .cop-proposal, .cop-err-msg { user-select: text; }
-  .cop-asst-head { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; }
-  .cop-asst-name { font-size: 11px; color: var(--ink-4); font-weight: 500; }
+  .cop-asst { padding-right: 4px; }
+  .cop-asst-head { display: flex; align-items: center; gap: 7px; margin-bottom: 10px; }
+  .cop-asst-head > .msr {
+    width: 24px; height: 24px; display: inline-flex; align-items: center; justify-content: center;
+    border-radius: 8px; background: var(--surface-2);
+  }
+  .cop-asst-name { font-size: 11.5px; color: var(--ink-3); font-weight: 550; }
   .msr.breathe { animation: doku-breathe 1.8s ease-in-out infinite; }
-  .cop-copy { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border: 0; border-radius: 7px; background: transparent; color: var(--ink-4); cursor: pointer; }
+  .cop-copy { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border: 0; border-radius: 8px; background: transparent; color: var(--ink-4); cursor: pointer; opacity: 0.72; }
   .cop-copy:hover { background: var(--surface-hover); color: var(--ink); }
   .cop-skel-wrap { display: flex; flex-direction: column; gap: 8px; padding-top: 2px; }
   .cop-status { display: flex; align-items: center; gap: 7px; font-size: 12.5px; color: var(--ink-4); padding-top: 2px; }
-  .cop-md-plain { font-size: 13px; line-height: 1.65; color: var(--ink-2); white-space: pre-wrap; overflow-wrap: anywhere; }
+  .cop-md-plain { font-size: 13.5px; line-height: 1.65; color: var(--ink-2); white-space: pre-wrap; overflow-wrap: anywhere; }
 
   /* Rendu Markdown assaini (contenu injecté via {@html} → styles :global) */
-  .cop-md { font-size: 13px; line-height: 1.65; color: var(--ink-2); overflow-wrap: anywhere; }
+  .cop-md { font-size: 13.5px; line-height: 1.65; color: var(--ink-2); overflow-wrap: anywhere; }
   .cop-md :global(p) { margin: 0 0 10px; }
   .cop-md :global(> *:last-child) { margin-bottom: 0; }
   .cop-md :global(ul), .cop-md :global(ol) { padding-left: 18px; margin: 0 0 12px; display: flex; flex-direction: column; gap: 5px; }
@@ -696,7 +1144,7 @@
   .cop-md :global(code) { background: var(--code-bg); border-radius: 4px; padding: 1px 4px; font-family: var(--font-mono); font-size: 11.5px; }
   .cop-md :global(pre) { background: var(--code-bg); border-radius: 8px; padding: 10px 12px; overflow-x: auto; margin: 0 0 10px; }
   .cop-md :global(pre code) { background: none; padding: 0; }
-  .cop-md :global(blockquote) { border-left: 2px solid var(--line-2); padding-left: 10px; color: var(--ink-3); margin: 0 0 10px; }
+  .cop-md :global(blockquote) { padding: 9px 11px; border-radius: 8px; background: var(--surface-2); color: var(--ink-3); margin: 0 0 10px; }
   /* border-collapse ignore border-radius → separate + spacing 0 (mêmes hairlines, coins ronds réels) */
   .cop-md :global(table) { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 12px; border: 1px solid var(--line-1); border-radius: 8px; overflow: hidden; margin: 0 0 10px; }
   .cop-md :global(tr:last-child td) { border-bottom: 0; }
@@ -726,56 +1174,167 @@
   .cop-dismiss { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; flex: 0 0 auto; border: 0; border-radius: 7px; background: transparent; color: var(--ink-4); cursor: pointer; }
   .cop-dismiss:hover { background: var(--surface-hover); color: var(--ink); }
 
-  /* Saisie imbriquée */
-  .cop-input-wrap { flex-shrink: 0; padding: 8px 13px 12px; }
-  .cop-input { border-radius: 19px; overflow: hidden; border: 1px solid var(--line-2); display: flex; flex-direction: column; }
-  /* Focus clavier visible sur le champ composite (le textarea interne a outline:none) */
-  .cop-input:focus-within { border-color: var(--line-3); }
-  .cop-input-ctx { background: var(--cream-tint); padding: 10px 13px 22px; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
-  .cop-ctx-chip {
-    display: inline-flex; align-items: center; gap: 5px; height: 24px; padding: 0 8px;
-    background: var(--cream-content); border: 1px solid var(--line-2); border-radius: 8px; font-size: 11.5px; color: var(--ink-2);
-    max-width: 60%; overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+  /* Composeur à deux plans : Question et Contexte permutent leur profondeur. */
+  .cop-input-wrap {
+    flex-shrink: 0;
+    padding: 8px 16px 10px;
+    background: var(--cream-content);
+    container-type: inline-size;
   }
-  .cop-ctx-add {
-    display: inline-flex; align-items: center; gap: 3px; height: 24px; padding: 0 9px;
-    background: transparent; border: 1px dashed var(--line-3); border-radius: 8px;
-    font-family: var(--font-sans); font-size: 11.5px; color: var(--ink-4); cursor: default; opacity: 0.6;
+  .cop-panel.expanded .cop-input-wrap {
+    padding-inline: max(24px, calc((100% - 760px) / 2));
   }
-  .cop-ctx-warn {
-    display: inline-flex; align-items: center; gap: 4px; height: 24px; padding: 0 8px;
-    background: rgba(180, 130, 60, 0.12); border: 1px solid rgba(180, 130, 60, 0.3); border-radius: 8px;
-    font-size: 11px; color: var(--warn-text); white-space: nowrap; cursor: help;
+  .cop-composer-shell {
+    overflow: visible;
   }
-  .cop-newchat { margin-left: auto; display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border: 0; border-radius: 7px; background: transparent; color: var(--ink-4); cursor: pointer; }
-  .cop-newchat:hover { background: var(--cream-content); color: var(--ink); }
-  .cop-input-field { margin-top: -15px; background: var(--cream-content); border-radius: 15px 15px 0 0; padding: 11px 12px 12px; display: flex; align-items: flex-end; gap: 8px; }
-  .cop-input-attach { width: 30px; height: 30px; flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; background: transparent; border: 0; border-radius: 9px; color: var(--ink-5); cursor: default; }
+  .cop-composer-shell:focus-within .cop-composer-front {
+    box-shadow: 0 10px 28px rgba(var(--shadow-rgb), 0.09);
+  }
+  .cop-composer-back {
+    width: calc(100% - 28px);
+    height: 58px;
+    margin-inline: 14px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 12px 16px;
+    border: 0;
+    border-radius: 16px;
+    background: color-mix(in srgb, var(--cream-tint) 78%, var(--cream-content));
+    box-shadow: 0 5px 18px rgba(var(--shadow-rgb), 0.04);
+    color: var(--ink-3);
+    font-family: var(--font-sans);
+    text-align: left;
+    cursor: pointer;
+    transition: background 160ms ease, color 160ms ease;
+  }
+  :global([data-theme='dark']) .cop-composer-back { background: var(--cream-soft); }
+  .cop-composer-back:hover { background: var(--surface-hover); color: var(--ink); }
+  .cop-composer-back:active { background: var(--accent-soft); }
+  .cop-composer-back:focus-visible { outline: 2px solid var(--line-3); outline-offset: -3px; border-radius: 16px; }
+  .cop-composer-back-icon {
+    width: 28px; height: 28px; flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center;
+    border: 0; border-radius: 9px; background: var(--cream-content); color: var(--ink-3);
+  }
+  :global([data-theme='dark']) .cop-composer-back-icon { background: var(--surface-2); }
+  .cop-composer-back-icon .msr { font-size: 16px; }
+  .cop-composer-back-label { font-size: 12px; font-weight: 600; }
+  .cop-composer-note {
+    margin-left: auto;
+    min-width: 0;
+    overflow: hidden;
+    color: var(--ink-4);
+    font-size: 10.5px;
+    font-weight: 450;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+  .cop-composer-switch { flex: 0 0 auto; font-size: 15px; color: var(--ink-4); transition: transform 240ms cubic-bezier(0.22, 1, 0.36, 1); }
+  .cop-composer-back:hover .cop-composer-switch { transform: rotate(180deg); }
+  .cop-composer-front {
+    position: relative;
+    z-index: 1;
+    min-width: 0;
+    margin-top: -16px;
+    overflow: hidden;
+    border: 0;
+    border-radius: 16px;
+    background: var(--composer-bg);
+    box-shadow: 0 8px 26px rgba(var(--shadow-rgb), 0.07);
+    animation: cop-composer-drawer-in 240ms cubic-bezier(0.22, 1, 0.36, 1);
+  }
+  .cop-composer-front-tab {
+    width: 100%; height: 38px; display: flex; align-items: center; gap: 8px; padding: 0 12px;
+    border: 0; background: transparent; color: var(--ink-2);
+    font-family: var(--font-sans); font-size: 12px; font-weight: 600; text-align: left; cursor: default;
+  }
+  .cop-composer-front-tab .msr { font-size: 16px; color: var(--ink-3); }
+  .cop-composer-front-tab:focus-visible { outline: 2px solid var(--line-3); outline-offset: -3px; border-radius: 14px; }
+  .cop-composer-active-label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+  .cop-composer-panels { display: grid; min-width: 0; }
+  .cop-composer-panel {
+    grid-area: 1 / 1;
+    min-width: 0;
+    visibility: hidden;
+    opacity: 0;
+    pointer-events: none;
+    transform: translateY(4px);
+    transition: opacity 160ms ease, transform 220ms cubic-bezier(0.22, 1, 0.36, 1);
+  }
+  .cop-composer-panel:not(.active) { display: none; }
+  .cop-composer-panel.active { visibility: visible; opacity: 1; pointer-events: auto; transform: translateY(0); }
+  .cop-question-drawer {
+    min-height: 94px;
+    padding: 10px 8px 8px;
+    display: grid;
+    grid-template-columns: 36px minmax(0, 1fr) 36px;
+    grid-template-rows: minmax(34px, auto) 36px;
+    column-gap: 8px;
+  }
+  .cop-input-attach {
+    grid-column: 1; grid-row: 2;
+    width: 36px; height: 36px; display: inline-flex; align-items: center; justify-content: center;
+    background: transparent; border: 0; border-radius: 10px; color: var(--ink-5); cursor: default;
+  }
   .cop-input-ta {
-    flex: 1; min-width: 0; border: 0; background: transparent; outline: none; resize: none;
-    font-family: var(--font-sans); font-size: 13px; line-height: 1.4; color: var(--ink); padding: 6px 0; max-height: 120px;
+    grid-column: 1 / -1; grid-row: 1; align-self: start;
+    width: 100%; min-width: 0; border: 0; background: transparent; outline: none; resize: none;
+    font-family: var(--font-sans); font-size: 13.5px; line-height: 1.45; color: var(--ink); padding: 2px 4px 7px; max-height: 120px;
     field-sizing: content; /* auto-grow : les lignes Shift+Entrée restent visibles (WebView2 OK) */
   }
   .cop-input-ta::placeholder { color: var(--ink-4); }
-  .cop-input-send { width: 30px; height: 30px; flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; background: var(--ink); border: 0; border-radius: 50%; color: var(--cream-content); cursor: pointer; }
+  .cop-input-send { grid-column: 3; grid-row: 2; width: 36px; height: 36px; display: inline-flex; align-items: center; justify-content: center; background: var(--ink); border: 0; border-radius: 50%; color: var(--cream-content); cursor: pointer; }
   .cop-input-send:hover { background: var(--ink-2); }
+  .cop-input-send:focus-visible { outline: 2px solid var(--line-3); outline-offset: 2px; }
   .cop-input-send:disabled { opacity: 0.4; cursor: default; }
-  .cop-disclaimer { text-align: center; font-size: 11px; color: var(--ink-4); margin-top: 9px; }
+  .cop-context-drawer {
+    min-height: 56px;
+    padding: 8px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .cop-context-icon {
+    width: 36px; height: 36px; flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center;
+    border-radius: 10px; background: var(--surface-2); color: var(--ink-3);
+  }
+  .cop-context-icon .msr { font-size: 18px; }
+  .cop-context-copy { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+  .cop-context-copy strong { overflow: hidden; color: var(--ink-2); font-size: 11.5px; font-weight: 550; white-space: nowrap; text-overflow: ellipsis; }
+  .cop-context-copy small { overflow: hidden; color: var(--ink-4); font-size: 10.5px; line-height: 1.3; white-space: nowrap; text-overflow: ellipsis; }
+  .cop-context-state {
+    height: 24px; flex: 0 0 auto; display: inline-flex; align-items: center; gap: 4px; padding: 0 8px;
+    border-radius: 999px; background: var(--surface-2); color: var(--ink-4); font-size: 10px; white-space: nowrap;
+  }
+  .cop-context-state.warn { background: rgba(180, 130, 60, 0.12); color: var(--warn-text); }
+  .cop-context-state .msr { font-size: 13px; }
+  .cop-context-add {
+    width: 36px; height: 36px; flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center;
+    border: 1px dashed var(--line-3); border-radius: 10px; background: transparent; color: var(--ink-4); opacity: 0.55;
+  }
+  .cop-context-add .msr { font-size: 17px; }
+  .cop-disclaimer { text-align: center; font-size: 10.5px; line-height: 1.35; color: var(--ink-4); margin-top: 8px; }
 
-  /* Reformuler — barre de sélection (16.1) */
-  .cop-rephrase-bar {
-    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
-    margin-bottom: 8px; padding: 8px 10px;
-    background: var(--accent-soft); border: 1px solid var(--line-2); border-radius: 12px;
+  :global([data-theme='dark']) .cop-composer-back {
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.12);
   }
-  .cop-rephrase-lbl { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; color: var(--ink-3); }
-  .cop-rephrase-acts { display: flex; gap: 6px; margin-left: auto; }
-  .cop-rephrase-btn {
-    height: 26px; padding: 0 11px; border: 1px solid var(--line-2); border-radius: 8px;
-    background: var(--cream-content); color: var(--ink-2);
-    font-family: var(--font-sans); font-size: 11.5px; font-weight: 500; cursor: pointer;
+  :global([data-theme='dark']) .cop-composer-front,
+  :global([data-theme='dark']) .cop-composer-shell:focus-within .cop-composer-front {
+    box-shadow: 0 8px 22px rgba(0, 0, 0, 0.2);
   }
-  .cop-rephrase-btn:hover { background: var(--surface-hover); color: var(--ink); border-color: var(--line-3); }
+
+  @container (max-width: 330px) {
+    .cop-composer-note,
+    .cop-context-add { display: none; }
+    .cop-context-state { max-width: 86px; overflow: hidden; text-overflow: ellipsis; }
+  }
 
   /* Reformuler — carte proposition (16.1) */
   .cop-proposal {
@@ -794,4 +1353,15 @@
   .cop-prop-note { display: inline-flex; align-items: center; gap: 6px; margin-top: 9px; font-size: 12px; color: var(--ink-4); }
   .cop-prop-note.ok { color: var(--ok-text); }
   .cop-prop-note.warn { color: var(--warn-text); }
+
+  @keyframes cop-composer-drawer-in {
+    from { opacity: 0.82; transform: translateY(8px) scale(0.992); }
+    to { opacity: 1; transform: translateY(0) scale(1); }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .cop-composer-front { animation: none; }
+    .cop-composer-panel,
+    .cop-composer-switch { transition-duration: 0.01ms; }
+  }
 </style>

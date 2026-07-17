@@ -13,6 +13,11 @@ export interface OllamaMessage {
   content: string
 }
 
+// Le profil ne change pas les garde-fous documentaires : il règle le degré d'initiative laissé
+// au modèle. Les petits modèles locaux reçoivent un cadre très direct ; le cloud peut choisir
+// sa structure, synthétiser et expliciter ses inférences sans les faire passer pour des faits.
+export type PersonaProfile = 'local' | 'cloud'
+
 // Cap du texte injecté (14.1). Un doc plus long est tronqué avec marqueur — le résumé
 // robuste des longs docs (segmentation map-reduce) est la story 14.2.
 export const MAX_DOC_CHARS = 12000
@@ -49,7 +54,7 @@ export const REFUSAL_PHRASE = 'Je ne trouve pas cette information dans ce docume
 // travailler le texte — un « vérifie l'orthographe » doit être traité, pas refusé (dérive
 // constatée : le modèle répondait la phrase de refus à toute demande de tâche).
 export const GROUNDING_REMINDER =
-  `(Travaille uniquement sur le document ci-dessus, sans inventer d'information qui n'y figure pas. ` +
+  `(Travaille uniquement d'après le document ci-dessus, sans inventer d'information qui n'y figure pas. ` +
   `Si on te demande une information absente du document, réponds « ${REFUSAL_PHRASE} ». ` +
   `Les tâches sur le texte — orthographe, clarté, résumé, comptage — sont bienvenues.)`
 
@@ -57,12 +62,26 @@ export const GROUNDING_REMINDER =
 // « créatif » et favorise l'hallucination ; ~0,2 le maintient fidèle au texte fourni.
 export const COPILOT_TEMPERATURE = 0.2
 
-const SYSTEM_BASE =
+const LOCAL_SYSTEM_BASE =
   "Tu es Doku-San, l'assistant local intégré à l'éditeur Doku. Réponds toujours en français, de " +
   'manière concise. Tes réponses se fondent UNIQUEMENT sur le document fourni ci-dessous, jamais ' +
   'sur des connaissances extérieures. Si la réponse ne figure pas dans le document, réponds ' +
   `exactement « ${REFUSAL_PHRASE} » sans rien inventer ni compléter. Si le document est signalé ` +
   "comme tronqué, précise que tu n'en as lu qu'une partie."
+
+const CLOUD_SYSTEM_BASE =
+  "Tu es Doku-San, un partenaire documentaire attentif et expérimenté intégré à l'éditeur Doku. " +
+  "Réponds en français et adapte librement la profondeur, le ton et la structure à l'intention de l'utilisateur. " +
+  "Prends l'initiative utile : synthétise, relie les idées, relève les contradictions, explicite les implications " +
+  "et propose des pistes pertinentes plutôt que de seulement reformuler la demande. Ancre toujours tes affirmations " +
+  "sur le document. Distingue clairement ce qui vient du document, ce que tu en infères et, seulement si la demande " +
+  "le justifie, ce qui relève d'un contexte général extérieur. Si une information manque, dis-le clairement sans " +
+  "l'inventer. Si le document est tronqué, précise que tu n'en as lu qu'une partie."
+
+const CLOUD_GROUNDING_REMINDER =
+  "(Appuie d'abord ta réponse sur le document. Tu peux analyser et faire des inférences raisonnables, mais signale-les " +
+  "comme telles. N'ajoute du contexte général extérieur que si la demande le justifie, en le distinguant explicitement " +
+  "du contenu du document. N'invente jamais un fait attribué au document.)"
 
 // CopilotService : messages /api/chat (system = cadre + contexte doc, puis l'historique, puis
 // la question). Les rôles évitent la dérive de complétion d'un prompt concaténé single-turn.
@@ -72,12 +91,16 @@ export function buildChatMessages(p: {
   kind: DocKind
   history: ChatTurn[]
   question: string
+  persona?: PersonaProfile
 }): OllamaMessage[] {
-  const system = `${SYSTEM_BASE}\n\n${buildDocContext(p.docName, p.docText, p.kind)}`
+  const persona = p.persona ?? 'local'
+  const systemBase = persona === 'cloud' ? CLOUD_SYSTEM_BASE : LOCAL_SYSTEM_BASE
+  const reminder = persona === 'cloud' ? CLOUD_GROUNDING_REMINDER : GROUNDING_REMINDER
+  const system = `${systemBase}\n\n${buildDocContext(p.docName, p.docText, p.kind)}`
   return [
     { role: 'system', content: system },
     ...p.history.map((t) => ({ role: t.role, content: t.content }) as OllamaMessage),
-    { role: 'user', content: `${p.question}\n\n${GROUNDING_REMINDER}` },
+    { role: 'user', content: `${p.question}\n\n${reminder}` },
   ]
 }
 
@@ -133,39 +156,64 @@ export function segmentDoc(text: string, max = SEGMENT_CHARS): string[] {
   return segments
 }
 
-const SUMMARY_SYS =
+const LOCAL_SUMMARY_SYS =
   "Tu es Doku-San, l'assistant local de l'éditeur Doku. Tu résumes en français, fidèlement, " +
   "sans rien inventer ni ajouter d'information absente du texte fourni."
 
+const CLOUD_SUMMARY_SYS =
+  "Tu es Doku-San, un analyste documentaire expérimenté. Produis une synthèse en français qui hiérarchise " +
+  "l'essentiel au lieu de suivre mécaniquement l'ordre du texte. Tu peux regrouper les idées, expliciter leurs liens " +
+  "et signaler les tensions ou implications directement étayées. N'invente aucun fait et distingue clairement toute inférence."
+
+function summarySystem(persona: PersonaProfile): string {
+  return persona === 'cloud' ? CLOUD_SUMMARY_SYS : LOCAL_SUMMARY_SYS
+}
+
 // Résumé direct quand le document tient dans une seule fenêtre.
-export function buildWholeSummaryPrompt(text: string, name: string | null, mode: SummaryMode = 'summary'): string {
+export function buildWholeSummaryPrompt(
+  text: string,
+  name: string | null,
+  mode: SummaryMode = 'summary',
+  persona: PersonaProfile = 'local',
+): string {
   const title = name ?? 'sans titre'
   const task =
     mode === 'keypoints'
       ? 'Dégage les POINTS CLÉS du document sous forme de puces courtes.'
       : 'Rédige un résumé concis et fidèle du document (court paragraphe ou puces).'
-  return `${SUMMARY_SYS}\n\n${task} Document « ${title} » :\n"""\n${text}\n"""`
+  return `${summarySystem(persona)}\n\n${task} Document « ${title} » :\n"""\n${text}\n"""`
 }
 
 // Phase map : résume UN segment d'un document plus grand (pas d'intro ni de conclusion).
-export function buildSegmentSummaryPrompt(segment: string, index: number, total: number, name: string | null): string {
+export function buildSegmentSummaryPrompt(
+  segment: string,
+  index: number,
+  total: number,
+  name: string | null,
+  persona: PersonaProfile = 'local',
+): string {
   const title = name ?? 'sans titre'
   return (
-    `${SUMMARY_SYS}\n\nVoici la partie ${index}/${total} du document « ${title} ». ` +
+    `${summarySystem(persona)}\n\nVoici la partie ${index}/${total} du document « ${title} ». ` +
     "Résume fidèlement le contenu de CETTE partie en puces courtes, sans introduction ni conclusion " +
     `(ce n'est qu'un fragment) :\n"""\n${segment}\n"""`
   )
 }
 
 // Phase reduce : fusionne des résumés partiels (dans l'ordre) en une synthèse unique.
-export function buildReduceSummaryPrompt(partials: string, name: string | null, mode: SummaryMode = 'summary'): string {
+export function buildReduceSummaryPrompt(
+  partials: string,
+  name: string | null,
+  mode: SummaryMode = 'summary',
+  persona: PersonaProfile = 'local',
+): string {
   const title = name ?? 'sans titre'
   const task =
     mode === 'keypoints'
       ? 'Fusionne-les en une liste unique des POINTS CLÉS (puces courtes), sans répétition.'
       : 'Rédige à partir d\'eux un résumé global unique, cohérent et fidèle (court paragraphe ou puces), sans répétition.'
   return (
-    `${SUMMARY_SYS}\n\nVoici, dans l'ordre, des résumés partiels du document « ${title} ». ` +
+    `${summarySystem(persona)}\n\nVoici, dans l'ordre, des résumés partiels du document « ${title} ». ` +
     `${task} N'ajoute aucune information qui n'y figure pas :\n"""\n${partials}\n"""`
   )
 }
@@ -182,10 +230,17 @@ const REPHRASE_TASK: Record<RephraseMode, string> = {
   tone: 'en adoptant un ton plus neutre et professionnel',
 }
 
-export function buildRephrasePrompt(text: string, mode: RephraseMode): string {
+export function buildRephrasePrompt(
+  text: string,
+  mode: RephraseMode,
+  persona: PersonaProfile = 'local',
+): string {
+  const role =
+    persona === 'cloud'
+      ? "Tu es Doku-San, un éditeur expérimenté. Améliore franchement le passage : tu peux réorganiser les phrases et la structure lorsque cela sert l'objectif demandé."
+      : "Tu es Doku-San, l'assistant d'écriture local de l'éditeur Doku."
   return (
-    "Tu es Doku-San, l'assistant d'écriture local de l'éditeur Doku. Reformule le passage " +
-    `ci-dessous ${REPHRASE_TASK[mode]}.\n` +
+    `${role} Reformule le passage ci-dessous ${REPHRASE_TASK[mode]}.\n` +
     'Règles STRICTES :\n' +
     "- Garde exactement le même sens ; n'ajoute aucune information nouvelle.\n" +
     "- Conserve la langue d'origine et la mise en forme Markdown (titres, listes, gras, liens, code).\n" +

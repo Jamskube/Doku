@@ -96,6 +96,11 @@
         app.focus = !app.focus
         return
       }
+      if (e.key === 'Escape' && app.copilotExpanded) {
+        e.preventDefault()
+        app.copilotExpanded = false
+        return
+      }
       if (e.key === 'Escape' && app.focus) {
         e.preventDefault()
         app.focus = false
@@ -156,7 +161,7 @@
 
 <div class="app">
   {#if !app.focus}<Sidebar />{/if}
-  <div class="main">
+  <div class="main" class:copilot-expanded={app.copilotExpanded}>
     {#if !app.focus}<TitleBar onOpen={openFromDialog} />{/if}
     {#if app.banner && !app.focus}
       <div class="banner" role="status">
@@ -191,6 +196,7 @@
               // Fermeture → réinitialise en 'chat' : la réouverture repart sur la coquille
               // sans re-solliciter le moteur (la vue Modèles seule déclenche ensureReady).
               if (!app.copilotOpen) app.copilotView = 'chat'
+              if (!app.copilotOpen) app.copilotExpanded = false
             }}
           >
             <svg width="17" height="17" viewBox="-0.5 -0.5 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" style="transform:scaleX(-1)"><path d="M5.625 2.1875v10.625M1.875 5.875c0 -1.4 0 -2.1 0.2725 -2.635a2.5 2.5 0 0 1 1.0925 -1.0925C3.775 1.875 4.475 1.875 5.875 1.875h3.25c1.4 0 2.1 0 2.635 0.2725a2.5 2.5 0 0 1 1.0925 1.0925C13.125 3.775 13.125 4.475 13.125 5.875v3.25c0 1.4 0 2.1 -0.2725 2.635a2.5 2.5 0 0 1 -1.0925 1.0925C11.225 13.125 10.525 13.125 9.125 13.125H5.875c-1.4 0 -2.1 0 -2.635 -0.2725a2.5 2.5 0 0 1 -1.0925 -1.0925C1.875 11.225 1.875 10.525 1.875 9.125z"></path></svg>
@@ -200,7 +206,7 @@
       </div>
     </div>
   </div>
-  {#if app.copilotOpen && !app.focus}<CopilotPanel />{/if}
+  {#if !app.focus}<CopilotPanel />{/if}
   {#if app.dragging}
     <div class="drop-overlay" role="presentation">
       <div class="drop-hint">
@@ -216,7 +222,18 @@
 
 <style>
   .app { position: relative; height: 100%; display: flex; background: var(--cream-base); }
-  .main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  .main {
+    flex: 1 1 0;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    opacity: 1;
+    transition:
+      flex-grow 240ms cubic-bezier(0.4, 0, 1, 1),
+      opacity 130ms ease-in;
+  }
+  .main.copilot-expanded { flex-grow: 0; opacity: 0; pointer-events: none; }
   .drop-overlay {
     position: absolute;
     inset: 8px;
@@ -238,7 +255,7 @@
     padding: 20px 28px;
     border-radius: 12px;
     background: var(--cream-content);
-    box-shadow: 0 12px 32px rgba(var(--ink-rgb), 0.18);
+    box-shadow: 0 12px 32px rgba(var(--shadow-rgb), 0.18);
     color: var(--ink-2);
     font-size: 14px;
   }
@@ -294,6 +311,7 @@
     overflow: hidden;
     display: flex;
     flex-direction: column;
+    transition: border-radius 240ms cubic-bezier(0.22, 1, 0.36, 1);
   }
   /* Panneau copilote ouvert : la jonction document↔chat est à angle droit. */
   .page.with-copilot { border-radius: 14px 0 0 0; }

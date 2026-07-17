@@ -2,8 +2,21 @@
 // (même motif que `app` dans stores.svelte.ts). Le port du sidecar est stable (start_ollama
 // idempotent côté Rust) → on le cache ; `ensureReady` déduplique les appels concurrents
 // (motif indexBuild de la recherche). Le modèle ACTIF (persisté) vit dans `app.activeModel`.
-import { activeTab, app, editorRef, editorSel, type DocKind } from './stores.svelte'
+import { activeTab, app, editorRef, editorSel, type CopilotProvider, type DocKind } from './stores.svelte'
 import { chat, deleteModel, generate, listModels, pull, startOllama, waitReady, type OllamaModel } from './ollama'
+import {
+  cancelOpenAiAuth,
+  disconnectOpenAi,
+  getOpenAiStatus,
+  openAiChat,
+  openAiGenerate,
+  openOpenAiAuthPage,
+  pollOpenAiAuth,
+  startOpenAiAuth,
+  OPENAI_MODEL,
+  type OpenAiAuthStart,
+  type OpenAiMessage,
+} from './openai'
 import {
   buildChatMessages,
   buildReduceSummaryPrompt,
@@ -15,6 +28,7 @@ import {
   segmentDoc,
   SUMMARY_MAP_MAX_TOKENS,
   type ChatTurn,
+  type PersonaProfile,
   type RephraseMode,
   type SummaryMode,
 } from './copilot-service'
@@ -30,7 +44,7 @@ export interface ChatMsg {
   // État de CONFIGURATION (pas un échec de génération) : aucun modèle actif. Rendu en carte
   // neutre « Aucun modèle actif » avec un bouton vers la vue Modèles — pas en carte d'erreur
   // rouge (rien n'a échoué, rien n'a même été tenté).
-  config?: boolean
+  config?: 'model' | 'openai'
   status?: string
   // Posé sur une carte `failed` : ce qu'il faut rejouer pour « Réessayer » (la question, le mode
   // de résumé ou la variante de reformulation). Le document est re-capturé au moment du retry.
@@ -52,12 +66,21 @@ export const copilot = $state({
   error: '',
   messages: [] as ChatMsg[],
   generating: false,
+  openAiAuthenticated: null as boolean | null,
+  openAiPreferredAvailable: null as boolean | null,
+  openAiModels: [] as string[],
+  openAiStatusError: '',
+  openAiChecking: false,
+  openAiAuth: null as OpenAiAuthStart | null,
+  openAiAuthPhase: 'idle' as 'idle' | 'starting' | 'waiting' | 'error',
+  openAiAuthError: '',
 })
 
 let readyPromise: Promise<number | null> | null = null
 let pullController: AbortController | null = null
 let genController: AbortController | null = null
 let refreshToken = 0
+let openAiAuthAttempt = 0
 
 // Démarre le sidecar (idempotent) et renvoie son port ; null en navigateur / échec. Un appel
 // en vol est partagé (pas de double démarrage si la vue s'ouvre pendant un pull).
@@ -169,6 +192,168 @@ export async function removeModel(name: string): Promise<void> {
 
 export function setActiveModel(name: string): void {
   app.activeModel = name
+  app.copilotProvider = 'ollama'
+}
+
+export async function refreshOpenAiStatus(): Promise<void> {
+  copilot.openAiChecking = true
+  try {
+    const status = await getOpenAiStatus()
+    copilot.openAiAuthenticated = status.authenticated
+    copilot.openAiPreferredAvailable = status.preferredModelAvailable
+    copilot.openAiModels = status.models
+    copilot.openAiStatusError = status.error ?? ''
+  } catch (error) {
+    console.error('[copilot] openai status', error)
+    copilot.openAiAuthenticated = false
+    copilot.openAiPreferredAvailable = null
+    copilot.openAiModels = []
+    copilot.openAiStatusError = 'État de la connexion OpenAI indisponible.'
+  } finally {
+    copilot.openAiChecking = false
+  }
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+export async function beginOpenAiAuth(): Promise<void> {
+  const attempt = ++openAiAuthAttempt
+  copilot.openAiAuthPhase = 'starting'
+  copilot.openAiAuthError = ''
+  try {
+    const auth = await startOpenAiAuth()
+    if (attempt !== openAiAuthAttempt) {
+      await cancelOpenAiAuth(auth.sessionId)
+      return
+    }
+    copilot.openAiAuth = auth
+    copilot.openAiAuthPhase = 'waiting'
+    try {
+      await openOpenAiAuthPage(auth.verificationUrl)
+    } catch (error) {
+      console.error('[copilot] open OpenAI auth page', error)
+      copilot.openAiAuthError = 'La page ne s’est pas ouverte. Copiez le code puis ouvrez le lien indiqué.'
+    }
+
+    const expiresAt = Date.now() + auth.expiresIn * 1000
+    while (attempt === openAiAuthAttempt && Date.now() < expiresAt) {
+      await delay(auth.interval * 1000)
+      if (attempt !== openAiAuthAttempt) return
+      const poll = await pollOpenAiAuth(auth.sessionId)
+      if (poll.status === 'pending') continue
+      if (poll.status === 'approved') {
+        copilot.openAiAuth = null
+        copilot.openAiAuthPhase = 'idle'
+        copilot.openAiAuthError = ''
+        await refreshOpenAiStatus()
+        return
+      }
+      break
+    }
+    if (attempt === openAiAuthAttempt) {
+      copilot.openAiAuthPhase = 'error'
+      copilot.openAiAuthError = 'Le code a expiré. Relancez la connexion pour en obtenir un nouveau.'
+    }
+  } catch (error) {
+    if (attempt !== openAiAuthAttempt) return
+    console.error('[copilot] OpenAI auth', error)
+    copilot.openAiAuthPhase = 'error'
+    copilot.openAiAuthError = error instanceof Error ? error.message : String(error)
+  }
+}
+
+export async function cancelOpenAiConnection(): Promise<void> {
+  const auth = copilot.openAiAuth
+  ++openAiAuthAttempt
+  copilot.openAiAuth = null
+  copilot.openAiAuthPhase = 'idle'
+  copilot.openAiAuthError = ''
+  if (auth) await cancelOpenAiAuth(auth.sessionId).catch(() => {})
+}
+
+export async function disconnectOpenAiAccount(): Promise<void> {
+  await cancelOpenAiConnection()
+  try {
+    await disconnectOpenAi()
+    copilot.openAiAuthenticated = false
+    copilot.openAiPreferredAvailable = null
+    copilot.openAiModels = []
+    copilot.openAiStatusError = ''
+  } catch (error) {
+    console.error('[copilot] OpenAI disconnect', error)
+    copilot.openAiStatusError = 'Impossible de déconnecter le compte OpenAI.'
+  }
+}
+
+export function setCopilotProvider(provider: CopilotProvider): void {
+  app.copilotProvider = provider
+  if (provider === 'openai') void refreshOpenAiStatus()
+}
+
+type ProviderRuntime =
+  | { provider: 'ollama'; port: number; model: string }
+  | { provider: 'openai'; model: typeof OPENAI_MODEL }
+
+function personaFor(runtime: ProviderRuntime): PersonaProfile {
+  return runtime.provider === 'openai' ? 'cloud' : 'local'
+}
+
+async function resolveRuntime(provider: CopilotProvider, localModel: string): Promise<ProviderRuntime | null> {
+  if (provider === 'openai') {
+    if (copilot.openAiAuthenticated === null) await refreshOpenAiStatus()
+    return copilot.openAiAuthenticated && copilot.openAiPreferredAvailable !== false
+      ? { provider: 'openai', model: OPENAI_MODEL }
+      : null
+  }
+  if (!localModel) return null
+  const port = await ensureReady()
+  return port === null ? null : { provider: 'ollama', port, model: localModel }
+}
+
+function streamChat(
+  runtime: ProviderRuntime,
+  messages: OpenAiMessage[],
+  onToken: (token: string) => void,
+  signal: AbortSignal,
+): Promise<string> {
+  if (runtime.provider === 'openai') return openAiChat(messages, onToken, signal)
+  return chat(runtime.port, runtime.model, messages, onToken, signal, {
+    num_ctx: COPILOT_NUM_CTX,
+    temperature: COPILOT_TEMPERATURE,
+  })
+}
+
+function streamGenerate(
+  runtime: ProviderRuntime,
+  prompt: string,
+  onToken: (token: string) => void,
+  signal: AbortSignal,
+  options: { map?: boolean } = {},
+): Promise<string> {
+  if (runtime.provider === 'openai') {
+    return openAiGenerate(prompt, onToken, signal)
+  }
+  return generate(runtime.port, runtime.model, prompt, onToken, signal, {
+    num_ctx: COPILOT_NUM_CTX,
+    temperature: COPILOT_TEMPERATURE,
+    ...(options.map ? { num_predict: SUMMARY_MAP_MAX_TOKENS } : {}),
+  })
+}
+
+function providerSetupMessage(provider: CopilotProvider): string {
+  return provider === 'openai'
+    ? copilot.openAiPreferredAvailable === false
+      ? 'Votre compte OpenAI est connecté, mais GPT‑5.6 Luna n’est pas disponible pour cet abonnement.'
+      : 'Connectez votre compte OpenAI dans Modèles. Doku ne vous demandera jamais de clé API.'
+    : 'Choisissez ou téléchargez un modèle local pour utiliser le copilote — tout reste sur votre machine.'
+}
+
+function generationFailure(error: unknown, provider: CopilotProvider, fallback: string): string {
+  if (provider !== 'openai') return fallback
+  const detail = error instanceof Error ? error.message : typeof error === 'string' ? error : ''
+  return detail.trim() ? `OpenAI : ${detail.trim()}` : fallback
 }
 
 // Envoie un message au copilote et streame la réponse (14.1). `doc` = SNAPSHOT du document
@@ -181,14 +366,16 @@ export async function sendChat(
 ): Promise<void> {
   const q = question.trim()
   if (!q || copilot.generating) return
+  const provider = app.copilotProvider
+  const localModel = app.activeModel
 
   // Garde modèle : carte de CONFIG sans démarrer le sidecar (préserve le boot-safety 14.0).
-  if (!app.activeModel) {
+  if (provider === 'ollama' && !localModel) {
     copilot.messages.push({ role: 'user', content: q })
     copilot.messages.push({
       role: 'assistant',
-      content: 'Choisissez ou téléchargez un modèle pour utiliser le copilote — tout reste sur votre machine.',
-      config: true,
+      content: providerSetupMessage(provider),
+      config: 'model',
     })
     return
   }
@@ -216,21 +403,33 @@ export async function sendChat(
   const idx = copilot.messages.length - 1 // index stable (generating sérialise les envois)
 
   try {
-    const p = await ensureReady()
-    if (p === null) {
-      copilot.messages[idx].content = copilot.error || 'Le moteur IA est indisponible.'
-      copilot.messages[idx].failed = true
-      copilot.messages[idx].retry = { kind: 'chat', question: q }
+    const runtime = await resolveRuntime(provider, localModel)
+    if (runtime === null) {
+      const message = copilot.messages[idx]
+      if (provider === 'openai') {
+        message.content = providerSetupMessage(provider)
+        message.config = 'openai'
+      } else {
+        message.content = copilot.error || 'Le moteur IA est indisponible.'
+        message.failed = true
+        message.retry = { kind: 'chat', question: q }
+      }
       return
     }
-    const messages = buildChatMessages({ docName: doc.name, docText: doc.text, kind: doc.kind, history, question: q })
+    const messages = buildChatMessages({
+      docName: doc.name,
+      docText: doc.text,
+      kind: doc.kind,
+      history,
+      question: q,
+      persona: personaFor(runtime),
+    })
     // num_ctx fixé (14.3) : le doc + la consigne d'ancrage doivent rester en contexte sur plusieurs
     // tours ; au défaut Ollama (4096) l'historique les évincerait par troncature gauche silencieuse.
     // Mutation via l'index (élément proxifié du $state array) → réactif ; muter la ref locale
     // poussée ne le serait PAS (piège $state profond de Svelte 5).
-    await chat(
-      p,
-      app.activeModel,
+    await streamChat(
+      runtime,
       messages,
       (t) => {
         const m = copilot.messages[idx]
@@ -238,11 +437,10 @@ export async function sendChat(
         m.content += t
       },
       signal,
-      { num_ctx: COPILOT_NUM_CTX, temperature: COPILOT_TEMPERATURE },
     )
   } catch (e) {
     console.error('[copilot] chat', e)
-    copilot.messages[idx].content = copilot.messages[idx].content || 'La génération a échoué. Vérifiez que le moteur est prêt, puis réessayez.'
+    copilot.messages[idx].content = copilot.messages[idx].content || generationFailure(e, provider, 'La génération a échoué. Vérifiez que le moteur est prêt, puis réessayez.')
     copilot.messages[idx].failed = true
     copilot.messages[idx].retry = { kind: 'chat', question: q }
   } finally {
@@ -274,15 +472,17 @@ export async function summarizeDoc(
   mode: SummaryMode = 'summary',
 ): Promise<void> {
   if (copilot.generating) return
+  const provider = app.copilotProvider
+  const localModel = app.activeModel
   const userLabel = mode === 'keypoints' ? 'Quels sont les points clés de ce document ?' : 'Résume ce document.'
-  const reply = (content: string, flags: { failed?: boolean; config?: boolean } = {}) => {
+  const reply = (content: string, flags: { failed?: boolean; config?: 'model' | 'openai' } = {}) => {
     copilot.messages.push({ role: 'user', content: userLabel })
     copilot.messages.push({ role: 'assistant', content, ...flags })
   }
 
   // Garde modèle : carte de CONFIG sans démarrer le sidecar (préserve le boot-safety 14.0).
-  if (!app.activeModel) {
-    reply('Choisissez ou téléchargez un modèle pour utiliser le copilote — tout reste sur votre machine.', { config: true })
+  if (provider === 'ollama' && !localModel) {
+    reply(providerSetupMessage(provider), { config: 'model' })
     return
   }
   // Rien de valable à résumer → message clair, pas de résumé bidon (FR-4). L'extraction du texte
@@ -305,8 +505,6 @@ export async function summarizeDoc(
   const idx = copilot.messages.length - 1
   // `opts` = synthèse finale (sortie libre pour un résumé complet). `mapOpts` = phases
   // intermédiaires (map + réductions non finales) : sortie bornée → plus rapide et pas de débordement.
-  const opts = { num_ctx: COPILOT_NUM_CTX, temperature: COPILOT_TEMPERATURE }
-  const mapOpts = { num_ctx: COPILOT_NUM_CTX, temperature: COPILOT_TEMPERATURE, num_predict: SUMMARY_MAP_MAX_TOKENS }
   const setStatus = (s: string | undefined) => {
     const m = copilot.messages[idx]
     if (m) m.status = s
@@ -320,26 +518,31 @@ export async function summarizeDoc(
   }
 
   try {
-    const p = await ensureReady()
-    if (p === null) {
+    const runtime = await resolveRuntime(provider, localModel)
+    if (runtime === null) {
       const m = copilot.messages[idx]
-      m.content = copilot.error || 'Le moteur IA est indisponible.'
-      m.failed = true
-      m.retry = { kind: 'summary', mode }
+      if (provider === 'openai') {
+        m.content = providerSetupMessage(provider)
+        m.config = 'openai'
+      } else {
+        m.content = copilot.error || 'Le moteur IA est indisponible.'
+        m.failed = true
+        m.retry = { kind: 'summary', mode }
+      }
       return
     }
-    const model = app.activeModel
 
     const segments = segmentDoc(doc.text)
+    const persona = personaFor(runtime)
     if (segments.length <= 1) {
       // Tient dans une fenêtre → résumé direct, streamé (le statut initial couvre le prefill).
-      await generate(p, model, buildWholeSummaryPrompt(doc.text, doc.name, mode), stream, signal, opts)
+      await streamGenerate(runtime, buildWholeSummaryPrompt(doc.text, doc.name, mode, persona), stream, signal)
     } else {
       // map : un résumé par segment (non streamé, avec progression).
       const partials: string[] = []
       for (let i = 0; i < segments.length; i++) {
         setStatus(`Lecture du document — partie ${i + 1}/${segments.length}…`)
-        const s = await generate(p, model, buildSegmentSummaryPrompt(segments[i], i + 1, segments.length, doc.name), () => {}, signal, mapOpts)
+        const s = await streamGenerate(runtime, buildSegmentSummaryPrompt(segments[i], i + 1, segments.length, doc.name, persona), () => {}, signal, { map: true })
         if (signal.aborted) return
         partials.push(s)
       }
@@ -351,7 +554,7 @@ export async function summarizeDoc(
         const groups = segmentDoc(joined)
         const reduced: string[] = []
         for (const g of groups) {
-          const s = await generate(p, model, buildReduceSummaryPrompt(g, doc.name, mode), () => {}, signal, mapOpts)
+          const s = await streamGenerate(runtime, buildReduceSummaryPrompt(g, doc.name, mode, persona), () => {}, signal, { map: true })
           if (signal.aborted) return
           reduced.push(s)
         }
@@ -365,7 +568,7 @@ export async function summarizeDoc(
       const finalGroups = segmentDoc(joined)
       for (let i = 0; i < finalGroups.length; i++) {
         if (i > 0) copilot.messages[idx].content += '\n\n'
-        await generate(p, model, buildReduceSummaryPrompt(finalGroups[i], doc.name, mode), stream, signal, opts)
+        await streamGenerate(runtime, buildReduceSummaryPrompt(finalGroups[i], doc.name, mode, persona), stream, signal)
         if (signal.aborted) return
       }
     }
@@ -373,7 +576,7 @@ export async function summarizeDoc(
     console.error('[copilot] summarize', e)
     const m = copilot.messages[idx]
     if (m) {
-      m.content = m.content || 'Le résumé a échoué. Vérifiez que le moteur est prêt, puis réessayez.'
+      m.content = m.content || generationFailure(e, provider, 'Le résumé a échoué. Vérifiez que le moteur est prêt, puis réessayez.')
       m.failed = true
       m.retry = { kind: 'summary', mode }
     }
@@ -395,6 +598,8 @@ export async function summarizeDoc(
 // ou la refuse (texte d'origine intact). Anti-TOCTOU et boot-safety identiques à sendChat.
 export async function rephraseSelection(mode: RephraseMode): Promise<void> {
   if (copilot.generating) return
+  const provider = app.copilotProvider
+  const localModel = app.activeModel
   const view = editorRef.view
   if (!view) return
   const sel = view.state.selection.main
@@ -406,12 +611,12 @@ export async function rephraseSelection(mode: RephraseMode): Promise<void> {
   const label = mode === 'shorten' ? 'Raccourcir la sélection' : mode === 'tone' ? 'Changer le ton de la sélection' : 'Clarifier la sélection'
 
   // Garde modèle : carte de CONFIG sans démarrer le sidecar (préserve le boot-safety 14.0).
-  if (!app.activeModel) {
+  if (provider === 'ollama' && !localModel) {
     copilot.messages.push({ role: 'user', content: label })
     copilot.messages.push({
       role: 'assistant',
-      content: 'Choisissez ou téléchargez un modèle pour utiliser le copilote — tout reste sur votre machine.',
-      config: true,
+      content: providerSetupMessage(provider),
+      config: 'model',
     })
     return
   }
@@ -425,24 +630,26 @@ export async function rephraseSelection(mode: RephraseMode): Promise<void> {
   const idx = copilot.messages.length - 1
 
   try {
-    const p = await ensureReady()
-    if (p === null) {
+    const runtime = await resolveRuntime(provider, localModel)
+    if (runtime === null) {
       const m = copilot.messages[idx]
-      m.content = copilot.error || 'Le moteur IA est indisponible.'
-      m.failed = true
+      if (provider === 'openai') {
+        m.content = providerSetupMessage(provider)
+        m.config = 'openai'
+      } else {
+        m.content = copilot.error || 'Le moteur IA est indisponible.'
+        m.failed = true
+      }
       m.rephrase = undefined
-      m.retry = { kind: 'rephrase', mode }
+      if (m.failed) m.retry = { kind: 'rephrase', mode }
       return
     }
     // Mutation via l'index (élément proxifié du $state array) → réactif (piège $state profond).
-    await generate(p, app.activeModel, buildRephrasePrompt(original, mode), (t) => (copilot.messages[idx].content += t), signal, {
-      num_ctx: COPILOT_NUM_CTX,
-      temperature: COPILOT_TEMPERATURE,
-    })
+    await streamGenerate(runtime, buildRephrasePrompt(original, mode, personaFor(runtime)), (t) => (copilot.messages[idx].content += t), signal)
   } catch (e) {
     console.error('[copilot] rephrase', e)
     const m = copilot.messages[idx]
-    m.content = m.content || 'La reformulation a échoué. Vérifiez que le moteur est prêt, puis réessayez.'
+    m.content = m.content || generationFailure(e, provider, 'La reformulation a échoué. Vérifiez que le moteur est prêt, puis réessayez.')
     m.failed = true
     m.rephrase = undefined
     m.retry = { kind: 'rephrase', mode }
@@ -499,7 +706,7 @@ export function retryGeneration(idx: number): void {
   // Reformulation : la sélection d'origine a probablement disparu (l'échec l'a désélectionnée).
   // Sans sélection, rejouer serait un no-op silencieux → on guide au lieu de faire disparaître.
   if (r.kind === 'rephrase' && !editorSel.text.trim()) {
-    m.content = 'Sélectionnez à nouveau le passage à reformuler, puis relancez depuis la barre « Sélection ».'
+    m.content = 'Sélectionnez à nouveau le passage à reformuler, puis relancez depuis le menu de sélection.'
     m.retry = undefined
     return
   }

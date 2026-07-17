@@ -18,8 +18,8 @@ use windows::core::PCWSTR;
 use windows::Win32::Foundation::{CloseHandle, HANDLE};
 #[cfg(windows)]
 use windows::Win32::System::JobObjects::{
-    AssignProcessToJobObject, CreateJobObjectW, SetInformationJobObject, TerminateJobObject,
-    JobObjectExtendedLimitInformation, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+    AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
+    SetInformationJobObject, TerminateJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
     JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
 };
 #[cfg(windows)]
@@ -76,7 +76,10 @@ fn terminate_job(job: &Job) {
 // accepté en mono-utilisateur (ADR-0012).
 fn free_loopback_port() -> Result<u16, String> {
     let listener = TcpListener::bind("127.0.0.1:0").map_err(|e| e.to_string())?;
-    listener.local_addr().map(|a| a.port()).map_err(|e| e.to_string())
+    listener
+        .local_addr()
+        .map(|a| a.port())
+        .map_err(|e| e.to_string())
 }
 
 pub struct OllamaState {
@@ -112,7 +115,10 @@ impl OllamaState {
 // Démarre `ollama serve` en sidecar (idempotent). Port éphémère, modèles isolés, cloud coupé
 // (8.3), et l'enfant est rattaché au Job Object pour un kill d'arbre garanti.
 #[tauri::command]
-pub async fn start_ollama(app: tauri::AppHandle, state: tauri::State<'_, OllamaState>) -> Result<u16, String> {
+pub async fn start_ollama(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, OllamaState>,
+) -> Result<u16, String> {
     if let Some((_, port)) = state.child.lock().unwrap().as_ref() {
         return Ok(*port);
     }
@@ -141,7 +147,10 @@ pub async fn start_ollama(app: tauri::AppHandle, state: tauri::State<'_, OllamaS
         .args(["serve"])
         .env("OLLAMA_HOST", format!("127.0.0.1:{port}"))
         .env("OLLAMA_MODELS", models.to_string_lossy().to_string())
-        .env("OLLAMA_LIBRARY_PATH", lib_base.to_string_lossy().to_string())
+        .env(
+            "OLLAMA_LIBRARY_PATH",
+            lib_base.to_string_lossy().to_string(),
+        )
         .env("OLLAMA_NO_CLOUD", "1") // coupe le poll model_recommendations -> ollama.com (8.3)
         .env("OLLAMA_REMOTES", "127.0.0.1") // ceinture : neutralise l'allow-list distante
         .env("OLLAMA_ORIGINS", "http://tauri.localhost")

@@ -9,9 +9,11 @@ Frontend Svelte 5 de Doku (lecteur/éditeur de documents — shell W1 + éditeur
 | `main.ts` | Point d'entrée : fonts bundlées, CSS global, montage de App |
 | `app.css` | Tokens AIR (crème + sombre), styles de base, icônes Material Symbols |
 | `App.svelte` | Assemblage shell (sidebar + titlebar + stage) + raccourcis clavier globaux |
-| `components/TitleBar.svelte` | Barre 40px : toggle sidebar/logo, onglets Chrome-style, pin/thème/contrôles fenêtre |
+| `components/TitleBar.svelte` | Barre 40px : onglets Chrome-style, menu ⋯ du document, pin/thème/contrôles fenêtre |
 | `components/Sidebar.svelte` | Ruban d'icônes 46px + panneau (Fichiers / Plan / Historique), repliée = 0px |
-| `components/DocumentView.svelte` | Caption chemin + hôte CM6, cache d'états par onglet, bascule source |
+| `components/DocumentView.svelte` | Hôte CM6 plein espace, cache d'états par onglet, menu contextuel de sélection |
+| `components/CopilotPanel.svelte` | Chat Doku-San, choix Ollama/OpenAI et composeur superposé Question / Contexte |
+| `lib/openai.ts` | Client IPC OpenAI : connexion du compte Codex, statut, streaming et annulation sans exposer les jetons |
 | `lib/stores.svelte.ts` | État global (runes) : onglets, thème, sidebar, TOC, dirty tracking |
 | `lib/editor/editor.ts` | Extensions CM6 : thème typographique du design, coloration, Compartment preview/source |
 | `lib/editor/live-preview.ts` | Décorations live preview (ADR-0002) : masquage syntaxe, checkboxes, wikilinks |

@@ -12,6 +12,7 @@ Doku — petite application pour **ouvrir, lire et éditer des fichiers Markdown
 - Référence : `G:\KUDE` (mode lecture/édition Markdown + design system AIR) ; maquettes officielles dans `docs/design/w1/`
 - Éditeur : CodeMirror 6 « live preview » (ADR-0002) — `src/lib/editor/`
 - Database / ORM: aucune (fichiers locaux)
+- IA : Ollama local par défaut ; OpenAI optionnel via connexion du compte ChatGPT/Codex et coffre d’identifiants Windows (ADR-0014), jamais par saisie ou configuration manuelle d’une clé API
 - Package manager: npm
 
 ## Setup commands
@@ -37,6 +38,7 @@ Doku — petite application pour **ouvrir, lire et éditer des fichiers Markdown
 ## Patterns
 - ALWAYS: garder le cœur « lecture/édition de documents » extensible — le Markdown est le premier format, pas le seul (PDF et autres suivront)
 - ALWAYS: décider la stack via PRD + architecture avant d'écrire du code
+- ALWAYS: pour OpenAI, proposer une connexion de compte explicite de type OAuth ; ne jamais demander à l’utilisateur de fournir ou configurer une clé API
 - NEVER: créer des dossiers spécifiques à une technologie avant que la stack soit choisie
 
 ## Context & compaction
@@ -96,6 +98,8 @@ _Append via `/start learn <type>: <lesson>`. NEVER delete this section on update
 - [2026-07-16] **Packaging release du sidecar Ollama = résolution EXE-RELATIVE (Tauri 2 Windows).** `ollama.exe` charge `lib/ollama/` (`llama-server.exe` + DLLs ggml) **relativement à son propre dossier**, PAS via `OLLAMA_LIBRARY_PATH` (env **no-op** sur Ollama 0.32 — absent de l'env loggé ; le code peut le poser, il est ignoré). Donc la seule chose qui compte : que `lib/ollama/` soit **frère** de `ollama.exe`. En release, `bundle.externalBin` place `ollama.exe` (suffixe triplet **retiré**) à côté de `Doku.exe`, et `bundle.resources` (`"binaries/lib/ollama/": "lib/ollama/"`) place la lib sous `resource_dir()` = même dossier → OK. **Prouvable SANS installer** : le `ollama.exe` de `target/release/` (build release, donc `cfg!(debug_assertions)=false` → chemin `resource_dir()` exercé) + une **génération réelle** (charge llama-server + DLLs) valide le chemin release de bout en bout. Reste natif chez l'utilisateur : que l'**installateur** stage pareil + l'association `.pdf`. Layout release attendu : `Doku.exe` / `ollama.exe` / `lib/ollama/*` frères. (Dette S11 « resource_dir jamais prouvé en install » soldée ainsi.)
 - [2026-07-16] **Ollama sur ARM64 : toujours des tags `-q4_0` EXPLICITES, jamais le tag par défaut.** llama.cpp repacke les poids **Q4_0** au chargement vers des kernels ARM (KleidiAI/i8mm, PR #9921) : **×2,3 en décodage, ×2,9 en prefill** (confirmé sur Snapdragon X). Or les tags Ollama par défaut sont en **Q4_K_M** (non repacké) — vérifié au digest : `qwen2.5:3b` = `:3b-instruct-q4_K_M`. Sur cette machine (Surface Pro 11, CPU-only), la quantif du tag est donc un levier de perf ×2-3 gratuit : `qwen2.5:1.5b-instruct-q4_0`, `qwen2.5:3b-instruct-q4_0`, ou `hf.co/<org>/<repo>-GGUF:Q4_0`. (Effet secondaire : le repack désactive mmap → chargement un peu plus lent, RAM résidente un peu plus haute — négligeable ≤ 2 Go)
 - [2026-07-16] **Ollama `think:false` = ERREUR API sur un modèle non-thinking → ne jamais le hardcoder.** Le thinking est **ON par défaut** quand le modèle le supporte (Qwen3, SmolLM3…) ; `think:false` sur `/api/chat`/`/api/generate` le coupe proprement, MAIS l'envoyer à un modèle non-thinking (Qwen2.5, Gemma, Llama 3.2) **rejette la requête**. Il n'existe AUCUN `PARAMETER` de Modelfile pour le couper globalement. Si Doku doit un jour supporter des modèles thinking : détecter la capacité (`ollama show` → capabilities) et ne poser `think` que si supportée — jamais en dur dans le body
+
+- [2026-07-17] **Ne jamais utiliser le token de texte `--ink-rgb` pour les ombres d’élévation.** En thème sombre, `--ink-rgb` devient presque blanc : toute ombre diffuse (`box-shadow: … rgba(var(--ink-rgb), …)`) se transforme en glow clair. Utiliser un token indépendant (`--shadow-rgb`) — sombre/noir dans les deux thèmes — et, si nécessaire, un filet net séparé pour les surfaces élevées.
 
 ### Workarounds
 <!-- working solutions to known issues -->

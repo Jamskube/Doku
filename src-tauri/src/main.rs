@@ -4,8 +4,10 @@
 // de vie du sidecar Ollama, isolé dans `sidecar.rs`.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod openai;
 mod sidecar;
 
+use openai::OpenAiState;
 use sidecar::OllamaState;
 use tauri::{Emitter, Listener, Manager, WindowEvent};
 
@@ -31,8 +33,20 @@ fn main() {
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_opener::init())
         .manage(OllamaState::new().expect("création du Job Object du sidecar Ollama"))
-        .invoke_handler(tauri::generate_handler![sidecar::start_ollama, sidecar::stop_ollama])
+        .manage(OpenAiState::default())
+        .invoke_handler(tauri::generate_handler![
+            sidecar::start_ollama,
+            sidecar::stop_ollama,
+            openai::openai_status,
+            openai::openai_auth_start,
+            openai::openai_auth_poll,
+            openai::openai_auth_cancel,
+            openai::openai_disconnect,
+            openai::stream_openai,
+            openai::cancel_openai,
+        ])
         .on_window_event(|window, event| {
             // Arrêt du sidecar à la destruction de la fenêtre. Filet de sécurité : même si ce
             // handler ne tourne pas (crash de Doku), la fermeture du handle du Job Object à la

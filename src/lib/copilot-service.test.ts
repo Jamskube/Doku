@@ -78,6 +78,16 @@ describe('buildChatMessages', () => {
     expect(msgs[0].content).toContain(REFUSAL_PHRASE)
     expect(msgs[0].content).toMatch(/jamais sur des connaissances extérieures/i)
   })
+
+  it('donne au cloud plus d’initiative tout en séparant faits, inférences et contexte extérieur', () => {
+    const local = buildChatMessages({ ...base, history: [], question: 'Analyse.', persona: 'local' })
+    const cloud = buildChatMessages({ ...base, history: [], question: 'Analyse.', persona: 'cloud' })
+    expect(cloud[0].content).not.toBe(local[0].content)
+    expect(cloud[0].content).toMatch(/prends l'initiative|synthétise/i)
+    expect(cloud[0].content).toMatch(/infères|inférence/i)
+    expect(cloud[cloud.length - 1].content).toMatch(/contexte général extérieur/i)
+    expect(cloud[cloud.length - 1].content).toMatch(/n'invente jamais un fait attribué au document/i)
+  })
 })
 
 describe('segmentDoc (14.2)', () => {
@@ -133,6 +143,13 @@ describe('prompts de résumé (14.2)', () => {
     expect(p).toContain('r1')
     expect(p).toMatch(/n'ajoute aucune information/i)
   })
+  it('le profil cloud autorise une synthèse plus analytique sans relâcher la fidélité', () => {
+    const local = buildWholeSummaryPrompt('t', 'd', 'summary', 'local')
+    const cloud = buildWholeSummaryPrompt('t', 'd', 'summary', 'cloud')
+    expect(cloud).not.toBe(local)
+    expect(cloud).toMatch(/hiérarchise|implications/i)
+    expect(cloud).toMatch(/n'invente aucun fait/i)
+  })
 })
 
 describe('buildRephrasePrompt (16.1)', () => {
@@ -153,5 +170,11 @@ describe('buildRephrasePrompt (16.1)', () => {
     expect(s).toMatch(/court|concis/i)
     expect(t).toMatch(/ton/i)
     expect(c).toMatch(/clair/i)
+  })
+  it('le profil cloud peut réorganiser le passage mais conserve le contrat de remplacement', () => {
+    const cloud = buildRephrasePrompt('t', 'clarify', 'cloud')
+    expect(cloud).toMatch(/réorganiser/i)
+    expect(cloud).toMatch(/même sens/i)
+    expect(cloud).toMatch(/UNIQUEMENT/)
   })
 })

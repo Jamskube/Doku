@@ -99,6 +99,11 @@ Icônes : **Material Symbols Rounded** (les mots dans le proto — `search`, `fo
 
 Fenêtre = flex **row** : `[ Sidebar ] [ Zone principale (col) ] [ Panneau Copilote (aside) ]`.
 
+Le document ne possède plus de barre d'outils interne : son contenu commence directement sous les
+onglets et occupe toute la hauteur disponible. Un bouton **⋯** fixe à droite des onglets regroupe
+la sauvegarde, les exports Word / HTML autonome / PDF, le mode source, le mode focus et la largeur
+du document (étroit / confortable / pleine largeur).
+
 Point clé demandé par le client (à respecter précisément) :
 - Le **header (titlebar) est une bande continue** sur toute la largeur ; les contrôles fenêtre
   `— ▢ ✕` sont **tout à droite**.
@@ -124,25 +129,38 @@ Point clé demandé par le client (à respecter précisément) :
 
 ## Panneau Copilote
 
-- Largeur fixe **344px**, pleine hauteur, fond `--cream-base`, apparition animée
-  `doku-panel-in` (200ms, `translateX(14px)→0` + fondu, easing `cubic-bezier(.22,1,.36,1)`).
+- Largeur responsive jusqu’à **400px** (`100vw - 40px` en fenêtre compacte), pleine hauteur,
+  fond `--cream-base`. Le panneau reste monté et anime sa largeur, son glissement horizontal et
+  son opacité dans les deux sens avec un rythme symétrique de 240ms. Le document se redimensionne
+  simultanément, sans saut en fin de transition.
 - **En‑tête (40px)**, aligné avec le titlebar : titre **« Doku‑San »** (12.5px, 600, `--ink-2`) à
   gauche ; à droite, bouton **gérer les modèles** (icône `layers`), séparateur, puis contrôles
-  fenêtre `— ▢ ✕` (fermer → survol fond `--err`, texte blanc).
+  fenêtre `— ▢ ✕` (rayon 7px et focus discret identiques pour les trois actions ; la fermeture
+  utilise un rouge franc `--window-close`, plus saturé que le rouge sémantique `--err`).
   - En état **Modèles**, le bouton `layers` est remplacé par une **flèche retour** (`arrow_back`).
 - **Corps** : carte `--cream-content`, `border-left:1px solid var(--line-1)`,
   `border-radius:0 14px 0 0`, `overflow:hidden`. Défilement vertical interne.
 
 ### Zone de saisie « imbriquée » (états empty / streaming / conversation / error)
-Technique **carte‑dans‑carte à chevauchement** (le motif signature du design) :
-- Conteneur `border-radius:19px; overflow:hidden; border:1px solid var(--line-2)`.
-- **Tête** (`--cream-tint`, padding bas généreux `…22px`) : chips de contexte —
-  puce `notes.md` (fond `--cream-content`, bordure, icône `description` + `close`) et bouton
-  pointillé **`+ Contexte`**.
-- **Tiroir** (saisie, `--cream-content`) qui **remonte par‑dessus la tête** :
-  `margin-top:-15px; border-radius:15px 15px 0 0`. Le chevauchement négatif ≈ rayon crée la
-  jonction courbe imbriquée. Contient : bouton `+` (joindre), placeholder
-  *« Posez une question sur ce document… »*, bouton d'envoi rond (fond `--ink`, flèche `arrow_upward`).
+Le composeur utilise désormais **deux surfaces superposées qui permutent Question et Contexte**,
+directement alignées sur la construction du KPI « modèle actif » :
+- Le plan arrière est une carte autonome de 58px, raccourcie de 14px à gauche et à droite. Le tiroir
+  avant reste pleine largeur et remonte dessus avec `margin-top:-16px` et un rayon de 16px ; les deux
+  bords latéraux visibles rendent immédiatement la profondeur lisible.
+- **Question** est dans le tiroir au premier plan par défaut ; **Contexte** reste dans la tête arrière.
+- Un clic sur la tête échange les rôles en 240ms : le nouveau tiroir avance par translation/échelle
+  douce, tandis que l'ancien plan devient la tête de retour. Le brouillon n'est jamais perdu.
+- Les deux contenus partagent la même cellule CSS Grid dans le tiroir ; seul le panneau actif est
+  visible et interactif. Le tiroir Question sans en-tête conserve une hauteur minimale de 94px,
+  égale au total en-tête + contenu du tiroir Contexte, pour éviter tout saut de gabarit.
+- La carte **Question** place le champ *« Demandez à Doku-San… »* en haut sur toute la largeur,
+  puis le bouton `+` et le bouton d'envoi/arrêt rond sur une rangée d'actions en bas. La carte
+  **Contexte** détaille le document réellement transmis : nom, format,
+  nombre de caractères et état « Document entier », « Lecture partielle » ou métadonnées PDF.
+- Le plan actif reste très blanc en clair (`--composer-bg:#fff`) et mat en sombre ; le plan arrière
+  utilise une surface plus sourde. Les ombres d'élévation restent noires en sombre, jamais lumineuses.
+- Les onglets suivent un motif accessible de tabs : flèches pour permuter, `Échap` depuis Contexte
+  pour revenir à Question, contenu arrière `inert`, et animation neutralisée en réduction de mouvement.
 - Sous la carte : disclaimer centré *« Doku peut se tromper — vérifiez les informations importantes. »* (10.5px, `--ink-5`).
 - **Pendant la génération**, le bouton d'envoi devient un **bouton stop** (même emplacement, rond
   `--ink`, glyphe `stop` rempli `font-variation-settings:'FILL' 1`).
@@ -213,13 +231,19 @@ contrôles fenêtre de retour dans le header principal.
 - **toggleChat** : ouvre/ferme le panneau (déplacement des contrôles fenêtre + rayon document, voir plus haut).
 - **toggleTheme** : bascule `[data-theme]` clair/sombre.
 - **Navigation d'états** : `layers` → Modèles ; `arrow_back` → conversation ; liens onboarding/erreur → Modèles.
+- **Transition du panneau** : largeur/flex-basis + glissement horizontal + fondu, 240ms dans
+  les deux sens ; le panneau fermé reste `inert`, invisible et non cliquable.
+- **Vue pleine page** : le bouton `open_in_full` de l’en-tête replie progressivement l’éditeur
+  et donne tout l’espace restant au copilote. Le contenu du chat reste centré sur 760px maximum ;
+  `close_fullscreen` ou `Échap` restaure la vue partagée.
 - **Keyframes** (à recréer en CSS dans le dépôt) :
-  - `doku-panel-in` — entrée du panneau (200ms).
   - `doku-shimmer` — balayage dégradé, `background-position 200%→-200%`, 1.6s linear infinite (squelettes + barre de téléchargement).
   - `doku-orbit` — rotation 360°, 1.4s linear infinite (spinner).
   - `doku-breathe` — `opacity .45→1` + `scale .9→1.08`, ~1.8–2s ease‑in‑out infinite (icône assistant en génération, point « Actif »).
 - **Envoi ↔ Stop** : le bouton rond d'envoi devient bouton stop pendant la génération.
-- Survols : boutons‑icônes fantômes → fond `--surface-hover`, texte `--ink` ; bouton fermer → `--err`/blanc ; actions destructives → `--err`.
+- **Question ↔ Contexte** : permutation de profondeur symétrique en 240ms ; le draft reste monté,
+  les flèches changent de plan et `Échap` rend immédiatement le focus au champ Question.
+- Survols : boutons-icônes fantômes → fond `--surface-hover`, texte `--ink` ; bouton fermer → `--err`/blanc ; actions destructives → `--err`.
 
 ## État / logique (à mapper sur les stores Svelte de Doku)
 - `chatOpen: boolean` — panneau ouvert/fermé.

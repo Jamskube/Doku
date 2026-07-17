@@ -16,3 +16,5 @@ Registre des décisions d'architecture. Une décision par fichier ; on ne suppri
 | [0010](./0010-export-docx-lib-lazy.md) | Export DOCX : lib `docx` (lazy-loadée, marked.lexer → OOXML) | accepted | 2026-07-13 | export, docx, ooxml, fr-5 |
 | [0011](./0011-lecture-pdf-pdfjs.md) | Lecture PDF : PDF.js (canvas, worker Vite, offline) | accepted | 2026-07-13 | pdf, viewer, csp, arm64, fr-3 |
 | [0012](./0012-cycle-de-vie-sidecar-ollama.md) | Cycle de vie du sidecar Ollama : instance dédiée, port éphémère, modèles isolés, spawn paresseux | accepted | 2026-07-14 | ia, sidecar, ollama, process-lifecycle, arm64, csp |
+| [0013](./0013-fournisseur-openai-optionnel.md) | Fournisseur OpenAI par clé API — approche rejetée au profit d’une connexion de compte | rejected | 2026-07-17 | ia, openai, cloud, oauth, confidentialité |
+| [0014](./0014-connexion-compte-openai-codex.md) | Connexion optionnelle du compte OpenAI via Codex | accepted | 2026-07-17 | ia, openai, codex, oauth, cloud, secret |
