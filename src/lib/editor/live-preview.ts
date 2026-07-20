@@ -16,6 +16,7 @@ import { convertFileSrc } from '@tauri-apps/api/core'
 import { isTauri } from '../tauri'
 import { isBlockedImageUrl, resolveLocalImagePath } from '../images'
 import { parseTable } from '../table'
+import { rephrasePreviewRange, setRephrasePreview } from './rephrase-preview'
 
 // Dossier du document courant (fourni par état, dans DocumentView) — sert à
 // résoudre les images relatives.
@@ -330,6 +331,7 @@ class TableWidget extends WidgetType {
 function buildTableDecorations(state: EditorState): DecorationSet {
   const decos: Range<Decoration>[] = []
   const activeLines = activeLineSet(state)
+  const preview = rephrasePreviewRange(state)
   syntaxTree(state).iterate({
     enter(node) {
       if (node.name !== 'Table') return
@@ -337,6 +339,10 @@ function buildTableDecorations(state: EditorState): DecorationSet {
       // de ligne (un tableau indenté a un node.from en milieu de ligne).
       const from = state.doc.lineAt(node.from).from
       const to = state.doc.lineAt(node.to).to
+      // Un aperçu de reformulation (replace inline, rephrase-preview.ts) qui chevauche le
+      // tableau interdit le widget-bloc : deux replaces partiellement superposés = rendu
+      // indéfini CM6. Le tableau reste en source tant que l'aperçu vit.
+      if (preview && preview.from <= to && from <= preview.to) return false
       const first = state.doc.lineAt(from).number
       const last = state.doc.lineAt(to).number
       let active = false
@@ -355,9 +361,10 @@ function buildTableDecorations(state: EditorState): DecorationSet {
 const tableField = StateField.define<DecorationSet>({
   create: (state) => buildTableDecorations(state),
   update(deco, tr) {
-    // Recalcul sur édition, changement de curseur, ou avancée du parseur (le tableau
-    // peut être sous la frontière d'analyse au chargement).
-    if (tr.docChanged || tr.selection || syntaxTree(tr.state) !== syntaxTree(tr.startState)) {
+    // Recalcul sur édition, changement de curseur, avancée du parseur (le tableau peut
+    // être sous la frontière d'analyse au chargement), ou pose/retrait d'un aperçu de
+    // reformulation (les tables qu'il chevauchait doivent re-rendre leur widget).
+    if (tr.docChanged || tr.selection || syntaxTree(tr.state) !== syntaxTree(tr.startState) || tr.effects.some((e) => e.is(setRephrasePreview))) {
       return buildTableDecorations(tr.state)
     }
     return deco

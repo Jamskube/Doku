@@ -6,10 +6,12 @@ import {
   buildRephrasePrompt,
   buildSegmentSummaryPrompt,
   buildWholeSummaryPrompt,
+  diffWords,
   segmentDoc,
   truncateDoc,
   MAX_DOC_CHARS,
   REFUSAL_PHRASE,
+  type DiffSeg,
 } from './copilot-service'
 
 describe('truncateDoc', () => {
@@ -176,5 +178,71 @@ describe('buildRephrasePrompt (16.1)', () => {
     expect(cloud).toMatch(/réorganiser/i)
     expect(cloud).toMatch(/même sens/i)
     expect(cloud).toMatch(/UNIQUEMENT/)
+  })
+  it('« Corriger » (16.2) : orthographe/grammaire, changement minimal, contrat conservé', () => {
+    const p = buildRephrasePrompt('t', 'correct')
+    expect(p).toMatch(/orthographe/i)
+    expect(p).toMatch(/grammaire/i)
+    expect(p).toMatch(/le moins/i)
+    expect(p).toMatch(/même sens/i)
+    expect(p).toMatch(/Markdown/)
+    expect(p).toMatch(/UNIQUEMENT/)
+    for (const other of ['clarify', 'shorten', 'tone'] as const) expect(p).not.toBe(buildRephrasePrompt('t', other))
+  })
+  it('cloud + Corriger : PAS de licence de réorganisation (correction = changement minimal)', () => {
+    expect(buildRephrasePrompt('t', 'correct', 'cloud')).not.toMatch(/réorganiser/i)
+  })
+})
+
+describe('diffWords (16.2, brief w3)', () => {
+  // Propriété centrale : le diff reconstruit EXACTEMENT les deux textes (aucun blanc perdu).
+  const reconstruct = (segs: DiffSeg[]) => ({
+    original: segs.filter((s) => s.kind !== 'add').map((s) => s.text).join(''),
+    proposed: segs.filter((s) => s.kind !== 'del').map((s) => s.text).join(''),
+  })
+
+  it('textes identiques → un seul segment same (et aucun pour deux vides)', () => {
+    expect(diffWords('le chat dort', 'le chat dort')).toEqual([{ kind: 'same', text: 'le chat dort' }])
+    expect(diffWords('', '')).toEqual([])
+  })
+  it('substitution : del + add ciblés, reconstruction exacte', () => {
+    const segs = diffWords('le chat dort', 'le chien dort')
+    expect(reconstruct(segs)).toEqual({ original: 'le chat dort', proposed: 'le chien dort' })
+    expect(segs.some((s) => s.kind === 'del' && s.text.includes('chat'))).toBe(true)
+    expect(segs.some((s) => s.kind === 'add' && s.text.includes('chien'))).toBe(true)
+    expect(segs.some((s) => s.kind === 'same' && s.text.includes('dort'))).toBe(true)
+  })
+  it('insertion pure et suppression pure', () => {
+    expect(reconstruct(diffWords('a c', 'a b c'))).toEqual({ original: 'a c', proposed: 'a b c' })
+    expect(reconstruct(diffWords('a b c', 'a c'))).toEqual({ original: 'a b c', proposed: 'a c' })
+  })
+  it('fusionne les segments adjacents de même nature (mots consécutifs supprimés)', () => {
+    const segs = diffWords('un deux trois quatre', 'un quatre')
+    expect(segs.filter((s) => s.kind === 'del')).toEqual([{ kind: 'del', text: 'deux trois ' }])
+    expect(reconstruct(segs)).toEqual({ original: 'un deux trois quatre', proposed: 'un quatre' })
+  })
+  it('préserve blancs multiples et sauts de ligne (reconstruction octet pour octet)', () => {
+    const a = 'Premier  paragraphe.\n\nDeuxieme ligne\tavec tab.'
+    const b = 'Premier  paragraphe corrige.\n\nDeuxieme ligne\tavec tab.'
+    expect(reconstruct(diffWords(a, b))).toEqual({ original: a, proposed: b })
+  })
+  it('espaces de bord : jamais de segment vide', () => {
+    const segs = diffWords(' a ', ' b ')
+    expect(segs.every((s) => s.text !== '')).toBe(true)
+    expect(reconstruct(segs)).toEqual({ original: ' a ', proposed: ' b ' })
+  })
+  it('au-delà du plafond → repli remplacement intégral (jamais de diff faux)', () => {
+    const a = Array.from({ length: 1500 }, (_, i) => `a${i}`).join(' ')
+    const b = Array.from({ length: 1500 }, (_, i) => `b${i}`).join(' ')
+    expect(diffWords(a, b)).toEqual([
+      { kind: 'del', text: a },
+      { kind: 'add', text: b },
+    ])
+  })
+  it('sous le plafond, un texte de plusieurs paragraphes garde un diff fin', () => {
+    const base = Array.from({ length: 300 }, (_, i) => `mot${i}`).join(' ')
+    const segs = diffWords(`${base} fin`, `${base} conclusion`)
+    expect(segs.filter((s) => s.kind === 'del')).toEqual([{ kind: 'del', text: 'fin' }])
+    expect(segs.filter((s) => s.kind === 'add')).toEqual([{ kind: 'add', text: 'conclusion' }])
   })
 })

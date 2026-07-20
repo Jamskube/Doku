@@ -2,7 +2,8 @@
 // (même motif que `app` dans stores.svelte.ts). Le port du sidecar est stable (start_ollama
 // idempotent côté Rust) → on le cache ; `ensureReady` déduplique les appels concurrents
 // (motif indexBuild de la recherche). Le modèle ACTIF (persisté) vit dans `app.activeModel`.
-import { activeTab, app, editorRef, editorSel, type CopilotProvider, type DocKind } from './stores.svelte'
+import { activeTab, app, editorRef, type CopilotProvider, type DocKind } from './stores.svelte'
+import { setRephrasePreview } from './editor/rephrase-preview'
 import { chat, deleteModel, generate, listModels, pull, startOllama, waitReady, type OllamaModel } from './ollama'
 import {
   cancelOpenAiAuth,
@@ -46,15 +47,9 @@ export interface ChatMsg {
   // rouge (rien n'a échoué, rien n'a même été tenté).
   config?: 'model' | 'openai'
   status?: string
-  // Posé sur une carte `failed` : ce qu'il faut rejouer pour « Réessayer » (la question, le mode
-  // de résumé ou la variante de reformulation). Le document est re-capturé au moment du retry.
-  retry?: { kind: 'chat'; question: string } | { kind: 'summary'; mode: SummaryMode } | { kind: 'rephrase'; mode: RephraseMode }
-  // Reformulation (16.1) : proposition liée à une sélection de l'éditeur. `state` pilote les
-  // boutons Accepter/Refuser ; `tabId` + `from/to/original` appliquent le remplacement ET
-  // détectent une cible périmée — mauvais onglet OU doc modifié entre-temps (`stale` → on n'écrit
-  // rien, zéro perte). L'éditeur CM6 étant PARTAGÉ entre onglets, `tabId` est indispensable :
-  // sans lui, accepter après un changement d'onglet réécrirait le mauvais document.
-  rephrase?: { tabId: number; from: number; to: number; original: string; state: 'pending' | 'applied' | 'rejected' | 'stale' }
+  // Posé sur une carte `failed` : ce qu'il faut rejouer pour « Réessayer » (la question ou le
+  // mode de résumé). Le document est re-capturé au moment du retry.
+  retry?: { kind: 'chat'; question: string } | { kind: 'summary'; mode: SummaryMode }
 }
 
 export const copilot = $state({
@@ -593,107 +588,154 @@ export async function summarizeDoc(
   }
 }
 
-// Reformule la sélection courante de l'éditeur (16.1, FR-7). Streame une PROPOSITION — n'écrit
-// RIEN dans le document — portant les bornes de la sélection ; l'utilisateur l'accepte (remplace)
-// ou la refuse (texte d'origine intact). Anti-TOCTOU et boot-safety identiques à sendChat.
+// --- Assistance d'écriture en place (16.1 + 16.2, brief w3) ---------------------------------
+// La proposition ne vit PLUS dans le panneau : elle est rendue PAR-DESSUS la sélection dans
+// l'éditeur (rephrase-preview.ts, câblé par DocumentView). `current` est le run unique en
+// cours ; `id` déjoue les callbacks d'un run annulé — comparer par id, JAMAIS par identité
+// d'objet (une ref locale pointe le raw, pas le proxy $state).
+export interface RephraseRun {
+  id: number
+  tabId: number
+  from: number
+  to: number
+  original: string
+  mode: RephraseMode
+  text: string
+  phase: 'streaming' | 'ready' | 'error' | 'config'
+  error: string
+}
+
+export const rephrase = $state({ current: null as RephraseRun | null })
+let rephraseSeq = 0
+
+// Reformule/corrige la sélection courante (FR-7/FR-8). Streame une PROPOSITION — n'écrit RIEN
+// dans le document ; l'aperçu en place la rend avec un diff, l'utilisateur accepte (remplace,
+// une transaction → Ctrl+Z restaure) ou refuse. Anti-TOCTOU et boot-safety identiques à
+// sendChat ; le tabId fige l'onglet cible (éditeur CM6 PARTAGÉ entre onglets).
 export async function rephraseSelection(mode: RephraseMode): Promise<void> {
-  if (copilot.generating) return
-  const provider = app.copilotProvider
-  const localModel = app.activeModel
+  if (copilot.generating || rephrase.current) return
   const view = editorRef.view
   if (!view) return
   const sel = view.state.selection.main
   if (sel.empty) return
-  const from = sel.from
-  const to = sel.to
-  const original = view.state.sliceDoc(from, to)
-  const tabId = app.activeId // onglet cible figé à la proposition (éditeur partagé entre onglets)
-  const label = mode === 'shorten' ? 'Raccourcir la sélection' : mode === 'tone' ? 'Changer le ton de la sélection' : 'Clarifier la sélection'
+  await runRephrase({ tabId: app.activeId, from: sel.from, to: sel.to, original: view.state.sliceDoc(sel.from, sel.to), mode })
+}
 
-  // Garde modèle : carte de CONFIG sans démarrer le sidecar (préserve le boot-safety 14.0).
-  if (provider === 'ollama' && !localModel) {
-    copilot.messages.push({ role: 'user', content: label })
-    copilot.messages.push({
-      role: 'assistant',
-      content: providerSetupMessage(provider),
-      config: 'model',
-    })
-    return
-  }
-
+async function runRephrase(params: { tabId: number; from: number; to: number; original: string; mode: RephraseMode }): Promise<void> {
+  const provider = app.copilotProvider
+  const localModel = app.activeModel
+  const id = ++rephraseSeq
   copilot.generating = true
   genController = new AbortController()
   const signal = genController.signal
-
-  copilot.messages.push({ role: 'user', content: label })
-  copilot.messages.push({ role: 'assistant', content: '', streaming: true, rephrase: { tabId, from, to, original, state: 'pending' } })
-  const idx = copilot.messages.length - 1
+  rephrase.current = { id, ...params, text: '', phase: 'streaming', error: '' }
 
   try {
-    const runtime = await resolveRuntime(provider, localModel)
-    if (runtime === null) {
-      const m = copilot.messages[idx]
-      if (provider === 'openai') {
-        m.content = providerSetupMessage(provider)
-        m.config = 'openai'
-      } else {
-        m.content = copilot.error || 'Le moteur IA est indisponible.'
-        m.failed = true
+    // Garde modèle : note de config en place, sans démarrer le sidecar (boot-safety 14.0).
+    if (provider === 'ollama' && !localModel) {
+      const cur = rephrase.current
+      if (cur?.id === id) {
+        cur.phase = 'config'
+        cur.error = providerSetupMessage(provider)
       }
-      m.rephrase = undefined
-      if (m.failed) m.retry = { kind: 'rephrase', mode }
       return
     }
-    // Mutation via l'index (élément proxifié du $state array) → réactif (piège $state profond).
-    await streamGenerate(runtime, buildRephrasePrompt(original, mode, personaFor(runtime)), (t) => (copilot.messages[idx].content += t), signal)
+    const runtime = await resolveRuntime(provider, localModel)
+    let cur = rephrase.current
+    if (cur?.id !== id) return
+    if (runtime === null) {
+      if (provider === 'openai') {
+        cur.phase = 'config'
+        cur.error = providerSetupMessage(provider)
+      } else {
+        cur.phase = 'error'
+        cur.error = copilot.error || 'Le moteur IA est indisponible.'
+      }
+      return
+    }
+    const text = await streamGenerate(
+      runtime,
+      buildRephrasePrompt(params.original, params.mode, personaFor(runtime)),
+      (t) => {
+        const c = rephrase.current
+        if (c?.id === id) c.text += t
+      },
+      signal,
+    )
+    cur = rephrase.current
+    if (cur?.id !== id) return
+    // Abort externe (Échap a déjà nettoyé, mais aussi stop/nouvelle conversation du panneau —
+    // le contrôleur est partagé) : écarter l'aperçu, ne jamais le laisser figé en streaming.
+    if (signal.aborted) {
+      rephrase.current = null
+      return
+    }
+    const trimmed = text.trim()
+    if (!trimmed) {
+      cur.phase = 'error'
+      cur.error = 'Aucune proposition reçue. Réessayez, ou changez de modèle.'
+      return
+    }
+    // Les blancs de bord de l'ORIGINAL sont réappliqués : le remplacement ne mange jamais un
+    // saut de ligne de frontière, et le diff ne montre pas de suppression d'espace fantôme.
+    cur.text = (params.original.match(/^\s*/)?.[0] ?? '') + trimmed + (params.original.match(/\s*$/)?.[0] ?? '')
+    cur.phase = 'ready' // posé AVANT le finally : cancelRephrase n'aborte que la phase streaming
   } catch (e) {
     console.error('[copilot] rephrase', e)
-    const m = copilot.messages[idx]
-    m.content = m.content || generationFailure(e, provider, 'La reformulation a échoué. Vérifiez que le moteur est prêt, puis réessayez.')
-    m.failed = true
-    m.rephrase = undefined
-    m.retry = { kind: 'rephrase', mode }
-  } finally {
-    const m = copilot.messages[idx]
-    if (m) {
-      m.streaming = false
-      // Le texte proposé remplacera la sélection → on nettoie les espaces de bord (préambule
-      // éventuel non géré ici : l'utilisateur relit avant d'appliquer).
-      m.content = m.content.trim()
-      // Annulé avant tout token → tour fantôme (question + bulle vide) : on retire les deux.
-      if (m.content === '' && !m.failed) copilot.messages.splice(idx - 1, 2)
+    const cur = rephrase.current
+    if (cur?.id !== id) return
+    if (signal.aborted) {
+      rephrase.current = null
+      return
     }
+    cur.phase = 'error'
+    cur.error = generationFailure(e, provider, 'La génération a échoué. Vérifiez que le moteur est prêt, puis réessayez.')
+  } finally {
     copilot.generating = false
     genController = null
   }
 }
 
-// Applique une proposition (16.1) : remplace la sélection d'origine par le texte proposé.
-// Garde ZÉRO PERTE : si le document a changé sous la proposition (la région ne contient plus le
-// texte d'origine), on n'écrit RIEN et on signale (`stale`). Remplacement = transaction CM
-// unique → annulable par Ctrl+Z.
-export function acceptRephrase(idx: number): void {
-  const m = copilot.messages[idx]
-  if (!m?.rephrase || m.rephrase.state !== 'pending' || m.streaming) return
+// Applique la proposition : remplace la plage d'origine par le texte proposé — UNE transaction
+// (annulable Ctrl+Z) qui porte AUSSI le retrait de l'aperçu (l'auto-dismiss du champ ne doit
+// pas la prendre pour une édition étrangère). Garde zéro-perte 16.1 conservée en défense en
+// profondeur : mauvais onglet ou région qui n'est plus l'original → on n'écrit RIEN.
+export function acceptRephrase(): void {
+  const cur = rephrase.current
+  if (!cur || cur.phase !== 'ready') return
   const view = editorRef.view
-  const { tabId, from, to, original } = m.rephrase
-  const proposed = m.content
-  if (!view || !proposed) return
-  // Cible périmée : mauvais onglet (éditeur partagé) OU région modifiée depuis la proposition.
-  // Dans les deux cas on N'ÉCRIT RIEN (zéro perte) et on signale.
-  if (app.activeId !== tabId || to > view.state.doc.length || view.state.sliceDoc(from, to) !== original) {
-    m.rephrase.state = 'stale'
+  if (!view || !cur.text) return
+  if (app.activeId !== cur.tabId || cur.to > view.state.doc.length || view.state.sliceDoc(cur.from, cur.to) !== cur.original) {
+    rephrase.current = null
     return
   }
-  view.dispatch({ changes: { from, to, insert: proposed }, selection: { anchor: from + proposed.length } })
+  view.dispatch({
+    changes: { from: cur.from, to: cur.to, insert: cur.text },
+    selection: { anchor: cur.from + cur.text.length },
+    effects: setRephrasePreview.of(null),
+  })
+  rephrase.current = null
   view.focus()
-  m.rephrase.state = 'applied'
 }
 
-// Refuse une proposition : ne touche PAS au document (texte d'origine conservé).
-export function rejectRephrase(idx: number): void {
-  const m = copilot.messages[idx]
-  if (m?.rephrase && m.rephrase.state === 'pending') m.rephrase.state = 'rejected'
+// Écarte l'aperçu sans rien écrire (Refuser, Échap, édition du doc, changement d'onglet…).
+// N'aborte le contrôleur partagé QUE si c'est la reformulation qui streame — un aperçu `ready`
+// peut coexister avec une génération de chat, ne pas la tuer.
+export function cancelRephrase(): void {
+  const cur = rephrase.current
+  if (!cur) return
+  if (cur.phase === 'streaming') genController?.abort()
+  rephrase.current = null
+}
+
+// Relance après échec, avec les MÊMES bornes (toujours valides : toute édition du document
+// auto-dismisse l'aperçu, phase error comprise).
+export function retryRephrase(): void {
+  const cur = rephrase.current
+  if (!cur || cur.phase !== 'error' || copilot.generating) return
+  const { tabId, from, to, original, mode } = cur
+  rephrase.current = null
+  void runRephrase({ tabId, from, to, original, mode })
 }
 
 // Rejoue une génération échouée (bouton « Réessayer » de la carte d'erreur). Retire la paire
@@ -703,19 +745,11 @@ export function retryGeneration(idx: number): void {
   const m = copilot.messages[idx]
   if (!m?.retry || copilot.generating) return
   const r = m.retry
-  // Reformulation : la sélection d'origine a probablement disparu (l'échec l'a désélectionnée).
-  // Sans sélection, rejouer serait un no-op silencieux → on guide au lieu de faire disparaître.
-  if (r.kind === 'rephrase' && !editorSel.text.trim()) {
-    m.content = 'Sélectionnez à nouveau le passage à reformuler, puis relancez depuis le menu de sélection.'
-    m.retry = undefined
-    return
-  }
   copilot.messages.splice(idx - 1, 2)
   const t = activeTab()
   const doc = { name: t?.name ?? null, text: t?.content ?? '', kind: t?.kind ?? ('md' as DocKind) }
   if (r.kind === 'chat') void sendChat(r.question, doc)
-  else if (r.kind === 'summary') void summarizeDoc(doc, r.mode)
-  else void rephraseSelection(r.mode)
+  else void summarizeDoc(doc, r.mode)
 }
 
 // Interrompt la génération en cours (abort → texte partiel conservé, < 500 ms côté serveur).

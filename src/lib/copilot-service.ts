@@ -222,12 +222,14 @@ export function buildReduceSummaryPrompt(
 // Assistance à la rédaction (FR-7). La sortie REMPLACE la sélection dans l'éditeur → le modèle
 // ne doit renvoyer QUE le texte réécrit (aucun préambule, guillemet ni commentaire), sinon on
 // insérerait du parasite. Zéro invention : même sens, même langue, même mise en forme Markdown.
-export type RephraseMode = 'clarify' | 'shorten' | 'tone'
+export type RephraseMode = 'clarify' | 'shorten' | 'tone' | 'correct'
 
 const REPHRASE_TASK: Record<RephraseMode, string> = {
-  clarify: 'en le rendant plus clair et plus facile à lire (phrases simples et directes)',
-  shorten: "en le rendant plus court et plus concis, sans perdre l'information importante",
-  tone: 'en adoptant un ton plus neutre et professionnel',
+  clarify: 'Reformule le passage ci-dessous en le rendant plus clair et plus facile à lire (phrases simples et directes).',
+  shorten: "Reformule le passage ci-dessous en le rendant plus court et plus concis, sans perdre l'information importante.",
+  tone: 'Reformule le passage ci-dessous en adoptant un ton plus neutre et professionnel.',
+  // 16.2 : correction = changement MINIMAL — jamais de licence de réécriture, quel que soit le persona.
+  correct: "Corrige l'orthographe, la grammaire, la conjugaison et la ponctuation du passage ci-dessous, en changeant le moins de mots possible.",
 }
 
 export function buildRephrasePrompt(
@@ -237,14 +239,76 @@ export function buildRephrasePrompt(
 ): string {
   const role =
     persona === 'cloud'
-      ? "Tu es Doku-San, un éditeur expérimenté. Améliore franchement le passage : tu peux réorganiser les phrases et la structure lorsque cela sert l'objectif demandé."
+      ? mode === 'correct'
+        ? 'Tu es Doku-San, un correcteur rigoureux.'
+        : "Tu es Doku-San, un éditeur expérimenté. Améliore franchement le passage : tu peux réorganiser les phrases et la structure lorsque cela sert l'objectif demandé."
       : "Tu es Doku-San, l'assistant d'écriture local de l'éditeur Doku."
   return (
-    `${role} Reformule le passage ci-dessous ${REPHRASE_TASK[mode]}.\n` +
+    `${role} ${REPHRASE_TASK[mode]}\n` +
     'Règles STRICTES :\n' +
     "- Garde exactement le même sens ; n'ajoute aucune information nouvelle.\n" +
     "- Conserve la langue d'origine et la mise en forme Markdown (titres, listes, gras, liens, code).\n" +
-    '- Réponds UNIQUEMENT avec le texte reformulé — sans préambule, sans guillemets, sans commentaire.\n' +
+    '- Réponds UNIQUEMENT avec le texte réécrit — sans préambule, sans guillemets, sans commentaire.\n' +
     `\nPassage :\n"""\n${text}\n"""`
   )
+}
+
+// --- Diff mot à mot (16.2, brief w3) : ce qui change entre l'original et la proposition -------
+// Pour l'aperçu en place : suppressions barrées, ajouts surlignés. Tokenisation par mots ET
+// blancs (les blancs sont des tokens à part entière) → propriété garantie : la concaténation
+// des segments `same`+`del` redonne EXACTEMENT l'original, `same`+`add` la proposition. LCS
+// O(n·m) borné : au-delà du plafond (sélections énormes), repli sur un remplacement intégral —
+// jamais de diff faux, juste moins fin.
+export interface DiffSeg {
+  kind: 'same' | 'del' | 'add'
+  text: string
+}
+
+// ~2000 tokens par côté (≈ 1000 mots — les blancs comptent) : couvre une correction de
+// plusieurs paragraphes en restant à ~16 Mo transitoires (Uint32Array), quelques ms sur ARM.
+const DIFF_MAX_CELLS = 4_000_000
+
+export function diffWords(original: string, proposed: string): DiffSeg[] {
+  if (original === proposed) return original ? [{ kind: 'same', text: original }] : []
+  const a = original.split(/(\s+)/).filter((t) => t !== '')
+  const b = proposed.split(/(\s+)/).filter((t) => t !== '')
+  const segs: DiffSeg[] = []
+  const push = (kind: DiffSeg['kind'], text: string) => {
+    const last = segs[segs.length - 1]
+    if (last && last.kind === kind) last.text += text
+    else segs.push({ kind, text })
+  }
+  if (a.length * b.length > DIFF_MAX_CELLS) {
+    if (original) push('del', original)
+    if (proposed) push('add', proposed)
+    return segs
+  }
+  // Table des longueurs de LCS (suffixes), puis backtrack avant→arrière.
+  const n = a.length
+  const m = b.length
+  const w = m + 1
+  const lcs = new Uint32Array((n + 1) * w)
+  for (let i = n - 1; i >= 0; i--) {
+    for (let j = m - 1; j >= 0; j--) {
+      lcs[i * w + j] = a[i] === b[j] ? lcs[(i + 1) * w + j + 1] + 1 : Math.max(lcs[(i + 1) * w + j], lcs[i * w + j + 1])
+    }
+  }
+  let i = 0
+  let j = 0
+  while (i < n && j < m) {
+    if (a[i] === b[j]) {
+      push('same', a[i])
+      i++
+      j++
+    } else if (lcs[(i + 1) * w + j] >= lcs[i * w + j + 1]) {
+      push('del', a[i])
+      i++
+    } else {
+      push('add', b[j])
+      j++
+    }
+  }
+  while (i < n) push('del', a[i++])
+  while (j < m) push('add', b[j++])
+  return segs
 }

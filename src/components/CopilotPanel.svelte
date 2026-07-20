@@ -3,7 +3,7 @@
   import { activeTab, app } from '../lib/stores.svelte'
   import { closeWindow, minimizeWindow, toggleMaximizeWindow } from '../lib/tauri'
   import { formatBytes } from '../lib/ollama'
-  import { acceptRephrase, beginOpenAiAuth, cancelOpenAiConnection, cancelPull, copilot, disconnectOpenAiAccount, newChat, pullModel, refreshModels, refreshOpenAiStatus, rejectRephrase, removeModel, retryGeneration, sendChat, setActiveModel, setCopilotProvider, stopChat, summarizeDoc } from '../lib/copilot.svelte'
+  import { beginOpenAiAuth, cancelOpenAiConnection, cancelPull, copilot, disconnectOpenAiAccount, newChat, pullModel, refreshModels, refreshOpenAiStatus, removeModel, retryGeneration, sendChat, setActiveModel, setCopilotProvider, stopChat, summarizeDoc } from '../lib/copilot.svelte'
   import { MAX_DOC_CHARS } from '../lib/copilot-service'
   import { openOpenAiAuthPage, OPENAI_MODEL } from '../lib/openai'
   import { renderChatMarkdown } from '../lib/export/render-md'
@@ -559,8 +559,8 @@
             {:else}
               <div class="cop-asst">
                 <div class="cop-asst-head">
-                  <span class="msr" class:breathe={m.streaming} style="font-size:16px;color:var(--ink-4)">{m.rephrase ? 'edit_note' : 'spa'}</span>
-                  <span class="cop-asst-name">{m.rephrase ? 'Proposition' : 'Doku-San'}</span>
+                  <span class="msr" class:breathe={m.streaming} style="font-size:16px;color:var(--ink-4)">spa</span>
+                  <span class="cop-asst-name">Doku-San</span>
                   <div class="grow"></div>
                   {#if !m.streaming}
                     <button class="cop-copy" title="Copier" aria-label="Copier la réponse" onclick={() => copyMessage(m.content)}>
@@ -568,34 +568,7 @@
                     </button>
                   {/if}
                 </div>
-                {#if m.rephrase}
-                  <!-- Reformulation (16.1) : le texte proposé remplacera la sélection → affiché tel
-                       quel (pas de rendu Markdown) pour montrer exactement ce qui sera inséré. -->
-                  {#if m.streaming && m.content === ''}
-                    <div class="cop-skel-wrap">
-                      <div class="doku-skel" style="height:11px;width:88%"></div>
-                      <div class="doku-skel" style="height:11px;width:96%;animation-delay:0.15s"></div>
-                    </div>
-                  {:else}
-                    <div class="cop-proposal">{m.content}</div>
-                    {#if m.rephrase.state === 'pending' && !m.streaming}
-                      <div class="cop-prop-acts">
-                        <button class="cop-prop-btn accept" onclick={() => acceptRephrase(i)}>
-                          <span class="msr" style="font-size:15px">check</span>Accepter
-                        </button>
-                        <button class="cop-prop-btn" onclick={() => rejectRephrase(i)}>
-                          <span class="msr" style="font-size:15px">close</span>Refuser
-                        </button>
-                      </div>
-                    {:else if m.rephrase.state === 'applied'}
-                      <div class="cop-prop-note ok" role="status"><span class="msr" style="font-size:14px">check_circle</span>Appliqué au document.</div>
-                    {:else if m.rephrase.state === 'rejected'}
-                      <div class="cop-prop-note" role="status"><span class="msr" style="font-size:14px">do_not_disturb_on</span>Refusé — texte d'origine conservé.</div>
-                    {:else if m.rephrase.state === 'stale'}
-                      <div class="cop-prop-note warn" role="status"><span class="msr" style="font-size:14px">warning</span>Le document a changé — remplacement annulé (texte d'origine intact).</div>
-                    {/if}
-                  {/if}
-                {:else if m.streaming && m.status}
+                {#if m.streaming && m.status}
                   <!-- Progression (prefill/map) — role=status : annoncée au lecteur d'écran. -->
                   <div class="cop-status" role="status">
                     <span class="msr breathe" style="font-size:16px;color:var(--ink-4)">auto_stories</span>{m.status}
@@ -1119,7 +1092,7 @@
   }
   /* Le contenu de la conversation doit être COPIABLE (le body global est en user-select:none) :
      sans ça, une question échouée ne peut même pas être re-copiée pour la retaper. */
-  .cop-user-bubble, .cop-md, .cop-md-plain, .cop-proposal, .cop-err-msg { user-select: text; }
+  .cop-user-bubble, .cop-md, .cop-md-plain, .cop-err-msg { user-select: text; }
   .cop-asst { padding-right: 4px; }
   .cop-asst-head { display: flex; align-items: center; gap: 7px; margin-bottom: 10px; }
   .cop-asst-head > .msr {
@@ -1335,24 +1308,6 @@
     .cop-context-add { display: none; }
     .cop-context-state { max-width: 86px; overflow: hidden; text-overflow: ellipsis; }
   }
-
-  /* Reformuler — carte proposition (16.1) */
-  .cop-proposal {
-    font-size: 13px; line-height: 1.6; color: var(--ink); white-space: pre-wrap; overflow-wrap: anywhere;
-    padding: 10px 12px; background: var(--surface-2); border: 1px solid var(--line-2); border-radius: 10px;
-  }
-  .cop-prop-acts { display: flex; gap: 7px; margin-top: 9px; }
-  .cop-prop-btn {
-    display: inline-flex; align-items: center; gap: 5px; height: 30px; padding: 0 13px;
-    border: 1px solid var(--line-2); border-radius: 9px; background: var(--cream-content); color: var(--ink-2);
-    font-family: var(--font-sans); font-size: 12px; font-weight: 500; cursor: pointer;
-  }
-  .cop-prop-btn:hover { background: var(--surface-hover); color: var(--ink); }
-  .cop-prop-btn.accept { background: var(--ink); color: var(--cream-content); border-color: var(--ink); }
-  .cop-prop-btn.accept:hover { background: var(--ink-2); }
-  .cop-prop-note { display: inline-flex; align-items: center; gap: 6px; margin-top: 9px; font-size: 12px; color: var(--ink-4); }
-  .cop-prop-note.ok { color: var(--ok-text); }
-  .cop-prop-note.warn { color: var(--warn-text); }
 
   @keyframes cop-composer-drawer-in {
     from { opacity: 0.82; transform: translateY(8px) scale(0.992); }

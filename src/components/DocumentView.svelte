@@ -6,11 +6,13 @@
   import { baseExtensions, htmlSourceExtensions, livePreviewComp, previewExtensions, serializeDoc, sourceExtensions, txtExtensions } from '../lib/editor/editor'
   import { docDirFacet } from '../lib/editor/live-preview'
   import { revealMatch, searchFlashField } from '../lib/editor/search-flash'
+  import { isRephrasePreviewUpdate, rephrasePreviewField, setRephrasePreview, syncRephrasePreview } from '../lib/editor/rephrase-preview'
   import { parentPath } from '../lib/explorer'
   import { sandboxDoc } from '../lib/html'
   import { writePastedImage } from '../lib/tauri'
   import { imageMarkdown, imageStamp, sniffImageExt } from '../lib/paste-image'
-  import { copilot, rephraseSelection } from '../lib/copilot.svelte'
+  import { acceptRephrase, cancelRephrase, copilot, rephrase, rephraseSelection, retryRephrase } from '../lib/copilot.svelte'
+  import { diffWords, type RephraseMode } from '../lib/copilot-service'
   import DokuMark from '../lib/DokuMark.svelte'
   import PdfView from './PdfView.svelte'
 
@@ -102,18 +104,33 @@
   let renderedRev = -1
   let selectionMenu = $state<{ left: number; top: number } | null>(null)
   let selectionMenuExpanded = $state(false)
+  let selectionMenuConfig = $state(false)
   let selectionMenuEl: HTMLElement | undefined = $state()
   let selectionMenuTimer: ReturnType<typeof setTimeout> | undefined
+
+  // Copilote non configuré : le clic sur un verbe affiche une note dans le popover au lieu de
+  // lancer une génération vouée à l'échec (brief w3 « Aucun modèle actif »).
+  const copilotNeedsSetup = $derived(
+    app.copilotProvider === 'ollama'
+      ? !app.activeModel
+      : copilot.openAiAuthenticated === false || copilot.openAiPreferredAvailable === false,
+  )
+  const setupNote = $derived(
+    app.copilotProvider === 'openai'
+      ? 'Compte OpenAI non connecté — connectez-le dans Modèles, ou choisissez un modèle local.'
+      : 'Aucun modèle actif — choisissez ou téléchargez un modèle pour utiliser Doku-San.',
+  )
 
   function hideSelectionMenu() {
     clearTimeout(selectionMenuTimer)
     selectionMenu = null
     selectionMenuExpanded = false
+    selectionMenuConfig = false
   }
 
   function positionSelectionMenu(currentView: EditorView, expanded = selectionMenuExpanded) {
     const sel = currentView.state.selection.main
-    if (sel.empty || copilot.generating || activeTab()?.kind === 'pdf') {
+    if (sel.empty || copilot.generating || rephrase.current || activeTab()?.kind === 'pdf') {
       selectionMenu = null
       return
     }
@@ -125,7 +142,7 @@
     }
 
     const menuWidth = 264
-    const menuHeight = expanded ? 306 : 180
+    const menuHeight = expanded ? 348 : 180
     const viewportMargin = 12
     const gap = 8
     const anchorX = end.left
@@ -150,9 +167,11 @@
     editorSel.to = sel.to
     editorSel.text = sel.empty ? '' : currentView.state.sliceDoc(sel.from, sel.to)
     clearTimeout(selectionMenuTimer)
-    if (sel.empty || !editorSel.text.trim()) {
+    // Un aperçu de reformulation en cours a priorité : pas de menu par-dessus le widget.
+    if (sel.empty || !editorSel.text.trim() || rephrase.current) {
       selectionMenu = null
       selectionMenuExpanded = false
+      selectionMenuConfig = false
       return
     }
     selectionMenuTimer = setTimeout(() => positionSelectionMenu(currentView), 120)
@@ -160,6 +179,7 @@
 
   function toggleRewriteOptions() {
     selectionMenuExpanded = !selectionMenuExpanded
+    selectionMenuConfig = selectionMenuExpanded && copilotNeedsSetup
     if (view) positionSelectionMenu(view, selectionMenuExpanded)
   }
 
@@ -211,11 +231,23 @@
     }
   }
 
-  function runSelectionAction(mode: 'clarify' | 'shorten' | 'tone') {
+  // Lance la proposition EN PLACE (brief w3) : le panneau ne s'ouvre plus, l'aperçu recouvre
+  // la sélection dans l'éditeur (rephrase-preview) jusqu'à Accepter/Refuser.
+  function runSelectionAction(mode: RephraseMode) {
+    if (copilotNeedsSetup) {
+      selectionMenuConfig = true
+      if (view) positionSelectionMenu(view, true)
+      return
+    }
     hideSelectionMenu()
-    app.copilotOpen = true
-    app.copilotView = 'chat'
     void rephraseSelection(mode)
+  }
+
+  function openModelSettings() {
+    hideSelectionMenu()
+    cancelRephrase()
+    app.copilotOpen = true
+    app.copilotView = 'models'
   }
 
   function makeState(tabId: number, content: string): EditorState {
@@ -224,10 +256,16 @@
     const extra: Extension[] = [
       docDirFacet.of(dir),
       searchFlashField,
+      rephrasePreviewField,
       EditorView.updateListener.of((u) => {
         if (u.docChanged) {
           const t = app.tabs.find((x) => x.id === tabId)
           if (t) t.content = serializeDoc(u.state.doc.toString(), t.eol)
+          // Édition étrangère pendant un aperçu de reformulation : le champ s'est déjà vidé
+          // atomiquement ; on annule la machine (abort si streaming) — rien n'était écrit.
+          // Les $effect Svelte tournent en microtâche APRÈS le cycle CM → aucun dispatch
+          // pendant un update en cours.
+          if (rephrase.current && !isRephrasePreviewUpdate(u)) cancelRephrase()
         }
         // Publie la sélection courante (16.1) : le copilote propose « Reformuler » quand
         // `text` est non vide. Sur édition, les bornes bougent → on republie aussi.
@@ -287,7 +325,17 @@
       hideSelectionMenu()
     }
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape' && selectionMenu) hideSelectionMenu()
+      if (event.key !== 'Escape') return
+      // Un Échap déjà consommé par un autre overlay (modale, recherche…) ne doit pas écarter
+      // une proposition qui a coûté une génération complète.
+      if (event.defaultPrevented) return
+      // Priorité à l'aperçu de reformulation : Échap = annuler (streaming) ou refuser (prêt),
+      // document intact dans tous les cas (brief w3).
+      if (rephrase.current) {
+        cancelRephrase()
+        return
+      }
+      if (selectionMenu) hideSelectionMenu()
     }
     view.scrollDOM.addEventListener('scroll', onScroll, { passive: true })
     view.dom.addEventListener('pointerup', onSelectionIntent)
@@ -313,7 +361,15 @@
     const sourceMode = app.sourceMode
     if (!view) return
     if (tab && tab.id !== renderedId) {
-      if (renderedId !== -1) states.set(renderedId, view.state)
+      if (renderedId !== -1) {
+        // Ne jamais mettre en cache un état portant encore l'aperçu de reformulation : au
+        // retour sur l'onglet, la décoration renaîtrait orpheline (l'effet de sync la
+        // nettoierait, mais la robustesse ne doit pas dépendre de cet ordre).
+        if ((view.state.field(rephrasePreviewField, false)?.size ?? 0) > 0) {
+          view.dispatch({ effects: setRephrasePreview.of(null) })
+        }
+        states.set(renderedId, view.state)
+      }
       // Cache réutilisable seulement s'il a été bâti au rev courant de l'onglet.
       const cached = revs.get(tab.id) === tab.rev ? states.get(tab.id) : undefined
       view.setState(cached ?? makeState(tab.id, tab.content))
@@ -341,6 +397,48 @@
 
   $effect(() => {
     if (copilot.generating || app.copilotExpanded || htmlRender || pdfRender) hideSelectionMenu()
+  })
+
+  // Aperçu de reformulation en place (16.2, brief w3). Déclaré APRÈS l'effet de switch
+  // d'onglet : quand l'onglet ou son rev change, le setState tourne d'abord — on revalide
+  // ensuite ici que la plage porte toujours l'original. Indispensable pour le rechargement
+  // externe (bump de rev) : setState ne passe par AUCUNE transaction, ni l'auto-dismiss du
+  // champ ni l'updateListener ne le voient.
+  const rephraseDiff = $derived(
+    rephrase.current?.phase === 'ready' ? diffWords(rephrase.current.original, rephrase.current.text) : [],
+  )
+  $effect(() => {
+    const cur = rephrase.current
+    void activeTab()?.rev // re-déclenche sur rechargement externe de l'onglet actif
+    if (!view) return
+    if (cur) {
+      const stale =
+        cur.tabId !== app.activeId ||
+        cur.to > view.state.doc.length ||
+        view.state.sliceDoc(cur.from, cur.to) !== cur.original
+      if (stale) {
+        cancelRephrase()
+        return
+      }
+    }
+    syncRephrasePreview(
+      view,
+      cur
+        ? {
+            from: cur.from,
+            to: cur.to,
+            snapshot: {
+              phase: cur.phase,
+              label: cur.mode === 'correct' ? 'Doku-San corrige…' : 'Doku-San reformule…',
+              text: cur.text,
+              diff: rephraseDiff,
+              message: cur.error,
+              busy: copilot.generating,
+            },
+          }
+        : null,
+      { onAccept: acceptRephrase, onReject: cancelRephrase, onRetry: retryRephrase, onChooseModel: openModelSettings },
+    )
   })
 
   // Révélation d'une occurrence de recherche (9.4). Déclaré APRÈS l'effet de switch
@@ -420,15 +518,25 @@
         inert={!selectionMenuExpanded}
       >
         <div class="selection-rewrite-inner">
-          <button class="selection-menu-action selection-menu-subaction" role="menuitem" onclick={() => runSelectionAction('clarify')}>
-            <span class="msr">auto_fix_high</span><span>Clarifier</span>
-          </button>
-          <button class="selection-menu-action selection-menu-subaction" role="menuitem" onclick={() => runSelectionAction('shorten')}>
-            <span class="msr">compress</span><span>Raccourcir</span>
-          </button>
-          <button class="selection-menu-action selection-menu-subaction" role="menuitem" onclick={() => runSelectionAction('tone')}>
-            <span class="msr">tune</span><span>Adopter un ton neutre</span>
-          </button>
+          {#if selectionMenuConfig}
+            <div class="selection-menu-note" role="note">{setupNote}</div>
+            <button class="selection-menu-action selection-menu-subaction" role="menuitem" onclick={openModelSettings}>
+              <span class="msr">layers</span><span>Choisir un modèle</span>
+            </button>
+          {:else}
+            <button class="selection-menu-action selection-menu-subaction" role="menuitem" onclick={() => runSelectionAction('clarify')}>
+              <span class="msr">auto_fix_high</span><span>Clarifier</span>
+            </button>
+            <button class="selection-menu-action selection-menu-subaction" role="menuitem" onclick={() => runSelectionAction('shorten')}>
+              <span class="msr">compress</span><span>Raccourcir</span>
+            </button>
+            <button class="selection-menu-action selection-menu-subaction" role="menuitem" onclick={() => runSelectionAction('tone')}>
+              <span class="msr">tune</span><span>Adopter un ton neutre</span>
+            </button>
+            <button class="selection-menu-action selection-menu-subaction" role="menuitem" onclick={() => runSelectionAction('correct')}>
+              <span class="msr">spellcheck</span><span>Corriger</span>
+            </button>
+          {/if}
         </div>
       </div>
     </div>
@@ -647,6 +755,12 @@
     font-size: 12px;
   }
   .selection-menu-subaction .msr { width: 17px; font-size: 16px; }
+  .selection-menu-note {
+    margin: 4px 10px 2px 39px;
+    font-size: 11.5px;
+    line-height: 1.5;
+    color: var(--ink-3);
+  }
 
   @keyframes selection-menu-in {
     from { opacity: 0; transform: translateY(4px) scale(0.98); }
