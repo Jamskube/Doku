@@ -18,3 +18,4 @@ Registre des décisions d'architecture. Une décision par fichier ; on ne suppri
 | [0012](./0012-cycle-de-vie-sidecar-ollama.md) | Cycle de vie du sidecar Ollama : instance dédiée, port éphémère, modèles isolés, spawn paresseux | accepted | 2026-07-14 | ia, sidecar, ollama, process-lifecycle, arm64, csp |
 | [0013](./0013-fournisseur-openai-optionnel.md) | Fournisseur OpenAI par clé API — approche rejetée au profit d’une connexion de compte | rejected | 2026-07-17 | ia, openai, cloud, oauth, confidentialité |
 | [0014](./0014-connexion-compte-openai-codex.md) | Connexion optionnelle du compte OpenAI via Codex | accepted | 2026-07-17 | ia, openai, codex, oauth, cloud, secret |
+| [0015](./0015-stack-rag-embeddings-locaux.md) | Stack RAG : granite-embedding:278m + cosinus brute-force en mémoire | accepted | 2026-07-20 | rag, copilote, embeddings, perf, arm64 |

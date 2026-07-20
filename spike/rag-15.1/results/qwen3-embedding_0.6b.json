@@ -1,0 +1,174 @@
+{
+  "model": "qwen3-embedding:0.6b",
+  "dims": 1024,
+  "notes": 150,
+  "chunks": 150,
+  "chunkTarget": 900,
+  "index": {
+    "totalMs": 104394,
+    "chunksPerSec": 1.4
+  },
+  "query": {
+    "medianMs": 289,
+    "searchMsPerQuery": 0.45
+  },
+  "footprint": {
+    "loadedBytes": 2371270737,
+    "loadedMB": 2371
+  },
+  "storagePerChunkBytes": 4096,
+  "semantic": {
+    "all": {
+      "n": 30,
+      "recall@1": 0.9,
+      "recall@3": 0.967,
+      "recall@5": 0.967,
+      "mrr10": 0.928
+    },
+    "direct": {
+      "n": 9,
+      "recall@1": 1,
+      "recall@3": 1,
+      "recall@5": 1,
+      "mrr10": 1
+    },
+    "paraphrase": {
+      "n": 17,
+      "recall@1": 0.882,
+      "recall@3": 0.941,
+      "recall@5": 0.941,
+      "mrr10": 0.902
+    },
+    "trap": {
+      "n": 4,
+      "recall@1": 0.75,
+      "recall@3": 1,
+      "recall@5": 1,
+      "mrr10": 0.875
+    }
+  },
+  "bm25": {
+    "all": {
+      "n": 30,
+      "recall@1": 0.867,
+      "recall@3": 0.967,
+      "recall@5": 0.967,
+      "mrr10": 0.911
+    },
+    "direct": {
+      "n": 9,
+      "recall@1": 0.889,
+      "recall@3": 1,
+      "recall@5": 1,
+      "mrr10": 0.926
+    },
+    "paraphrase": {
+      "n": 17,
+      "recall@1": 0.882,
+      "recall@3": 0.941,
+      "recall@5": 0.941,
+      "mrr10": 0.912
+    },
+    "trap": {
+      "n": 4,
+      "recall@1": 0.75,
+      "recall@3": 1,
+      "recall@5": 1,
+      "mrr10": 0.875
+    }
+  },
+  "hybridRRF": {
+    "all": {
+      "n": 30,
+      "recall@1": 0.933,
+      "recall@3": 0.967,
+      "recall@5": 0.967,
+      "mrr10": 0.95
+    },
+    "direct": {
+      "n": 9,
+      "recall@1": 1,
+      "recall@3": 1,
+      "recall@5": 1,
+      "mrr10": 1
+    },
+    "paraphrase": {
+      "n": 17,
+      "recall@1": 0.882,
+      "recall@3": 0.941,
+      "recall@5": 0.941,
+      "mrr10": 0.912
+    },
+    "trap": {
+      "n": 4,
+      "recall@1": 1,
+      "recall@3": 1,
+      "recall@5": 1,
+      "mrr10": 1
+    }
+  },
+  "ranks": [
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    2,
+    1,
+    11,
+    3,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1
+  ],
+  "hybridRanks": [
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    2,
+    13,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1
+  ]
+}

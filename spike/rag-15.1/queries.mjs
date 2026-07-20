@@ -1,0 +1,36 @@
+// Requêtes d'évaluation (spike 15.1) — une par note cible, vérité terrain = target.
+// kind : direct (recouvrement lexical assumé) · paraphrase (synonymes, peu/pas de mots
+// communs) · trap (les mots de la requête matchent lexicalement d'AUTRES notes — le cas où
+// la recherche sémantique doit battre le lexical).
+export const QUERIES = [
+  { q: 'combien de temps faut-il attendre avant de cuire les crêpes ?', target: 'recette-crepes', kind: 'paraphrase' },
+  { q: 'quelle variété de riz tient le mieux la cuisson ?', target: 'recette-risotto', kind: 'trap' },
+  { q: 'à quelle température cuire le pain en cocotte ?', target: 'recette-pain-cocotte', kind: 'direct' },
+  { q: 'pourquoi ma sauce à la crème a-t-elle tranché ?', target: 'recette-blanquette', kind: 'paraphrase' },
+  { q: 'combien d\'heures le tiramisu doit-il rester au frais ?', target: 'recette-tiramisu', kind: 'direct' },
+  { q: 'quelle proportion de sucre pour un kilo de fruits ?', target: 'recette-confiture-abricots', kind: 'direct' },
+  { q: 'quel est le chiffrage de la sortie de Keycloak ?', target: 'cr-reunion-migration-zitadel', kind: 'trap' },
+  { q: 'quel est le plafond de dépenses cloud du trimestre ?', target: 'cr-budget-t3', kind: 'direct' },
+  { q: 'la bascule de la base de données est prévue pour quel sprint ?', target: 'cr-choix-postgres', kind: 'trap' },
+  { q: 'en combien de temps un nouveau développeur est-il opérationnel ?', target: 'cr-retro-onboarding', kind: 'paraphrase' },
+  { q: 'que faire quand le renouvellement d\'un certificat échoue en silence ?', target: 'cr-incident-mars', kind: 'trap' },
+  { q: 'où partent mes données pour la copie hors site ?', target: 'note-backup-nas', kind: 'paraphrase' },
+  { q: 'mon disque est plein, qu\'est-ce qui mange toute la place ?', target: 'note-docker-purge', kind: 'paraphrase' },
+  { q: 'comment atteindre les machines de production derrière la passerelle ?', target: 'note-ssh-jump', kind: 'paraphrase' },
+  { q: 'que régler la veille d\'un changement de serveurs de noms ?', target: 'note-dns-ttl', kind: 'paraphrase' },
+  { q: 'combien coûte l\'émulation de programmes Intel sur la tablette ?', target: 'note-win-arm', kind: 'paraphrase' },
+  { q: 'comment dégonfler une grosse table sans bloquer les écritures ?', target: 'note-pg-vacuum', kind: 'paraphrase' },
+  { q: 'pourquoi éviter de mouiller les feuilles au potager ?', target: 'jardin-tomates', kind: 'paraphrase' },
+  { q: 'quelles proportions de déchets verts et de matières sèches ?', target: 'jardin-compost', kind: 'paraphrase' },
+  { q: 'à quelle température régler le ballon d\'eau chaude ?', target: 'maison-chauffe-eau', kind: 'direct' },
+  { q: 'combien a coûté le chantier du grenier ?', target: 'maison-isolation-combles', kind: 'paraphrase' },
+  { q: 'le pass ferroviaire japonais vaut-il son prix ?', target: 'voyage-japon-jr', kind: 'paraphrase' },
+  { q: 'à quelle heure monter dans le vieux tramway pour éviter la foule ?', target: 'voyage-lisbonne', kind: 'direct' },
+  { q: 'combien de temps de route pour rejoindre l\'île de Skye ?', target: 'voyage-ecosse-distances', kind: 'direct' },
+  { q: 'suis-je déjà assuré à l\'étranger avec ma carte bancaire ?', target: 'voyage-assurance', kind: 'paraphrase' },
+  { q: 'de combien augmenter l\'entraînement chaque semaine sans se blesser ?', target: 'sante-course-plan', kind: 'paraphrase' },
+  { q: 'combien peut-on déduire par jour travaillé à la maison ?', target: 'admin-impots-teletravail', kind: 'paraphrase' },
+  { q: 'quel taux sera prélevé sur mon salaire à la rentrée ?', target: 'admin-prelevement-source', kind: 'paraphrase' },
+  { q: 'quel roman utilise la poésie comme langage diplomatique ?', target: 'lecture-notes-sf', kind: 'direct' },
+  { q: 'c\'était quoi mon idée de capteur pour l\'arrosage ?', target: 'idee-app-plantes', kind: 'direct' },
+]
