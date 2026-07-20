@@ -3,7 +3,7 @@
 **Goal** : **v2.0 livrée** — le copilote dialogue, résume et répond sur le document ouvert, et Doku s'installe avec son moteur embarqué.
 **Start** : 2026-07-16
 **End** : 2026-07-23
-**Status** : Active
+**Status** : Completed (2026-07-20 — clos à J+4, rétro : `retro-sprint-12.md`)
 
 1er sprint au **format recalibré** (rétro S11) : **1 semaine / 6-8 stories** au lieu de 2 semaines / 3-4. Source : `docs/planning/PRD-v2.md` (FR-3, FR-4, FR-5 → Epic 14 ; FR-7, FR-8 → Epic 16). À la clôture : le copilote est **utilisable** (chat streamé, résumé, Q&A ancrée) et le sidecar est **prouvé en release installée**.
 
@@ -17,11 +17,11 @@
 |---|-------|------|--------|-------|
 | 14.0 | Coquille panneau droit (`aside`) + chorégraphie chrome + relocalisation UI modèles (13.4) | M | ✅ Done | Validé natif 2026-07-16. `CopilotPanel.svelte` : aside 344px « Doku-San », bouton collapse, chrome migré (contrôles fenêtre titlebar↔panneau), coin doc `with-copilot`, `doku-panel-in`. Modèles relocalisés (vue `layers`) ; coquille chat statique (streaming → 14.1). Boot-safety : aucun spawn Ollama au démarrage. critic (HIGH corrigé) + code-reviewer Approve. |
 | 14.1 | Panneau copilote (chat, streaming, annuler, rendu MD sanitizé) | M | ✅ Done | Validé natif 2026-07-16. Chat streamé (`chat()` /api/chat), stop < 500 ms, rendu MD via **`sanitizeChatHtml` allowlist** (0 réseau, contenu LLM non fiable en webview principale) + CSP durcie, copiable, 3 actions câblées. `OllamaSpike` supprimé. critic (Block → 3 HIGH réseau corrigés) + code-reviewer Approve. |
-| 14.2 | Résumer le document (md/txt/html/PDF, map-reduce si > contexte) | M | TODO | **Risque n°1.** Segmentation map-reduce obligatoire — le PRD interdit la **troncature silencieuse**. PDF scanné sans texte → message clair. |
-| 14.3 | Q&A sur le document courant (ancrée, « je ne trouve pas ») | S | TODO | Réponse ancrée sur le doc ; info absente → refus explicite, pas d'invention. 0 requête réseau. |
-| 13.5 | Packaging release du sidecar (build ARM64 + install) | S | TODO | **Solde 2 dettes** : `resource_dir()`/`bundle.resources` jamais prouvés en release (S11) + association `.pdf` validée « sur confiance » (S10). |
-| 16.1 | Reformuler une sélection — **stretch** | M | TODO | Réutilise la machinerie `generate` de 14.1, indépendant du RAG. **Coupable en premier** si le sprint déborde. |
-| 16.2 | Corriger orthographe & grammaire — **stretch** | S | TODO | Idem. Ne doit changer ni le sens ni le Markdown ; annulable (Ctrl+Z). |
+| 14.2 | Résumer le document (md/txt/html/PDF, map-reduce si > contexte) | M | ✅ Done | Validé natif 2026-07-16. Map-reduce borné (segmentDoc + réductions plafonnées) + `num_ctx` fixé = 0 troncature silencieuse ; résumé direct streamé si ça tient en une fenêtre ; PDF → message clair (extraction = dette). |
+| 14.3 | Q&A sur le document courant (ancrée, « je ne trouve pas ») | S | ✅ Done | Validé natif 2026-07-16. Ancrage + phrase de refus exacte, température basse + rappel collé à la question ; badge lecture partielle au-delà du seuil (lecture complète → RAG Epic 15). Correctif post-livraison : distinction tâches-sur-le-texte / invention (le modèle refusait « check les fautes »). |
+| 13.5 | Packaging release du sidecar (build ARM64 + install) | S | ✅ Done | Validé natif 2026-07-16. `ollama.exe` + `lib/ollama` frères sous `resource_dir()` prouvés par génération depuis target/release ; app installée OK + association `.pdf`. Les 2 dettes S10/S11 sont soldées. |
+| 16.1 | Reformuler une sélection — **stretch** | M | ✅ Done | Validé natif 2026-07-16. Clarifier/Raccourcir/Ton → proposition streamée, accepter remplace (Ctrl+Z restaure), refuser intact, garde zéro-perte onglet+région. UI déplacée ensuite vers l'aperçu en place (16.2/w3). |
+| 16.2 | Corriger orthographe & grammaire — **stretch** | S | ✅ Done | Validé natif 2026-07-20. Absorbée par le **brief w3** : 4ᵉ verbe du menu de sélection + **aperçu diff mot à mot EN PLACE** (`rephrase-preview.ts`, StateField, doc intact jusqu'à Accepter, une transaction Ctrl+Z) ; panneau redevenu conversation pure. critic 3 HIGH intégrés + code-reviewer Approve. |
 
 ## Blockers
 _None_
@@ -54,3 +54,6 @@ Coquille du panneau copilote droit livrée et validée en natif : ouverture/ferm
 
 ### 2026-07-16 — 14.1 validée natif (checkpoint 30 % franchi)
 Le **chat copilote streaming** est vivant : réponse token-par-token, stop < 500 ms, rendu Markdown à la fin, actions rapides, non perturbé par un changement d'onglet. `OllamaSpike` supprimé. Ledger **52/57**. Le durcissement sécurité est le fait marquant : le critic a renvoyé **Block** (contenu LLM rendu dans la webview principale sans `default-src` = 3 vecteurs réseau), corrigé par une **allowlist DOMPurify** + CSP durcie + `/api/chat`, avec un test de non-régression réseau. Reste au sprint : 14.2 (résumer map-reduce), 14.3 (Q&A ancrée), 13.5 (packaging release), 16.1/16.2 (stretch).
+
+### 2026-07-20 — 16.2 validée natif, sprint clos (ledger 57/57)
+La dernière story arrive **par le design** : le brief w3 (confirmé le 17/07 en session `/impeccable`, réaligné par l'utilisateur avec son menu contextuel de sélection) absorbe 16.2 — 4ᵉ verbe **Corriger** + **aperçu diff mot à mot EN PLACE** dans l'éditeur (`rephrase-preview.ts`, StateField, document intact jusqu'à Accepter, une transaction Ctrl+Z) ; le panneau perd ses cartes Proposition. critic « ship with changes » (3 HIGH : reload externe hors transaction, virtualisation CM6, catch non gardé) + code-reviewer Approve (0 Critical/Major). Entre-temps, **hors sprint** : refonte interface (menu `⋯`, vue pleine page), **provider OpenAI optionnel** (ADR-0013/0014) et correctif du sur-ancrage 14.3. **Sprint clos à J+4 : 7/7, v2.0 + rédaction livrées** → rétro `retro-sprint-12.md`, cap sprint 13 = Epic 15 (RAG).
