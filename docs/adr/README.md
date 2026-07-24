@@ -19,3 +19,4 @@ Registre des décisions d'architecture. Une décision par fichier ; on ne suppri
 | [0013](./0013-fournisseur-openai-optionnel.md) | Fournisseur OpenAI par clé API — approche rejetée au profit d’une connexion de compte | rejected | 2026-07-17 | ia, openai, cloud, oauth, confidentialité |
 | [0014](./0014-connexion-compte-openai-codex.md) | Connexion optionnelle du compte OpenAI via Codex | accepted | 2026-07-17 | ia, openai, codex, oauth, cloud, secret |
 | [0015](./0015-stack-rag-embeddings-locaux.md) | Stack RAG : granite-embedding:278m + cosinus brute-force en mémoire | accepted | 2026-07-20 | rag, copilote, embeddings, perf, arm64 |
+| [0016](./0016-backend-inference-npu-foundry-local.md) | Backend d'inférence NPU via Foundry Local — cadre de décision (spike 17.1) | proposed | 2026-07-24 | ia, llm, npu, qnn, foundry-local, arm64, perf, copilote |

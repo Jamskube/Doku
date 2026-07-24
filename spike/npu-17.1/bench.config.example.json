@@ -1,0 +1,13 @@
+{
+  "_comment": "Copie vers bench.config.json et remplace le port Foundry (foundry service status). Comparaison B = décision (stack réelle). Pour la comparaison A informative (isolation matérielle), remets qwen2.5:7b des deux côtés dans un 2e fichier.",
+  "targets": [
+    { "label": "cpu-3b-q4", "api": "ollama", "url": "http://127.0.0.1:11434", "model": "qwen2.5:3b-instruct-q4_0", "quant": "Q4_0" },
+    { "label": "npu-contender", "api": "openai", "url": "http://localhost:PORT/v1", "model": "qwen2.5-7b-instruct-qnn-npu", "quant": "INT8" }
+  ],
+  "inputSizesChars": [1800, 3600, 7200, 14400, 28800],
+  "genTokens": 400,
+  "runs": 10,
+  "cooldownMs": 60000,
+  "numCtx": 12288,
+  "outDir": "results"
+}

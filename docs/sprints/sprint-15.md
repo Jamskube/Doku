@@ -17,7 +17,7 @@ Rappels de cadrage :
 
 | # | Story | Size | Status | Gate | Notes |
 |---|-------|------|--------|------|-------|
-| 17.1 | Spike Foundry Local : mesure prefill NPU vs CPU + re-preuve 0-réseau → ADR-0017 GO/NO-GO | M | TODO | **STOP/GO** | Sidecar QNN sur ce SoC, prefill chiffré sur long doc réel, 0 réseau monitoré, faisabilité client OpenAI. Verdict tranché par la donnée avant tout code de prod. |
+| 17.1 | Spike Foundry Local : mesure prefill NPU vs CPU + re-preuve 0-réseau → ADR-0016 GO/NO-GO | M | TODO | **STOP/GO** | Sidecar QNN sur ce SoC, prefill chiffré sur long doc réel, 0 réseau monitoré, faisabilité client OpenAI. Verdict tranché par la donnée avant tout code de prod. |
 | 17.2 | Abstraction couche d'inférence (Ollama ⇄ Foundry) + client OpenAI | L | 🔒 Gated | déverrouillée **si 17.1 = GO** | Réécriture lourde : nouveau sidecar ONNX, client OpenAI `/v1/chat/completions`, re-packaging ARM64, 0 réseau re-prouvé. Non codée tant que 17.1 n'a pas tranché GO. |
 
 ## Blockers
@@ -26,7 +26,7 @@ _None_
 ## Checkpoints STOP/GO
 | ~% | Critère | Si STOP |
 |---|---|---|
-| 100 % (17.1) | Prefill mesuré (NPU vs CPU, chiffres), 0 réseau prouvé, faisabilité client OpenAI, **ADR-0017 avec verdict GO/NO-GO** | **NO-GO** = livraison valide : documenter que le gain prefill ne vaut pas la complexité → **repli sur le levier CPU** (câbler + mesurer `qwen2.5:3b-instruct-q4_0` comme défaut). 17.2 abandonnée, Epic 17 re-noté « piste, préalable CPU d'abord ». |
+| 100 % (17.1) | Prefill mesuré (NPU vs CPU, chiffres), 0 réseau prouvé, faisabilité client OpenAI, **ADR-0016 avec verdict GO/NO-GO** | **NO-GO** = livraison valide : documenter que le gain prefill ne vaut pas la complexité → **repli sur le levier CPU** (câbler + mesurer `qwen2.5:3b-instruct-q4_0` comme défaut). 17.2 abandonnée, Epic 17 re-noté « piste, préalable CPU d'abord ». |
 | — (17.2) | Ne démarre **que** sur un GO de 17.1 | Si 17.1 = NO-GO : 17.2 n'est pas ouverte du tout. |
 
 ## Progress Log
