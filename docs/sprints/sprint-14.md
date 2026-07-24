@@ -35,3 +35,6 @@ _None_
 ### 2026-07-24
 - Sprint initialisé avec **3 stories** (Epic 18, dette PDF). Ledger : +3 entrées (63 features). Direction choisie après clôture du cap v2.1 RAG.
 - 18.3 (PDF dans le RAG) désignée **stretch cuttable** : si 18.1 révèle un coût d'extraction lourd ou une qualité insuffisante, elle passe en index à la demande ou est re-notée en dette.
+
+### 2026-07-24 — 18.1 : couche d'extraction codée (preuve native portée par 18.2)
+Couche pure `pdf-text.ts` (assemblage `str`+`hasEOL`, détection « scanné » sur seuil de caractères non blancs, biais assumé vers « non scanné ») **testée en node (11 tests)** ; `extractPdfText(bytes)` + service caché `getPdfText(path)` (cache mono-emplacement clé `path`+`size`) dans `pdf.ts` (appel pdfjs `getTextContent`, browser-only). Séparation stricte : la logique pure ne connaît pas pdfjs (pdf.ts initialise son worker au niveau module → non importable sous vitest). Chunk pdfjs resté séparé au build (lazy-load préservé). Non couverts documentés : ordre de lecture multi-colonnes/tableaux, CJK sans CMap, pas d'OCR (scanné → signalé). **18.1 n'a aucune surface UI** : sa preuve native (vrai `getTextContent` sur un PDF réel) est indissociable de 18.2 → ledger 18.1 flippé à la validation de 18.2. 259 tests, svelte-check, build OK.
