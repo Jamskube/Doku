@@ -1,5 +1,12 @@
 # Sidecar NPU — banc d'essai (17.1)
 
+> **Statut : conservé comme banc, plus branché dans l'app.** Le spike 17.1 a tranché
+> **NO-GO** ([ADR-0016](../../../docs/adr/0016-backend-inference-npu-foundry-local.md)) :
+> le provider `'npu'` et l'onglet « NPU (essai) » ont été **retirés du produit**. Ce
+> sidecar reste **fonctionnel et autonome** (endpoint OpenAI sur `127.0.0.1:8017`) —
+> il suffit de le relancer pour re-mesurer, par exemple si un **3B QNN francophone**
+> est publié ou sur une machine **≥ 32 Go**.
+
 Endpoint **OpenAI-compatible streamé** servi par `onnxruntime-genai` + EP **QNN** sur
 le Hexagon (Snapdragon X Plus). But : basculer le copilote de Doku sur NPU pour
 **comparer l'expérience** à Ollama CPU. **Pas la forme livrable** (ce serait des

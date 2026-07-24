@@ -1,8 +1,8 @@
-# 0016. Backend d'inférence NPU via Foundry Local — cadre de décision (spike 17.1)
+# 0016. Backend d'inférence NPU (Foundry Local / QNN) — NO-GO mesuré (spike 17.1)
 
-**Date** : 2026-07-24 · **Status** : proposed (verdict GO/NO-GO en attente des mesures 17.1) · **Deciders** : nicos (+ Claude) · **Tags** : ia, llm, npu, qnn, foundry-local, arm64, perf, copilote
+**Date** : 2026-07-24 · **Status** : **rejected** (NO-GO mesuré — spike 17.1) · **Deciders** : nicos (+ Claude) · **Tags** : ia, llm, npu, qnn, foundry-local, arm64, perf, copilote
 
-> ⏳ **ADR vivant.** Il fige le **cadre de décision et les seuils AVANT de mesurer** (anti-rationalisation post-hoc). Le spike 17.1 (`spike/npu-17.1/`) remplit la section « Mesures » sur la Surface Pro 11 réelle, puis le **Status** passe à `accepted` (GO) ou `rejected` (NO-GO). Successeur explicitement prévu par [ADR-0006](./0006-copilote-ia-ollama-sidecar-cpu.md) (« toute piste NPU future … exigera son propre ADR »).
+> ✅ **Verdict rendu le 2026-07-24 : NO-GO.** Le cadre et les seuils ci-dessous ont été figés **avant** de mesurer (anti-rationalisation post-hoc) ; les mesures réelles sur la Surface Pro 11 sont consignées telles quelles. **Le NPU fonctionne** (voie ORT-genai-QNN directe, découverte pendant le spike), mais il **échoue la grille** sur cette machine. Le copilote **reste sur Ollama CPU**, modèle `qwen2.5:1.5b-instruct-q4_0`. Successeur explicitement prévu par [ADR-0006](./0006-copilote-ia-ollama-sidecar-cpu.md) (« toute piste NPU future … exigera son propre ADR »).
 
 ## Context
 
@@ -35,22 +35,48 @@ Direction pressentie (mémoire `piste-backend-npu`) : **Microsoft Foundry Local*
 | Gain prefill ~18× confirmé sur X Plus ? | **Non étayé** — aucun benchmark X Plus public. Decode NPU < CPU q4_0 : **confirmé comme risque** | faible |
 | DLLs Qualcomm redistribuables ? | **Non confirmé** — SDK MIT, mais DLLs QNN/Qualcomm sous termes propres. À vérifier juridiquement | faible |
 
-## Mesures (spike 17.1 — À REMPLIR sur la machine réelle)
+## Mesures (spike 17.1 — machine réelle, 2026-07-24)
 
-> Protocole complet : `spike/npu-17.1/README.md`. Comparaison **B** = décision (stack réelle CPU `qwen2.5:3b-q4_0` vs contender NPU). Comparaison **A** (même modèle 7B des deux côtés) = **informative** seulement (quantifications Q4 vs INT8 différentes → ne prouve pas un « speedup hardware pur »).
+### Résultat préalable : Foundry Local est HORS JEU
 
-| Métrique | CPU baseline (`qwen2.5:3b-q4_0`) | Contender NPU (`________`) |
+`foundry model load qwen2.5-1.5b-instruct-qnn-npu` → `QNN SetupBackend failed`. Logs : `AutoRegisterCertifiedEps: Failure` (« Unknown EP bootstrapper name(s) »). Le SDK (`FoundryLocalManager.discoverEps()`) ne retourne **que WebGpu** — le QNN n'est même pas *découvrable* ; `downloadAndRegisterEps(['QNN'])` est un no-op silencieux ; `.foundry/ep/` ne contient que `webgpu-ep`. 0.10.2 = dernière version. **Le chemin pressenti par l'ADR n'existe pas sur cette machine.**
+
+### La voie qui marche (découverte du spike, hors Foundry)
+
+**`onnxruntime-genai` + `onnxruntime-qnn` en direct** (paquets pip, DLLs Qualcomm officielles) : `og.register_execution_provider_library("QNNExecutionProvider", …)` + `Config.append_provider(…)` + **`ADSP_LIBRARY_PATH`** vers les libs (sinon `load library failed`). Le modèle charge réellement sur le HTP Hexagon en ~4-5 s et génère du français cohérent. Artefacts : `spike/npu-17.1/sidecar/npu_server.py` (endpoint OpenAI streamé servi par le NPU). **Le NPU fait donc bien tourner un LLM — la question devient « à quel prix ».**
+
+### Chiffres (comparaison A : même modèle des deux côtés, `qwen2.5-1.5b`)
+
+| Métrique | CPU (Ollama, q4_0) | NPU (QNN, INT4/INT8) |
 |---|---|---|
-| Quantification | Q4_0 | _____ (INT8 ?) |
-| Cold-start TTFT (load + compile QNN, jeté) | _____ | _____ |
-| TTFT @ ~4000 tok (prefill) | _____ s | _____ s |
-| Pente prefill (ms/tok d'entrée, 500→8000) | _____ | _____ |
-| Decode tok/s | _____ | _____ |
-| **Bout-à-bout, réponse 400 tok** | _____ s | _____ s |
-| **Croisement L\*** (tokens de sortie où le NPU cesse de gagner) | — | _____ tok |
-| RAM crête (working set) | _____ Go | _____ Go |
-| Qualité FR en aveugle (≥ baseline ?) | référence | _____ |
-| 0-réseau (pktmon plein cycle + cold-load air-gap) | N/A | _____ (OK / cassé) |
+| Quantification | Q4_0 (repack ARM KleidiAI) | quantif QNN vendeur (plus agressive) |
+| Cold-start (chargement + compile QNN, jeté) | ~1 s | **~4-5 s** |
+| Prefill @ 440 tok d'entrée | ~4 900 ms | **1 244 ms** (≈ 4×) |
+| Prefill @ 786 tok d'entrée | ~10 900 ms | **1 779 ms** (≈ 6×) |
+| Pente prefill | ~16 ms/tok, **super-linéaire** | **~1,5 ms/tok, quasi plate** |
+| Decode | **44-48 tok/s** | 22-25 tok/s (**~2× plus lent**) |
+| RAM | tient large | tient (~1,5 Go de poids) |
+| Qualité FR (jugée en natif dans Doku) | référence acceptable | **REJETÉE** — nettement plus bête, boucles de répétition sans `repetition_penalty` |
+
+### Chiffres (le contender « qualité » : `qwen2.5-7b-instruct-onnx-qnn`, llmware)
+
+| Métrique | Valeur | Commentaire |
+|---|---|---|
+| Poids / RAM | ~4 Go sur disque, **~5 Go résident** | **swap** sur 16 Go partagés ; **a OOM une fois** au chargement |
+| Prefill | **10 565 ms** | l'avantage NPU est **annulé** par la pression mémoire |
+| Decode | **7,8 tok/s** | ~6× plus lent que le CPU 1.5b |
+| Bout-à-bout | **~4× plus lent** que le CPU `1.5b-q4_0` | le « bon » modèle NPU est le plus lent de tous |
+| Qualité FR | **bonne** | le seul qui tienne la comparaison… et le seul inutilisable |
+
+### Le trou dans le catalogue
+
+**Aucun modèle 3B QNN genai francophone public** : le catalogue saute **1,5B → 7B**. (`llama-3.2-3b-qnn` existe mais son FR est faible — déjà éliminé sur preuves dans [[upgrade-modele-copilote]].) Il n'existe donc **pas de point de fonctionnement** entre « tient en RAM mais trop bête » et « bon mais swappe ».
+
+### Non mesuré (devenu sans objet)
+
+- **0-réseau (pktmon plein cycle + cold-load air-gap)** : non exécuté. Le NO-GO est tombé sur les axes qualité/RAM avant ce gate. À noter : la voie ORT directe serait **plus favorable** que Foundry (DLLs empaquetables, aucun téléchargement dynamique d'EP).
+- **Comparaison B contre `qwen2.5:3b-q4_0`** : sans objet — la baseline produit réelle est le **1.5b** (choix utilisateur du 2026-07-16 : copilote « gadget discret »), et le 3b a été re-rejeté le 2026-07-24 (trop lent, trop de RAM). C'est le 1.5b CPU qui sert de référence ci-dessus.
+- **Licence de redistribution des DLLs Qualcomm** : non tranchée (sans objet).
 
 ## Grille GO/NO-GO (seuils PRÉ-ENREGISTRÉS — ne pas bouger après mesure)
 
@@ -64,22 +90,50 @@ GO **seulement si TOUS** vrais :
 
 **Un seul échec → NO-GO.**
 
+### Verdict contre la grille
+
+| # | Seuil pré-enregistré | Résultat | Verdict |
+|---|---|---|---|
+| 1 | TTFT < 5 s ET ≥ 3× plus rapide | 1,2-1,8 s, 4-6× plus rapide (1.5b) | ✅ **PASSE** |
+| 2 | Bout-à-bout 400 tok NPU < CPU ET L\* > 800 | decode 2× plus lent → le gain prefill est mangé bien avant 400 tok de sortie ; 7b = ~4× plus lent bout-à-bout | ❌ **ÉCHEC** |
+| 3 | 0-réseau prouvé | non mesuré (sans objet) | ⚪ n/a |
+| 4 | Qualité FR ≥ baseline | 1.5b-qnn **rejeté en natif** ; seul le 7b tient, et il est inutilisable | ❌ **ÉCHEC** |
+| 5 | RAM crête < 12 Go | 1.5b OK ; **7b → swap + OOM** sur 16 Go partagés | ❌ **ÉCHEC** (sur le seul modèle de qualité suffisante) |
+| 6 | DLLs redistribuables | non tranché (sans objet) | ⚪ n/a |
+
+**3 échecs sur les 4 seuils atteignables → NO-GO.**
+
 ## Decision
 
-⏳ **En attente des mesures 17.1.** Le cadre ci-dessus est figé ; le verdict sera l'un des deux :
+**NO-GO. Le copilote reste sur Ollama CPU avec `qwen2.5:1.5b-instruct-q4_0`.** L'Epic 17 est **clos**, la story 17.2 (abstraction Ollama ⇄ Foundry) est **annulée** — sa gate ne s'est pas ouverte.
 
-- **GO** → `accepted` : ouvrir 17.2 (abstraction couche d'inférence Ollama ⇄ Foundry via le `ProviderRuntime` existant de `copilot.svelte.ts` + client OpenAI, précédent ADR-0014). Consigner les chiffres qui justifient la complexité.
-- **NO-GO** → `rejected` : repli documenté sur le **levier CPU** (`qwen2.5:3b-instruct-q4_0` comme défaut copilote — le préalable sauté au sprint 15). Epic 17 re-noté « piste, préalable CPU d'abord ». **Un NO-GO chiffré est une livraison valide du spike.**
+**La raison n'est pas que le NPU est lent — c'est qu'il n'a pas de point de fonctionnement sur cette machine.** Le NPU gagne exactement là où la théorie le prédisait (prefill, 4-6×, pente plate) et perd là où elle le prédisait (decode, 2×). Mais le choix de modèle est un **étau à trois branches** : le 1,5B QNN tient en RAM et est trop bête ; le 7B QNN est bon et swappe ; **le 3B QNN qui aurait pu concilier les deux n'existe pas**. Aucune quantité d'ingénierie de notre côté ne desserre cet étau — il faudrait soit 32 Go de RAM, soit un modèle qui n'est pas publié.
+
+**Corollaire produit (2026-07-24) : le repli « levier CPU 3b » est lui aussi écarté.** L'ADR prévoyait de basculer le défaut sur `qwen2.5:3b-instruct-q4_0` en cas de NO-GO. L'utilisateur l'a re-testé et tranché : **trop lent et trop gourmand en RAM** pour un copilote qui doit rester un **gadget discret** (cadrage du 2026-07-16). **`qwen2.5:1.5b-instruct-q4_0` est confirmé comme le bon modèle** — l'arbitrage vitesse/discrétion prime sur la qualité brute. Le 3b reste installable en un clic pour les usages où la qualité compte.
+
+**Ce que le spike laisse derrière lui** (valeur réelle d'un NO-GO) :
+- `spike/npu-17.1/sidecar/npu_server.py` — **une recette NPU qui marche**, reproductible, prête à re-mesurer sur une future machine ≥ 32 Go ou dès qu'un 3B QNN FR est publié.
+- `spike/npu-17.1/bench.mjs` — banc TTFT/decode/croisement L\*, réutilisable pour tout futur backend.
+- La certitude que **Foundry Local n'est pas le chemin** (bug amont, pas notre config) — 2 jours d'investigation qu'on ne refera pas.
+
+### Conditions de réouverture
+
+Ne rouvrir l'Epic 17 que si **l'une** de ces conditions est remplie :
+1. Un modèle **~3B QNN genai avec un bon français** est publié (le trou du catalogue se comble).
+2. La machine cible passe à **≥ 32 Go** de RAM (le 7B cesse de swapper → l'étau se desserre).
+3. Un runtime sait faire **prefill-NPU / decode-CPU** sur le même modèle (aujourd'hui impossible : un seul EP par graphe).
 
 ## Consequences
 
-**Positive (si GO)** : prefill effondré (~45 s → ~1-2 s) sur longs docs ; le NPU inexploité enfin mis à profit ; abstraction d'inférence réutilisable (Ollama ⇄ Foundry ⇄ OpenAI cloud).
-**Negative (si GO)** : 2ᵉ sidecar volumineux à empaqueter ; re-packaging ARM64 ; changement de modèle (impact qualité/RAM) ; surface de maintenance doublée.
-**Risks** :
-- **0-réseau cassé au provisioning** (#275) → gate DUR : NO-GO si l'air-gap post-provisioning n'est pas prouvé.
-- **Bilan net négatif** : decode NPU plus lent + pas de split → un long résumé peut être *plus lent* qu'en CPU (capté par L\* et le bout-à-bout).
-- **Maturité QNN fragile** sur Surface Pro 11 (#259, #244) → risque d'instabilité même en cas de gain.
-- **Licence DLLs Qualcomm** non redistribuable → showstopper juridique indépendant de la perf.
+**Positive** : aucune complexité ajoutée — pas de 2ᵉ sidecar, pas de re-packaging ARM64, pas de surface de maintenance doublée, le 0-réseau reste prouvé tel quel (ADR-0006/0012 intacts). Le backlog est **vide** : Epics 1-16 + 18 livrés, Epic 17 clos par la mesure. Le NPU a été tranché **par la donnée** en une journée, pas par intuition ni par un chantier de plusieurs semaines abandonné en cours de route.
+
+**Negative** : le prefill long-doc reste à la charge du CPU (irritant non résolu — mais mesuré comme non résoluble ici) ; le NPU Hexagon reste inexploité ; le travail d'intégration du provider `'npu'` dans l'app est retiré du produit (il survit dans `spike/npu-17.1/`).
+
+**Risques du NO-GO** :
+- **Décision datée par la machine, pas par le principe** : elle est vraie sur *cette* Surface Pro 11 à 16 Go. Les 3 conditions de réouverture ci-dessus sont là pour éviter qu'un « non » de 2026 devienne un dogme.
+- **Recette périssable** : `onnxruntime-genai` / `onnxruntime-qnn` bougent vite ; la recette du sidecar pourrait ne plus s'appliquer telle quelle dans 6 mois. Les versions exactes sont épinglées dans `spike/npu-17.1/sidecar/requirements.txt`.
+
+**Risques éteints par le NO-GO** (ils étaient bien réels) : 0-réseau cassé au provisioning (#275) ; bilan net négatif du decode ; maturité QNN fragile (#259, #244 — **confirmée**, l'EP ne s'enregistre même pas) ; licence des DLLs Qualcomm.
 
 ## Related
 

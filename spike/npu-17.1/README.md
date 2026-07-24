@@ -1,5 +1,15 @@
 # Spike 17.1 — Backend d'inférence NPU (Foundry Local) : trancher GO/NO-GO par la mesure
 
+> ## ✅ SPIKE TERMINÉ — **verdict NO-GO** (2026-07-24)
+>
+> **Ne pas suivre le protocole Foundry Local ci-dessous : il ne marche pas.** L'EP QNN de Foundry Local 0.10.2 ne s'enregistre pas sur cette machine (`AutoRegisterCertifiedEps: Failure`, `discoverEps()` ne retourne que WebGpu) — bug amont, pas un problème de config.
+>
+> **La voie qui marche** (trouvée pendant le spike, hors Foundry) : `onnxruntime-genai` + `onnxruntime-qnn` **en direct** → voir **[`sidecar/README.md`](./sidecar/README.md)**. Le modèle tourne réellement sur le HTP Hexagon.
+>
+> **Verdict** : prefill NPU **4-6× plus rapide**, decode **2× plus lent**, mais **aucun modèle QNN ne convient sur 16 Go** (1,5B trop bête / 7B swappe / pas de 3B). Chiffres complets et conditions de réouverture : **[`docs/adr/0016`](../../docs/adr/0016-backend-inference-npu-foundry-local.md)** (`rejected`).
+>
+> **Ce dossier est conservé comme banc réutilisable**, pas comme une tâche en cours. Le reste de ce README est le protocole d'origine, gardé tel quel pour la traçabilité.
+
 ## Purpose
 Décider, **par la donnée sur cette Surface Pro 11 (Snapdragon X Plus)**, si un backend NPU via **Microsoft Foundry Local** (ONNX Runtime + execution provider QNN) vaut la complexité, face à la stack CPU actuelle (Ollama, `qwen2.5:3b-instruct-q4_0`). Douleur ciblée : **~45 s de prefill** avant le 1er token sur longs docs. Sortie du spike : les mesures ci-dessous **remplissent `docs/adr/0016-backend-inference-npu-foundry-local.md`** et figent le verdict.
 

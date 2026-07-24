@@ -21,7 +21,6 @@ import {
   type OpenAiAuthStart,
   type OpenAiMessage,
 } from './openai'
-import { npuChat, npuGenerate, npuAvailable, NPU_MODEL } from './npu'
 import {
   buildChatMessages,
   buildDocIndexChatMessages,
@@ -328,7 +327,6 @@ export function setCopilotProvider(provider: CopilotProvider): void {
 type ProviderRuntime =
   | { provider: 'ollama'; port: number; model: string }
   | { provider: 'openai'; model: typeof OPENAI_MODEL }
-  | { provider: 'npu'; model: typeof NPU_MODEL }
 
 function personaFor(runtime: ProviderRuntime): PersonaProfile {
   return runtime.provider === 'openai' ? 'cloud' : 'local'
@@ -340,10 +338,6 @@ async function resolveRuntime(provider: CopilotProvider, localModel: string): Pr
     return copilot.openAiAuthenticated && copilot.openAiPreferredAvailable !== false
       ? { provider: 'openai', model: OPENAI_MODEL }
       : null
-  }
-  if (provider === 'npu') {
-    // Banc d'essai NPU : le sidecar (spike/npu-17.1/sidecar) doit tourner. 0 modèle Ollama requis.
-    return (await npuAvailable()) ? { provider: 'npu', model: NPU_MODEL } : null
   }
   if (!localModel) return null
   const port = await ensureReady()
@@ -357,7 +351,6 @@ function streamChat(
   signal: AbortSignal,
 ): Promise<string> {
   if (runtime.provider === 'openai') return openAiChat(messages, onToken, signal)
-  if (runtime.provider === 'npu') return npuChat(messages, onToken, signal)
   return chat(runtime.port, runtime.model, messages, onToken, signal, {
     num_ctx: COPILOT_NUM_CTX,
     temperature: COPILOT_TEMPERATURE,
@@ -374,9 +367,6 @@ function streamGenerate(
   if (runtime.provider === 'openai') {
     return openAiGenerate(prompt, onToken, signal)
   }
-  if (runtime.provider === 'npu') {
-    return npuGenerate(prompt, onToken, signal)
-  }
   return generate(runtime.port, runtime.model, prompt, onToken, signal, {
     num_ctx: COPILOT_NUM_CTX,
     temperature: COPILOT_TEMPERATURE,
@@ -385,13 +375,11 @@ function streamGenerate(
 }
 
 function providerSetupMessage(provider: CopilotProvider): string {
-  if (provider === 'openai')
-    return copilot.openAiPreferredAvailable === false
+  return provider === 'openai'
+    ? copilot.openAiPreferredAvailable === false
       ? 'Votre compte OpenAI est connecté, mais GPT‑5.6 Luna n’est pas disponible pour cet abonnement.'
       : 'Connectez votre compte OpenAI dans Modèles. Doku ne vous demandera jamais de clé API.'
-  if (provider === 'npu')
-    return 'Le banc d’essai NPU n’est pas démarré. Lance `py spike/npu-17.1/sidecar/npu_server.py` puis réessaie.'
-  return 'Choisissez ou téléchargez un modèle local pour utiliser le copilote — tout reste sur votre machine.'
+    : 'Choisissez ou téléchargez un modèle local pour utiliser le copilote — tout reste sur votre machine.'
 }
 
 function generationFailure(error: unknown, provider: CopilotProvider, fallback: string): string {
