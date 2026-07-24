@@ -2,6 +2,8 @@ import { describe, it, expect } from 'vitest'
 import {
   buildChatMessages,
   buildDocContext,
+  buildDocIndexChatMessages,
+  buildFolderChatMessages,
   buildReduceSummaryPrompt,
   buildRephrasePrompt,
   buildSegmentSummaryPrompt,
@@ -9,6 +11,8 @@ import {
   diffWords,
   segmentDoc,
   truncateDoc,
+  DOC_INDEX_REFUSAL_PHRASE,
+  FOLDER_REFUSAL_PHRASE,
   MAX_DOC_CHARS,
   REFUSAL_PHRASE,
   type DiffSeg,
@@ -46,6 +50,66 @@ describe('buildDocContext', () => {
   })
   it('gère un nom absent', () => {
     expect(buildDocContext(null, 'a', 'md')).toContain('sans titre')
+  })
+})
+
+describe('buildFolderChatMessages (15.3)', () => {
+  const passages = [
+    { name: 'recettes.md', text: 'La pâte repose 30 minutes.' },
+    { name: 'courses.md', text: 'Acheter de la levure.' },
+  ]
+
+  it('system = cadre + passages étiquetés par note ; question + rappel dossier', () => {
+    const msgs = buildFolderChatMessages({ passages, history: [], question: 'Combien de repos ?' })
+    expect(msgs[0].role).toBe('system')
+    expect(msgs[0].content).toContain('Note « recettes.md »')
+    expect(msgs[0].content).toContain('La pâte repose 30 minutes.')
+    expect(msgs[0].content).toContain('Note « courses.md »')
+    const last = msgs[msgs.length - 1]
+    expect(last.role).toBe('user')
+    expect(last.content).toContain('Combien de repos ?')
+    expect(last.content).toContain(FOLDER_REFUSAL_PHRASE)
+  })
+
+  it('la phrase de refus dossier parle des notes, pas du document', () => {
+    expect(FOLDER_REFUSAL_PHRASE).toMatch(/notes/)
+    expect(FOLDER_REFUSAL_PHRASE).not.toMatch(/document/)
+  })
+
+  it('insère l’historique entre le system et la question', () => {
+    const msgs = buildFolderChatMessages({
+      passages,
+      history: [
+        { role: 'user', content: 'Q1' },
+        { role: 'assistant', content: 'R1' },
+      ],
+      question: 'Q2',
+    })
+    expect(msgs.map((m) => m.role)).toEqual(['system', 'user', 'assistant', 'user'])
+    expect(msgs[1].content).toBe('Q1')
+  })
+})
+
+describe('buildDocIndexChatMessages (15.3)', () => {
+  const passages = [{ text: 'Le délai est de 140 jours.' }]
+
+  it('annonce honnêtement des EXTRAITS d’un doc indexé en entier + refus dédié', () => {
+    const msgs = buildDocIndexChatMessages({ docName: 'gros.md', passages, history: [], question: 'Quel délai ?' })
+    expect(msgs[0].content).toContain('gros.md')
+    expect(msgs[0].content).toMatch(/indexé\s+en entier/)
+    expect(msgs[0].content).toContain("n'ont pas été relus")
+    expect(msgs[0].content).toContain('Extrait 1')
+    const last = msgs[msgs.length - 1]
+    expect(last.content).toContain(DOC_INDEX_REFUSAL_PHRASE)
+    // JAMAIS l'ancienne phrase 14.3 : le modèle ne peut pas affirmer une absence sur
+    // tout le document alors qu'il n'a vu que le top-k.
+    expect(msgs[0].content).not.toContain(REFUSAL_PHRASE)
+    expect(last.content).not.toContain(`« ${REFUSAL_PHRASE} »`)
+  })
+
+  it('signale un index plafonné (doc géant)', () => {
+    const msgs = buildDocIndexChatMessages({ docName: 'x.md', passages, history: [], question: 'Q', indexTruncated: true })
+    expect(msgs[0].content).toMatch(/plafond d.indexation/)
   })
 })
 

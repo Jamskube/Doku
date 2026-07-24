@@ -4,6 +4,9 @@
 // (motif indexBuild de la recherche). Le modèle ACTIF (persisté) vit dans `app.activeModel`.
 import { activeTab, app, editorRef, type CopilotProvider, type DocKind } from './stores.svelte'
 import { setRephrasePreview } from './editor/rephrase-preview'
+import { parentPath } from './explorer'
+import { DEFAULT_EMBED_MODEL, noteTitle, RAG_TOP_K } from './rag'
+import { cancelRagIndexing, ragState, searchDocEphemeral, searchRag, type RagHit } from './rag-index.svelte'
 import { chat, deleteModel, generate, listModels, pull, startOllama, waitReady, type OllamaModel } from './ollama'
 import {
   cancelOpenAiAuth,
@@ -20,6 +23,10 @@ import {
 } from './openai'
 import {
   buildChatMessages,
+  buildDocIndexChatMessages,
+  buildFolderChatMessages,
+  FOLDER_REFUSAL_PHRASE,
+  MAX_DOC_CHARS,
   buildReduceSummaryPrompt,
   buildRephrasePrompt,
   buildSegmentSummaryPrompt,
@@ -29,6 +36,7 @@ import {
   segmentDoc,
   SUMMARY_MAP_MAX_TOKENS,
   type ChatTurn,
+  type OllamaMessage,
   type PersonaProfile,
   type RephraseMode,
   type SummaryMode,
@@ -37,19 +45,28 @@ import {
 // Un tour de conversation (14.1). `streaming` = réponse en cours (bulle en texte brut,
 // rendu Markdown à la fin) ; `failed` = carte d'erreur ; `status` = ligne de progression
 // transitoire pendant la phase « map » d'un résumé (14.2). Conversation éphémère (non persistée).
+// Portée d'une question (15.3) : le document courant ou le dossier entier (RAG).
+export type ChatScope = 'doc' | 'folder'
+
 export interface ChatMsg {
   role: 'user' | 'assistant'
   content: string
   streaming?: boolean
   failed?: boolean
-  // État de CONFIGURATION (pas un échec de génération) : aucun modèle actif. Rendu en carte
-  // neutre « Aucun modèle actif » avec un bouton vers la vue Modèles — pas en carte d'erreur
-  // rouge (rien n'a échoué, rien n'a même été tenté).
-  config?: 'model' | 'openai'
+  // État de CONFIGURATION (pas un échec de génération) : aucun modèle actif / compte
+  // OpenAI absent / modèle d'EMBEDDING manquant (mode dossier, 15.3). Rendu en carte
+  // neutre avec un bouton vers la vue Modèles — pas en carte d'erreur rouge.
+  config?: 'model' | 'openai' | 'embed'
+  // Message d'INFO de l'app (« dossier pas encore indexé »…) : affiché comme une réponse
+  // mais exclu de l'historique envoyé au modèle (ce n'est pas un tour de dialogue).
+  notice?: boolean
   status?: string
+  // Passages top-k réellement fournis au modèle (mode dossier, 15.3) : pied « Passages
+  // consultés » DÉTERMINISTE, cliquable — on ne dépend jamais du modèle pour citer.
+  sources?: { path: string; name: string }[]
   // Posé sur une carte `failed` : ce qu'il faut rejouer pour « Réessayer » (la question ou le
-  // mode de résumé). Le document est re-capturé au moment du retry.
-  retry?: { kind: 'chat'; question: string } | { kind: 'summary'; mode: SummaryMode }
+  // mode de résumé). Le document est re-capturé au moment du retry (le dossier aussi, 15.3).
+  retry?: { kind: 'chat'; question: string; scope: ChatScope } | { kind: 'summary'; mode: SummaryMode }
 }
 
 export const copilot = $state({
@@ -61,6 +78,8 @@ export const copilot = $state({
   error: '',
   messages: [] as ChatMsg[],
   generating: false,
+  // Portée courante des questions (15.3) — éphémère, choisie dans la face « Contexte ».
+  scope: 'doc' as ChatScope,
   openAiAuthenticated: null as boolean | null,
   openAiPreferredAvailable: null as boolean | null,
   openAiModels: [] as string[],
@@ -369,9 +388,11 @@ function generationFailure(error: unknown, provider: CopilotProvider, fallback: 
 // courant capturé À L'ENVOI → un changement d'onglet pendant la génération ne la perturbe pas.
 // Anti-TOCTOU : `generating`/`genController` posés SYNCHRONEMENT avant tout `await` (deux
 // envois rapprochés ne peuvent pas s'entrelacer). Aucun spawn moteur si pas de modèle actif.
+// `scope` (15.3) : 'folder' répond depuis les passages top-k de l'index du dossier.
 export async function sendChat(
   question: string,
   doc: { name: string | null; text: string; kind: DocKind },
+  scope: ChatScope = 'doc',
 ): Promise<void> {
   const q = question.trim()
   if (!q || copilot.generating) return
@@ -397,8 +418,8 @@ export async function sendChat(
   const history: ChatTurn[] = []
   for (let k = 0; k < copilot.messages.length; k++) {
     const m = copilot.messages[k]
-    // `config` écarté aussi : la carte « Aucun modèle actif » est de l'UI, pas un tour de dialogue.
-    if (m.role === 'assistant' && !m.failed && !m.config && m.content) {
+    // `config` et `notice` écartés aussi : cartes/messages d'UI, pas des tours de dialogue.
+    if (m.role === 'assistant' && !m.failed && !m.config && !m.notice && m.content) {
       const prev = copilot.messages[k - 1]
       if (prev?.role === 'user') history.push({ role: 'user', content: prev.content })
       history.push({ role: 'assistant', content: m.content })
@@ -408,7 +429,12 @@ export async function sendChat(
   copilot.messages.push({ role: 'user', content: q })
   // `status` couvre le démarrage moteur + le PREFILL (ingestion du doc, longue sur CPU) : sans
   // lui, le skeleton muet se lit comme un blocage. Effacé au 1er token (voir stream ci-dessous).
-  copilot.messages.push({ role: 'assistant', content: '', streaming: true, status: 'Doku-San lit le document…' })
+  copilot.messages.push({
+    role: 'assistant',
+    content: '',
+    streaming: true,
+    status: scope === 'folder' ? 'Doku-San cherche dans vos notes…' : 'Doku-San lit le document…',
+  })
   const idx = copilot.messages.length - 1 // index stable (generating sérialise les envois)
 
   try {
@@ -421,18 +447,21 @@ export async function sendChat(
       } else {
         message.content = copilot.error || 'Le moteur IA est indisponible.'
         message.failed = true
-        message.retry = { kind: 'chat', question: q }
+        message.retry = { kind: 'chat', question: q, scope }
       }
       return
     }
-    const messages = buildChatMessages({
-      docName: doc.name,
-      docText: doc.text,
-      kind: doc.kind,
-      history,
-      question: q,
-      persona: personaFor(runtime),
-    })
+    const persona = personaFor(runtime)
+    let messages: OllamaMessage[]
+    let sources: RagHit[] | null = null
+    if (scope === 'folder') {
+      const prep = await prepareFolderMessages(q, history, persona, runtime, signal, idx)
+      if (!prep) return // question soldée (carte config / message d'info posé sur idx)
+      messages = prep.messages
+      sources = prep.sources
+    } else {
+      messages = await prepareDocMessages(q, doc, history, persona, runtime, signal, idx)
+    }
     // num_ctx fixé (14.3) : le doc + la consigne d'ancrage doivent rester en contexte sur plusieurs
     // tours ; au défaut Ollama (4096) l'historique les évincerait par troncature gauche silencieuse.
     // Mutation via l'index (élément proxifié du $state array) → réactif ; muter la ref locale
@@ -447,11 +476,30 @@ export async function sendChat(
       },
       signal,
     )
+    // Pied « Passages consultés » déterministe (15.3) — supprimé sur refus : des sources
+    // cliquables sous « je ne trouve pas » seraient trompeuses.
+    const done = copilot.messages[idx]
+    if (sources && done?.content && !done.content.includes(FOLDER_REFUSAL_PHRASE)) {
+      const seen = new Set<string>()
+      done.sources = sources
+        .filter((h) => (seen.has(h.path) ? false : (seen.add(h.path), true)))
+        .map((h) => ({ path: h.path, name: h.name }))
+    }
   } catch (e) {
+    // Stop pendant la récupération (embed de la requête / du doc) : annulation propre —
+    // le finally retire le tour fantôme, pas de carte d'erreur (chat() avale déjà ses aborts).
+    if (signal.aborted) return
     console.error('[copilot] chat', e)
+    const msg = e instanceof Error ? e.message : String(e)
+    if (/^embed 404/i.test(msg)) {
+      // Le modèle d'EMBEDDING a disparu (supprimé en cours de session) : carte config, pas erreur.
+      copilot.messages[idx].content = "Le modèle d'embedding n'est plus installé."
+      copilot.messages[idx].config = 'embed'
+      return
+    }
     copilot.messages[idx].content = copilot.messages[idx].content || generationFailure(e, provider, 'La génération a échoué. Vérifiez que le moteur est prêt, puis réessayez.')
     copilot.messages[idx].failed = true
-    copilot.messages[idx].retry = { kind: 'chat', question: q }
+    copilot.messages[idx].retry = { kind: 'chat', question: q, scope }
   } finally {
     const m = copilot.messages[idx]
     if (m) {
@@ -464,6 +512,124 @@ export async function sendChat(
     copilot.generating = false
     genController = null
   }
+}
+
+// Une recherche dossier est-elle en vol ? stopChat s'en sert pour annuler AUSSI un
+// refresh d'index inline (le signal du chat ne couvre que l'embed de la requête).
+let folderSearching = false
+
+// Prépare les messages du mode « dossier » (15.3) : garde-fous embeddings puis passages
+// top-k de l'index du dossier. Renvoie null quand la question est déjà soldée (carte
+// config ou message d'info posé sur la bulle idx). Le PREMIER index complet d'un dossier
+// n'est JAMAIS lancé ici (buildIfMissing:false — des minutes d'embed n'ont pas leur
+// place derrière une question) : il se lance depuis la vue Modèles.
+async function prepareFolderMessages(
+  q: string,
+  history: ChatTurn[],
+  persona: PersonaProfile,
+  runtime: ProviderRuntime,
+  signal: AbortSignal,
+  idx: number,
+): Promise<{ messages: OllamaMessage[]; sources: RagHit[] } | null> {
+  const answer = (content: string, config?: ChatMsg['config']): null => {
+    const m = copilot.messages[idx]
+    m.content = content
+    if (config) m.config = config
+    else m.notice = true // info d'app : jamais rejouée au modèle comme historique
+    return null
+  }
+  const fail = (content: string): null => {
+    const m = copilot.messages[idx]
+    m.content = content
+    m.failed = true
+    m.retry = { kind: 'chat', question: q, scope: 'folder' }
+    return null
+  }
+  const dir = app.explorerDir ?? parentPath(activeTab()?.path ?? null)
+  if (!dir) return answer("Ouvrez un document enregistré ou fixez un dossier dans l'explorateur pour interroger vos notes.")
+  // Les embeddings sont TOUJOURS locaux (0 réseau), même quand le chat est OpenAI.
+  const port = runtime.provider === 'ollama' ? runtime.port : await ensureReady()
+  if (port === null) return fail(copilot.error || 'Le moteur IA est indisponible.')
+  // Liste des modèles pas encore chargée (vue Modèles jamais ouverte) : la rafraîchir AVANT
+  // de conclure « modèle absent ». MÊME prédicat que le badge du panneau (repli sur le
+  // défaut quand le réglage est effacé) — badge et comportement ne divergent jamais.
+  if (copilot.models.length === 0) await refreshModels()
+  const em = app.embedModel || DEFAULT_EMBED_MODEL
+  const installed = copilot.models.some((m) => m.name === em || m.name === `${em}:latest`)
+  if (!installed) return answer("Le mode dossier a besoin d'un modèle d'embedding local.", 'embed')
+  folderSearching = true
+  let hits: RagHit[] | null
+  try {
+    hits = await searchRag(port, em, dir, q, RAG_TOP_K, { signal, buildIfMissing: false })
+  } finally {
+    folderSearching = false
+  }
+  if (hits === null) {
+    return answer('Ce dossier n’est pas encore indexé. Lancez l’indexation dans Modèles → « Index du dossier », puis reposez votre question.')
+  }
+  if (hits.length === 0) {
+    // [] recouvre trois réalités distinctes — les distinguer via ragState (un refresh
+    // échoué NE rejette PAS) : modèle manquant / indexation échouée / index réellement vide.
+    if (ragState.needsModel) return answer(`Modèle « ${ragState.needsModel} » non installé.`, 'embed')
+    if (ragState.error) return fail(ragState.error)
+    return answer("L'index de ce dossier est vide — aucune note indexable n'y a été trouvée.")
+  }
+  return {
+    messages: buildFolderChatMessages({
+      passages: hits.map((h) => ({ name: noteTitle(h.name), text: h.text })),
+      history,
+      question: q,
+      persona,
+    }),
+    sources: hits,
+  }
+}
+
+// Messages du mode « document » : au-delà de MAX_DOC_CHARS avec embeddings locaux
+// disponibles, le doc ENTIER est interrogé via l'index éphémère (15.3 — solde la lecture
+// partielle de 14.3) ; sinon comportement 14.3 inchangé (troncature signalée). Fournisseur
+// OpenAI : troncature 14.3 conservée — pas de spawn du sidecar local en douce pour un
+// utilisateur qui a choisi le cloud.
+async function prepareDocMessages(
+  q: string,
+  doc: { name: string | null; text: string; kind: DocKind },
+  history: ChatTurn[],
+  persona: PersonaProfile,
+  runtime: ProviderRuntime,
+  signal: AbortSignal,
+  idx: number,
+): Promise<OllamaMessage[]> {
+  if (runtime.provider === 'ollama' && doc.kind !== 'pdf' && doc.text.length > MAX_DOC_CHARS) {
+    if (copilot.models.length === 0) await refreshModels()
+    const em = app.embedModel || DEFAULT_EMBED_MODEL // même repli que le badge du panneau
+    const installed = copilot.models.some((m) => m.name === em || m.name === `${em}:latest`)
+    if (installed) {
+      const m = copilot.messages[idx]
+      if (m) m.status = 'Doku-San parcourt tout le document…'
+      const key = activeTab()?.path ?? doc.name ?? 'document'
+      const { hits, truncated } = await searchDocEphemeral(
+        runtime.port,
+        em,
+        key,
+        noteTitle(doc.name ?? 'document'),
+        doc.text,
+        q,
+        RAG_TOP_K,
+        signal,
+      )
+      if (hits.length > 0) {
+        return buildDocIndexChatMessages({
+          docName: doc.name,
+          passages: hits,
+          history,
+          question: q,
+          persona,
+          indexTruncated: truncated,
+        })
+      }
+    }
+  }
+  return buildChatMessages({ docName: doc.name, docText: doc.text, kind: doc.kind, history, question: q, persona })
 }
 
 // Plafond de passes de réduction : garde-fou contre un modèle qui ne « contracterait » pas ses
@@ -762,13 +928,16 @@ export function retryGeneration(idx: number): void {
   copilot.messages.splice(idx - 1, 2)
   const t = activeTab()
   const doc = { name: t?.name ?? null, text: t?.content ?? '', kind: t?.kind ?? ('md' as DocKind) }
-  if (r.kind === 'chat') void sendChat(r.question, doc)
+  if (r.kind === 'chat') void sendChat(r.question, doc, r.scope)
   else void summarizeDoc(doc, r.mode)
 }
 
 // Interrompt la génération en cours (abort → texte partiel conservé, < 500 ms côté serveur).
 export function stopChat(): void {
   genController?.abort()
+  // Stop pendant une recherche dossier : annule aussi le refresh d'index inline en cours
+  // (son travail d'embed déjà accompli est conservé — checkpoints 15.2).
+  if (folderSearching) cancelRagIndexing()
 }
 
 // Nouvelle conversation : annule d'abord une génération en cours, puis vide l'historique.

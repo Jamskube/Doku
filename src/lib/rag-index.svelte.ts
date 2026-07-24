@@ -26,7 +26,7 @@ import {
   type RagFileEntry,
   type RagMeta,
 } from './rag'
-import { readFolderTexts, readRagIndex, removeRagIndexDir, sweepRagTmp, writeRagIndex } from './tauri'
+import { readFolderTexts, readRagIndex, readRagMetaText, removeRagIndexDir, sweepRagTmp, writeRagIndex } from './tauri'
 
 // Lot d'embed (débit mesuré au spike) et cadence de checkpoint : persister toutes les
 // ~10 s borne la perte à quelques secondes d'embed si l'app ferme en plein index
@@ -251,17 +251,92 @@ export function refreshRagIndex(port: number, model: string, dir: string, force 
   return p
 }
 
-// Recherche sémantique top-k (consommée par 15.3 ; testable dès 15.2). Rafraîchit
-// d'abord si nécessaire (index absent/dirty), puis embed de la requête (BRUTE — pas de
-// préfixe : protocole granite mesuré au spike) et cosinus brute-force.
-export async function searchRag(port: number, model: string, dir: string, query: string, k = RAG_TOP_K): Promise<RagHit[]> {
+// Recherche sémantique top-k (15.3). Rafraîchit d'abord si nécessaire (dirty/chargé),
+// puis embed de la requête (BRUTE — pas de préfixe : protocole granite mesuré au spike)
+// et cosinus brute-force. `buildIfMissing: false` → null si AUCUN index n'existe pour ce
+// dossier (ni en mémoire ni sur disque) : le premier index complet (minutes) n'a pas sa
+// place derrière une question de chat — il se lance depuis la vue Modèles. Le refresh
+// inline restant est un diff incrémental (secondes). `signal` ne couvre que l'embed de
+// la requête : un refresh en cours s'annule via cancelRagIndexing (travail conservé).
+export async function searchRag(
+  port: number,
+  model: string,
+  dir: string,
+  query: string,
+  k = RAG_TOP_K,
+  opts: { signal?: AbortSignal; buildIfMissing?: boolean } = {},
+): Promise<RagHit[] | null> {
+  if (opts.buildIfMissing === false) {
+    // Index PARTIEL (indexation annulée) : même chargé, le compléter inline pourrait
+    // coûter des minutes — retour à la vue Modèles pour finir l'indexation.
+    if (ragState.canceled && ragState.dir === dir) return null
+    const loaded = index !== null && index.dir === dir && index.model === model
+    if (!loaded) {
+      // L'EXISTENCE du meta ne suffit pas : un meta d'un autre modèle (chip de repli
+      // cliquée) ou d'une autre version passerait la garde puis déclencherait le
+      // ré-embed INTÉGRAL du dossier derrière la question — précisément l'interdit.
+      const metaText = await readRagMetaText(await ragDirKey(dir))
+      const meta = metaText ? parseRagMeta(metaText) : null
+      if (!meta || meta.model !== model) return null
+    }
+  }
   await refreshRagIndex(port, model, dir)
   const idx = index
   if (!idx || idx.dir !== dir || idx.rows.length === 0) return []
-  const [qv] = await embed(port, model, [query])
+  const [qv] = await embed(port, model, [query], opts.signal)
   if (!qv) return []
   normalizeVec(qv)
   return topK(qv, idx.matrix, idx.dims, k).map(({ row, score }) => ({ ...idx.rows[row], score }))
+}
+
+// --- Index ÉPHÉMÈRE du document courant (15.3) ----------------------------------------
+// Un doc > fenêtre de contexte est interrogé en entier : chunk + embed + top-k, en
+// mémoire seulement (cache mono-emplacement invalidé par hash de contenu — un gros doc
+// ne se ré-embedde pas à chaque question). Même protocole que le spike : préfixe
+// «titre» — pour les chunks, requête brute. `truncated` = plafond de chunks atteint
+// (doc géant) — remonté à l'appelant, jamais silencieux.
+let docCache: {
+  key: string
+  hash: string
+  model: string
+  dims: number
+  matrix: Float32Array
+  chunks: string[]
+  truncated: boolean
+} | null = null
+
+export async function searchDocEphemeral(
+  port: number,
+  model: string,
+  key: string,
+  title: string,
+  text: string,
+  query: string,
+  k = RAG_TOP_K,
+  signal?: AbortSignal,
+): Promise<{ hits: { text: string; score: number }[]; truncated: boolean }> {
+  const hash = await hashText(text)
+  if (!docCache || docCache.key !== key || docCache.hash !== hash || docCache.model !== model) {
+    const { chunks, truncated } = chunkText(text)
+    const vecs: Float32Array[] = []
+    for (let i = 0; i < chunks.length; i += EMBED_BATCH) {
+      const inputs = chunks.slice(i, i + EMBED_BATCH).map((c) => embedInput(title, c))
+      for (const v of await embed(port, model, inputs, signal)) vecs.push(normalizeVec(v))
+    }
+    // Réponse d'embed courte → JAMAIS de cache partiel (le prompt affirme « indexé en
+    // entier ») : on lève, l'appelant affiche une carte d'échec.
+    if (vecs.length !== chunks.length) throw new Error(`embed incomplet (${vecs.length}/${chunks.length})`)
+    const dims = vecs[0]?.length ?? 0
+    docCache = { key, hash, model, dims, matrix: flattenVectors(vecs, dims), chunks, truncated }
+  }
+  const cache = docCache
+  const [qv] = await embed(port, model, [query], signal)
+  if (!qv) return { hits: [], truncated: cache.truncated }
+  normalizeVec(qv)
+  return {
+    hits: topK(qv, cache.matrix, cache.dims, k).map(({ row, score }) => ({ text: cache.chunks[row], score })),
+    truncated: cache.truncated,
+  }
 }
 
 export function cancelRagIndexing(): void {

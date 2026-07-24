@@ -104,6 +104,109 @@ export function buildChatMessages(p: {
   ]
 }
 
+// --- Q&A dossier + document indexé (15.3, ADR-0015) -------------------------
+// Deux modes de récupération : « dossier » (passages top-k de l'index 15.2, réponse
+// citant les notes) et « document courant » (doc > fenêtre interrogé via un index
+// éphémère). Les citations UTILISATEUR sont déterministes (pied « Passages consultés »
+// posé par l'app d'après les passages réellement fournis) — on demande AUSSI au modèle
+// de nommer ses notes, mais on ne dépend jamais de sa fiabilité pour citer.
+
+export interface RagPassage {
+  name: string
+  text: string
+}
+
+// Refus dédiés : « ces notes » (dossier) et « extraits consultés » (doc indexé). Ce
+// dernier est CRUCIAL : le modèle ne voit que le top-k d'un document entier — lui faire
+// dire « absent du document » serait un mensonge silencieux (FR-4) quand le rappel rate.
+export const FOLDER_REFUSAL_PHRASE = 'Je ne trouve pas cette information dans ces notes.'
+export const DOC_INDEX_REFUSAL_PHRASE = 'Je ne trouve pas cette information dans les extraits consultés de ce document.'
+
+const LOCAL_FOLDER_SYSTEM =
+  "Tu es Doku-San, l'assistant local intégré à l'éditeur Doku. Réponds toujours en français, de " +
+  'manière concise. Tes réponses se fondent UNIQUEMENT sur les extraits de notes fournis ' +
+  'ci-dessous, jamais sur des connaissances extérieures. Quand tu utilises un extrait, mentionne ' +
+  'le nom de sa note. Si la réponse ne figure pas dans les extraits, réponds exactement ' +
+  `« ${FOLDER_REFUSAL_PHRASE} » sans rien inventer ni compléter.`
+
+const CLOUD_FOLDER_SYSTEM =
+  'Tu es Doku-San, un partenaire documentaire attentif intégré à l\'éditeur Doku. Réponds en français. ' +
+  'Appuie ta réponse sur les extraits de notes fournis ci-dessous et cite le nom des notes que tu utilises. ' +
+  'Tu peux relier les idées entre notes et expliciter tes inférences en les signalant comme telles. ' +
+  `Si l'information ne figure pas dans les extraits, dis-le clairement sans l'inventer.`
+
+const FOLDER_REMINDER =
+  `(Réponds uniquement d'après les extraits de notes ci-dessus, en citant le nom des notes utilisées. ` +
+  `Si l'information n'y figure pas, réponds « ${FOLDER_REFUSAL_PHRASE} ».)`
+
+function passagesBlock(passages: RagPassage[]): string {
+  return passages.map((p) => `Note « ${p.name} » :\n"""\n${p.text}\n"""`).join('\n\n')
+}
+
+// Q&A « dossier » : system = cadre + passages top-k étiquetés par note.
+export function buildFolderChatMessages(p: {
+  passages: RagPassage[]
+  history: ChatTurn[]
+  question: string
+  persona?: PersonaProfile
+}): OllamaMessage[] {
+  const persona = p.persona ?? 'local'
+  const base = persona === 'cloud' ? CLOUD_FOLDER_SYSTEM : LOCAL_FOLDER_SYSTEM
+  const system =
+    `${base}\n\nExtraits des notes du dossier (sélectionnés pour cette question) :\n\n${passagesBlock(p.passages)}`
+  return [
+    { role: 'system', content: system },
+    ...p.history.map((t) => ({ role: t.role, content: t.content }) as OllamaMessage),
+    { role: 'user', content: `${p.question}\n\n${FOLDER_REMINDER}` },
+  ]
+}
+
+const DOC_INDEX_REMINDER =
+  `(Réponds uniquement d'après les extraits ci-dessus. Si l'information n'y figure pas, réponds ` +
+  `« ${DOC_INDEX_REFUSAL_PHRASE} » — d'autres passages du document existent mais n'ont pas été relus.)`
+
+// Bases DÉDIÉES au mode extraits : les bases 14.3 imposent l'ancienne phrase de refus
+// (« dans ce document ») — le modèle affirmerait une absence sur TOUT le document alors
+// qu'il n'a vu que le top-k. La distinction est le cœur du correctif d'honnêteté 15.3.
+const LOCAL_DOC_INDEX_SYSTEM =
+  "Tu es Doku-San, l'assistant local intégré à l'éditeur Doku. Réponds toujours en français, de " +
+  'manière concise. Tes réponses se fondent UNIQUEMENT sur les extraits du document fournis ' +
+  'ci-dessous, jamais sur des connaissances extérieures. Si la réponse ne figure pas dans les ' +
+  `extraits, réponds exactement « ${DOC_INDEX_REFUSAL_PHRASE} » sans rien inventer ni compléter.`
+
+const CLOUD_DOC_INDEX_SYSTEM =
+  "Tu es Doku-San, un partenaire documentaire attentif intégré à l'éditeur Doku. Réponds en français. " +
+  'Appuie ta réponse sur les extraits du document fournis ci-dessous. Tu peux analyser et faire des ' +
+  'inférences raisonnables en les signalant comme telles. Si une information ne figure pas dans les ' +
+  "extraits, dis-le clairement sans l'inventer — d'autres passages du document existent mais n'ont pas été relus."
+
+// Mode « document courant » (doc > fenêtre) : le document ENTIER a été indexé, seuls les
+// extraits les plus pertinents pour CETTE question sont fournis — dit explicitement au
+// modèle (jamais laisser croire qu'il a lu tout le document).
+export function buildDocIndexChatMessages(p: {
+  docName: string | null
+  passages: { text: string }[]
+  history: ChatTurn[]
+  question: string
+  persona?: PersonaProfile
+  indexTruncated?: boolean
+}): OllamaMessage[] {
+  const persona = p.persona ?? 'local'
+  const base = persona === 'cloud' ? CLOUD_DOC_INDEX_SYSTEM : LOCAL_DOC_INDEX_SYSTEM
+  const title = p.docName ?? 'sans titre'
+  const excerpts = p.passages.map((x, i) => `Extrait ${i + 1} :\n"""\n${x.text}\n"""`).join('\n\n')
+  const system =
+    `${base}\n\nLe document « ${title} » est plus long que la fenêtre de lecture : il a été indexé ` +
+    `en entier${p.indexTruncated ? ' (sa toute fin, au-delà du plafond d\'indexation, exceptée)' : ''} et seuls ` +
+    `les extraits les plus pertinents pour la question sont fournis ci-dessous. D'autres passages ` +
+    `existent mais n'ont pas été relus pour cette question.\n\n${excerpts}`
+  return [
+    { role: 'system', content: system },
+    ...p.history.map((t) => ({ role: t.role, content: t.content }) as OllamaMessage),
+    { role: 'user', content: `${p.question}\n\n${DOC_INDEX_REMINDER}` },
+  ]
+}
+
 // --- Résumé (14.2) : segmentation map-reduce des longs docs -----------------
 // Le PRD (FR-4) interdit la troncature silencieuse. Un doc trop long pour la fenêtre du modèle
 // est donc DÉCOUPÉ (map : un résumé par segment ; reduce : synthèse des résumés), jamais coupé.

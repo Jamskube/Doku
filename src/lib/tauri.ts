@@ -259,6 +259,21 @@ async function ragDirPath(key: string): Promise<string> {
   return join(await appDataDir(), 'rag', key)
 }
 
+// Lit meta.json seul (sans le bin) : garde légère du chat, qui REFUSE de déclencher un
+// index complet (minutes) depuis une question — l'existence du fichier ne suffit pas,
+// l'appelant valide aussi version + modèle (un meta d'un autre modèle d'embedding
+// déclencherait exactement le ré-embed intégral qu'on interdit ici). null si absent.
+export async function readRagMetaText(key: string): Promise<string | null> {
+  if (!isTauri) return null
+  try {
+    const { readTextFile } = await import('@tauri-apps/plugin-fs')
+    const { join } = await import('@tauri-apps/api/path')
+    return await readTextFile(await join(await ragDirPath(key), 'meta.json'))
+  } catch {
+    return null
+  }
+}
+
 // Lit le couple persisté. null si absent/illisible (l'appelant ré-indexe).
 export async function readRagIndex(key: string): Promise<{ meta: string; bin: Uint8Array } | null> {
   if (!isTauri) return null

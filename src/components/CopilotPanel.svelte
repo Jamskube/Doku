@@ -1,12 +1,12 @@
 <script lang="ts">
   import { untrack } from 'svelte'
-  import { activeTab, app } from '../lib/stores.svelte'
+  import { activeTab, app, openPath } from '../lib/stores.svelte'
   import { closeWindow, minimizeWindow, toggleMaximizeWindow } from '../lib/tauri'
   import { formatBytes } from '../lib/ollama'
   import { beginOpenAiAuth, cancelOpenAiConnection, cancelPull, copilot, disconnectOpenAiAccount, ensureCopilotReady, newChat, pullModel, refreshModels, refreshOpenAiStatus, removeModel, retryGeneration, sendChat, setActiveModel, setCopilotProvider, stopChat, summarizeDoc } from '../lib/copilot.svelte'
-  import { DEFAULT_EMBED_MODEL, FALLBACK_EMBED_MODEL } from '../lib/rag'
+  import { DEFAULT_EMBED_MODEL, FALLBACK_EMBED_MODEL, noteTitle } from '../lib/rag'
   import { cancelRagIndexing, deleteRagIndex, ragState, refreshRagIndex } from '../lib/rag-index.svelte'
-  import { parentPath } from '../lib/explorer'
+  import { baseName, parentPath } from '../lib/explorer'
   import { MAX_DOC_CHARS } from '../lib/copilot-service'
   import { openOpenAiAuthPage, OPENAI_MODEL } from '../lib/openai'
   import { renderChatMarkdown } from '../lib/export/render-md'
@@ -94,6 +94,24 @@
     if (copilot.models.some((m) => m.name === name || m.name === `${name}:latest`)) await indexFolder()
   }
 
+  // --- Portée des questions (15.3) : document courant ou dossier entier ---
+  // Le mode « document entier (index) » n'existe qu'en local : un utilisateur OpenAI
+  // garde la troncature 14.3 (pas de spawn du sidecar en douce) — badge et comportement
+  // lisent le MÊME prédicat (copilot.models).
+  const docIndexAvailable = $derived(app.copilotProvider === 'ollama' && embedInstalled)
+  const folderMeta = $derived.by(() => {
+    if (!ragDir) return 'Aucun dossier — ouvrez un document enregistré'
+    if (ragIndexing) return 'Indexation en cours…'
+    if (ragReadyHere) {
+      return ragState.files > 0
+        ? `${ragState.files} note${ragState.files > 1 ? 's' : ''} indexée${ragState.files > 1 ? 's' : ''} · réponses citées`
+        : 'Index vide — voir Modèles'
+    }
+    // Phase idle : un index persisté peut exister (chargé à la première question) —
+    // ne JAMAIS affirmer « non indexé » sans avoir regardé le disque.
+    return 'Réponses citées depuis vos notes · index géré dans Modèles'
+  })
+
   // --- Chat (14.1) ---
   let draft = $state('')
   let promptEl = $state<HTMLTextAreaElement | null>(null)
@@ -121,8 +139,15 @@
     return {
       count: 1,
       name: t.name,
-      meta: `${format} · ${numberFormatter.format(readableChars)} caractères transmis`,
-      state: docTruncated ? 'Lecture partielle' : 'Document entier',
+      // « Document entier (index) » (15.3) : le doc dépasse la fenêtre mais l'index
+      // éphémère le couvre EN ENTIER — le badge d'avertissement 14.3 ne reste que
+      // lorsqu'aucun modèle d'embedding local n'est disponible. La méta suit : afficher
+      // « 12 000 caractères transmis » à côté de « Document entier » serait contradictoire.
+      meta:
+        docTruncated && docIndexAvailable
+          ? `${format} · ${numberFormatter.format(t.content.length)} caractères couverts par l'index`
+          : `${format} · ${numberFormatter.format(readableChars)} caractères transmis`,
+      state: docTruncated ? (docIndexAvailable ? 'Document entier (index)' : 'Lecture partielle') : 'Document entier',
     }
   })
 
@@ -155,7 +180,7 @@
     if (!q || copilot.generating) return
     draft = ''
     const t = activeTab()
-    void sendChat(q, { name: t?.name ?? null, text: t?.content ?? '', kind: t?.kind ?? 'md' })
+    void sendChat(q, { name: t?.name ?? null, text: t?.content ?? '', kind: t?.kind ?? 'md' }, copilot.scope)
   }
 
   function onPromptKey(e: KeyboardEvent) {
@@ -626,12 +651,16 @@
               <!-- État de CONFIG (aucun modèle actif) : carte neutre, pas une erreur — rien n'a
                    échoué. Le bouton fait le travail (pas de « icône calques » à traduire). -->
               <div class="cop-err-card" role="status">
-                <span class="msr" style="font-size:20px;color:var(--ink-3);flex:0 0 auto">{m.config === 'openai' ? 'cloud_off' : 'layers'}</span>
+                <span class="msr" style="font-size:20px;color:var(--ink-3);flex:0 0 auto">
+                  {m.config === 'openai' ? 'cloud_off' : m.config === 'embed' ? 'database' : 'layers'}
+                </span>
                 <div>
-                  <div class="cop-err-title">{m.config === 'openai' ? 'Compte OpenAI non connecté' : 'Aucun modèle actif'}</div>
+                  <div class="cop-err-title">
+                    {m.config === 'openai' ? 'Compte OpenAI non connecté' : m.config === 'embed' ? "Modèle d'embedding requis" : 'Aucun modèle actif'}
+                  </div>
                   <p class="cop-err-msg">{m.content}</p>
                   <button class="cop-err-btn" onclick={() => (app.copilotView = 'models')}>
-                    {m.config === 'openai' ? 'Connecter OpenAI' : 'Choisir un modèle'}
+                    {m.config === 'openai' ? 'Connecter OpenAI' : m.config === 'embed' ? 'Ouvrir les modèles' : 'Choisir un modèle'}
                   </button>
                 </div>
               </div>
@@ -679,6 +708,18 @@
                   <!-- Réponse terminée : Markdown assaini (allowlist, 0 réseau). -->
                   <div class="cop-md">{@html renderChatMarkdown(m.content)}</div>
                 {/if}
+                {#if m.sources?.length && !m.streaming}
+                  <!-- Citations DÉTERMINISTES (15.3) : les notes dont les passages ont
+                       réellement été fournis au modèle — pas ce qu'il prétend avoir lu. -->
+                  <div class="cop-sources">
+                    <span class="cop-sources-lbl">Passages consultés</span>
+                    {#each m.sources as s (s.path)}
+                      <button class="cop-source-chip" title={s.path} onclick={() => void openPath(s.path)}>
+                        <span class="msr" style="font-size:13px">description</span>{noteTitle(s.name)}
+                      </button>
+                    {/each}
+                  </div>
+                {/if}
               </div>
             {/if}
           {/each}
@@ -704,7 +745,7 @@
             >
               <span class="cop-composer-back-icon"><span class="msr">layers</span></span>
               <span class="cop-composer-back-label">Contexte</span>
-              <span class="cop-composer-note">{contextDetails.count} document{contextDetails.count === 1 ? '' : 's'}</span>
+              <span class="cop-composer-note">{copilot.scope === 'folder' ? 'Dossier entier' : `${contextDetails.count} document${contextDetails.count === 1 ? '' : 's'}`}</span>
               <span class="msr cop-composer-switch">swap_vert</span>
             </button>
           {:else}
@@ -752,7 +793,7 @@
                 >
                   <span class="msr">layers</span>
                   <span>Contexte</span>
-                  <span class="cop-composer-note">{contextDetails.count} document{contextDetails.count === 1 ? '' : 's'}</span>
+                  <span class="cop-composer-note">{copilot.scope === 'folder' ? 'Dossier entier' : `${contextDetails.count} document${contextDetails.count === 1 ? '' : 's'}`}</span>
                 </button>
               {/if}
 
@@ -772,8 +813,8 @@
                     bind:this={promptEl}
                     bind:value={draft}
                     rows="1"
-                    placeholder="Demandez à Doku-San…"
-                    aria-label="Poser une question sur ce document"
+                    placeholder={copilot.scope === 'folder' ? 'Demandez à vos notes…' : 'Demandez à Doku-San…'}
+                    aria-label={copilot.scope === 'folder' ? 'Poser une question sur le dossier de notes' : 'Poser une question sur ce document'}
                     onkeydown={onPromptKey}
                   ></textarea>
                   {#if copilot.generating}
@@ -796,22 +837,45 @@
                   aria-hidden={composerFace !== 'context'}
                   inert={composerFace !== 'context'}
                 >
-                  <span class="cop-context-icon" aria-hidden="true"><span class="msr">description</span></span>
-                  <span class="cop-context-copy">
-                    <strong>{contextDetails.name}</strong>
-                    <small>{contextDetails.meta}</small>
-                  </span>
-                  <span
-                    class="cop-context-state"
-                    class:warn={docTruncated}
-                    role={docTruncated ? 'note' : undefined}
-                    title={docTruncated ? 'Document trop long : seul son début est transmis au copilote.' : contextDetails.state}
+                  <!-- Portée des questions (15.3) — le câblage des puces « + Contexte » :
+                       document courant OU dossier entier (réponses citant les notes). -->
+                  <button
+                    class="cop-scope"
+                    class:sel={copilot.scope === 'doc'}
+                    aria-pressed={copilot.scope === 'doc'}
+                    onclick={() => (copilot.scope = 'doc')}
                   >
-                    {#if docTruncated}<span class="msr">warning</span>{/if}
-                    {contextDetails.state}
-                  </span>
-                  <button class="cop-context-add" disabled title="Contexte multi-documents — à venir" aria-label="Ajouter un document au contexte, bientôt disponible">
-                    <span class="msr">add</span>
+                    <span class="cop-context-icon" aria-hidden="true"><span class="msr">description</span></span>
+                    <span class="cop-context-copy">
+                      <strong>{contextDetails.name}</strong>
+                      <small>{contextDetails.meta}</small>
+                    </span>
+                    <span
+                      class="cop-context-state"
+                      class:warn={docTruncated && !docIndexAvailable}
+                      role={docTruncated && !docIndexAvailable ? 'note' : undefined}
+                      title={docTruncated
+                        ? docIndexAvailable
+                          ? 'Recherche sémantique sur tout le document — les réponses citent les extraits retrouvés.'
+                          : 'Document trop long : seul son début est transmis au copilote.'
+                        : contextDetails.state}
+                    >
+                      {#if docTruncated && !docIndexAvailable}<span class="msr">warning</span>{/if}
+                      {contextDetails.state}
+                    </span>
+                  </button>
+                  <button
+                    class="cop-scope"
+                    class:sel={copilot.scope === 'folder'}
+                    aria-pressed={copilot.scope === 'folder'}
+                    onclick={() => (copilot.scope = 'folder')}
+                  >
+                    <span class="cop-context-icon" aria-hidden="true"><span class="msr">folder</span></span>
+                    <span class="cop-context-copy">
+                      <strong>Dossier{ragDir ? ` « ${baseName(ragDir)} »` : ''}</strong>
+                      <small>{folderMeta}</small>
+                    </span>
+                    <span class="cop-context-state">{copilot.scope === 'folder' ? 'Actif' : 'Choisir'}</span>
                   </button>
                 </div>
               </div>
@@ -1376,11 +1440,20 @@
   .cop-input-send:disabled { opacity: 0.4; cursor: default; }
   .cop-context-drawer {
     min-height: 56px;
-    padding: 8px;
+    padding: 6px;
     display: flex;
-    align-items: center;
-    gap: 8px;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 4px;
   }
+  /* Portée (15.3) : deux lignes sélectionnables — document courant / dossier entier. */
+  .cop-scope {
+    display: flex; align-items: center; gap: 8px; padding: 5px 8px; min-width: 0;
+    border: 1px solid transparent; border-radius: 11px; background: none; color: var(--ink);
+    text-align: left; cursor: pointer;
+  }
+  .cop-scope:hover { background: var(--surface-hover); }
+  .cop-scope.sel { border-color: var(--line-2); background: var(--accent-soft); }
   .cop-context-icon {
     width: 36px; height: 36px; flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center;
     border-radius: 10px; background: var(--surface-2); color: var(--ink-3);
@@ -1395,12 +1468,17 @@
   }
   .cop-context-state.warn { background: rgba(180, 130, 60, 0.12); color: var(--warn-text); }
   .cop-context-state .msr { font-size: 13px; }
-  .cop-context-add {
-    width: 36px; height: 36px; flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center;
-    border: 1px dashed var(--line-3); border-radius: 10px; background: transparent; color: var(--ink-4); opacity: 0.55;
-  }
-  .cop-context-add .msr { font-size: 17px; }
   .cop-disclaimer { text-align: center; font-size: 10.5px; line-height: 1.35; color: var(--ink-4); margin-top: 8px; }
+
+  /* Passages consultés (15.3) */
+  .cop-sources { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 10px; }
+  .cop-sources-lbl { font-size: 10.5px; color: var(--ink-4); letter-spacing: 0.02em; }
+  .cop-source-chip {
+    display: inline-flex; align-items: center; gap: 4px; height: 24px; padding: 0 9px;
+    border: 1px solid var(--line-2); border-radius: 999px; background: transparent;
+    color: var(--ink-3); font-family: var(--font-sans); font-size: 11px; cursor: pointer;
+  }
+  .cop-source-chip:hover { background: var(--surface-hover); color: var(--ink); }
 
   :global([data-theme='dark']) .cop-composer-back {
     box-shadow: 0 4px 14px rgba(0, 0, 0, 0.12);
@@ -1411,8 +1489,7 @@
   }
 
   @container (max-width: 330px) {
-    .cop-composer-note,
-    .cop-context-add { display: none; }
+    .cop-composer-note { display: none; }
     .cop-context-state { max-width: 86px; overflow: hidden; text-overflow: ellipsis; }
   }
 
