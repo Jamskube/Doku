@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { app, activeTab, docHeadings, isDirty, loadSnapshotsForActive, openPath, openSearchHit, refreshExplorer, restoreSnapshot, runSearch, scrollToLine, setExplorerSort, toggleSidebarView } from '../lib/stores.svelte'
+  import { app, activeTab, docHeadings, isDirty, loadSnapshotsForActive, openPath, openSearchHit, openSettings, refreshExplorer, restoreSnapshot, runSearch, scrollToLine, setExplorerSort, toggleSidebarView } from '../lib/stores.svelte'
   import { baseName, joinPath, nameExists, normalizeNewName, parentPath, visibleEntries, type FsEntry, type SortKey } from '../lib/explorer'
   import { createDirAt, createFileAt, isTauri, readDirectory } from '../lib/tauri'
   import { DEMO_DIR } from '../lib/demo'
@@ -158,7 +158,7 @@
 <aside class="sidebar" class:open={app.sidebarOpen}>
   <div class="inner">
     <div class="ribbon">
-      <button class="logo" title="Doku" onclick={() => {}}>
+      <button class="logo" title="À propos de Doku" aria-label="À propos de Doku" onclick={() => openSettings('about')}>
         <DokuMark size={26} />
       </button>
       <div class="divider"></div>
@@ -178,7 +178,7 @@
 
       <div class="spacer"></div>
 
-      <button class="rib" title="Paramètres" aria-label="Paramètres" onclick={() => {}}>
+      <button class="rib" class:active={app.settingsOpen} title="Paramètres" aria-label="Paramètres" onclick={() => openSettings()}>
         <span class="msr" style="font-size:21px">settings</span>
       </button>
     </div>

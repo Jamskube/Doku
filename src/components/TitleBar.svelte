@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount, tick } from 'svelte'
-  import { app, activeTab, applyColumnWidth, requestCloseTab, isDirty, saveTab, toggleTheme, togglePin, type ColumnWidth, type DocKind } from '../lib/stores.svelte'
+  import { app, activeTab, requestCloseTab, isDirty, saveTab, setColumnWidth, toggleTheme, togglePin, type ColumnWidth, type DocKind } from '../lib/stores.svelte'
   import { tabDiscriminator } from '../lib/tabs'
   import { parentPath } from '../lib/explorer'
   import { exportViaPrint } from '../lib/export/print'
@@ -76,9 +76,10 @@
     else exportPrint(tab)
   }
 
-  function setColumnWidth(width: ColumnWidth) {
-    app.columnWidth = width
-    applyColumnWidth()
+  // Délègue au store : la modale Paramètres règle la même chose, un seul chemin
+  // d'application (sinon les deux UI peuvent diverger).
+  function pickColumnWidth(width: ColumnWidth) {
+    setColumnWidth(width)
     closeMenus()
   }
 
@@ -326,13 +327,13 @@
           </button>
           {#if submenu === 'width'}
             <div class="app-menu flyout-menu width-menu" role="menu" tabindex="-1" aria-label="Largeur du document" bind:this={widthMenuEl} onkeydown={(event) => handleSubmenuKeydown(event, 'width')}>
-              <button class="app-menu-item" role="menuitemradio" aria-checked={app.columnWidth === 'narrow'} onclick={() => setColumnWidth('narrow')}>
+              <button class="app-menu-item" role="menuitemradio" aria-checked={app.columnWidth === 'narrow'} onclick={() => pickColumnWidth('narrow')}>
                 <span class="menu-check">{app.columnWidth === 'narrow' ? '✓' : ''}</span><span class="msr">width_normal</span><span class="menu-label">Étroit</span>
               </button>
-              <button class="app-menu-item" role="menuitemradio" aria-checked={app.columnWidth === 'wide'} onclick={() => setColumnWidth('wide')}>
+              <button class="app-menu-item" role="menuitemradio" aria-checked={app.columnWidth === 'wide'} onclick={() => pickColumnWidth('wide')}>
                 <span class="menu-check">{app.columnWidth === 'wide' ? '✓' : ''}</span><span class="msr">width_wide</span><span class="menu-label">Confortable</span>
               </button>
-              <button class="app-menu-item" role="menuitemradio" aria-checked={app.columnWidth === 'full'} onclick={() => setColumnWidth('full')}>
+              <button class="app-menu-item" role="menuitemradio" aria-checked={app.columnWidth === 'full'} onclick={() => pickColumnWidth('full')}>
                 <span class="menu-check">{app.columnWidth === 'full' ? '✓' : ''}</span><span class="msr">width_full</span><span class="menu-label">Pleine largeur</span>
               </button>
             </div>

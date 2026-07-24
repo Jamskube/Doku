@@ -314,7 +314,7 @@ _Source : docs/planning/PRD-v2.md · Architecture : docs/planning/architecture-v
 
 **Goal** : supprimer les boutons qui **font semblant**. Un bouton visible qui ne fait rien est pire qu'un bouton absent : il promet une fonction, l'utilisateur clique, rien ne se passe — et la confiance dans le reste de l'app baisse.
 **Spans PRD** : FR-6 (explorateur), NFR Sobriété/Confiance.
-**État** : 🟡 en cours (19.1 codée le 2026-07-24, en attente de validation native).
+**État** : 🟡 en cours — **19.1 livrée et validée** (2026-07-24) ; 19.2 + 19.3 codées le 2026-07-24, en attente de validation native.
 
 > **Inventaire réel** (relevé le 2026-07-24 par balayage de `src/components/`) : 4 boutons inertes dans l'en-tête de l'explorateur (`Sidebar.svelte`), 2 dans le ruban (logo, **Paramètres**). Le bouton « Joindre » du copilote est `disabled` — **placeholder honnête**, hors périmètre. Règle de l'epic : chaque bouton listé finit **branché** ou **retiré**, jamais laissé muet.
 

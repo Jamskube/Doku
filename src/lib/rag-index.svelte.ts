@@ -26,7 +26,7 @@ import {
   type RagFileEntry,
   type RagMeta,
 } from './rag'
-import { readFolderForRag, readRagIndex, readRagMetaText, removeRagIndexDir, sweepRagTmp, writeRagIndex } from './tauri'
+import { readFolderForRag, readRagIndex, readRagMetaText, removeRagIndexDir, removeRagRoot, sweepRagTmp, writeRagIndex } from './tauri'
 
 // Lot d'embed (débit mesuré au spike) et cadence de checkpoint : persister toutes les
 // ~10 s borne la perte à quelques secondes d'embed si l'app ferme en plein index
@@ -395,6 +395,30 @@ export function deleteRagIndex(dir: string): Promise<void> {
     ragState.done = 0
     ragState.total = 0
     ragState.skipped = 0
+    ragState.error = ''
+    ragState.needsModel = ''
+    ragState.canceled = false
+    publishStats(null)
+  }
+  const p = chain.then(run, run)
+  chain = p.catch(() => {})
+  return p
+}
+
+// Purge TOUS les index sémantiques (tous dossiers), disque + mémoire. Même
+// sérialisation que deleteRagIndex : jamais concurrente d'une persistance en cours,
+// sinon un run survivant réécrirait sur disque ce qu'on vient d'effacer.
+export function deleteAllRagIndexes(): Promise<void> {
+  abortCtl?.abort()
+  const run = async () => {
+    await removeRagRoot()
+    index = null
+    ragState.phase = 'idle'
+    ragState.dir = null
+    ragState.done = 0
+    ragState.total = 0
+    ragState.skipped = 0
+    ragState.truncated = 0
     ragState.error = ''
     ragState.needsModel = ''
     ragState.canceled = false

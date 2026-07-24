@@ -72,6 +72,10 @@ export const app = $state({
   copilotOpen: false,
   // Vue copilote pleine page : transitoire, revient en vue partagée à la fermeture du panneau.
   copilotExpanded: false,
+  // Modale Paramètres (19.2) : transitoire — elle ne doit jamais se rouvrir au démarrage.
+  settingsOpen: false,
+  // Section à mettre en avant à l'ouverture ('about' quand on vient du logo).
+  settingsFocus: null as 'about' | null,
   // Vue interne du panneau (transitoire, non persistée) : boot toujours 'chat'.
   copilotView: 'chat' as CopilotView,
   sourceMode: false,
@@ -255,8 +259,19 @@ export function applyTheme() {
 }
 
 export function toggleTheme() {
-  app.theme = app.theme === 'dark' ? 'light' : 'dark'
+  setTheme(app.theme === 'dark' ? 'light' : 'dark')
+}
+
+// Réglage direct (modale Paramètres) : même chemin que la bascule de la barre de
+// titre, pour qu'un seul endroit applique réellement le thème.
+export function setTheme(theme: 'light' | 'dark') {
+  app.theme = theme
   applyTheme()
+}
+
+export function setColumnWidth(width: ColumnWidth) {
+  app.columnWidth = width
+  applyColumnWidth()
 }
 
 // Épingle la fenêtre au-dessus des autres apps (FR-11). Logique partagée entre le
@@ -548,6 +563,16 @@ export function setExplorerSort(key: SortKey) {
 // Force l'explorateur à relire le dossier courant (après une création, ou à la demande).
 export function refreshExplorer() {
   app.explorerNonce++
+}
+
+export function openSettings(focus: 'about' | null = null) {
+  app.settingsFocus = focus
+  app.settingsOpen = true
+}
+
+export function closeSettings() {
+  app.settingsOpen = false
+  app.settingsFocus = null
 }
 
 export interface Heading {

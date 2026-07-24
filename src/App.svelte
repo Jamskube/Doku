@@ -6,6 +6,7 @@
   import CopilotPanel from './components/CopilotPanel.svelte'
   import ConfirmDialog from './components/ConfirmDialog.svelte'
   import WikilinkPrompt from './components/WikilinkPrompt.svelte'
+  import SettingsDialog from './components/SettingsDialog.svelte'
   import { app, activeTab, askSave, checkExternalChanges, cycleTab, dialog, dismissReloadPrompt, initApp, isDirty, openDropped, openPath, openTab, openWikilink, reloadPromptedTab, requestCloseTab, saveSession, saveSettings, saveTab, togglePin, toggleSidebarView } from './lib/stores.svelte'
   import { onFileDrop, onOpenFile, onWindowCloseRequested, onWindowFocus, openFileDialog } from './lib/tauri'
   import { detectUnsupported } from './lib/encoding'
@@ -219,6 +220,7 @@
 
 <ConfirmDialog />
 <WikilinkPrompt />
+<SettingsDialog />
 
 <style>
   .app { position: relative; height: 100%; display: flex; background: var(--cream-base); }

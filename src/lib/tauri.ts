@@ -395,6 +395,50 @@ export async function writeRagIndex(key: string, bin: Uint8Array, metaJson: stri
 }
 
 // Supprime l'index d'un dossier (bouton « Supprimer l'index »). Silencieux si absent.
+// Purge MANUELLE et totale de l'historique : supprime tous les instantanés de tous
+// les fichiers. À ne pas confondre avec purgeAllSnapshots(), qui applique seulement la
+// rétention d'ADR-0003 (garde le plus récent de chaque fichier). Renvoie le nombre de
+// dossiers supprimés pour que l'UI puisse dire ce qui a réellement disparu.
+export async function purgeSnapshotsHard(): Promise<number> {
+  if (!isTauri) return 0
+  const { appDataDir, join } = await import('@tauri-apps/api/path')
+  const { exists, readDir, remove } = await import('@tauri-apps/plugin-fs')
+  const root = await join(await appDataDir(), 'snapshots')
+  if (!(await exists(root))) return 0
+  let removed = 0
+  let raw
+  try {
+    raw = await readDir(root)
+  } catch {
+    return 0
+  }
+  // On supprime chaque dossier-clé, pas la racine « snapshots » elle-même : elle est
+  // recréée à la première sauvegarde, et la capability ne couvre que son contenu.
+  for (const e of raw) {
+    if (!e.isDirectory) continue
+    try {
+      await remove(await join(root, e.name), { recursive: true })
+      removed++
+    } catch {
+      // dossier verrouillé (fichier ouvert ailleurs) : ignoré, le compte reste honnête
+    }
+  }
+  return removed
+}
+
+// Purge totale des index sémantiques (tous dossiers confondus). L'état mémoire est
+// remis à zéro par deleteAllRagIndexes() côté rag-index — ne pas appeler ceci seul.
+export async function removeRagRoot(): Promise<void> {
+  if (!isTauri) return
+  try {
+    const { appDataDir, join } = await import('@tauri-apps/api/path')
+    const { remove } = await import('@tauri-apps/plugin-fs')
+    await remove(await join(await appDataDir(), 'rag'), { recursive: true })
+  } catch {
+    // absent ou verrouillé : rien à faire
+  }
+}
+
 export async function removeRagIndexDir(key: string): Promise<void> {
   if (!isTauri) return
   try {
