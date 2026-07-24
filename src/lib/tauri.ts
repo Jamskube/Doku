@@ -62,33 +62,51 @@ const SEARCH_FILE_CAP = 5000
 // et le pic mémoire sur la cible ARM (tablette). On lit par lots.
 const SEARCH_READ_BATCH = 64
 
-// Construit l'index de recherche d'un dossier (ADR-0007) : scan récursif, ne garde
-// que les formats supportés, lit chacun (par lots bornés), ignore les binaires/UTF-8
-// invalide. Coût one-time, hors budget par-recherche. [] en mode navigateur.
-export async function buildSearchIndex(dir: string, maxDepth = 4): Promise<SearchDoc[]> {
-  if (!isTauri) return []
+export interface FolderTextFile {
+  path: string
+  name: string
+  content: string
+}
+
+// Lit tous les fichiers texte d'un dossier : scan récursif borné, formats supportés
+// seulement (.pdf exclu : binaire), lecture par lots, binaires/UTF-8 invalide ignorés.
+// Partagé par l'index de recherche (9.2) et l'index d'embeddings (15.2). `total` = nb
+// de candidats AVANT cap ; `capped` = nb ÉCARTÉS par le plafond (à distinguer des
+// illisibles, omis en silence comme dans l'index de recherche) : l'appelant signale un
+// éventuel index partiel (jamais de cap silencieux — règle AGENTS.md). Vide en navigateur.
+export async function readFolderTexts(
+  dir: string,
+  maxDepth = 4,
+): Promise<{ files: FolderTextFile[]; total: number; capped: number }> {
+  if (!isTauri) return { files: [], total: 0, capped: 0 }
   const { readTextFile } = await import('@tauri-apps/plugin-fs')
-  // Exclut les .pdf : supportés (ouverture/explorateur) mais binaires → non indexables en texte.
-  const files = (await scanFiles(dir, maxDepth)).filter((f) => isSupportedFile(f.name) && !/\.pdf$/i.test(f.name))
-  if (files.length > SEARCH_FILE_CAP) {
-    console.warn(`Recherche : ${files.length} fichiers, indexation limitée aux ${SEARCH_FILE_CAP} premiers.`)
-  }
-  const capped = files.slice(0, SEARCH_FILE_CAP)
-  const readOne = async (f: { path: string; name: string }): Promise<SearchDoc | null> => {
+  const all = (await scanFiles(dir, maxDepth)).filter((f) => isSupportedFile(f.name) && !/\.pdf$/i.test(f.name))
+  const capped = all.slice(0, SEARCH_FILE_CAP)
+  const readOne = async (f: { path: string; name: string }): Promise<FolderTextFile | null> => {
     try {
       const content = await readTextFile(f.path)
       if (detectUnsupported(content, f.name)) return null // binaire / non-UTF-8 permissif
-      return makeSearchDoc(f.path, f.name, content)
+      return { path: f.path, name: f.name, content }
     } catch {
       return null // readTextFile lève sur UTF-8 invalide / illisible : on ignore
     }
   }
-  const out: SearchDoc[] = []
+  const out: FolderTextFile[] = []
   for (let i = 0; i < capped.length; i += SEARCH_READ_BATCH) {
     const batch = await Promise.all(capped.slice(i, i + SEARCH_READ_BATCH).map(readOne))
     for (const d of batch) if (d) out.push(d)
   }
-  return out
+  return { files: out, total: all.length, capped: Math.max(0, all.length - SEARCH_FILE_CAP) }
+}
+
+// Construit l'index de recherche d'un dossier (ADR-0007). Coût one-time, hors budget
+// par-recherche. [] en mode navigateur.
+export async function buildSearchIndex(dir: string, maxDepth = 4): Promise<SearchDoc[]> {
+  const { files, total } = await readFolderTexts(dir, maxDepth)
+  if (total > SEARCH_FILE_CAP) {
+    console.warn(`Recherche : ${total} fichiers, indexation limitée aux ${SEARCH_FILE_CAP} premiers.`)
+  }
+  return files.map((f) => makeSearchDoc(f.path, f.name, f.content))
 }
 
 // Lit le contenu texte d'un fichier (natif). null en mode navigateur.
@@ -227,6 +245,71 @@ export async function writeFileAtomic(path: string, bytes: Uint8Array) {
   const tmp = `${path}.${Date.now()}-${tmpSeq++}.doku-tmp`
   await writeFile(tmp, bytes)
   await rename(tmp, path)
+}
+
+// --- Index d'embeddings RAG (15.2, ADR-0015) ---
+// %APPDATA%\<app>\rag\<clé>\ : vectors.bin (matrice Float32 brute) + meta.json.
+// Chaque fichier est écrit atomiquement (tmp + rename) ; l'appariement du COUPLE est
+// garanti par le checksum du bin stocké dans meta.json (vérifié au chargement).
+// NB confidentialité : meta.json contient les textes des passages indexés — copie
+// locale sous %APPDATA%, comme les snapshots (ADR-0003) ; « Supprimer l'index » purge tout.
+
+async function ragDirPath(key: string): Promise<string> {
+  const { appDataDir, join } = await import('@tauri-apps/api/path')
+  return join(await appDataDir(), 'rag', key)
+}
+
+// Lit le couple persisté. null si absent/illisible (l'appelant ré-indexe).
+export async function readRagIndex(key: string): Promise<{ meta: string; bin: Uint8Array } | null> {
+  if (!isTauri) return null
+  try {
+    const { readTextFile, readFile } = await import('@tauri-apps/plugin-fs')
+    const { join } = await import('@tauri-apps/api/path')
+    const dir = await ragDirPath(key)
+    const meta = await readTextFile(await join(dir, 'meta.json'))
+    const bin = await readFile(await join(dir, 'vectors.bin'))
+    return { meta, bin }
+  } catch {
+    return null
+  }
+}
+
+export async function writeRagIndex(key: string, bin: Uint8Array, metaJson: string): Promise<void> {
+  if (!isTauri) return
+  const { mkdir } = await import('@tauri-apps/plugin-fs')
+  const { join } = await import('@tauri-apps/api/path')
+  const dir = await ragDirPath(key)
+  await mkdir(dir, { recursive: true })
+  // bin d'abord, meta ensuite : meta décrit (checksum) un bin qui existe déjà. Un crash
+  // entre les deux laisse l'ANCIEN meta + le nouveau bin → checksum ≠ → ré-index complet.
+  await writeFileAtomic(await join(dir, 'vectors.bin'), bin)
+  await writeTextFileAtomic(await join(dir, 'meta.json'), metaJson)
+}
+
+// Supprime l'index d'un dossier (bouton « Supprimer l'index »). Silencieux si absent.
+export async function removeRagIndexDir(key: string): Promise<void> {
+  if (!isTauri) return
+  try {
+    const { remove } = await import('@tauri-apps/plugin-fs')
+    await remove(await ragDirPath(key), { recursive: true })
+  } catch {
+    // index absent ou verrouillé : rien à faire
+  }
+}
+
+// Purge les .doku-tmp orphelins d'un crash (interruption entre write et rename).
+export async function sweepRagTmp(key: string): Promise<void> {
+  if (!isTauri) return
+  try {
+    const { readDir, remove } = await import('@tauri-apps/plugin-fs')
+    const { join } = await import('@tauri-apps/api/path')
+    const dir = await ragDirPath(key)
+    for (const e of await readDir(dir)) {
+      if (!e.isDirectory && e.name.endsWith('.doku-tmp')) await remove(await join(dir, e.name))
+    }
+  } catch {
+    // dossier inexistant (premier index) : rien à balayer
+  }
 }
 
 // Écrit une image collée à côté du document (12.1). Nom unique JAMAIS écrasant : le

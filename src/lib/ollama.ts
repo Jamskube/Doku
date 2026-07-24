@@ -230,6 +230,23 @@ export async function pull(
   }
 }
 
+// Embeddings (15.2, ADR-0015) — POST /api/embed, non streamé. `input` batché par
+// l'appelant (16 : le débit mesuré au spike). Même localhost que le reste : 0 réseau.
+// `keep_alive` par défaut d'Ollama (5 min) conservé : le modèle reste chaud pendant
+// l'indexation et une session de questions, puis se décharge seul — ne PAS envoyer
+// keep_alive:0 par lot (décharge/recharge à chaque batch = débit détruit).
+export async function embed(port: number, model: string, input: string[], signal?: AbortSignal): Promise<Float32Array[]> {
+  const r = await api(port, '/api/embed', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ model, input }),
+    signal,
+  })
+  if (!r.ok) throw new Error(`embed ${r.status}: ${await r.text().catch(() => '')}`)
+  const json = (await r.json()) as { embeddings?: number[][] }
+  return (json.embeddings ?? []).map((e) => Float32Array.from(e))
+}
+
 // Supprime un modèle local (purge, 13.4). DELETE /api/delete. Requiert le sidecar prêt.
 export async function deleteModel(port: number, name: string): Promise<void> {
   const r = await api(port, '/api/delete', {

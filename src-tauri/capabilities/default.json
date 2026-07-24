@@ -45,7 +45,7 @@
     },
     {
       "identifier": "fs:allow-remove",
-      "allow": [{ "path": "$APPDATA/snapshots/**" }]
+      "allow": [{ "path": "$APPDATA/snapshots/**" }, { "path": "$APPDATA/rag" }, { "path": "$APPDATA/rag/**" }]
     },
     {
       "identifier": "fs:allow-exists",

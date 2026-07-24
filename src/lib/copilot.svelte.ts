@@ -113,6 +113,12 @@ async function ensureReady(): Promise<number | null> {
   return readyPromise
 }
 
+// Expose ensureReady aux consommateurs externes (index sémantique 15.2 : la vue Modèles
+// démarre le sidecar puis passe le port au service RAG, qui n'importe pas ce module).
+export function ensureCopilotReady(): Promise<number | null> {
+  return ensureReady()
+}
+
 // Rafraîchit la liste des modèles installés. Garde anti-périmé (le dernier appel gagne).
 export async function refreshModels(): Promise<void> {
   const p = await ensureReady()
@@ -157,7 +163,11 @@ export async function pullModel(name: string): Promise<void> {
     // si le modèle EST dans la liste rafraîchie (un pull annulé sort silencieusement d'ici —
     // sans ce contrôle on activerait un modèle à moitié téléchargé).
     const installed = copilot.models.find((m) => m.name === model || m.name === `${model}:latest`)
-    if (!app.activeModel && installed) app.activeModel = installed.name
+    // JAMAIS d'auto-activation d'un modèle d'embedding (index 15.2) : il ne sait pas
+    // générer — l'activer casserait chat/résumé (« does not support generate ») sans
+    // cause visible pour l'utilisateur dont le PREMIER pull est le modèle d'index.
+    const isEmbed = installed && (installed.name === app.embedModel || /embed|bge-m3/i.test(installed.name))
+    if (!app.activeModel && installed && !isEmbed) app.activeModel = installed.name
   } catch (e) {
     console.error('[copilot] pull', e)
     copilot.error = `Échec du téléchargement de ${model}.`
@@ -178,6 +188,10 @@ export async function removeModel(name: string): Promise<void> {
   try {
     await deleteModel(p, name)
     if (app.activeModel === name) app.activeModel = ''
+    // Modèle d'embedding supprimé : effacer le réglage (sinon le prochain index part
+    // en 404) — l'UI de l'index repropose alors le défaut à télécharger. Alias :latest
+    // couvert (pull de « bge-m3 » → installé « bge-m3:latest »).
+    if (name === app.embedModel || name === `${app.embedModel}:latest`) app.embedModel = ''
     await refreshModels()
   } catch (e) {
     console.error('[copilot] delete', e)

@@ -3,7 +3,10 @@
   import { activeTab, app } from '../lib/stores.svelte'
   import { closeWindow, minimizeWindow, toggleMaximizeWindow } from '../lib/tauri'
   import { formatBytes } from '../lib/ollama'
-  import { beginOpenAiAuth, cancelOpenAiConnection, cancelPull, copilot, disconnectOpenAiAccount, newChat, pullModel, refreshModels, refreshOpenAiStatus, removeModel, retryGeneration, sendChat, setActiveModel, setCopilotProvider, stopChat, summarizeDoc } from '../lib/copilot.svelte'
+  import { beginOpenAiAuth, cancelOpenAiConnection, cancelPull, copilot, disconnectOpenAiAccount, ensureCopilotReady, newChat, pullModel, refreshModels, refreshOpenAiStatus, removeModel, retryGeneration, sendChat, setActiveModel, setCopilotProvider, stopChat, summarizeDoc } from '../lib/copilot.svelte'
+  import { DEFAULT_EMBED_MODEL, FALLBACK_EMBED_MODEL } from '../lib/rag'
+  import { cancelRagIndexing, deleteRagIndex, ragState, refreshRagIndex } from '../lib/rag-index.svelte'
+  import { parentPath } from '../lib/explorer'
   import { MAX_DOC_CHARS } from '../lib/copilot-service'
   import { openOpenAiAuthPage, OPENAI_MODEL } from '../lib/openai'
   import { renderChatMarkdown } from '../lib/export/render-md'
@@ -63,6 +66,32 @@
   function doRemove(name: string) {
     confirmDelete = null
     void removeModel(name)
+  }
+
+  // --- Index sémantique du dossier (15.2, ADR-0015) ---
+  // Le service RAG n'importe ni stores ni copilot : la vue fournit dossier, modèle et port.
+  const EMBED_CHOICES = [DEFAULT_EMBED_MODEL, FALLBACK_EMBED_MODEL]
+  const ragDir = $derived(app.explorerDir ?? parentPath(activeTab()?.path ?? null))
+  // '' = réglage effacé (modèle supprimé du disque) : on repropose le défaut.
+  const embedModelName = $derived(app.embedModel || DEFAULT_EMBED_MODEL)
+  const embedInstalled = $derived(copilot.models.some((m) => m.name === embedModelName || m.name === `${embedModelName}:latest`))
+  const ragIndexing = $derived(ragState.phase === 'indexing' && ragState.dir === ragDir)
+  const ragReadyHere = $derived(ragState.phase === 'ready' && ragState.dir === ragDir)
+
+  async function indexFolder() {
+    const dir = ragDir
+    if (!dir || ragState.phase === 'indexing') return
+    if (!app.embedModel) app.embedModel = DEFAULT_EMBED_MODEL
+    const port = await ensureCopilotReady()
+    if (port == null) return
+    void refreshRagIndex(port, app.embedModel, dir, true)
+  }
+
+  // Depuis la carte d'erreur « modèle non installé » : pull PUIS relance de l'index —
+  // sinon le message d'erreur périmé resterait affiché jusqu'à un clic manuel.
+  async function pullEmbedAndIndex(name: string) {
+    await pullModel(name)
+    if (copilot.models.some((m) => m.name === name || m.name === `${name}:latest`)) await indexFolder()
   }
 
   // --- Chat (14.1) ---
@@ -469,6 +498,70 @@
                     </div>
                   {/if}
                 {/each}
+              </div>
+            </section>
+
+            <!-- Index sémantique du dossier (15.2, ADR-0015) : embeddings 100 % locaux
+                 via le sidecar — prépare le mode « dossier » du copilote (15.3). -->
+            <section>
+              <div class="cop-label row">
+                <span>INDEX DU DOSSIER</span>
+                {#if ragReadyHere && ragState.files > 0}
+                  <span class="cop-count">{ragState.files} note{ragState.files > 1 ? 's' : ''} · {ragState.chunks} passage{ragState.chunks > 1 ? 's' : ''}</span>
+                {/if}
+              </div>
+              <div class="cop-rag">
+                <div class="cop-rag-row">
+                  <span class="msr" style="font-size:18px;color:var(--ink-4)">database</span>
+                  <span class="cop-mono grow" title="Modèle d'embedding — réglage distinct du modèle de chat">{embedModelName}</span>
+                  {#if !embedInstalled}
+                    <button class="cop-btn-sm" onclick={() => startPull(embedModelName)} disabled={!!copilot.pulling}>Télécharger</button>
+                  {:else if ragIndexing}
+                    <button class="cop-del" title="Annuler l'indexation" aria-label="Annuler l'indexation" onclick={cancelRagIndexing}>
+                      <span class="msr" style="font-size:16px">close</span>
+                    </button>
+                  {:else}
+                    <!-- Désactivé aussi quand un AUTRE dossier s'indexe (une seule indexation à la fois). -->
+                    <button class="cop-btn-sm" onclick={indexFolder} disabled={!ragDir || ragState.phase === 'indexing'} title={ragDir ?? 'Ouvrir un document ou un dossier d’abord'}>Indexer</button>
+                  {/if}
+                </div>
+                <div class="cop-chips" style="margin-top:8px">
+                  {#each EMBED_CHOICES as c (c)}
+                    <button class="cop-chip" class:sel={embedModelName === c} title="Choisir ce modèle d'embedding" aria-pressed={embedModelName === c} onclick={() => (app.embedModel = c)}>
+                      {c}<span class="cop-chip-tag">{c === DEFAULT_EMBED_MODEL ? 'défaut' : 'repli'}</span>
+                    </button>
+                  {/each}
+                </div>
+                {#if ragIndexing}
+                  <div class="cop-rag-progress">
+                    <span class="cop-rag-note" style="margin-top:0">{ragState.done}/{ragState.total} fichier{ragState.total > 1 ? 's' : ''}</span>
+                    <div class="cop-track grow"><div class="doku-skel" style="width:{ragState.total ? Math.round((ragState.done / ragState.total) * 100) : 0}%;height:100%;border-radius:3px"></div></div>
+                  </div>
+                {:else if ragState.phase === 'error' && ragState.dir === ragDir}
+                  <div class="cop-rag-note err">
+                    {ragState.error}
+                    {#if ragState.needsModel}
+                      <button class="cop-err-btn" onclick={() => void pullEmbedAndIndex(ragState.needsModel)}>Télécharger</button>
+                    {/if}
+                  </div>
+                {:else if ragReadyHere}
+                  <div class="cop-rag-note">
+                    {ragState.canceled ? 'Indexation annulée — index partiel conservé.' : 'Index à jour.'}
+                    <!-- Caps JAMAIS silencieux (règle AGENTS.md) : un index partiel qui se tait
+                         donnerait des réponses « sûres » sur un corpus incomplet. -->
+                    {#if ragState.skipped > 0}
+                      Partiel : {ragState.skipped} fichier{ragState.skipped > 1 ? 's' : ''} au-delà du plafond (5000).
+                    {/if}
+                    {#if ragState.truncated > 0}
+                      {ragState.truncated} fichier{ragState.truncated > 1 ? 's' : ''} très long{ragState.truncated > 1 ? 's' : ''} indexé{ragState.truncated > 1 ? 's' : ''} en partie.
+                    {/if}
+                    {#if ragState.files > 0 && ragDir}
+                      <button class="cop-rag-del" onclick={() => void deleteRagIndex(ragDir)}>Supprimer l'index</button>
+                    {/if}
+                  </div>
+                {:else}
+                  <div class="cop-rag-note">Prépare les réponses sur tout le dossier, sources citées — 100 % local.</div>
+                {/if}
               </div>
             </section>
 
@@ -1047,6 +1140,20 @@
     color: var(--ink-3); font-family: var(--font-mono); font-size: 11.5px; cursor: pointer;
   }
   .cop-chip:hover { background: var(--surface-hover); color: var(--ink); }
+
+  /* Index du dossier (15.2) */
+  .cop-rag { padding: 11px 12px; border: 1px solid var(--line-1); border-radius: 12px; }
+  .cop-rag-row { display: flex; align-items: center; gap: 9px; }
+  .cop-rag-progress { display: flex; align-items: center; gap: 9px; margin-top: 9px; }
+  .cop-rag-note { font-size: 11.5px; line-height: 1.55; color: var(--ink-4); margin-top: 8px; }
+  .cop-rag-note.err { color: var(--err-text); display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .cop-chip.sel { border-color: var(--line-3); background: var(--accent-soft); color: var(--ink); }
+  .cop-chip-tag { margin-left: 5px; font-family: var(--font-sans); font-size: 10px; color: var(--ink-4); letter-spacing: 0.03em; }
+  .cop-rag-del {
+    border: 0; background: none; padding: 0; margin-left: 4px; cursor: pointer;
+    font-family: var(--font-sans); font-size: 11.5px; color: var(--ink-4); text-decoration: underline;
+  }
+  .cop-rag-del:hover { color: var(--err); }
 
   /* Chat — accueil */
   .cop-chat-empty {

@@ -3,6 +3,8 @@ import { DEMO_DIR, DEMO_TABS } from './demo'
 import { detectLineEnding } from './editor/editor'
 import { baseName, isSupportedFile, joinPath, parentPath } from './explorer'
 import { detectUnsupported } from './encoding'
+import { DEFAULT_EMBED_MODEL } from './rag'
+import { ragFileChanged } from './rag-index.svelte'
 import { classifyExternalChange } from './reload'
 import { makeSearchDoc, searchDocs, type SearchDoc, type SearchResult } from './search'
 import { snapshotKey, type SnapshotInfo } from './snapshot'
@@ -61,6 +63,9 @@ export const app = $state({
   columnWidth: 'narrow' as ColumnWidth,
   // Modèle IA actif (copilote, 13.4) ; persisté (settings). '' = aucun choisi.
   activeModel: '',
+  // Modèle d'EMBEDDING (index sémantique 15.2, ADR-0015) — réglage distinct du modèle
+  // de chat ; persisté. '' = effacé (supprimé du disque) : l'UI repropose le défaut.
+  embedModel: DEFAULT_EMBED_MODEL,
   // Ollama reste le fournisseur local par défaut ; OpenAI est une option cloud explicite.
   copilotProvider: 'ollama' as CopilotProvider,
   // Panneau copilote droit (14.0) : ouvert/fermé, persisté (settings) comme sidebarOpen.
@@ -126,6 +131,7 @@ export function loadSettings() {
         app.columnWidth = s.columnWidth
       }
       if (typeof s.activeModel === 'string') app.activeModel = s.activeModel
+      if (typeof s.embedModel === 'string') app.embedModel = s.embedModel
       if (s.copilotProvider === 'ollama' || s.copilotProvider === 'openai') app.copilotProvider = s.copilotProvider
       if (typeof s.copilotOpen === 'boolean') app.copilotOpen = s.copilotOpen
     }
@@ -146,6 +152,7 @@ export function saveSettings() {
         sidebarView: app.sidebarView,
         columnWidth: app.columnWidth,
         activeModel: app.activeModel,
+        embedModel: app.embedModel,
         copilotProvider: app.copilotProvider,
         copilotOpen: app.copilotOpen,
       }),
@@ -584,6 +591,7 @@ export async function saveTab(tab: DocTab): Promise<boolean> {
     }
     tab.savedContent = saved
     invalidateSearchDoc(tab.path, tab.name, saved) // garder l'index de recherche à jour
+    ragFileChanged(tab.path) // index d'embeddings : marqué périmé, ré-embed au prochain refresh
     // Snapshot du contenu sauvé (FR-12), seulement s'il a réellement changé.
     // Fire-and-forget : un échec d'historique ne doit JAMAIS casser le save.
     if (changed) {
@@ -665,7 +673,10 @@ function applyDiskContent(tab: DocTab, disk: string) {
   tab.savedContent = disk
   tab.eol = detectLineEnding(disk)
   tab.rev++
-  if (tab.path) invalidateSearchDoc(tab.path, tab.name, disk) // restauration / reload externe
+  if (tab.path) {
+    invalidateSearchDoc(tab.path, tab.name, disk) // restauration / reload externe
+    ragFileChanged(tab.path)
+  }
 }
 
 // Au retour du focus : relit chaque fichier ouvert et compare au disque.
