@@ -1,13 +1,13 @@
 # Next session pointer
-_Updated: 2026-07-17 13:12_
+_Updated: 2026-07-24 12:10_
 
 ## Where I left off
-La refonte front est fonctionnelle mais encore non commitée : Doku-San a été modernisé avec des transitions symétriques et une vue pleine page, la sélection de texte possède un menu contextuel de réécriture, le header interne des documents a disparu, la barre de titre utilise un menu `⋯` responsive, et les surfaces clair/sombre ont été affinées sans glow ni contour autour du composer. `npm.cmd run check`, `npm.cmd run build` et les smoke tests navigateur passent.
+Deux sprints livrés aujourd'hui : **S13 (Epic 15, RAG dossier) clos 60/60** et **S14 (Epic 18, dette PDF) clos 63/63** (stretch 18.3 inclus). Le copilote comprend maintenant tout un dossier (recherche sémantique locale + réponses citant les notes) ET lit vraiment les PDF (résumé, Q&A, RAG multi-PDF), 100 % hors-ligne. Le sprint 14 est **Completed** mais sa **rétro n'est pas encore faite** — c'est la seule chose en suspens.
 
 ## Open work
-- Branch: `main`  (16 uncommitted files)
-- Open PRs: non vérifiées — accès à l’API GitHub bloqué pendant `/wrap`
-- Drafts/plans: aucun fichier dans `docs/plans/` ou `.claude/plans/`
+- Branch: `main` (clean, tout poussé jusqu'à `9f68e52`)
+- Open PRs: aucune
+- Drafts/plans: aucun en attente
 
 ## Next concrete step
-Smoke-tester la refonte dans l’application Tauri native, puis créer et pousser un commit de sauvegarde si le rendu est validé.
+Faire la **rétro du sprint 14** (`/sprint retro`) pour clore proprement — deux observations à confirmer : la boucle critic+reviewer a encore attrapé des défauts réels (BLOCK sur 18.3, garde abort sur 18.2), et « réutiliser, pas rouvrir » a tenu (stories PDF branchées sur 14.2/15.2/15.3 sans les modifier). Après la rétro, le backlog ne contient plus que l'**Epic 17 (NPU/Foundry Local)**, toujours différé (chantier perf, gain étroit sur le prefill) — décision produit à prendre avant d'ouvrir un sprint 15.
