@@ -1,13 +1,19 @@
 # Next session pointer
-_Updated: 2026-07-24 12:10_
+_Updated: 2026-07-24 17:00_
 
 ## Where I left off
-Deux sprints livrés aujourd'hui : **S13 (Epic 15, RAG dossier) clos 60/60** et **S14 (Epic 18, dette PDF) clos 63/63** (stretch 18.3 inclus). Le copilote comprend maintenant tout un dossier (recherche sémantique locale + réponses citant les notes) ET lit vraiment les PDF (résumé, Q&A, RAG multi-PDF), 100 % hors-ligne. Le sprint 14 est **Completed** mais sa **rétro n'est pas encore faite** — c'est la seule chose en suspens.
+Session marathon. **Rétro S14 faite** (3/3), **Sprint 15 planifié** (Epic 17 NPU), puis le **spike 17.1 a viré en grosse investigation NPU** menée jusqu'au bout sur la vraie machine. Résultat : **le NPU MARCHE pour l'inférence LLM — mais PAS via Foundry Local** (son EP QNN est cassé sur X Plus 0.10.2). La voie qui marche = **onnxruntime-genai + onnxruntime-qnn EN DIRECT** (recette dans la mémoire `piste-backend-npu` + `spike/npu-17.1/sidecar/`). Mesuré : prefill 4-6× plus rapide, decode 2× plus lent. **Mais verdict pratique NO-GO sur 16 Go** : le 1.5b-qnn est trop bête (rejeté en natif par l'utilisateur dans Doku), le 7b-qnn est bon mais swappe (~5 Go → prefill 10,6 s, decode 7,8 t/s), et **il n'existe pas de 3B QNN** pour le juste milieu.
 
 ## Open work
-- Branch: `main` (clean, tout poussé jusqu'à `9f68e52`)
+- Branch: `main` (propre, tout commité ; **à pousser** : `50cc9a5`, `7f3ed50`, `d0c50c4`, `d85e9cf`)
 - Open PRs: aucune
-- Drafts/plans: aucun en attente
+- **Sprint 15 : Active** — 17.1 (spike) codé/mesuré mais **ledger PAS flippé** (pas de GO/NO-GO gravé) ; 17.2 reste gated.
+- **ADR-0016 : status `proposed`** — le cadre + les mesures sont là, mais le **verdict final n'est pas figé** (accepted/rejected).
+- Banc d'essai NPU utilisable dans Doku : onglet « NPU (essai) » → sidecar `py spike/npu-17.1/sidecar/npu_server.py` (défaut 1.5b ; `NPU_MODEL=~/npu-models/qwen7b-qnn` pour le 7B). Prérequis : `py -m pip install onnxruntime onnxruntime-qnn onnxruntime-genai`.
 
 ## Next concrete step
-Faire la **rétro du sprint 14** (`/sprint retro`) pour clore proprement — deux observations à confirmer : la boucle critic+reviewer a encore attrapé des défauts réels (BLOCK sur 18.3, garde abort sur 18.2), et « réutiliser, pas rouvrir » a tenu (stories PDF branchées sur 14.2/15.2/15.3 sans les modifier). Après la rétro, le backlog ne contient plus que l'**Epic 17 (NPU/Foundry Local)**, toujours différé (chantier perf, gain étroit sur le prefill) — décision produit à prendre avant d'ouvrir un sprint 15.
+**Trancher le GO/NO-GO NPU** (décision produit en suspens). Deux options sur la table :
+1. L'utilisateur **teste le 7B dans Doku** (qualité OK mais lent/fragile RAM) pour sentir le compromis → puis décide.
+2. **Acter NO-GO** (reco) : sur 16 Go le NPU n'a pas de sweet spot. Graver **ADR-0016 → rejected** (avec les mesures), fermer 17.2, flipper 17.1 au ledger avec le verdict, et **basculer le vrai levier utile : câbler + mesurer `qwen2.5:3b-instruct-q4_0` en défaut CPU** (plus intelligent que le 1.5b, fiable — le préalable qu'on avait sauté). Voir mémoire [[upgrade-modele-copilote]].
+
+Après ça, clore le sprint 15 (rétro).
