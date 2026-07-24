@@ -35,5 +35,8 @@ _None_
 - Sprint initialisé avec **3 stories** (Epic 15 complet, rien d'autre — action rétro S12). Ledger : +3 entrées (60 features).
 - Dette « extraction texte PDF » (14.2) proposée en stretch, **écartée par l'utilisateur** : RAG seul.
 
+### 2026-07-24
+- **15.1 validée par l'utilisateur (GO)** : ADR-0015 confirmée (granite-embedding:278m, brute-force mémoire, repli bge-m3). Ledger 58/60. Checkpoint 35 % franchi → lancement 15.2.
+
 ### 2026-07-20 — 15.1 : spike mesuré, ADR-0015 écrite (validation utilisateur en attente)
 5 modèles d'embedding comparés sur banc Node (corpus 150 notes FR à vérité terrain, 30 requêtes direct/paraphrase/piège, baseline BM25 + fusion RRF), sidecar Ollama local `OLLAMA_NO_CLOUD=1`, 0 connexion non-loopback à l'inférence. **Verdict : `granite-embedding:278m`** — r@1 0,933, **r@3 parfait (1,0)**, paraphrases 1,0, 11,1 chunks/s (3× bge-m3), 568 Mo (½ bge-m3) ; échelle 1000 notes = 92 s d'index, recherche 2,25 ms, 2,9 Mo. Surprises du spike : embeddinggemma inutilisable sur ce CPU (0,5 c/s), qwen3-embedding charge 2,4 Go, **BM25 est une baseline sérieuse (0,867)** mais la fusion RRF n'apporte rien au modèle retenu → différée. Repli désigné : bge-m3. Base vectorielle tierce rejetée (brute-force 2,25 ms, YAGNI). ADR-0015 + banc vendoré `spike/rag-15.1/` (jeu de régression pour 15.2/15.3) + liste explicite des non-couverts (corpus synthétique, chunking longs docs, cohabitation RAM embed+chat, incrémental non prototypé). Modèles perdants purgés du disque, granite conservé.
