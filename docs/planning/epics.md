@@ -281,6 +281,14 @@ _Source : docs/planning/PRD-v2.md · Architecture : docs/planning/architecture-v
 **Direction** : **Microsoft Foundry Local** (ONNX Runtime + execution provider QNN), lancé en **sidecar** comme ollama.exe, **API HTTP compatible OpenAI** (`/v1/chat/completions`), 100 % local, licence propre. Modèle : vrai 4B texte FR (Qwen3-4B / Ministral-3). **Exclus : OmniNeural-4B / Nexa** (anglais + activation en ligne obligatoire = casse le 0-réseau).
 **Coût pressenti** : nouveau sidecar à empaqueter + adaptateur client (`ollama.ts` parle l'API native Ollama → écrire un client OpenAI) + gestion modèles ONNX + **re-preuve du 0-réseau** + re-packaging ARM64. Prototyper/mesurer sur ce Snapdragon X **Plus** avant de s'engager ; viser une **abstraction** de la couche d'inférence (Ollama ⇄ Foundry) plutôt qu'un remplacement sec.
 
+> **Décomposition (sprint 15)** : **spike-first, avec gate STOP/GO.** Le préalable « épuiser le levier CPU + Q4_0 + vrai 4B » est **sauté par choix produit** (2026-07-24) — assumé : si le spike mesure que le prefill n'est pas si bloquant, le verdict honnête est **NO-GO** → repli sur le levier CPU. 17.2 (la réécriture lourde) n'est **codée que si 17.1 tranche GO**.
+
+### Stories
+| # | Title | Size | Priority | Acceptance |
+|---|---|---|---|---|
+| 17.1 | Spike : Foundry Local sur ce Snapdragon X Plus (mesure prefill + 0-réseau) | M | P1 | Given `foundry`/ONNX Runtime + EP **QNN** empaqueté en sidecar, when je le lance sur ce SoC et génère sur un **long doc réel**, then le **prefill est mesuré** (NPU vs CPU q4_0, chiffres relevés — le ~18× espéré est confirmé ou réfuté) ; **0 requête non-`localhost`** prouvée (monitor réseau pendant l'inférence, y compris activation du modèle) ; faisabilité d'un **client OpenAI** (`/v1/chat/completions`) confirmée ; un **ADR-0017** documente le verdict **GO/NO-GO tranché par la donnée** — **avant** tout code de production. STOP si le gain prefill ne vaut pas la complexité (→ NO-GO, repli CPU documenté) |
+| 17.2 | Abstraction couche d'inférence (Ollama ⇄ Foundry) + client OpenAI — **gated 17.1=GO** | L | P1 | **Déverrouillée seulement si 17.1 = GO.** Given l'inférence abstraite derrière une interface, when je bascule Ollama ⇄ **Foundry Local**, then le copilote (chat/Q&A/résumé) fonctionne via Foundry avec **client OpenAI** (`/v1/chat/completions`, streaming, **annulation < 500 ms**) ; **0 réseau re-prouvé** ; gestion des modèles ONNX ; **re-packaging ARM64** vérifié ; bascule de retour vers Ollama sans régression |
+
 ---
 
 ## Epic 18 : Le copilote lit les PDF — extraction texte (FR-3, FR-4, FR-6) — v2.2
