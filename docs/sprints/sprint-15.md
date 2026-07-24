@@ -3,7 +3,7 @@
 **Goal** : **trancher le NPU par la mesure** — prouver (ou réfuter) que Foundry Local + QNN effondre le prefill (~45 s → ~1-2 s) sur ce Snapdragon X **Plus**, sans casser le 0-réseau, **avant** d'engager la réécriture du sidecar.
 **Start** : 2026-07-24
 **End** : 2026-07-24 (clos J+0)
-**Status** : **Done — verdict NO-GO** (ADR-0016 `rejected`)
+**Status** : **Completed — verdict NO-GO** (ADR-0016 `rejected`) · rétro : [`retro-sprint-15.md`](./retro-sprint-15.md)
 
 Sprint **spike-first** (Epic 17, backend d'inférence NPU). C'est le **dernier epic du backlog** : Epics 1–16 + 18 sont livrés (ledger 63/63), le produit est feature-complete côté v2.2. L'Epic 17 était une « piste » (urgence rétrogradée le 2026-07-16) ; le choix produit du 2026-07-24 est de **l'attaquer maintenant**, en sautant le préalable CPU (assumé). La livraison se mesure en **décision tranchée**, pas en nombre de stories : un **NO-GO documenté est une livraison**.
 
