@@ -26,7 +26,7 @@ import {
   type RagFileEntry,
   type RagMeta,
 } from './rag'
-import { readFolderTexts, readRagIndex, readRagMetaText, removeRagIndexDir, sweepRagTmp, writeRagIndex } from './tauri'
+import { readFolderForRag, readRagIndex, readRagMetaText, removeRagIndexDir, sweepRagTmp, writeRagIndex } from './tauri'
 
 // Lot d'embed (débit mesuré au spike) et cadence de checkpoint : persister toutes les
 // ~10 s borne la perte à quelques secondes d'embed si l'app ferme en plein index
@@ -141,7 +141,10 @@ async function loadPersisted(dir: string, key: string, model: string): Promise<L
 }
 
 function publishStats(idx: LoadedIndex | null): void {
-  ragState.files = idx?.files.size ?? 0
+  // Ne compte que les fichiers PORTEURS de passages : les entrées à `chunks: []` (marqueurs
+  // de PDF scanné/illisible, mais AUSSI notes vides) existent pour l'incrémental sans ajouter
+  // de matière → les exclure du compte « N notes indexées » qui serait sinon trompeur.
+  ragState.files = idx ? [...idx.files.values()].filter((f) => f.entry.chunks.length > 0).length : 0
   ragState.chunks = idx?.rows.length ?? 0
   ragState.truncated = idx ? [...idx.files.values()].filter((f) => f.entry.truncated).length : 0
 }
@@ -165,13 +168,18 @@ async function doRefresh(port: number, model: string, dir: string, force: boolea
     if (!index || index.dir !== dir || index.model !== model) {
       index = await loadPersisted(dir, key, model)
     }
-    const scan = await readFolderTexts(dir)
+    const scan = await readFolderForRag(dir)
     // Seuls les fichiers écartés par le PLAFOND comptent ici : les illisibles (binaire,
     // UTF-8 invalide) sont omis comme dans l'index de recherche — les confondre
     // afficherait un « au-delà du plafond » faux.
     ragState.skipped = scan.capped
-    const hashed: { path: string; name: string; content: string; hash: string }[] = []
-    for (const f of scan.files) hashed.push({ ...f, hash: await hashText(f.content) })
+    // Liste fusionnée texte + PDF. Le hash d'un PDF = sa signature stat (`pdf:${sig}`),
+    // BON MARCHÉ : le diff saute un PDF inchangé sans l'extraire. Le texte du PDF n'est
+    // résolu (extraction pdf.js) que pour les ajoutés/modifiés, dans la boucle ci-dessous.
+    type ScanEntry = { path: string; name: string; hash: string; content?: string; isPdf: boolean }
+    const hashed: ScanEntry[] = []
+    for (const f of scan.textFiles) hashed.push({ path: f.path, name: f.name, content: f.content, hash: await hashText(f.content), isPdf: false })
+    for (const f of scan.pdfFiles) hashed.push({ path: f.path, name: f.name, hash: `pdf:${f.sig}`, isPdf: true })
     const prev = index ? [...index.files.values()].map((f) => ({ path: f.entry.path, hash: f.entry.hash })) : []
     const { added, changed, removed } = diffFiles(prev, hashed)
     const todo = [...added, ...changed]
@@ -190,7 +198,31 @@ async function doRefresh(port: number, model: string, dir: string, force: boolea
       if (signal.aborted) break
       const f = byPath.get(path)
       if (!f) continue
-      const { chunks, truncated } = chunkText(f.content)
+      // Résolution du contenu : texte en main ; PDF extrait À LA DEMANDE ici (getPdfText,
+      // import dynamique → chunk pdfjs séparé). Un PDF scanné/vide/illisible reçoit une
+      // ENTRÉE MARQUEUR (chunks: []) : le diff le verra INCHANGÉ au prochain refresh au lieu
+      // de le ré-extraire en boucle (sinon `added` ne se vide jamais).
+      let content: string
+      if (f.isPdf) {
+        let ex
+        try {
+          const { getPdfText } = await import('./pdf')
+          ex = await getPdfText(path, signal)
+        } catch (e) {
+          if (signal.aborted) break // Stop pendant l'extraction → annulation propre (pas « échoué »)
+          console.error('[rag] pdf extract', path, e)
+          ex = null // PDF illisible/corrompu → marqueur (n'échoue pas tout l'index)
+        }
+        if (!ex || ex.scanned || !ex.text.trim()) {
+          files.set(path, { entry: { path, name: f.name, hash: f.hash, chunks: [] }, vecs: [] })
+          ragState.done++
+          continue
+        }
+        content = ex.text
+      } else {
+        content = f.content ?? ''
+      }
+      const { chunks, truncated } = chunkText(content)
       const title = noteTitle(f.name)
       const vecs: Float32Array[] = []
       try {

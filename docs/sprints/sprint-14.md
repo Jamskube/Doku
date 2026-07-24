@@ -19,7 +19,7 @@ Rappels de cadrage :
 |---|-------|------|--------|-------|
 | 18.1 | Extraction texte PDF (couche pure + service, détection PDF scanné) | M | Codée (preuve native avec 18.2) | `extractPdfText` via `getTextContent` par page, assemblage ordre de lecture, cache par onglet. Détection scanné = ratio texte/pages. Non-couverts documentés. |
 | 18.2 | Copilote sur PDF (résumé + Q&A + gros PDF via index éphémère) | M | Codée (validation native en attente) | 6 gardes `kind==='pdf'` levées ; extraction à la demande (getPdfText), scanné → notice honnête, throw → retry, Stop annulable. Réutilise map-reduce 14.2 + index éphémère 15.3. |
-| 18.3 | PDF dans l'index du dossier (RAG) | M | TODO | **Stretch cuttable.** Inclure `.pdf` dans `readFolderTexts` (15.2) via extraction ; Q&A dossier cite les sources PDF (clic → ouvre). Coût d'extraction borné pendant l'indexation. |
+| 18.3 | PDF dans l'index du dossier (RAG) | M | Codée (validation native en attente) | Scan unique partitionné (`readFolderForRag`), PDF via `stat` (sig `size:mtime`) + extraction paresseuse dans la boucle ; scanné → marqueur `chunks:[]` (incrémental). Q&A dossier cite les PDF (clic → ouvre). |
 
 ## Blockers
 _None_
@@ -35,6 +35,9 @@ _None_
 ### 2026-07-24
 - Sprint initialisé avec **3 stories** (Epic 18, dette PDF). Ledger : +3 entrées (63 features). Direction choisie après clôture du cap v2.1 RAG.
 - 18.3 (PDF dans le RAG) désignée **stretch cuttable** : si 18.1 révèle un coût d'extraction lourd ou une qualité insuffisante, elle passe en index à la demande ou est re-notée en dette.
+
+### 2026-07-24 — 18.3 : PDF dans l'index du dossier codé (validation native en attente)
+`readFolderForRag` (tauri.ts) : **un seul balayage** partitionné texte (lu) / PDF (`stat` seul → signature `size:mtime`, bon marché), budget de fichiers partagé (cap 5000 combiné) ; `readFolderTexts` intacte (index de recherche 9.2 reste texte-only). `doRefresh` : liste fusionnée (hash texte = SHA-1 contenu ; hash PDF = `pdf:${sig}`), **extraction paresseuse dans la boucle à progression** (import dynamique `getPdfText`, seulement les ajoutés/modifiés) → un PDF inchangé n'est **jamais ré-extrait**, même au redémarrage. PDF scanné/vide/illisible → **entrée marqueur `chunks:[]`** (le diff le voit inchangé ensuite au lieu de le ré-extraire en boucle). Stop pendant extraction → annulation propre (try/catch, pas « échoué »). Citations 15.3 gratuites (RagHit.path → openPath ouvre le PDF). Permission `fs:allow-stat` ajoutée. Critic (BLOCK → 2 Critical intégrés : marqueur anti-boucle, garde abort) + code-reviewer (« approve with comments », 0 Critical/Major, 2 nits appliqués). Non couvert : réédition PDF à `size:mtime` identiques (raté, documenté). 260 tests, svelte-check, build, chunk pdfjs séparé.
 
 ### 2026-07-24 — 18.1 + 18.2 validées par l'utilisateur (natif)
 PDF texte résumé + Q&A ancrée, gros PDF interrogé en entier via l'index, PDF scanné → notice honnête, 0 réseau. **Ledger 62/63.** Checkpoint 75 % franchi → reste 18.3 (stretch cuttable : PDF dans l'index du dossier).

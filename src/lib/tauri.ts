@@ -99,6 +99,61 @@ export async function readFolderTexts(
   return { files: out, total: all.length, capped: Math.max(0, all.length - SEARCH_FILE_CAP) }
 }
 
+export interface FolderPdfFile {
+  path: string
+  name: string
+  // Signature de changement bon marché (taille:mtime via stat, PAS d'extraction) : le diff
+  // incrémental de l'index (15.2) saute un PDF inchangé SANS le ré-extraire. Limite assumée :
+  // une réédition qui préserve taille ET mtime (restore backup, git checkout) est ratée —
+  // stat reste le compromis coût/justesse voulu (hacher les octets lirait tout le fichier).
+  sig: string
+}
+
+// Scan UNIQUE d'un dossier pour l'index d'embeddings (15.2 + 18.3) : partitionne en fichiers
+// texte (lus) et PDF (stat seul, extraction déléguée à l'appelant, à la demande dans sa boucle
+// à progression). Un seul balayage récursif (≠ deux passes). Budget de fichiers PARTAGÉ
+// (SEARCH_FILE_CAP sur l'ensemble texte+PDF). Vide en mode navigateur.
+export async function readFolderForRag(
+  dir: string,
+  maxDepth = 4,
+): Promise<{ textFiles: FolderTextFile[]; pdfFiles: FolderPdfFile[]; capped: number }> {
+  if (!isTauri) return { textFiles: [], pdfFiles: [], capped: 0 }
+  const { readTextFile, stat } = await import('@tauri-apps/plugin-fs')
+  const all = (await scanFiles(dir, maxDepth)).filter((f) => isSupportedFile(f.name))
+  const kept = all.slice(0, SEARCH_FILE_CAP)
+  const isPdf = (name: string) => /\.pdf$/i.test(name)
+  const pdfCandidates = kept.filter((f) => isPdf(f.name))
+  const textCandidates = kept.filter((f) => !isPdf(f.name))
+  const readOne = async (f: { path: string; name: string }): Promise<FolderTextFile | null> => {
+    try {
+      const content = await readTextFile(f.path)
+      if (detectUnsupported(content, f.name)) return null
+      return { path: f.path, name: f.name, content }
+    } catch {
+      return null
+    }
+  }
+  const textFiles: FolderTextFile[] = []
+  for (let i = 0; i < textCandidates.length; i += SEARCH_READ_BATCH) {
+    const batch = await Promise.all(textCandidates.slice(i, i + SEARCH_READ_BATCH).map(readOne))
+    for (const d of batch) if (d) textFiles.push(d)
+  }
+  const statOne = async (f: { path: string; name: string }): Promise<FolderPdfFile | null> => {
+    try {
+      const info = await stat(f.path)
+      return { path: f.path, name: f.name, sig: `${info.size}:${info.mtime?.getTime() ?? 0}` }
+    } catch {
+      return null // illisible : ignoré (comme un fichier texte illisible)
+    }
+  }
+  const pdfFiles: FolderPdfFile[] = []
+  for (let i = 0; i < pdfCandidates.length; i += SEARCH_READ_BATCH) {
+    const batch = await Promise.all(pdfCandidates.slice(i, i + SEARCH_READ_BATCH).map(statOne))
+    for (const d of batch) if (d) pdfFiles.push(d)
+  }
+  return { textFiles, pdfFiles, capped: Math.max(0, all.length - SEARCH_FILE_CAP) }
+}
+
 // Construit l'index de recherche d'un dossier (ADR-0007). Coût one-time, hors budget
 // par-recherche. [] en mode navigateur.
 export async function buildSearchIndex(dir: string, maxDepth = 4): Promise<SearchDoc[]> {
