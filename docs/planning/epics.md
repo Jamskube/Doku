@@ -283,6 +283,23 @@ _Source : docs/planning/PRD-v2.md · Architecture : docs/planning/architecture-v
 
 ---
 
+## Epic 18 : Le copilote lit les PDF — extraction texte (FR-3, FR-4, FR-6) — v2.2
+
+**Goal** : solder la dette « texte PDF non extractible » — résumé, Q&A et RAG sur le **contenu** des PDF, extraction 100 % locale (pdf.js), PDF scanné signalé honnêtement (pas d'OCR).
+**Spans PRD** : PRD-v2 FR-4 (résumer), FR-3 (Q&A doc), FR-6 (RAG dossier). **NFR Confidentialité (0 réseau) = contrainte dure.**
+**État** : ⬜ à faire (sprint 14). La lecture PDF (Epic 11, ADR-0011) rend déjà le canvas ; ici on ajoute la couche **texte** (`getTextContent`), jamais montée jusqu'ici.
+
+> **Contexte** : en v2.0 (14.2/14.3) tout PDF renvoyait « texte non extractible » — dette assumée, message honnête. Le copilote bloque le PDF à 6 endroits (`buildDocContext`, `summarizeDoc`, index éphémère 15.3, `readFolderTexts` 15.2 exclut `.pdf`). Cet epic lève ces gardes en réutilisant les mécaniques existantes (map-reduce 14.2, index éphémère 15.3, index dossier 15.2). **Hors scope : OCR** (PDF scanné sans couche texte → message clair, jamais de faux texte) ; **CJK sans CMap** (limite `pdf.ts` connue).
+
+### Stories
+| # | Title | Size | Priority | Acceptance |
+|---|---|---|---|---|
+| 18.1 | Extraction texte PDF (couche pure + service, détection PDF scanné) | M | P1 | Given un PDF **avec couche texte**, when le copilote en a besoin, then texte extrait par page (`getTextContent`) assemblé dans l'ordre de lecture, **caché par onglet** ; PDF **scanné / sans texte** → détecté et signalé (pas d'OCR, pas de faux texte) ; le spike **liste ce qu'il ne couvre pas** (multi-colonnes, CJK sans CMap) |
+| 18.2 | Copilote sur PDF (résumé + Q&A + gros PDF via index éphémère) | M | P1 | Given un PDF texte affiché, when « Résumer » / une question, then résumé streamé (map-reduce si > fenêtre) et Q&A **ancrée** sur le contenu ; gros PDF > fenêtre → interrogé **en entier** via l'index éphémère (15.3) ; PDF scanné → **message honnête** (pas de faux résumé) ; **0 réseau** |
+| 18.3 | PDF dans l'index du dossier (RAG) | M | P1 | Given un dossier contenant des `.pdf`, when j'indexe, then leur texte est indexé au même titre que les notes ; question mode « dossier » → passages d'un PDF récupérés et **cités comme source** (clic → ouvre le PDF) ; PDF scanné ignoré proprement ; coût d'extraction **borné** pendant l'indexation ; **0 réseau** |
+
+---
+
 ## Stories reportées / hors décomposition (non prêtes)
 
 Signalées ici, **pas** dans le backlog tant que le critère d'acceptation n'est pas clair (règle : pas de story sans acceptance) :
