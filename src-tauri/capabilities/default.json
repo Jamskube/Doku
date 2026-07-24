@@ -41,7 +41,7 @@
     },
     {
       "identifier": "fs:allow-mkdir",
-      "allow": [{ "path": "$APPDATA/**" }]
+      "allow": [{ "path": "**" }]
     },
     {
       "identifier": "fs:allow-remove",

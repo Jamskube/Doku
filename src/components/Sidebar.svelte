@@ -1,7 +1,7 @@
 <script lang="ts">
-  import { app, activeTab, docHeadings, isDirty, loadSnapshotsForActive, openPath, openSearchHit, restoreSnapshot, runSearch, scrollToLine, toggleSidebarView } from '../lib/stores.svelte'
-  import { baseName, joinPath, parentPath, visibleEntries, type FsEntry } from '../lib/explorer'
-  import { isTauri, readDirectory } from '../lib/tauri'
+  import { app, activeTab, docHeadings, isDirty, loadSnapshotsForActive, openPath, openSearchHit, refreshExplorer, restoreSnapshot, runSearch, scrollToLine, setExplorerSort, toggleSidebarView } from '../lib/stores.svelte'
+  import { baseName, joinPath, nameExists, normalizeNewName, parentPath, visibleEntries, type FsEntry, type SortKey } from '../lib/explorer'
+  import { createDirAt, createFileAt, isTauri, readDirectory } from '../lib/tauri'
   import { DEMO_DIR } from '../lib/demo'
   import DokuMark from '../lib/DokuMark.svelte'
 
@@ -17,19 +17,108 @@
 
   $effect(() => {
     const dir = targetDir
+    const sort = app.explorerSort
+    void app.explorerNonce // dépendance explicite : rejoue après une création
     if (!dir) {
       entries = []
       return
     }
     let cancelled = false
     ;(async () => {
-      const raw = isTauri ? await readDirectory(dir) : DEMO_DIR
-      if (!cancelled) entries = visibleEntries(raw)
+      // Le stat par entrée n'est payé que si l'on trie effectivement par date.
+      const raw = isTauri ? await readDirectory(dir, sort.key === 'modified') : DEMO_DIR
+      if (!cancelled) entries = visibleEntries(raw, sort)
     })()
     return () => {
       cancelled = true
     }
   })
+
+  // --- Création d'une note / d'un dossier (saisie en place, 19.1) ---
+  let creating = $state<'file' | 'dir' | null>(null)
+  let draftName = $state('')
+  let createError = $state<string | null>(null)
+  let busy = $state(false)
+  let nameInput = $state<HTMLInputElement | null>(null)
+
+  // Le champ n'existe qu'en mode création : on le focus dès qu'il est monté.
+  $effect(() => {
+    if (creating) nameInput?.focus()
+  })
+
+  // La création exige un vrai dossier ET l'hôte natif : en mode navigateur (dev UI)
+  // l'écriture est un no-op, mieux vaut désactiver que faire échouer silencieusement.
+  const canCreate = $derived(!!targetDir && isTauri && !busy)
+  const createHint = $derived(
+    !isTauri ? 'Disponible dans l’application' : 'Ouvrez un fichier pour choisir un dossier',
+  )
+
+  function startCreate(kind: 'file' | 'dir') {
+    if (!canCreate) return
+    creating = kind
+    draftName = ''
+    createError = null
+  }
+
+  function cancelCreate() {
+    creating = null
+    draftName = ''
+    createError = null
+  }
+
+  async function commitCreate() {
+    if (!creating || !targetDir || busy) return
+    const kind = creating
+    const checked = normalizeNewName(draftName, kind)
+    if (!checked.ok) {
+      createError = checked.error
+      return
+    }
+    // Conflit détecté sur la liste affichée ET re-vérifié sur disque par
+    // createFileAt/createDirAt : la liste peut être périmée (création externe).
+    if (nameExists(checked.name, entries)) {
+      createError = 'Ce nom existe déjà dans ce dossier.'
+      return
+    }
+    const full = joinPath(targetDir, checked.name)
+    busy = true
+    try {
+      const created = kind === 'file' ? await createFileAt(full) : await createDirAt(full)
+      if (!created) {
+        createError = 'Ce nom existe déjà dans ce dossier.'
+        return
+      }
+      cancelCreate()
+      refreshExplorer()
+      // Une note créée s'ouvre aussitôt (c'est le geste attendu) ; un dossier non,
+      // on reste dans le dossier courant pour le voir apparaître dans la liste.
+      if (kind === 'file') await openPath(full)
+    } catch {
+      createError = "Création impossible (droits ou disque). Rien n'a été écrit."
+    } finally {
+      busy = false
+    }
+  }
+
+  function onNameKey(e: KeyboardEvent) {
+    if (e.key === 'Enter') {
+      e.preventDefault()
+      void commitCreate()
+    } else if (e.key === 'Escape') {
+      e.preventDefault()
+      cancelCreate()
+    }
+  }
+
+  // --- Menu de tri ---
+  let sortMenu = $state(false)
+  const SORT_LABELS: Record<SortKey, string> = { name: 'Nom', modified: 'Modifié le', type: 'Type' }
+  const SORT_KEYS: SortKey[] = ['name', 'modified', 'type']
+
+  function chooseSort(key: SortKey) {
+    setExplorerSort(key)
+    sortMenu = false
+  }
 
   function openEntry(entry: FsEntry) {
     if (!targetDir) return
@@ -98,10 +187,46 @@
       <div class="panel-head">
         {#if app.sidebarView === 'files'}
           <div class="actions">
-            <button title="Nouvelle note" aria-label="Nouvelle note"><span class="msr" style="font-size:19px">edit_square</span></button>
-            <button title="Nouveau dossier" aria-label="Nouveau dossier"><span class="msr" style="font-size:19px">create_new_folder</span></button>
-            <button title="Trier" aria-label="Trier"><span class="msr" style="font-size:19px">sort</span></button>
-            <button title="Tout replier" aria-label="Tout replier"><span class="msr" style="font-size:19px">unfold_less</span></button>
+            <button
+              title={canCreate ? 'Nouvelle note' : createHint}
+              aria-label="Nouvelle note"
+              disabled={!canCreate}
+              onclick={() => startCreate('file')}
+            ><span class="msr" style="font-size:19px">edit_square</span></button>
+            <button
+              title={canCreate ? 'Nouveau dossier' : createHint}
+              aria-label="Nouveau dossier"
+              disabled={!canCreate}
+              onclick={() => startCreate('dir')}
+            ><span class="msr" style="font-size:19px">create_new_folder</span></button>
+            <div
+              class="sort-wrap"
+              onfocusout={(e) => {
+                if (!e.currentTarget.contains(e.relatedTarget as Node | null)) sortMenu = false
+              }}
+            >
+              <button
+                class:active={sortMenu}
+                title="Trier ({SORT_LABELS[app.explorerSort.key]})"
+                aria-label="Trier"
+                aria-haspopup="menu"
+                aria-expanded={sortMenu}
+                onclick={() => (sortMenu = !sortMenu)}
+              ><span class="msr" style="font-size:19px">sort</span></button>
+              {#if sortMenu}
+                <div class="sort-menu" role="menu" tabindex="-1" onkeydown={(e) => { if (e.key === 'Escape') sortMenu = false }}>
+                  {#each SORT_KEYS as key (key)}
+                    <button role="menuitem" class:on={app.explorerSort.key === key} onclick={() => chooseSort(key)}>
+                      <span class="tick msr">{app.explorerSort.key === key ? 'check' : ''}</span>
+                      <span class="grow">{SORT_LABELS[key]}</span>
+                      {#if app.explorerSort.key === key}
+                        <span class="msr arrow">{app.explorerSort.order === 'asc' ? 'arrow_upward' : 'arrow_downward'}</span>
+                      {/if}
+                    </button>
+                  {/each}
+                </div>
+              {/if}
+            </div>
           </div>
         {/if}
       </div>
@@ -115,6 +240,23 @@
                 <span class="msr fold">drive_folder_upload</span>
                 <span class="label">..</span>
               </button>
+            {/if}
+            {#if creating}
+              <div class="newrow">
+                <span class="msr fold">{creating === 'dir' ? 'create_new_folder' : 'description'}</span>
+                <!-- svelte-ignore a11y_autofocus -->
+                <input
+                  bind:this={nameInput}
+                  bind:value={draftName}
+                  class="newname"
+                  placeholder={creating === 'dir' ? 'Nom du dossier' : 'Nom de la note'}
+                  aria-label={creating === 'dir' ? 'Nom du nouveau dossier' : 'Nom de la nouvelle note'}
+                  disabled={busy}
+                  onkeydown={onNameKey}
+                  onblur={() => { if (!busy) cancelCreate() }}
+                />
+              </div>
+              {#if createError}<p class="newerr" role="alert">{createError}</p>{/if}
             {/if}
             {#each entries as entry (entry.name)}
               {@const full = joinPath(targetDir, entry.name)}
@@ -273,7 +415,62 @@
     color: var(--ink-4);
     cursor: pointer;
   }
-  .actions button:hover { background: var(--surface-hover); color: var(--ink); }
+  .actions button:hover:not(:disabled) { background: var(--surface-hover); color: var(--ink); }
+  .actions button:disabled { opacity: 0.35; cursor: default; }
+  .actions button.active { background: var(--surface-hover); color: var(--ink); }
+
+  /* Menu de tri : ancré sous le bouton, aligné à droite pour ne pas déborder du panneau. */
+  .sort-wrap { position: relative; display: inline-flex; }
+  .sort-menu {
+    position: absolute;
+    top: 30px;
+    right: 0;
+    z-index: 20;
+    min-width: 168px;
+    padding: 4px;
+    background: var(--surface);
+    border: 1px solid var(--line-2);
+    border-radius: 8px;
+    box-shadow: 0 8px 24px rgb(0 0 0 / 0.14);
+  }
+  .sort-menu button {
+    width: 100%;
+    height: 28px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 0 6px;
+    background: transparent;
+    border: 0;
+    border-radius: 6px;
+    color: var(--ink-2);
+    font-size: 13px;
+    text-align: left;
+    cursor: pointer;
+  }
+  .sort-menu button:hover { background: var(--surface-hover); color: var(--ink); }
+  .sort-menu button.on { color: var(--ink); font-weight: 500; }
+  .sort-menu .tick { font-size: 15px; width: 15px; flex-shrink: 0; }
+  .sort-menu .grow { flex: 1; }
+  .sort-menu .arrow { font-size: 15px; color: var(--ink-4); }
+
+  /* Saisie du nom en place : mêmes métriques qu'une .row pour ne pas faire sauter la liste. */
+  .newrow { display: flex; align-items: center; gap: 5px; height: 28px; padding: 0 6px; }
+  .newname {
+    flex: 1;
+    min-width: 0;
+    height: 22px;
+    padding: 0 6px;
+    background: var(--surface);
+    border: 1px solid var(--accent, var(--line-3));
+    border-radius: 5px;
+    color: var(--ink);
+    font: inherit;
+    font-size: 13px;
+  }
+  .newname:focus { outline: 2px solid var(--line-3); outline-offset: 1px; }
+  .newerr { margin: 2px 6px 4px 30px; font-size: 11.5px; color: var(--danger, #b4442f); line-height: 1.35; }
+
   .panel-body { flex: 1; overflow-y: auto; min-height: 0; padding: 4px 8px 16px; }
 
   .row {

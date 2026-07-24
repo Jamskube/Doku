@@ -1,7 +1,7 @@
 import type { EditorView } from '@codemirror/view'
 import { DEMO_DIR, DEMO_TABS } from './demo'
 import { detectLineEnding } from './editor/editor'
-import { baseName, isSupportedFile, joinPath, parentPath } from './explorer'
+import { baseName, DEFAULT_SORT, isSupportedFile, joinPath, parentPath, type ExplorerSort, type SortKey } from './explorer'
 import { detectUnsupported } from './encoding'
 import { DEFAULT_EMBED_MODEL } from './rag'
 import { ragFileChanged } from './rag-index.svelte'
@@ -83,6 +83,11 @@ export const app = $state({
   activeId: 0,
   // Dossier affiché par l'explorateur ; null = suit le dossier du document actif.
   explorerDir: null as string | null,
+  // Tri de l'explorateur (persisté). Les dossiers restent toujours en tête.
+  explorerSort: { ...DEFAULT_SORT } as ExplorerSort,
+  // Compteur bumpé après une création : force l'effet de relecture du dossier à
+  // rejouer (targetDir n'a pas changé, donc lui seul ne re-déclencherait rien).
+  explorerNonce: 0,
   // Bannière d'information transitoire (ex. fichiers de session introuvables).
   banner: null as string | null,
   // Proposition de rechargement (modif externe + modifs locales) — non modale.
@@ -134,6 +139,12 @@ export function loadSettings() {
       if (typeof s.embedModel === 'string') app.embedModel = s.embedModel
       if (s.copilotProvider === 'ollama' || s.copilotProvider === 'openai') app.copilotProvider = s.copilotProvider
       if (typeof s.copilotOpen === 'boolean') app.copilotOpen = s.copilotOpen
+      // Réglage validé champ par champ : un settings corrompu ne doit pas faire
+      // planter le tri (sortEntries recevrait une clé inconnue et ne trierait plus).
+      const sort = s.explorerSort
+      if (sort && (sort.key === 'name' || sort.key === 'modified' || sort.key === 'type')) {
+        app.explorerSort = { key: sort.key, order: sort.order === 'desc' ? 'desc' : 'asc' }
+      }
     }
   } catch {
     // settings corrompus/indisponibles : valeurs par défaut
@@ -155,6 +166,7 @@ export function saveSettings() {
         embedModel: app.embedModel,
         copilotProvider: app.copilotProvider,
         copilotOpen: app.copilotOpen,
+        explorerSort: app.explorerSort,
       }),
     )
   } catch {
@@ -523,6 +535,19 @@ export function toggleSidebarView(view: SidebarView) {
     app.sidebarView = view
     app.sidebarOpen = true
   }
+}
+
+// Re-cliquer la clé active inverse l'ordre ; changer de clé repart en croissant
+// (sinon on hérite d'un « décroissant » invisible venu d'un autre critère).
+export function setExplorerSort(key: SortKey) {
+  const cur = app.explorerSort
+  app.explorerSort = key === cur.key ? { key, order: cur.order === 'asc' ? 'desc' : 'asc' } : { key, order: 'asc' }
+  saveSettings()
+}
+
+// Force l'explorateur à relire le dossier courant (après une création, ou à la demande).
+export function refreshExplorer() {
+  app.explorerNonce++
 }
 
 export interface Heading {

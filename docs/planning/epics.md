@@ -310,6 +310,23 @@ _Source : docs/planning/PRD-v2.md · Architecture : docs/planning/architecture-v
 
 ---
 
+## Epic 19 : Affordances mortes — rendre réels les boutons de l'interface (dette UI) — v2.3
+
+**Goal** : supprimer les boutons qui **font semblant**. Un bouton visible qui ne fait rien est pire qu'un bouton absent : il promet une fonction, l'utilisateur clique, rien ne se passe — et la confiance dans le reste de l'app baisse.
+**Spans PRD** : FR-6 (explorateur), NFR Sobriété/Confiance.
+**État** : 🟡 en cours (19.1 codée le 2026-07-24, en attente de validation native).
+
+> **Inventaire réel** (relevé le 2026-07-24 par balayage de `src/components/`) : 4 boutons inertes dans l'en-tête de l'explorateur (`Sidebar.svelte`), 2 dans le ruban (logo, **Paramètres**). Le bouton « Joindre » du copilote est `disabled` — **placeholder honnête**, hors périmètre. Règle de l'epic : chaque bouton listé finit **branché** ou **retiré**, jamais laissé muet.
+
+### Stories
+| # | Title | Size | Priority | Acceptance |
+|---|-------|------|----------|------------|
+| 19.1 | Explorateur : nouvelle note, nouveau dossier, tri | M | P1 | Given l'explorateur ouvert sur un dossier, when je clique « Nouvelle note » / « Nouveau dossier », then une **saisie en place** apparaît dans la liste (Entrée crée, Échap annule) ; nom **validé avant écriture** (caractères interdits, noms réservés Windows, conflit insensible à la casse) et **jamais d'écrasement silencieux** ; une note créée s'**ouvre** aussitôt. « Trier » propose **Nom / Modifié le / Type** avec inversion croissant-décroissant, **persisté** entre sessions, dossiers toujours en tête. Le 4ᵉ bouton (« Tout replier ») est **retiré** : l'explorateur est plat, il n'a rien à replier |
+| 19.2 | Panneau Paramètres (l'engrenage du ruban) | M | P1 | Given le bouton ⚙ du ruban, when je clique, then un panneau **Paramètres** s'ouvre et **regroupe les réglages aujourd'hui éparpillés** (thème, largeur de colonne, modèle de chat, modèle d'embedding, purge des instantanés/index) ; chaque réglage est **persisté** ; aucun réglage n'est dupliqué sans être synchronisé avec son emplacement d'origine |
+| 19.3 | Bouton logo : « À propos » ou retrait | S | P2 | Given le logo Doku du ruban, when je clique, then soit une carte **À propos** s'affiche (version, licence, « 100 % hors-ligne »), soit le logo **cesse d'être un bouton** (élément décoratif, non focusable). Décision à prendre — l'état actuel (bouton focusable qui ne fait rien) est exclu |
+
+---
+
 ## Stories reportées / hors décomposition (non prêtes)
 
 Signalées ici, **pas** dans le backlog tant que le critère d'acceptation n'est pas clair (règle : pas de story sans acceptance) :

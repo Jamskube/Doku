@@ -22,11 +22,49 @@ export async function onOpenFile(handler: (path: string) => void): Promise<() =>
 }
 
 // Liste un dossier (natif). [] en mode navigateur.
-export async function readDirectory(path: string): Promise<FsEntry[]> {
+// `withTimes` déclenche un stat par entrée : réservé au tri « Modifié le », car sur un
+// gros dossier c'est N appels IPC (batché ci-dessous pour ne pas saturer le pont ARM).
+export async function readDirectory(path: string, withTimes = false): Promise<FsEntry[]> {
   if (!isTauri) return []
-  const { readDir } = await import('@tauri-apps/plugin-fs')
+  const { readDir, stat } = await import('@tauri-apps/plugin-fs')
   const entries = await readDir(path)
-  return entries.map((e) => ({ name: e.name, isDir: e.isDirectory }))
+  const base = entries.map((e) => ({ name: e.name, isDir: e.isDirectory }))
+  if (!withTimes) return base
+  const out: FsEntry[] = []
+  for (let i = 0; i < base.length; i += SEARCH_READ_BATCH) {
+    const batch = await Promise.all(
+      base.slice(i, i + SEARCH_READ_BATCH).map(async (e) => {
+        try {
+          const info = await stat(joinPath(path, e.name))
+          return { ...e, mtime: info.mtime?.getTime() }
+        } catch {
+          return e // illisible : pas de date, sortEntries la reléguera en fin de liste
+        }
+      }),
+    )
+    out.push(...batch)
+  }
+  return out
+}
+
+// Crée un fichier vide. Renvoie false si le chemin est déjà pris — on ne rappelle
+// JAMAIS writeTextFile sur un chemin existant : ça écraserait le fichier sans un mot.
+export async function createFileAt(path: string): Promise<boolean> {
+  if (!isTauri) return false
+  const { writeTextFile, exists } = await import('@tauri-apps/plugin-fs')
+  if (await exists(path)) return false
+  await writeTextFile(path, '')
+  return true
+}
+
+// Crée un dossier. Même garde : mkdir sur un dossier existant lève, on préfère
+// répondre false et laisser l'appelant afficher « ce nom existe déjà ».
+export async function createDirAt(path: string): Promise<boolean> {
+  if (!isTauri) return false
+  const { mkdir, exists } = await import('@tauri-apps/plugin-fs')
+  if (await exists(path)) return false
+  await mkdir(path)
+  return true
 }
 
 // Scanne récursivement un dossier et renvoie tous les fichiers (chemin + nom).
