@@ -1,21 +1,25 @@
 # Next session pointer
-_Updated: 2026-07-24 23:00_
+_Updated: 2026-07-24 23:30 — reprise prévue **lundi 2026-07-27**_
 
 ## Where I left off
-**Le GO/NO-GO NPU est tranché : NO-GO, acté par l'utilisateur.** Sprint 15 clos J+0 sur un verdict chiffré (c'était le contrat du checkpoint STOP/GO : un NO-GO documenté est une livraison valide).
+Grosse session en trois temps. **(1)** Le **NPU est tranché : NO-GO**, acté par l'utilisateur — ADR-0016 `rejected`, Epic 17 clos, 17.2 annulée sans avoir été codée, provider `'npu'` retiré du produit (banc conservé dans `spike/npu-17.1/`). **(2)** Sprint 15 clos J+0 + **rétro faite**. **(3)** Backlog vide → l'utilisateur pointe une vraie dette : les boutons de l'interface qui ne font rien. Naissance de l'**Epic 19 « affordances mortes »**.
 
-Ce qui a été gravé : **ADR-0016 → `rejected`** (mesures réelles + verdict contre les 6 seuils pré-enregistrés + 3 conditions de réouverture), **Epic 17 clos**, **story 17.2 annulée sans avoir été codée** (sa gate ne s'est jamais ouverte), ledger **64/65**, sprint-15 `Done`. Le provider `'npu'` et l'onglet « NPU (essai) » ont été **retirés du produit** (un NO-GO ne laisse pas un provider expérimental dans l'app) ; le banc et le sidecar restent dans `spike/npu-17.1/`, autonomes et relançables.
-
-**Décision produit associée** : le repli prévu par l'ADR (basculer sur `qwen2.5:3b-instruct-q4_0`) est **écarté lui aussi** — trop lent, trop de RAM. **`qwen2.5:1.5b-instruct-q4_0` est confirmé définitivement** : le critère est « copilote = gadget discret », pas la qualité brute. **Aucun changement de code copilote** — statu quo assumé, pas subi.
+**Décision modèle, close** : `qwen2.5:1.5b-instruct-q4_0`, définitivement. Le 3b a été rejeté **deux fois** — le critère est « copilote = **gadget discret** », pas la qualité brute.
 
 ## Open work
-- Branch: `main` (propre, poussé)
-- Open PRs: aucune
-- **Sprint 15 : Done.** Rétro S15 **pas encore faite**.
-- **Backlog vide** : Epics 1-16 + 18 livrés, Epic 17 clos par la mesure. Le produit est feature-complete côté v2.2.
-- `svelte-check` 0 erreur, `vitest` 260/260 après retrait du provider NPU.
+- Branch: `main` — **tout commité et poussé**.
+- Sprint 15 : `Completed`. Sprint 16 : **pas encore planifié** (l'Epic 19 est décomposé dans `epics.md` et sert de backlog).
+- Ledger : **68 features, 65 PASS**. Ouvertes : `17.2` (annulée, branche fermée — pas de la dette), **`19.2`**, **`19.3`**.
+- Vérifs au vert : `svelte-check` 0 err / 0 warning, `vitest` 274/274, `npm run build` OK.
 
 ## Next concrete step
-**`/sprint retro`** pour clore proprement le sprint 15 (1 story, verdict NO-GO — rétro courte, mais la leçon « spike-first + seuils pré-enregistrés » mérite d'être consignée).
+**1. Valider 19.2 + 19.3 en natif** (`npm run tauri dev`) — c'est le seul blocage :
+- ⚙ du ruban → modale Paramètres (Échap + clic sur le fond ferment, focus piégé).
+- **Section « Données » = suppression DÉFINITIVE** → à éprouver sur un vrai historique avant de flipper le ledger. C'est le genre de bouton qu'on ne veut pas découvrir cassé.
+- Logo → modale avec « À propos » surligné.
 
-**Ensuite, le backlog est vide** — il faut décider ce que devient Doku. Pistes possibles à proposer, pas à présumer : polir/packager une **release v2.2**, ouvrir un nouvel epic produit (à partir d'un vrai besoin d'usage), ou faire une passe de dette/qualité. **Ne pas rouvrir le NPU** (3 conditions dans l'ADR-0016) **ni le sujet du modèle** (tranché, voir mémoires).
+**2. Trancher le bump de version** : `package.json` et `src-tauri/tauri.conf.json` disent `0.1.0`, toute la doc dit **v2.2** → la carte « À propos » afficherait *Doku v0.1.0*. Décision de release, volontairement laissée à l'utilisateur. Passer les deux fichiers à `2.2.0` ?
+
+**3. Ensuite** : `/sprint plan` pour un sprint 16 sur ce qui reste de l'Epic 19 et la suite. Rappel de la rétro S15 : l'action retenue était **« utiliser Doku pour de vrai »** et laisser le prochain epic émerger de l'usage — ce qui vient d'arriver avec l'Epic 19.
+
+**Ne pas rouvrir** : le NPU (3 conditions dans l'ADR-0016) ni le choix du modèle (tranché, voir mémoires).
