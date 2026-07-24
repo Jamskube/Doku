@@ -36,6 +36,9 @@ _None_
 - Sprint initialisé avec **3 stories** (Epic 18, dette PDF). Ledger : +3 entrées (63 features). Direction choisie après clôture du cap v2.1 RAG.
 - 18.3 (PDF dans le RAG) désignée **stretch cuttable** : si 18.1 révèle un coût d'extraction lourd ou une qualité insuffisante, elle passe en index à la demande ou est re-notée en dette.
 
+### 2026-07-24 — 18.1 + 18.2 validées par l'utilisateur (natif)
+PDF texte résumé + Q&A ancrée, gros PDF interrogé en entier via l'index, PDF scanné → notice honnête, 0 réseau. **Ledger 62/63.** Checkpoint 75 % franchi → reste 18.3 (stretch cuttable : PDF dans l'index du dossier).
+
 ### 2026-07-24 — 18.2 : copilote sur PDF codé (validation native 18.1+18.2 en attente)
 Les 6 gardes `kind==='pdf'` levées : `buildDocContext` rend le texte extrait (ne dit « non extractible » que si vide), `prepareDocMessages` laisse un gros PDF passer par l'index éphémère (15.3), `summarizeDoc` résout et résume (map-reduce 14.2), le badge de contexte lit `copilot.pdfDoc` honnêtement. **Résolveur `resolvePdfText`** : extraction à la demande via `getPdfText` (18.1, import dynamique → chunk pdfjs resté séparé), **notice honnête** pour états permanents (scanné « pas d'OCR, je préfère te le dire qu'inventer » / vide / sans chemin), **throw transitoire → carte failed + retry**, extraction **annulable** (signal entre pages). Résolution AVANT le runtime (scope doc) → un PDF scanné poste sa notice sans démarrer le sidecar. Critic (2 HIGH intégrés : signal UI de troncature via `copilot.pdfDoc`, throw≠scanné) + code-reviewer (« request changes » → Major corrigé : garde `signal.aborted` manquant dans le catch de `summarizeDoc` ; Minor : clé éphémère sur le snapshot `doc.path`). 260 tests, svelte-check, build OK, chunk pdfjs séparé. **18.1 et 18.2 se valident ENSEMBLE en natif** (premier vrai PDF de bout en bout).
 
