@@ -345,6 +345,15 @@
             <span class="msr">cloud</span>
             <span><strong>OpenAI</strong><small>Compte ChatGPT · cloud</small></span>
           </button>
+          <button
+            class:active={app.copilotProvider === 'npu'}
+            role="tab"
+            aria-selected={app.copilotProvider === 'npu'}
+            onclick={() => setCopilotProvider('npu')}
+          >
+            <span class="msr">bolt</span>
+            <span><strong>NPU (essai)</strong><small>Hexagon · prefill rapide</small></span>
+          </button>
         </div>
 
         {#if app.copilotProvider === 'openai'}

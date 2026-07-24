@@ -17,7 +17,7 @@ export type SidebarView = 'files' | 'plan' | 'history' | 'search'
 // 'chat' (coquille statique, ne démarre PAS le moteur) ; 'models' déclenche
 // ensureReady à l'ouverture (intention explicite) — évite un spawn Ollama au boot.
 export type CopilotView = 'chat' | 'models'
-export type CopilotProvider = 'ollama' | 'openai'
+export type CopilotProvider = 'ollama' | 'openai' | 'npu'
 export type ColumnWidth = 'narrow' | 'wide' | 'full'
 
 // Largeur de la colonne de lecture (variable CSS --doc-width, consommée par
@@ -132,7 +132,7 @@ export function loadSettings() {
       }
       if (typeof s.activeModel === 'string') app.activeModel = s.activeModel
       if (typeof s.embedModel === 'string') app.embedModel = s.embedModel
-      if (s.copilotProvider === 'ollama' || s.copilotProvider === 'openai') app.copilotProvider = s.copilotProvider
+      if (s.copilotProvider === 'ollama' || s.copilotProvider === 'openai' || s.copilotProvider === 'npu') app.copilotProvider = s.copilotProvider
       if (typeof s.copilotOpen === 'boolean') app.copilotOpen = s.copilotOpen
     }
   } catch {

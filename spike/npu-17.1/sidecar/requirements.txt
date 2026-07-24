@@ -1,0 +1,3 @@
+onnxruntime
+onnxruntime-qnn
+onnxruntime-genai
