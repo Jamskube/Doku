@@ -63,11 +63,14 @@ export async function renderPage(pdf: PdfDoc, pageNumber: number, canvas: HTMLCa
 // défaut → texte normalisé, pas de marked-content). L'assemblage et la détection « scanné »
 // vivent dans pdf-text.ts (pur, testé) ; ici seulement l'appel pdfjs. 0 réseau : aucune URL
 // cMap/font n'est passée (ADR-0011), l'extraction reste locale comme le rendu.
-export async function extractPdfText(bytes: Uint8Array): Promise<PdfExtraction> {
+export async function extractPdfText(bytes: Uint8Array, signal?: AbortSignal): Promise<PdfExtraction> {
   const { doc, destroy } = await loadPdf(bytes)
   try {
     const pages: PdfTextItem[][] = []
     for (let n = 1; n <= doc.numPages; n++) {
+      // Annulable entre pages (Stop pendant l'extraction d'un gros PDF) : granularité page,
+      // suffisante sur ARM. Le catch appelant traite `aborted` comme une annulation propre.
+      if (signal?.aborted) throw new DOMException('extraction annulée', 'AbortError')
       const page = await doc.getPage(n)
       try {
         const tc = await page.getTextContent()
@@ -89,13 +92,13 @@ export async function extractPdfText(bytes: Uint8Array): Promise<PdfExtraction> 
 // null en navigateur / si illisible.
 let pdfTextCache: { path: string; size: number; result: PdfExtraction } | null = null
 
-export async function getPdfText(path: string): Promise<PdfExtraction | null> {
+export async function getPdfText(path: string, signal?: AbortSignal): Promise<PdfExtraction | null> {
   const bytes = await readFileBytes(path)
   if (!bytes) return null
   if (pdfTextCache && pdfTextCache.path === path && pdfTextCache.size === bytes.length) {
     return pdfTextCache.result
   }
-  const result = await extractPdfText(bytes)
+  const result = await extractPdfText(bytes, signal)
   pdfTextCache = { path, size: bytes.length, result }
   return result
 }

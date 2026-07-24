@@ -132,7 +132,22 @@
     const t = activeTab()
     if (!t) return { count: 0, name: 'Aucun document actif', meta: 'Le chat ne reçoit aucun contenu.', state: 'Vide' }
     if (t.kind === 'pdf') {
-      return { count: 1, name: t.name, meta: 'PDF · texte non extractible pour l’instant', state: 'Métadonnées' }
+      // Le texte d'un PDF est lu à la demande (18.2) → le badge ne le connaît qu'APRÈS une
+      // première lecture (copilot.pdfDoc). Avant : neutre, honnête (n'affirme rien).
+      const ex = copilot.pdfDoc?.path === t.path ? copilot.pdfDoc : null
+      if (ex?.scanned) return { count: 1, name: t.name, meta: 'PDF scanné · pas de couche texte (OCR requis)', state: 'PDF image' }
+      if (ex && ex.charCount > MAX_DOC_CHARS) {
+        return {
+          count: 1,
+          name: t.name,
+          meta: `PDF · ${numberFormatter.format(ex.charCount)} caractères`,
+          // Gros PDF : couvert en entier PAR L'INDEX si un modèle d'embed est là, sinon
+          // lecture partielle (parité honnête avec les notes, Major reviewer 18.2).
+          state: docIndexAvailable ? 'Document entier (index)' : 'Lecture partielle',
+        }
+      }
+      if (ex) return { count: 1, name: t.name, meta: 'PDF · texte lu', state: 'Document entier' }
+      return { count: 1, name: t.name, meta: 'PDF · texte lu à la demande', state: 'Document PDF' }
     }
     const format = t.kind === 'md' ? 'Markdown' : t.kind === 'html' ? 'HTML' : 'Texte'
     const readableChars = Math.min(t.content.length, MAX_DOC_CHARS)
@@ -180,7 +195,7 @@
     if (!q || copilot.generating) return
     draft = ''
     const t = activeTab()
-    void sendChat(q, { name: t?.name ?? null, text: t?.content ?? '', kind: t?.kind ?? 'md' }, copilot.scope)
+    void sendChat(q, { name: t?.name ?? null, text: t?.content ?? '', kind: t?.kind ?? 'md', path: t?.path ?? null }, copilot.scope)
   }
 
   function onPromptKey(e: KeyboardEvent) {
@@ -198,7 +213,7 @@
       return
     }
     const t = activeTab()
-    void summarizeDoc({ name: t?.name ?? null, text: t?.content ?? '', kind: t?.kind ?? 'md' }, kind === 'keypoints' ? 'keypoints' : 'summary')
+    void summarizeDoc({ name: t?.name ?? null, text: t?.content ?? '', kind: t?.kind ?? 'md', path: t?.path ?? null }, kind === 'keypoints' ? 'keypoints' : 'summary')
   }
 
   async function copyMessage(text: string) {

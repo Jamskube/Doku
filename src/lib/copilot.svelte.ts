@@ -80,6 +80,10 @@ export const copilot = $state({
   generating: false,
   // Portée courante des questions (15.3) — éphémère, choisie dans la face « Contexte ».
   scope: 'doc' as ChatScope,
+  // Dernière extraction PDF résolue (18.2) : alimente le badge de contexte HONNÊTEMENT
+  // (le texte d'un PDF n'est pas dans tab.content → le badge ne peut le connaître qu'après
+  // une première lecture). null tant qu'aucun PDF n'a été lu ce cycle.
+  pdfDoc: null as { path: string; charCount: number; scanned: boolean } | null,
   openAiAuthenticated: null as boolean | null,
   openAiPreferredAvailable: null as boolean | null,
   openAiModels: [] as string[],
@@ -389,9 +393,37 @@ function generationFailure(error: unknown, provider: CopilotProvider, fallback: 
 // Anti-TOCTOU : `generating`/`genController` posés SYNCHRONEMENT avant tout `await` (deux
 // envois rapprochés ne peuvent pas s'entrelacer). Aucun spawn moteur si pas de modèle actif.
 // `scope` (15.3) : 'folder' répond depuis les passages top-k de l'index du dossier.
+// Résout le texte d'un PDF à la demande (18.2, service caché 18.1). Renvoie une NOTICE
+// honnête (état PERMANENT : scanné, vide, chemin absent — pas de retry, rien à réessayer),
+// ou `{ ok:true, text }`. Les erreurs d'extraction TRANSITOIRES (fichier verrouillé/corrompu)
+// ne sont PAS avalées ici : elles remontent (throw) au catch appelant → carte `failed` +
+// retry. Met à jour `copilot.pdfDoc` pour le badge. `signal` rend l'extraction annulable.
+type PdfResolution = { ok: true; text: string } | { ok: false; message: string }
+async function resolvePdfText(
+  path: string | null | undefined,
+  signal: AbortSignal,
+  setStatus: (s: string) => void,
+): Promise<PdfResolution> {
+  if (!path) return { ok: false, message: "Ce PDF n'a pas de chemin lisible sur le disque." }
+  setStatus('Doku-San lit le PDF…')
+  const { getPdfText } = await import('./pdf')
+  const ex = await getPdfText(path, signal)
+  if (!ex) return { ok: false, message: 'Lecture du PDF impossible (fichier illisible ou mode navigateur).' }
+  copilot.pdfDoc = { path, charCount: ex.charCount, scanned: ex.scanned }
+  if (ex.scanned) {
+    return {
+      ok: false,
+      message:
+        "Ce PDF est un document scanné (image) : il ne contient pas de couche texte. Je ne peux pas le lire sans OCR — je préfère te le dire plutôt que d'inventer un contenu.",
+    }
+  }
+  if (!ex.text.trim()) return { ok: false, message: "Je n'ai trouvé aucun texte exploitable dans ce PDF." }
+  return { ok: true, text: ex.text }
+}
+
 export async function sendChat(
   question: string,
-  doc: { name: string | null; text: string; kind: DocKind },
+  doc: { name: string | null; text: string; kind: DocKind; path?: string | null },
   scope: ChatScope = 'doc',
 ): Promise<void> {
   const q = question.trim()
@@ -438,6 +470,19 @@ export async function sendChat(
   const idx = copilot.messages.length - 1 // index stable (generating sérialise les envois)
 
   try {
+    // PDF (18.2) : résoudre le texte AVANT le runtime — un PDF scanné/illisible poste sa
+    // notice honnête SANS démarrer le sidecar. Mode dossier : le doc n'est pas utilisé.
+    if (scope === 'doc' && doc.kind === 'pdf') {
+      const setStatus = (s: string) => { const m = copilot.messages[idx]; if (m) m.status = s }
+      const res = await resolvePdfText(doc.path, signal, setStatus)
+      if (signal.aborted) return // Stop pendant l'extraction → annulation propre (finally splice)
+      if (!res.ok) {
+        copilot.messages[idx].content = res.message
+        copilot.messages[idx].notice = true // état permanent (scanné/vide) : ni erreur ni retry
+        return
+      }
+      doc = { ...doc, text: res.text }
+    }
     const runtime = await resolveRuntime(provider, localModel)
     if (runtime === null) {
       const message = copilot.messages[idx]
@@ -592,21 +637,25 @@ async function prepareFolderMessages(
 // utilisateur qui a choisi le cloud.
 async function prepareDocMessages(
   q: string,
-  doc: { name: string | null; text: string; kind: DocKind },
+  doc: { name: string | null; text: string; kind: DocKind; path?: string | null },
   history: ChatTurn[],
   persona: PersonaProfile,
   runtime: ProviderRuntime,
   signal: AbortSignal,
   idx: number,
 ): Promise<OllamaMessage[]> {
-  if (runtime.provider === 'ollama' && doc.kind !== 'pdf' && doc.text.length > MAX_DOC_CHARS) {
+  // Le texte d'un PDF est désormais résolu en amont (18.2) → un gros PDF passe AUSSI par
+  // l'index éphémère (plus de garde `kind !== 'pdf'`).
+  if (runtime.provider === 'ollama' && doc.text.length > MAX_DOC_CHARS) {
     if (copilot.models.length === 0) await refreshModels()
     const em = app.embedModel || DEFAULT_EMBED_MODEL // même repli que le badge du panneau
     const installed = copilot.models.some((m) => m.name === em || m.name === `${em}:latest`)
     if (installed) {
       const m = copilot.messages[idx]
       if (m) m.status = 'Doku-San parcourt tout le document…'
-      const key = activeTab()?.path ?? doc.name ?? 'document'
+      // Clé issue du SNAPSHOT (doc.path), pas de activeTab() live : un changement d'onglet
+      // pendant l'extraction/index ne lie pas le cache à un autre document.
+      const key = doc.path ?? doc.name ?? 'document'
       const { hits, truncated } = await searchDocEphemeral(
         runtime.port,
         em,
@@ -643,7 +692,7 @@ const MAX_REDUCE_PASSES = 3
 // (`status`) ; la synthèse finale est streamée. `doc` = SNAPSHOT (changement d'onglet sans effet).
 // Anti-TOCTOU et boot-safety identiques à sendChat.
 export async function summarizeDoc(
-  doc: { name: string | null; text: string; kind: DocKind },
+  doc: { name: string | null; text: string; kind: DocKind; path?: string | null },
   mode: SummaryMode = 'summary',
 ): Promise<void> {
   if (copilot.generating) return
@@ -660,13 +709,9 @@ export async function summarizeDoc(
     reply(providerSetupMessage(provider), { config: 'model' })
     return
   }
-  // Rien de valable à résumer → message clair, pas de résumé bidon (FR-4). L'extraction du texte
-  // des PDF (pdf.js) est une dette non soldée → tout PDF passe par ce message pour l'instant.
-  if (doc.kind === 'pdf') {
-    reply("Je ne peux pas encore résumer les PDF — l'extraction de leur texte arrive prochainement. Je résume les documents Markdown, texte et HTML.")
-    return
-  }
-  if (!doc.text.trim()) {
+  // Doc texte vide → message clair (FR-4). Un PDF a `text=''` avant extraction : sa vacuité
+  // se juge APRÈS résolution (plus bas), pas ici.
+  if (doc.kind !== 'pdf' && !doc.text.trim()) {
     reply("Ce document est vide — il n'y a rien à résumer.")
     return
   }
@@ -693,6 +738,19 @@ export async function summarizeDoc(
   }
 
   try {
+    // PDF (18.2) : résoudre le texte AVANT le runtime — un PDF scanné/illisible poste sa
+    // notice honnête (pas de faux résumé, FR-4) sans démarrer le sidecar.
+    if (doc.kind === 'pdf') {
+      const res = await resolvePdfText(doc.path, signal, (s) => setStatus(s))
+      if (signal.aborted) return
+      if (!res.ok) {
+        copilot.messages[idx].content = res.message
+        copilot.messages[idx].notice = true
+        return
+      }
+      doc = { ...doc, text: res.text }
+    }
+
     const runtime = await resolveRuntime(provider, localModel)
     if (runtime === null) {
       const m = copilot.messages[idx]
@@ -748,6 +806,10 @@ export async function summarizeDoc(
       }
     }
   } catch (e) {
+    // Stop pendant l'extraction PDF → annulation propre : extractPdfText LÈVE l'AbortError
+    // (contrairement à chat()/generate() qui l'avalent), il faut donc le même garde que
+    // sendChat sinon une annulation afficherait une carte d'échec rouge (finally splice).
+    if (signal.aborted) return
     console.error('[copilot] summarize', e)
     const m = copilot.messages[idx]
     if (m) {
@@ -927,7 +989,7 @@ export function retryGeneration(idx: number): void {
   const r = m.retry
   copilot.messages.splice(idx - 1, 2)
   const t = activeTab()
-  const doc = { name: t?.name ?? null, text: t?.content ?? '', kind: t?.kind ?? ('md' as DocKind) }
+  const doc = { name: t?.name ?? null, text: t?.content ?? '', kind: t?.kind ?? ('md' as DocKind), path: t?.path ?? null }
   if (r.kind === 'chat') void sendChat(r.question, doc, r.scope)
   else void summarizeDoc(doc, r.mode)
 }

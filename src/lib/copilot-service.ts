@@ -31,7 +31,9 @@ export function truncateDoc(text: string, max = MAX_DOC_CHARS): { text: string; 
 // texte extractible en v2.0 ; l'extraction pdf.js viendra en 14.2/14.3). Vide → signalé.
 export function buildDocContext(name: string | null, content: string, kind: DocKind): string {
   const title = name ?? 'sans titre'
-  if (kind === 'pdf') return `Document « ${title} » (PDF — texte non extractible pour l'instant).`
+  // PDF SANS texte extrait (18.1/18.2 non résolu, ou scanné) → signalé. Un PDF AVEC
+  // texte extrait est rendu comme un document normal (le texte a été résolu en amont).
+  if (kind === 'pdf' && !content.trim()) return `Document « ${title} » (PDF — texte non extractible).`
   const { text, truncated } = truncateDoc(content)
   if (!text.trim()) return `Document « ${title} » (vide).`
   const body = `Document « ${title} » :\n"""\n${text}\n"""`

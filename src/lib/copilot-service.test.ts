@@ -35,10 +35,17 @@ describe('buildDocContext', () => {
     expect(ctx).toContain('# Titre')
     expect(ctx).toContain('"""')
   })
-  it('signale un PDF comme non extractible (pas de faux contexte)', () => {
+  it('signale un PDF SANS texte extrait comme non extractible (pas de faux contexte)', () => {
     const ctx = buildDocContext('scan.pdf', '', 'pdf')
     expect(ctx).toMatch(/PDF/)
     expect(ctx).toMatch(/non extractible/i)
+  })
+
+  it('rend le texte d’un PDF une fois extrait (18.2), comme un doc normal', () => {
+    const ctx = buildDocContext('rapport.pdf', 'Le délai est de 140 jours.', 'pdf')
+    expect(ctx).toContain('Le délai est de 140 jours.')
+    expect(ctx).not.toMatch(/non extractible/i)
+    expect(ctx).toContain('"""')
   })
   it('signale un document vide', () => {
     expect(buildDocContext('vide.txt', '   ', 'txt')).toMatch(/vide/i)

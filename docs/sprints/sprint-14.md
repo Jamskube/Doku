@@ -17,8 +17,8 @@ Rappels de cadrage :
 
 | # | Story | Size | Status | Notes |
 |---|-------|------|--------|-------|
-| 18.1 | Extraction texte PDF (couche pure + service, détection PDF scanné) | M | TODO | `extractPdfText` via `getTextContent` par page, assemblage ordre de lecture, cache par onglet. Détection scanné = ratio texte/pages. Lister les non-couverts (multi-colonnes, CJK sans CMap). |
-| 18.2 | Copilote sur PDF (résumé + Q&A + gros PDF via index éphémère) | M | TODO | Câbler le texte extrait : lever les 6 gardes `kind==='pdf'` (`buildDocContext`, `summarizeDoc`, index éphémère, badge Contexte). Réutilise map-reduce 14.2 + index éphémère 15.3. PDF scanné → message honnête. |
+| 18.1 | Extraction texte PDF (couche pure + service, détection PDF scanné) | M | Codée (preuve native avec 18.2) | `extractPdfText` via `getTextContent` par page, assemblage ordre de lecture, cache par onglet. Détection scanné = ratio texte/pages. Non-couverts documentés. |
+| 18.2 | Copilote sur PDF (résumé + Q&A + gros PDF via index éphémère) | M | Codée (validation native en attente) | 6 gardes `kind==='pdf'` levées ; extraction à la demande (getPdfText), scanné → notice honnête, throw → retry, Stop annulable. Réutilise map-reduce 14.2 + index éphémère 15.3. |
 | 18.3 | PDF dans l'index du dossier (RAG) | M | TODO | **Stretch cuttable.** Inclure `.pdf` dans `readFolderTexts` (15.2) via extraction ; Q&A dossier cite les sources PDF (clic → ouvre). Coût d'extraction borné pendant l'indexation. |
 
 ## Blockers
@@ -35,6 +35,9 @@ _None_
 ### 2026-07-24
 - Sprint initialisé avec **3 stories** (Epic 18, dette PDF). Ledger : +3 entrées (63 features). Direction choisie après clôture du cap v2.1 RAG.
 - 18.3 (PDF dans le RAG) désignée **stretch cuttable** : si 18.1 révèle un coût d'extraction lourd ou une qualité insuffisante, elle passe en index à la demande ou est re-notée en dette.
+
+### 2026-07-24 — 18.2 : copilote sur PDF codé (validation native 18.1+18.2 en attente)
+Les 6 gardes `kind==='pdf'` levées : `buildDocContext` rend le texte extrait (ne dit « non extractible » que si vide), `prepareDocMessages` laisse un gros PDF passer par l'index éphémère (15.3), `summarizeDoc` résout et résume (map-reduce 14.2), le badge de contexte lit `copilot.pdfDoc` honnêtement. **Résolveur `resolvePdfText`** : extraction à la demande via `getPdfText` (18.1, import dynamique → chunk pdfjs resté séparé), **notice honnête** pour états permanents (scanné « pas d'OCR, je préfère te le dire qu'inventer » / vide / sans chemin), **throw transitoire → carte failed + retry**, extraction **annulable** (signal entre pages). Résolution AVANT le runtime (scope doc) → un PDF scanné poste sa notice sans démarrer le sidecar. Critic (2 HIGH intégrés : signal UI de troncature via `copilot.pdfDoc`, throw≠scanné) + code-reviewer (« request changes » → Major corrigé : garde `signal.aborted` manquant dans le catch de `summarizeDoc` ; Minor : clé éphémère sur le snapshot `doc.path`). 260 tests, svelte-check, build OK, chunk pdfjs séparé. **18.1 et 18.2 se valident ENSEMBLE en natif** (premier vrai PDF de bout en bout).
 
 ### 2026-07-24 — 18.1 : couche d'extraction codée (preuve native portée par 18.2)
 Couche pure `pdf-text.ts` (assemblage `str`+`hasEOL`, détection « scanné » sur seuil de caractères non blancs, biais assumé vers « non scanné ») **testée en node (11 tests)** ; `extractPdfText(bytes)` + service caché `getPdfText(path)` (cache mono-emplacement clé `path`+`size`) dans `pdf.ts` (appel pdfjs `getTextContent`, browser-only). Séparation stricte : la logique pure ne connaît pas pdfjs (pdf.ts initialise son worker au niveau module → non importable sous vitest). Chunk pdfjs resté séparé au build (lazy-load préservé). Non couverts documentés : ordre de lecture multi-colonnes/tableaux, CJK sans CMap, pas d'OCR (scanné → signalé). **18.1 n'a aucune surface UI** : sa preuve native (vrai `getTextContent` sur un PDF réel) est indissociable de 18.2 → ledger 18.1 flippé à la validation de 18.2. 259 tests, svelte-check, build OK.
