@@ -2,8 +2,8 @@
 
 **Goal** : clore l'Epic 19 (zéro bouton muet) et **sceller la v2.2** — dernier sprint de code avant la période d'usage réel décidée à la rétro S15.
 **Start** : 2026-07-27
-**End** : 2026-08-03 (au plus tard — le travail effectif visé est de 2-3 jours)
-**Status** : Active
+**End** : 2026-07-27 (clos J+0)
+**Status** : **Completed — 3/3, v2.2.0 scellée** · rétro : [`retro-sprint-16.md`](./retro-sprint-16.md)
 
 Sprint de **clôture**, volontairement léger : 19.2 et 19.3 sont déjà codées (commits `3054ba3`, `7558fa0`) — le travail restant est la **validation native**, puis le scellement de la release. Aucun code neuf hors 19.4. L'action High de la rétro S15 (« utiliser Doku pour de vrai, laisser le prochain epic émerger de l'usage ») commence dès que ce sprint est clos.
 
