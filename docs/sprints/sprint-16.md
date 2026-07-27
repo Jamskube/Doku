@@ -18,7 +18,7 @@ Rappels de cadrage :
 |---|-------|------|--------|-------|
 | 19.2 | Modale Paramètres — validation native (⚙, Échap/fond/focus piégé, Apparence, purges en 2 temps, À propos) | S | ✅ DONE | Validée en natif par l'utilisateur 2026-07-27 (purge « Données » éprouvée) — ledger flippé |
 | 19.3 | Logo → À propos — validation native (modale ouverte section À propos surlignée, title/aria-label) | S | ✅ DONE | Validée en natif par l'utilisateur 2026-07-27 — ledger flippé |
-| 19.4 | Sceller la v2.2 : bump `2.2.0` + `npm run tauri build` → installateur ARM64 vérifié (app installée : .md, save, copilote, assoc .pdf) | S | 🔄 In progress | Gate ouverte (19.2+19.3 validées). Bump fait, build en cours ; reste le smoke de l'app installée |
+| 19.4 | Sceller la v2.2 : bump `2.2.0` + `npm run tauri build` → installateur ARM64 vérifié (app installée : .md, save, copilote, assoc .pdf) | S | ✅ DONE | Validée par l'utilisateur 2026-07-27 (installateur habillé + smoke app installée) — ledger flippé |
 
 ## Blockers
 _None_
@@ -35,3 +35,5 @@ _None_
 - Décisions actées : périmètre accepté tel quel ; version **2.2.0**.
 - **19.2 + 19.3 validées en natif par l'utilisateur** (modale Paramètres complète, purges éprouvées en 2 temps ; logo → À propos surligné) → ledger flippé (67/69 PASS, seules 17.2 annulée et 19.4 restent).
 - **19.4 engagée** : versions bumpées à `2.2.0` (`package.json` + lock, `tauri.conf.json`, `Cargo.toml` + lock — la carte À propos lit `package.json`) ; `svelte-check` 0 err / 0 warn ; `npm run build` OK ; `npm run tauri build` lancé. Incident évité : un remplacement PowerShell avait mojibaké les accents de `Cargo.toml` (lecture ANSI) — restauré via git puis bump refait proprement.
+- **Hors sprint (design, préférence utilisateur)** : habillage complet de l'installateur NSIS en D.A. Doku, en deux itérations sur retour utilisateur — (1) BMPs sidebar/header + icône + langue française ; (2) template NSIS custom (base tauri-cli 2.11.4, blocs `; DOKU:`) pour les fonds crème/encre sur toutes les pages, le journal « papier » et le BrandingText. Recette + dette de re-diff documentées dans `docs/design/installer-nsis/`.
+- **19.4 validée par l'utilisateur** (installateur habillé jugé sur pièce + smoke de l'app installée) → ledger flippé. **Sprint 16 : 3/3 — reste la rétro pour clore.**
