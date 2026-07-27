@@ -21,6 +21,7 @@ Doku — petite application pour **ouvrir, lire et éditer des fichiers Markdown
 - Dev (app native) : `npm run tauri dev` (première compile Rust longue)
 - Build : `npm run build` · installateur : `npm run tauri build`
 - Typecheck : `npm run check`
+- Tests : `npm test` (vitest)
 
 ## Conventions
 - Commentaires uniquement sur le code non évident (des identifiants bien nommés font le reste)
@@ -32,8 +33,9 @@ Doku — petite application pour **ouvrir, lire et éditer des fichiers Markdown
 |---|---|
 | `src/` | Frontend Svelte 5 (components/, lib/, lib/editor/, assets/) |
 | `src-tauri/` | Hôte Rust minimal — plugins officiels uniquement (ADR-0004) |
-| `spike/` | Spike S0 (comparatif moteurs WYSIWYG) — conservé comme référence |
-| `docs/` | Documentation (planning, adr, design, journal, archives) |
+| `spike/` | Bancs d'essai conservés (WYSIWYG S0, RAG 15.1, NPU 17.1) |
+| `docs/` | Documentation (planning, adr, design, sprints, journal, archives) |
+| `public/` | Assets statiques servis tels quels par Vite |
 
 ## Patterns
 - ALWAYS: garder le cœur « lecture/édition de documents » extensible — le Markdown est le premier format, pas le seul (PDF et autres suivront)
