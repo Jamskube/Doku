@@ -1,16 +1,15 @@
 # Next session pointer
-_Updated: 2026-07-27 13:15_
+_Updated: 2026-07-27 14:00_
 
 ## Where I left off
-**Sprint 16 clos J+0 (3/3) et v2.2.0 scellée.** 19.2 + 19.3 validées en natif par l'utilisateur (purges « Données » éprouvées), version bumpée partout (`2.2.0`), installateur NSIS ARM64 généré, installé et smoke-testé. **Epic 19 soldé — plus aucun bouton muet.** Bonus design hors sprint, sur retour utilisateur : l'installateur est désormais **entièrement en D.A. Doku** (BMPs + template NSIS custom base tauri-cli 2.11.4, français). Rétro S16 gravée. Ledger : **69 features, 68 PASS** (seule 17.2 reste false — annulée par conception, pas une dette).
+**Sprint 16 clos J+0 (3/3), v2.2.0 scellée, Epic 19 soldé — plus aucun bouton muet.** L'installateur NSIS est **entièrement en D.A. Doku** (BMPs + template custom base tauri-cli 2.11.4, français) — validé sur pièce par l'utilisateur. Rétro S16 faite, 3 leçons gravées dans AGENTS.md. **Premier fruit de l'usage réel déjà récolté** : Doku refusait d'ouvrir `AGENTS.md` (« fichier binaire ») → diagnostic : 2 octets NUL littéraux réels dans le fichier (hérités de la gotcha S5), la détection de l'app était correcte ; repo assaini (plus aucun fichier texte avec NUL). Passe `/tidy` faite : README racine remis au réel (il disait « stack pas choisie » depuis 16 sprints), 5 READMEs structurels créés, memories intactes (61).
 
 ## Open work
-- Branch: `main` — clean, tout poussé (`aebf19d`)
+- Branch: `main` — clean, tout poussé (`e5096a6`)
 - Open PRs: aucune
 - Drafts/plans: aucun
-- **Backlog : VIDE.** Epics 1-16, 18, 19 livrés ; Epic 17 clos NO-GO. Pas de sprint actif, pas de sprint 17 à planifier d'office.
-- Dette documentée (pas urgente) : re-diff `src-tauri/installer/installer.nsi` à chaque upgrade du CLI Tauri (procédure : `docs/design/installer-nsis/README.md`). Le MSI WiX reste non habillé (chantier séparé si demandé).
-- Leçons de la rétro S16 : 3 suggestions `/start learn` (périphérie D.A. / template forké / encodage PowerShell) — proposées à l'utilisateur au wrap, voir `retro-sprint-16.md` si non appliquées.
+- **Backlog : VIDE.** Ledger 69 features / 68 PASS (17.2 annulée par conception). Pas de sprint actif.
+- Dettes documentées (pas urgentes) : re-diff `src-tauri/installer/installer.nsi` à chaque upgrade du CLI Tauri (`docs/design/installer-nsis/README.md`) ; MSI WiX non habillé ; READMEs de `src/*` non créés (choix : pas de tables de fichiers qui rotent).
 
 ## Next concrete step
-**Rien à coder.** L'action High des rétros S15 + S16 est : **l'utilisateur utilise Doku v2.2.0 au quotidien** et le prochain chantier émerge de l'usage réel (remarques, manques, frictions). À la prochaine session : recueillir ce que l'usage a révélé → `/sprint plan` seulement s'il y a une vraie matière. Ne pas rouvrir : NPU (3 conditions ADR-0016), modèle copilote (tranché `qwen2.5:1.5b-instruct-q4_0`).
+**Rien à coder — l'utilisateur utilise Doku v2.2.0 au quotidien** (action High des rétros S15+S16) et note remarques/manques/frictions ; à la prochaine session, recueillir ce que l'usage a révélé et ne lancer `/sprint plan` que s'il y a une vraie matière. Ne pas rouvrir : NPU (3 conditions ADR-0016), modèle copilote (tranché `qwen2.5:1.5b-instruct-q4_0`).
