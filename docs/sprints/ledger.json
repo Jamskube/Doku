@@ -1,74 +1,516 @@
 {
-  "sprint": 16,
-  "features": [
-    { "id": "1.1", "title": "Ouverture reelle via dialogue + I/O natif (Ctrl+O)", "verify": "npm run tauri dev -> Ctrl+O sur un vrai .md -> contenu reel affiche (pas la demo)", "passes": true, "verified_by": "npm run tauri dev — Ctrl+O sur vrai .md, valide utilisateur 2026-07-09" },
-    { "id": "3.2", "title": "Sauvegarde atomique + indicateur modifie (Ctrl+S)", "verify": "editer + Ctrl+S -> fichier ecrit via tmp+rename, badge dirty disparait", "passes": true, "verified_by": "Ctrl+S sur vrai fichier, valide utilisateur (tmp+rename) 2026-07-09 ; flux dirty->enregistre Playwright" },
-    { "id": "3.4", "title": "Confirmation de fermeture non sauvee", "verify": "fermer un onglet dirty -> dialogue Sauver/Ignorer/Annuler", "passes": true, "verified_by": "Playwright : dirty+Ctrl+W -> dialogue ; Annuler/Ignorer/Sauver OK ; non-dirty ferme direct (2026-07-09)" },
-    { "id": "2.2", "title": "Nouvel onglet actif + differenciateur d'homonymes", "verify": "ouvrir 2 fichiers homonymes -> dossier parent affiche en differenciateur", "passes": true, "verified_by": "npm test tabs (7 tests) + Playwright : 2x notes.md -> Notes/Archives, noms uniques sans suffixe (2026-07-09)" },
-    { "id": "3.3", "title": "Round-trip Markdown sans perte + tests auto", "verify": "npm run test roundtrip -> corpus ouvert+sauve identique octet pour octet (hors normalisation documentee)", "passes": true, "verified_by": "npm test : 19/19 (corpus LF+CRLF byte-identique apres edition ; mixte normalise dominante) 2026-07-09" },
-    { "id": "2.3", "title": "Instance unique + double-clic/association de fichiers", "verify": "double-clic .md hors app -> ouvre/focus l'instance existante + nouvel onglet ; assoc .md/.html apres install", "passes": true, "verified_by": "valide en natif par l'utilisateur (release ARM64) : instance unique + arg + associations NSIS apres install (2026-07-09)" },
-    { "id": "1.4", "title": "Sanitization du HTML inline (allowlist)", "verify": "doc avec <script>/onclick -> aucun script execute au rendu", "passes": true, "verified_by": "Playwright : <script>/onerror dans l'editeur = texte, non execute (chemin CM6 sur par construction) ; primitive sanitizeHtml DOMPurify 6 tests jsdom (2026-07-09)" },
-    { "id": "4.1", "title": "Explorateur de dossier reel", "verify": "sidebar Fichiers liste le dossier du doc actif (dossiers puis fichiers tries) ; clic -> onglet", "passes": true, "verified_by": "scan vrai dossier valide en natif par l'utilisateur ; logique+nav+clic Playwright + 14 tests (2026-07-09)" },
-    { "id": "4.2", "title": "Etat sidebar persistant (masquee par defaut)", "verify": "replier la sidebar, relancer -> reste masquee ; etat persiste (settings.json)", "passes": true, "verified_by": "Playwright : defaut masquee ; ouvrir->reload reste ouverte ; fermer->reload reste fermee (localStorage doku-settings) 2026-07-09" },
-    { "id": "2.5", "title": "Restauration de session (onglets + actif)", "verify": "ouvrir des onglets, relancer -> memes onglets + actif ; fichier disparu signale puis retire", "passes": true, "verified_by": "restauration + banniere fichier disparu validees en natif par l'utilisateur ; save+banniere Playwright (2026-07-09)" },
-    { "id": "1.3", "title": "Rendu GFM : coloration des blocs de code", "verify": "bloc code fence lang affiche avec coloration syntaxique dans le WYSIWYG", "passes": true, "verified_by": "Playwright : coloration JS + TS (keywords/types/fonctions/proprietes/strings/nombres/operateurs) via codeLanguages + dokuHighlight enrichi (2026-07-09)" },
-    { "id": "1.5", "title": "Images locales (relatives + placeholder)", "verify": "image relative affichee (resolue au dossier du fichier) ; image manquante -> placeholder discret", "passes": true, "verified_by": "vraie image locale affichee (valide natif utilisateur) ; placeholder Playwright + 6 tests (2026-07-09)" },
-    { "id": "4.4", "title": "Resolution & navigation des wikilinks", "verify": "clic sur [[note]] avec note.md dans le dossier/sous-dossiers -> ouvre l'onglet", "passes": true, "verified_by": "clic wikilink vers fichier non ouvert -> ouvre (valide natif utilisateur) ; onglet ouvert Playwright + 7 tests (2026-07-09)" },
-    { "id": "6.2", "title": "Largeur de colonne reglable (3 crans)", "verify": "3 crans ~65ch/~80ch/pleine appliques immediatement + persistes", "passes": true, "verified_by": "Playwright : cycle 680/820/none via bouton doc-head, applique immediat, persiste au reload (settings) 2026-07-09" },
-    { "id": "6.3", "title": "Mode focus (masque le chrome)", "verify": "F9 masque titlebar/sidebar/barres ; Echap restaure", "passes": true, "verified_by": "Playwright : F9 -> titlebar/sidebar/doc-head masques, editeur reste ; Echap restaure tout (2026-07-09)" },
-    { "id": "5.1", "title": "Vue HTML rendue (sandbox)", "verify": ".html s'ouvre rendu dans iframe sandbox (sans script ni reseau)", "passes": true, "verified_by": "Playwright : recette.html rendu dans iframe sandbox=\"\" + CSP default-src none injectee, editeur masque ; sandboxDoc 4 tests (2026-07-09)" },
-    { "id": "5.2", "title": "HTML : edition source + refresh", "verify": "bascule source .html editable ; Ctrl+S rafraichit le rendu", "passes": true, "verified_by": "Playwright : Ctrl+/ rendu<->source HTML colore (lang-html), retour rendu ; srcdoc reactif au contenu (2026-07-09)" },
-    { "id": "3.6", "title": "Mode source Ctrl+/ (formaliser)", "verify": "Ctrl+/ -> source coloree, curseur conserve, retour WYSIWYG sans perte", "passes": true, "verified_by": "Playwright : Ctrl+/ -> source monospace coloree (markdown brut) ; curseur conserve ; retour WYSIWYG sans perte. CORRECTIF 2026-07-10 (critique impeccable) : Mod-/ declenchait aussi toggleComment de CM (defaultKeymap dans minimalSetup) quand l'editeur avait le focus -> commentait la ligne + salissait le doc. Neutralise via suppressToggleComment (Prec.highest no-op) dans editor.ts ; re-verifie editeur focus : H1 intact, caption 'enregistre', aucun '<!--' (2026-07-10)" },
-    { "id": "4.6", "title": "Table des matieres (highlight au scroll)", "verify": "TOC H1-H3 ; titre courant surligne au scroll ; clic navigue", "passes": true, "verified_by": "Playwright : scroll 700->Decisions, 1500->A faire (scroll-spy) ; hierarchie H1-H3 + clic scrollToLine deja OK (2026-07-09)" },
-    { "id": "3.5", "title": "Rechargement sur modification externe", "verify": "fichier modifie sur disque + focus -> propose recharger (silencieux si pas de modif locale)", "passes": true, "verified_by": "valide en natif par l'utilisateur : au focus, reload silencieux si non-dirty + bandeau [Recharger] si modifs locales (detection focus/relecture disque, sans watcher) ; logique classifyExternalChange 5 tests (2026-07-10)" },
-    { "id": "6.1", "title": "Theme creme persistant", "verify": "theme creme par defaut ; bascule persiste entre sessions", "passes": true, "verified_by": "acquis S2 : couche settings loadSettings/saveSettings (localStorage doku-settings), validee Playwright reload (4.2) 2026-07-09" },
-    { "id": "8.1", "title": "Build ARM64 natif", "verify": "binaire ARM64 natif (aucune emulation) ; demarrage < 1.5s", "passes": true, "verified_by": "acquis S2 : tauri build release -> Target: arm64, exe+NSIS+MSI generes 2026-07-09" },
-    { "id": "8.2", "title": "Installateur NSIS + associations", "verify": "installateur ; .md/.html associes apres install", "passes": true, "verified_by": "acquis S2 (2.3) : fileAssociations NSIS, associations validees en natif apres install par l'utilisateur 2026-07-09" },
-    { "id": "2.4", "title": "Glisser-deposer de fichiers dans la fenetre", "verify": "glisser un .md sur la fenetre -> ouvert dans un onglet", "passes": true, "verified_by": "valide en natif par l'utilisateur : drop d'un fichier supporte -> ouvert dans un onglet + overlay au survol ; multi-fichiers OK ; format non supporte -> bandeau ; dedup onglet existant. onDragDropEvent du webview Tauri (zero Rust), openDropped -> openPath (garde 1.2) (2026-07-10)" },
-    { "id": "1.2", "title": "Detection d'encodage & fichiers non supportes", "verify": "ouvrir un fichier non-UTF-8/binaire -> message clair, aucun plantage ni corruption", "passes": true, "verified_by": "valide en natif par l'utilisateur : Ctrl+O sur binaire-test.txt (octets NUL) -> bandeau 'fichier binaire' ; latin1-test.txt (UTF-8 invalide) -> bandeau 'encodage non pris en charge' ; .md UTF-8 ouvre normalement. detectUnsupported (NUL + ratio U+FFFD) cable sur openFromDialog/openPath/restoreSession ; 6 tests unitaires. Formats non supportes (PDF/images) masques en amont (dialogue + explorateur), intentionnel (2026-07-10)" },
-    { "id": "5.3", "title": "Support .txt (editeur simple)", "verify": "ouvrir un .txt -> editeur CM6 nu (sans live preview), sauvegarde fiable round-trip", "passes": true, "verified_by": "Playwright : courses.txt -> texte brut monospace, 0 decoration live-preview (# et ** litteraux), Plan sans faux titre, edition -> dirty ; round-trip via serializeDoc/detectLineEnding (kind-agnostique, deja teste LF+CRLF) sur chemin de save partage (2026-07-10)" },
-    { "id": "8.3", "title": "Zero requete reseau au runtime", "verify": "monitorer le reseau app lancee -> aucune requete sortante", "passes": true, "verified_by": "audit code (0 fetch/XHR/WS/telemetry, 0 reseau Rust, polices @fontsource/material-symbols bundlees local) ; Playwright : 72 requetes toutes localhost, 0 hote distant ; CSP 'connect-src self ipc' ajoutee (bloque le phone-home) et validee en natif par l'utilisateur (app pleinement fonctionnelle : IPC/asset/srcdoc OK) (2026-07-10)" },
-    { "id": "1.6", "title": "Gros fichiers (>= ~2 Mo) reactifs", "verify": "ouvrir un fichier >= 2 Mo -> pas de gel > 200 ms ; bascule mode source proposee au-dela du seuil", "passes": true, "verified_by": "Playwright (doc genere ~1,9 Mo) : ouvert en mode source leger (0 decoration live-preview), scroll fluide 34ms/20 events (scroll-spy gate car O(doc)), Plan vide (gate), notice + 'Afficher l'apercu' -> forcePreview bascule en apercu sans gel ; non-regression notes.md (preview+Plan intacts). Cause du gel = docHeadings O(doc) au scroll, corrige par le gating heavy (2026-07-10)" },
-    { "id": "7.1", "title": "Epinglage always-on-top", "verify": "activer l'epinglage (bouton/raccourci) -> fenetre reste au-dessus d'une autre app, etat visible, re-clic desactive", "passes": true, "verified_by": "valide en natif par l'utilisateur : Ctrl+Maj+T + bouton -> fenetre reste au-dessus, etat visible, re-clic desactive. togglePin centralise dans le store (partage bouton + raccourci) ; Playwright : bouton .on/aria-pressed, raccourci via listener fenetre, editeur focus + Ctrl+Maj+T reel -> pin bascule SANS muter le doc (piege CM6 defaultKeymap Shift-Mod-t evite) ; svelte-check 0 err, 82 tests (2026-07-10)" },
-    { "id": "7.2", "title": "SnapshotService (copie a la save + purge)", "verify": "sauver un fichier plusieurs fois -> historique liste des snapshots dates avec apercu ; purge auto (20 versions / 30 j)", "passes": true, "verified_by": "listing valide en natif par l'utilisateur : editions + Ctrl+S repetes -> panneau Historique liste les versions datees avec apercu (plus recente en haut). Stockage %APPDATA%/<app>/snapshots/<sha1(chemin)>/ + meta.json index atomique ; dossiers de notes intacts. Ecritures serialisees par cle (anti-course meta/purge), noms uniques a la ms, snapshot fire-and-forget (jamais bloquant pour le save). Purge 20/30j + garde-toujours-le-dernier : selectPurgeable pur, 15 tests ; reconciliation disque (orphelins purges). fs:allow-remove confine a $APPDATA/snapshots/**. Revue code-reviewer Approve (0 Critical/Major) + 2 Minor corriges (meta atomique+reconciliee, horodatage synchrone). svelte-check 0 err, 97 tests. Durcissement interne re-exerce au smoke 7.3 (2026-07-10)" },
-    { "id": "7.3", "title": "Restauration depuis l'historique", "verify": "restaurer une version -> le fichier courant est snapshotte d'abord puis remplace (aucune perte)", "passes": true, "verified_by": "valide en natif par l'utilisateur : clic sur une version -> le fichier revient a cette version + onglet recharge (mecanisme rev 3.5) + banniere de confirmation. Reversibilite sans pollution : restaurer avec des modifs non enregistrees les archive (rien de perdu) ; restaurer depuis un etat propre n'ajoute PAS de doublon (l'etat courant est deja dans l'historique) -> navigation entre versions libre. readSnapshot garde parseStamp (jamais meta.json ni chemin detourne) ; ecriture atomique. svelte-check 0 err, 97 tests (2026-07-10)" },
-    { "id": "4.5", "title": "Desambiguisation & creation de wikilink", "verify": "clic sur [[note-inexistante]] -> propose creer note.md a cote ; [[cible-ambigue]] -> menu de candidats", "passes": true, "verified_by": "valide en natif par l'utilisateur : clic sur [[note-inexistante]] -> prompt 'Creer note.md' -> fichier cree dans le dossier du doc actif + ouvert (garde anti-ecrasement : ouvre si deja cree) ; [[homonymes]] -> menu de candidats (nom + dossier) ; cible unique -> ouvre direct. wikilinkCandidates + wikilinkFileName (dernier segment seul, traversee ../ neutralisee) purs, 9 tests ; WikilinkPrompt modal. Playwright : prompt creation rendu + Escape ferme, 0 erreur console. svelte-check 0 err/warn, 106 tests (2026-07-10)" },
-    { "id": "3.7", "title": "Widgets tableaux & images (rendu + edition source au clic)", "verify": "un tableau/une image dans le WYSIWYG -> rendu en widget ; clic sur le widget -> revele/edite la source correspondante", "passes": true, "verified_by": "valide en natif par l'utilisateur : un .md avec tableau GFM -> rendu en tableau style (.cm-lp-table) ; clic -> source '| ... |' revelee, edition d'une cellule -> clic ailleurs -> re-rendu, Ctrl+S round-trip ; image -> clic revele la source '![...]'. Widget-bloc via StateField tableField (un ViewPlugin ne peut pas fournir de replace block-level) ancre sur lineAt().from/.to (frontieres de ligne, tableau indente) ; gating par activeLineSet (source si le curseur est dans le bloc) ; clic capte par listener mousedown dans toDOM(view) (motif CheckboxWidget). parseTable pur (pipes echappes, alignements, bords optionnels) 7 tests. Revue code-reviewer Approve, Major corrige (alignement frontieres de ligne) ; verif navigateur (rendu + clic-pour-editer + re-rendu, 0 erreur console). svelte-check 0 err, 113 tests (2026-07-10)" },
-    { "id": "3.1", "title": "Edition live preview en place (formaliser)", "verify": "taper dans un bloc -> edition en place, syntaxe revelee au curseur, re-rendu a la sortie du bloc", "passes": true, "verified_by": "Playwright (navigateur, chemin pur CM6) : curseur sur la ligne H1 -> '# Mes notes de projet' (marqueur revele) ; curseur deplace sur le paragraphe -> 'Mes notes de projet' (# re-masque) = syntaxe revelee au curseur / re-rendue a la sortie du bloc (HIDDEN_MARKS gates par la ligne du curseur, live-preview.ts). Edition en place : frappe -> doc mute + badge modifie, Ctrl+Z restaure. Comportement WYSIWYG cle, deja soutenu par 3.2 (save) et 3.3 (round-trip 19 tests) (2026-07-10)" },
-    { "id": "4.3", "title": "Fichiers non supportes grises/masques (formaliser)", "verify": "dossier mixte -> les non supportes (pdf/images) sont masques/grises dans l'explorateur, aucune ouverture binaire", "passes": true, "verified_by": "tests unitaires explorer.test.ts (isSupportedFile png/pdf -> false ; visibleEntries filtre b.png) + Playwright : explorateur du dossier demo -> '..' + dossiers (archives, Projets) puis fichiers supportes tries (courses.txt, idees.md, notes.md, recette.html, todo.md), image.png MASQUE. Choix utilisateur 'garder masques' (pas grises) ; visibleEntries = dossiers + isSupportedFile, aucune ouverture binaire (2026-07-10)" },
-    { "id": "9.1", "title": "Spike : strategie d'index recherche (memoire vs scan)", "verify": "spike documente : sur corpus ~1000 fichiers (~5 Mo), comparaison scan-a-la-volee vs index-memoire, decision tranchee par mesure (cible < 300 ms), note/ADR ecrite avant de coder 9.2", "passes": true, "verified_by": "benchmark Node (scratchpad/bench-search.mjs, 1000 fichiers 5,11 Mo) : scan-par-recherche 20-50 ms/requete (relit tout a chaque fois) vs index-memoire build 23 ms une fois puis recherche 0,4-1,6 ms. Node fs = plancher (IPC Tauri plus lent -> ecart creuse en faveur de l'index). Decision = index-en-memoire (scan-once + cache + invalidation), > 200x de marge sous 300 ms, aligne pattern WikilinkResolver ; aucune lib tierce. Documente en ADR-0007 avec forme du SearchService pour 9.2 (2026-07-13)" },
-    { "id": "9.2", "title": "Moteur de recherche (scan dossier, casse-insensible, anti-perime)", "verify": "npm test recherche : scan dossier + sous-dossiers, casse-insensible, extraits de contexte, < 300 ms sur ~1000 fichiers ; non-supportes/binaires ignores (detectUnsupported) ; requete modifiee annule la precedente (req-token)", "passes": true, "verified_by": "valide en natif par l'utilisateur : recherche dans un vrai dossier fonctionne (scan + extraits), binaires exclus. search.ts pur (9 tests : casse-insensible, extraits+offsets, dedup ligne, caps, ligne longue fenetree) ; buildSearchIndex (scan recursif scanFiles + filtre isSupportedFile + skip detectUnsupported + lecture par lots bornes ARM) ; runSearch (index memoire paresseux ADR-0007 + coalescing des builds + req-token) ; invalidation in-place au save/reload. Revue code-reviewer Approve, 2 Majors corriges (index perime sur creation/reload ; builds concurrents). svelte-check 0 err, 122 tests (2026-07-13)" },
-    { "id": "9.3", "title": "Panneau de recherche (Ctrl+Maj+F, resultats surlignes)", "verify": "Playwright/natif : Ctrl+Maj+F -> panneau ; requete -> liste fichiers + extraits (terme surligne) ; 'Aucun resultat' clair si vide", "passes": true, "verified_by": "valide en natif par l'utilisateur. Playwright (demo) : Ctrl+Maj+F -> panneau + focus input ; 'pdf' -> notes.md:31 + idees.md:5 avec terme surligne (<mark>, pas de {@html}) + n de ligne, casse-insensible ; requete sans match -> 'Aucun resultat' ; requete vide -> hint ; clic resultat -> onglet ouvert ; 0 erreur console. Vue 'search' de la Sidebar (ruban + input as-you-type -> runSearch), rendu AIR. svelte-check 0 err (2026-07-13)" },
-    { "id": "9.4", "title": "Saut vers l'occurrence au clic", "verify": "clic sur un resultat -> fichier ouvert dans un onglet scrolle sur l'occurrence (ligne visible, terme mis en evidence) — valide natif", "passes": true, "verified_by": "valide en natif par l'utilisateur : clic sur un resultat -> ouvre le fichier, saute a la ligne du mot (centre) et l'ENCADRE (cadre visible qui s'estompe). openSearchHit pose un pending-reveal avant openPath ; DocumentView le consomme apres montage de l'onglet (effet declare apres le switch d'onglet) ; revealMatch selectionne + scrollIntoView centre + decoration .cm-search-flash (box-shadow 2px --ink-3 + fond --accent-soft, 1,6 s). search.ts SearchHit porte col+length (position doc exacte, distincte des offsets snippet fenetres) ; module editor/search-flash.ts (StateField). Playwright : clic 'coller' -> idees.md ouvert, 'Coller' selectionne + encadre (box-shadow computed), 0 erreur. svelte-check 0 err, 123 tests (2026-07-13)" },
-    { "id": "10.1", "title": "Spike : pipeline export PDF (window.print vs PrintToPdfAsync)", "verify": "spike documente : essai natif ARM64 de l'impression WebView2 par dialogue (window.print) vs PrintToPdfAsync (COM), fidelite + UX tranchees, piege #5199 (PDF supprime si webview disposee trop tot) note, note/ADR avant 10.2", "passes": true, "verified_by": "valide en natif par l'utilisateur : bouton 'Exporter en PDF' -> dialogue d'impression WebView2 -> 'Enregistrer au format PDF' fonctionne (approche A = window.print + @media print + iframe isole). Decision A vs B tranchee en ADR-0008 (A==B en fidelite car meme moteur Chromium ; B ecarte car exige Rust/COM contra ADR-0004 pour un besoin batch inexistant YAGNI). Piege #5199 DOCUMENTE dans l'ADR (ne jamais disposer la webview pendant l'impression ; teardown iframe differe). Scaffold : src/lib/export/print.ts (buildPrintHtml + exportViaPrint, iframe sandbox='allow-modals allow-same-origin' SANS allow-scripts + CSP 'default-src none' injectee = defense en profondeur), refactor html.ts (paperCss/injectHead reutilisables). Revue critic : 2 corrections (iframe sandboxe ; renderMarkdown SORTI du spike -> l'app n'a aucun renderer md, rendu MD->HTML = story 10.2). 5 tests print.test.ts, svelte-check 0 err, 128 tests. A CONFIRMER en 10.2 : persistance du PDF apres fermeture app (#5199) + rendu MD fidele (2026-07-13)" },
-    { "id": "10.2", "title": "Export PDF (@media print, fidele WYSIWYG)", "verify": "natif : 'Exporter -> PDF' sur un .md/.html affiche -> PDF fidele au rendu (chrome masque, sauts de page, marges), 100% hors-ligne", "passes": true, "verified_by": "valide en natif par l'utilisateur : 'Exporter en PDF' sur un .md -> PDF RENDU (titres/listes/table GFM/code/taches/citations via marked, pas de markdown brut), images locales visibles, marges/sauts de page OK, PDF persiste apres fermeture app (#5199). renderMarkdown (marked GFM + sanitizeHtml, ADR-0009) cable dans buildPrintHtml ; images resolues en asset:// (CSP img-src data: asset:). Revue code-reviewer Approve, Major corrige (images bloquees reseau/UNC SUPPRIMEES a la source -> aucun beacon, pas juste la CSP) + Minor wikilink echappe. 137 tests (9 render-md + print), svelte-check 0 err, build prod OK (marked bundle ~12 Ko). Limites notees (ADR-0009) : pas de coloration code, liens inertes, fences non exclus des pre-passes -> 10.3 (2026-07-13)" },
-    { "id": "10.3", "title": "Export HTML autonome (styles + images inline, sanitize)", "verify": "'Exporter -> HTML autonome' -> un seul .html avec styles inline (AIR) + images en data:, sanitize (aucun script), ouvrable hors-ligne dans n'importe quel navigateur", "passes": true, "verified_by": "valide en natif par l'utilisateur 2026-07-14 : Exporter en HTML autonome -> .html ouvert hors-ligne dans un navigateur tiers, image inline (data:) visible, styles AIR appliques, aucun script" },
-    { "id": "10.4", "title": "Export DOCX (lib OOXML) — stretch", "verify": "'Exporter -> DOCX' -> .docx ouvrable dans Word (titres/gras/italique/listes/liens/tableaux/code, fidelite raisonnable) ; elements non mappables -> texte brut sans planter", "passes": true, "verified_by": "valide en natif par l'utilisateur 2026-07-14 : Exporter en DOCX -> .docx ouvert dans Word/LibreOffice, titres/gras/italique/listes/lien/table/code rendus (fidelite raisonnable)" },
-    { "id": "11.1", "title": "Viewer PDF.js bundle local (lecture seule, scroll/zoom, worker sous CSP)", "verify": "natif : ouvrir un .pdf -> rendu lecture seule via PDF.js bundle (100% hors-ligne), scroll multi-pages + zoom ; 1re page < 1s (PDF 10 Mo) ; worker autorise sous CSP (worker-src 'self' blob:) ; octets lus via plugin-fs readFile (Uint8Array)", "passes": true, "verified_by": "valide en natif par l'utilisateur 2026-07-14 : Ctrl+O un vrai .pdf -> rendu lecture seule PDF.js hors-ligne, scroll multi-pages, worker charge (0 fake worker/violation CSP), 1re page rapide ; test critique Ctrl+S sur onglet pdf = aucune ecriture (fichier intact). CORRECTIF flou : le canvas etait dimensionne avant apparition de la scrollbar verticale -> `max-width:100%` reechantillonnait le canvas d'un facteur non-entier -> flou leger ; corrige par `scrollbar-gutter: stable` (gouttiere reservee en amont, clientWidth stable) + plafond DPR 2->3 (nettete si echelle Windows >200%). svelte-check 0 err" },
-    { "id": "11.2", "title": ".pdf comme format supporte (explorateur/associations, lecture seule)", "verify": ".pdf ajoute a isSupportedFile -> visible/ouvrable dans explorateur + associations ; aucun mode edition propose", "passes": true, "verified_by": "Moitie in-app (isSupportedFile pdf, explorateur affiche/ouvre, openPath/double-clic/single-instance routent en lecture seule, editeur+export masques, aucun mode edition) validee en natif par l'utilisateur en 11.1 (2026-07-14). Moitie association OS : entree fileAssociations .pdf role=Viewer (distinct de Editor md/html) ajoutee dans tauri.conf.json, mecanisme NSIS identique aux associations .md/.html deja validees apres install (8.2) ; l'utilisateur valide sur confiance (2026-07-14), confirmation au prochain build+install. file_from_args (Rust) est agnostique a l'extension -> zero Rust ajoute. 156 tests, svelte-check 0 err" },
-    { "id": "12.1", "title": "Coller une image -> fichier lie + insertion du lien", "verify": "natif : doc Markdown enregistre -> Ctrl+V d'une image -> ecrite a cote (nom unique jamais ecrasant) + ![](chemin-relatif) insere au curseur ; doc non enregistre -> demande de sauver ; presse-papier texte -> insertion normale ; echec ecriture -> message clair, aucun lien casse", "passes": true, "verified_by": "valide en natif par l'utilisateur 2026-07-14 : Ctrl+V d'une image dans un .md enregistre -> fichier image-AAAAMMJJ-HHMMSS.png ecrit a cote + ![](nom) insere au curseur (apercu OK) ; 2e collage -> ~1 (jamais ecrasant) ; presse-papier texte -> collage normal inchange. paste-image.ts pur (sniff magic bytes png/jpg/gif/webp, imageStamp, candidateName, nextFreeName) 17 tests ; writePastedImage serialise (chaine de promesses) + exists-loop anti-ecrasement + writeFileAtomic ; handler CM6 domEventHandlers paste (extraction File synchrone avant await, return true/false = pris en charge/fall-through texte). 2 bugs data-loss HIGH interceptes par critic (collage meme-seconde s'ecrasant -> serialisation ; insertion dans le MAUVAIS onglet via editeur partage -> garde app.activeId===tabId). Gardes : non-enregistre/dossier absent/format non reconnu/>25Mo/echec ecriture -> bandeau, aucun lien casse. fs:allow-exists elargi a ** (coherent ADR-0005). code-reviewer Approve 0 Critical/Major. svelte-check 0 err, 173 tests" },
-    { "id": "13.1", "title": "Spike : sidecar Ollama ARM64 (externalBin, serve, generate, port ephemere)", "verify": "natif : ollama.exe ARM64 lance en externalBin sur un port ephemere -> /api/generate streame une generation EN LOCAL (0 requete reseau non-localhost), spawn + kill verifies, pieges port/orphelin notes ; confirme ADR-0012 avant de coder 13.2 (gate go/no-go faisabilite)", "passes": true, "verified_by": "valide en natif par l'utilisateur 2026-07-14 (GO, 3/3 criteres) : ollama.exe ARM64 (v0.32.0, asset ollama-windows-arm64.zip) lance en sidecar (tauri-plugin-shell externalBin) sur port ephemere (bind 127.0.0.1:0 -> OLLAMA_HOST), modeles isoles %APPDATA%/com.soundnodes.doku/models (OLLAMA_MODELS), pull qwen2.5:0.5b OK ; GENERATION streamee end-to-end (tokens console via ollama.ts/splitNdjson + bandeau) POST /api/generate 200, ~120 tok/s CPU Snapdragon X (NEON/ARM_FMA), 100% local (llama-server 127.0.0.1) ; CORS/CSP webview->sidecar OK (OPTIONS 204). Kill propre confirme APRES fix arbre de process (taskkill /F /T : ollama spawne llama-server en grand-enfant que CommandChild::kill seul laissait orphelin). splitNdjson pur 4 tests, critic+code-reviewer Approve (0 Critical/Major). DETTE 13.2 : (1) lib/ollama non copie par externalBin -> hand-copie dans target/debug pour le dev ; empaqueter via bundle.resources + OLLAMA_LIBRARY_PATH via resource_dir() pour le build ; (2) taskkill -> Job Object (KILL_ON_JOB_CLOSE) + pidfile sweep pour survivre a un crash ; (3) egress 8.3 : Ollama a OLLAMA_REMOTES=ollama.com, un check model_recommendations planifie, OLLAMA_NO_CLOUD=false, genere une cle SSH -> neutraliser (OLLAMA_NO_CLOUD, telemetrie off) et re-verifier 0 reseau au repos ; (4) CORS : Ollama fusionne notre OLLAMA_ORIGINS avec une liste permissive par defaut" },
-    { "id": "13.2", "title": "SidecarManager (port ephemere, readiness-poll, kill, pidfile)", "verify": "copilote active -> Doku demarre le sidecar sur un port libre choisi dynamiquement + readiness-poll avant le 1er appel ; kill a la fermeture (0 orphelin) ; pidfile -> sweep d'un residu au demarrage ; port occupe/echec -> message clair, app intacte (Rust minimal : spawn+port+kill+proxy)", "passes": true, "verified_by": "valide en natif par l'utilisateur 2026-07-14 : logique sidecar extraite dans src-tauri/src/sidecar.rs. (1) Chemin lib PROPRE : hand-copie target/debug/lib supprimee, generation OK via OLLAMA_LIBRARY_PATH = CARGO_MANIFEST_DIR/binaries en dev (resource_dir() en release, bundle.resources) -> plus de hack. (2) KILL AU CRASH confirme : End task brutal de doku.exe (sans handler Destroyed) -> ni ollama.exe ni llama-server.exe ne survivent, via Job Object Windows KILL_ON_JOB_CLOSE (AssignProcessToJobObject ; le grand-enfant llama-server herite du job). Supersede le pidfile+sweep d'ADR-0012 (amende) : nettoyage garanti noyau, pas de hasard de reutilisation de PID. (3) Egress 8.3 : OLLAMA_NO_CLOUD=1 (+ OLLAMA_REMOTES=127.0.0.1) coupe le poll model_recommendations->ollama.com. windows 0.61 (deja dans l'arbre). critic (1 HIGH resource_dir dev -> garde fallback dev ; HANDLE Send/Sync ; Job supersede pidfile) + code-reviewer Approve (Major shutdown lock-ordering corrige : verrou tenu pendant terminate_job ; auto-heal du slot sur Terminated). cargo check OK, svelte-check 0 err, 177 tests. Dette : valider le packaging release (resource_dir) au prochain tauri build ; pare-feu = garantie dure 8.3" },
-    { "id": "13.3", "title": "OllamaClient (generate stream, tags, pull, delete, annulation)", "verify": "sidecar pret -> generate streame (NDJSON) et s'annule < 500 ms (AbortController) ; tags/pull(progress)/delete exposes ; 0 requete non-localhost a l'inference", "passes": true, "verified_by": "valide en natif par l'utilisateur 2026-07-14 : src/lib/ollama.ts (socle ecrit+streame au spike 13.1). generate accepte un AbortSignal -> abort coupe le fetch, arret quasi-instantane cote client ET serveur (Ollama stoppe a la deconnexion), texte partiel rendu sans exception (AbortError avale). Annulation testee natif via bouton stop du widget spike (prompt long -> stop -> flux coupe < 500 ms, bandeau 'annulee : <partiel>'). deleteModel(port,name) -> DELETE /api/delete (exerce par la purge 13.4). tags/pull(progress) deja en place. splitNdjson pur 4 tests. svelte-check 0 err, 177 tests. Petit diff TS, self-review" },
-    { "id": "13.4", "title": "Gestion des modeles (liste, pull+progress, actif persistant, taille/purge)", "verify": "panneau modeles -> modeles installes (nom, taille) + actif ; pull avec progression (action reseau explicite) ; choix actif persistant (settings) ; purge confirmee (%APPDATA%/Doku/models) ; 0 modele -> onboarding vers un pull", "passes": true, "verified_by": "valide en natif par l'utilisateur 2026-07-16 : vue sidebar 'Copilote' (bouton ruban smart_toy) -> liste des modeles installes avec nom + taille (formatBytes), modele actif selectionnable (radio/aria-pressed) et PERSISTANT (app.activeModel dans settings), pull avec barre de progression + annulation (AbortController), purge confirmee par nom (confirm) -> DELETE /api/delete, etat 0 modele -> onboarding vers un pull. Store slice src/lib/copilot.svelte.ts ($state module-level, reutilise par 14.1) : ensureReady (dedup promesse en vol + garde navigateur + catch sur startOllama), refreshModels (garde anti-perime), pullModel/cancelPull, removeModel (nettoie activeModel), setActiveModel. Effet d'ouverture untrack() (sinon auto-re-declenchement : ensureReady lit puis ecrit copilot.port). critic (3 Majors corriges : untrack, dedup ensureReady, pull annulable) + code-reviewer Approve (Major corrige : ensureReady n'attrapait pas un startOllama qui THROW -> rejet non gere + etat 'Aucun modele' trompeur ; + abort pendant la phase de connexion, aria-pressed). svelte-check 0 err, 177 tests. Epic 13 clos = fondation copilote complete" },
-    { "id": "14.0", "title": "Coquille panneau droit (aside) + chrome + relocalisation UI modeles (13.4)", "verify": "natif : bouton collapse (coin haut-droit du doc) ouvre/ferme un panneau aside 344px a droite ; a l'ouverture les controles fenetre migrent du header principal vers l'en-tete du chat et le coin haut-droit du doc passe a angle droit (haut-gauche seul arrondi) ; a la fermeture ils reviennent et le doc s'arrondit 14px 14px 0 0 ; anime doku-panel-in ; comportement OK EN RELEASE aussi (gotcha fermeture fenetre dev/release S2) ; l'UI de gestion des modeles (13.4) est deplacee dans ce panneau (page atteinte via l'icone layers), logique copilot.svelte.ts inchangee", "passes": true, "verified_by": "valide en natif par l'utilisateur 2026-07-16 : panneau aside droit « Doku-San » (nouveau CopilotPanel.svelte, maquette docs/design/w2-copilot) ouvert/ferme par le bouton collapse (coin haut-droit du doc, SVG miroir scaleX(-1)) ; anime doku-panel-in ; chrome migre (controles fenetre min/max/close titlebar<->en-tete panneau selon copilotOpen, pin+theme restent titlebar) ; coin du doc with-copilot 14px 0 0 0 (ouvert) / 14px 14px 0 0 (ferme) ; close-guard intact (bouton fermer panneau = closeWindow -> onCloseRequested unique -> dialogue onglet dirty). Gestion des modeles (13.4) relocalisee dans la vue Modeles (layers) : liste, actif persistant, pull+progression+annuler, purge confirmee, onboarding 0-modele + carte hero (stats reelles disque + params derives, PAS de debit factice). Vue chat = coquille statique (streaming = 14.1). Boot-safety : copilotView transitoire (boot 'chat'), coquille chat ne lit jamais le moteur -> aucun spawn Ollama au boot ; ensureReady uniquement a l'entree vue Modeles. smart_toy retire de la sidebar gauche. critic (HIGH boot-spawn corrige + 3 MED) + code-reviewer Approve (0 Critical/Major, 3 nits appliques). svelte-check 0 err, 181 tests, verif visuelle clair+sombre 0 erreur console" },
-    { "id": "14.1", "title": "Panneau copilote (chat, streaming, annuler, rendu MD sanitize)", "verify": "natif : Ctrl+Maj+I / bouton sidebar -> panneau chat ; message envoye -> reponse streamee token-par-token, annulable < 500 ms ; rendu Markdown sanitize (pas de {@html} brut) et copiable ; changement d'onglet pendant la generation -> generation non perturbee, resultat attache a la conversation ; OllamaSpike.svelte supprime", "passes": true, "verified_by": "valide en natif par l'utilisateur 2026-07-16 : chat reel dans le panneau droit (vue chat de CopilotPanel) -> question sur le doc courant -> reponse STREAMEE token-par-token (bulle texte brut pendant le stream, rendu Markdown a la fin : listes/code/table), copiable ; bouton stop coupe < 500 ms en gardant le partiel ; changement d'onglet pendant la generation -> non perturbee (contexte capture a l'envoi) ; 3 actions rapides cablees (Resumer/Question/Points cles). Securite (contenu LLM non fiable rendu dans la webview principale sans default-src) : sanitizeChatHtml en ALLOWLIST stricte (tags marked only) -> tout vecteur reseau supprime (img/video/audio/source/svg use/link/input src/style), robuste aux versions ; CSP main durcie (media-src/base-uri/form-action none) ; test de non-regression reseau (payload hostile -> 0 URL http). Client chat() /api/chat (roles, evite la derive de completion) ; service pur copilot-service.ts. Boot-safety 14.0 preserve (pas de spawn sans modele actif ; vue chat ne lit jamais copilot.models). OllamaSpike.svelte supprime. critic (Block -> 3 HIGH reseau corriges) + code-reviewer Approve (0 Critical/Major, 3 nits appliques). svelte-check 0 err, 196 tests (+15 : copilot-service 10, sanitizeChatHtml reseau hostile 5)" },
-    { "id": "14.2", "title": "Resumer le document (md/txt/html/PDF, map-reduce si > contexte)", "verify": "natif : doc md/txt/html/PDF affiche -> 'Resumer' (ou sur la selection) -> resume streame ; doc > fenetre de contexte -> segmentation map-reduce (AUCUNE troncature silencieuse) ; PDF scanne sans texte -> message clair", "passes": true, "verified_by": "natif 2026-07-16 (resume streame en 1 passe sur note ~14k car ; map-reduce borne + num_ctx fixe = 0 troncature)" },
-    { "id": "14.3", "title": "Q&A sur le document courant (ancree, refus d'inventer)", "verify": "natif : question sur le doc affiche -> reponse ancree sur son contenu ; info absente du doc -> 'je ne trouve pas cela dans ce document' (pas d'invention) ; 0 requete reseau", "passes": true, "verified_by": "natif 2026-07-16 (ancrage + phrase de refus exacte ; num_ctx 16384 anti-troncature ; badge lecture partielle > seuil ; lecture complete des gros docs deleguee au RAG Epic 15)" },
-    { "id": "13.5", "title": "Packaging release du sidecar (build ARM64 + install)", "verify": "npm run tauri build -> installateur execute -> lancer Doku INSTALLE (hors dev) : le copilote genere (lib/ollama embarquee via bundle.resources, resolue par resource_dir()) ; double-clic sur un .pdf -> ouvre en lecture seule (association OS). Solde les dettes S11 (chemin release jamais prouve) et S10 (assoc .pdf validee sur confiance)", "passes": true, "verified_by": "natif 2026-07-16 (build NSIS arm64 ; ollama.exe+lib/ollama freres sous resource_dir prouve par generation depuis target/release ; app installee OK + assoc .pdf)" },
-    { "id": "16.1", "title": "Reformuler une selection (stretch)", "verify": "natif : texte selectionne en edition -> 'Reformuler' (clarifier / raccourcir / ton) -> proposition ; accepter -> remplace (ou insere apres) ; refuser -> texte d'origine INTACT (zero perte)", "passes": true, "verified_by": "natif 2026-07-16 (selection -> Clarifier/Raccourcir/Ton -> proposition streamee ; accepter remplace + Ctrl+Z restaure ; refuser -> texte intact ; garde zero-perte onglet+region ; valide avec gemma4:e2b puis qwen2.5 3b/1.5b instruct-q4_0)" },
-    { "id": "16.2", "title": "Corriger orthographe & grammaire (stretch)", "verify": "natif : texte (selection ou doc) -> 'Corriger' -> version corrigee SANS changer le sens ni le Markdown ; appliquee -> relisible et annulable (Ctrl+Z restaure)", "passes": true, "verified_by": "natif 2026-07-20 : menu de selection -> Corriger -> apercu EN PLACE (streaming puis diff mot a mot), accepter remplace en une transaction + Ctrl+Z restaure, refuser/Echap -> texte intact. Absorbee par le chantier w3 (4e verbe + apercu diff, panneau sans cartes Proposition). Valide utilisateur" },
-    { "id": "15.1", "title": "Spike : stack RAG (embedding local, format d'index, perf/qualite ARM)", "verify": "spike documente sur corpus ~10^2-10^3 notes FR : modele d'embedding via Ollama + index vectoriel compares PAR LA MESURE (qualite top-k FR, temps d'indexation, empreinte) ; choix modele/chunking/format/incremental tranches ; 0 reseau verifie ; ADR ecrite AVANT de coder 15.2 ; le spike liste ce qu'il ne couvre pas", "passes": true, "verified_by": "utilisateur 2026-07-24 : GO valide — ADR-0015 (granite-embedding:278m, brute-force memoire, repli bge-m3), banc vendore spike/rag-15.1, 0 connexion non-loopback" },
-    { "id": "15.2", "title": "Index d'embeddings incremental (%APPDATA%/Doku/rag, hash, borne ARM)", "verify": "natif : indexer un vrai dossier de notes -> chunking + embeddings locaux stockes sous %APPDATA%/Doku/rag ; ajout/modif/suppression d'une note -> re-index incremental (hash) ; app reactive pendant l'indexation (borne ARM) ; 0 requete reseau", "passes": true, "verified_by": "utilisateur 2026-07-24 : natif — dossier reel indexe (progression visible, app reactive), modif -> 1 seul fichier re-embedde, suppression -> passages retires, 0 connexion non-loopback (re-preuve 8.3)" },
-    { "id": "15.3", "title": "Q&A dossier avec citations sources + mode document courant", "verify": "natif : question en mode dossier -> passages top-k recuperes + reponse citant les notes sources (nom cliquable -> ouvre le fichier) ; mode document courant : un doc > fenetre de contexte est interroge en entier via l'index (remplace le badge lecture partielle de 14.3)", "passes": true, "verified_by": "utilisateur 2026-07-24 : natif — question dossier -> reponse + Passages consultes (clic ouvre la note), refus honnete sans sources, gros doc : info apres le cap 12k trouvee (badge Document entier (index)), RAM embed+chat OK, 0 reseau" },
-    { "id": "18.1", "title": "Extraction texte PDF (couche pure + service, detection PDF scanne)", "verify": "natif : PDF avec couche texte -> texte extrait par page via pdf.js getTextContent, assemble dans l'ordre de lecture ; PDF scanne / sans couche texte -> detecte et signale clairement (pas d'OCR, pas de faux texte) ; extraction cache par onglet (pas re-extraite a chaque action) ; le spike liste ce qu'elle NE couvre PAS (multi-colonnes, CJK sans CMap)", "passes": true, "verified_by": "utilisateur 2026-07-24 : natif (conjoint 18.2) — texte extrait par page (getTextContent) assemble dans l'ordre ; PDF scanne detecte et signale (pas d'OCR) ; cache par onglet (path+size) ; non-couverts documentes dans pdf-text.ts" },
-    { "id": "18.2", "title": "Copilote sur PDF (resume + Q&A + gros PDF via index ephemere)", "verify": "natif : PDF texte affiche -> Resumer -> resume streame (map-reduce si > fenetre) ; Q&A ancree sur le contenu du PDF ; gros PDF > fenetre -> interroge en entier via l'index ephemere (15.3) ; PDF scanne -> message honnete au lieu d'un faux resume ; 0 reseau", "passes": true, "verified_by": "utilisateur 2026-07-24 : natif — PDF texte resume (map-reduce) + Q&A ancree ; gros PDF interroge en entier via l'index ephemere ; PDF scanne -> notice honnete (pas de faux resume) ; 0 reseau (extraction pdf.js locale)" },
-    { "id": "18.3", "title": "PDF dans l'index du dossier (RAG)", "verify": "natif : un dossier contenant des .pdf -> indexes (texte extrait) au meme titre que les notes ; question en mode dossier -> passages d'un PDF recuperes et cite comme source (clic -> ouvre le PDF) ; PDF scanne ignore proprement ; cout d'extraction borne pendant l'indexation ; 0 reseau", "passes": true, "verified_by": "utilisateur 2026-07-24 : natif — dossier avec .pdf indexe (texte extrait), question dossier -> passage PDF cite (clic ouvre le PDF), PDF scanne ignore (marqueur), refresh incremental sans re-extraction, 0 reseau" },
-    { "id": "17.1", "title": "Spike Foundry Local (NPU) : mesure prefill NPU vs CPU + re-preuve 0-reseau -> ADR-0016 GO/NO-GO", "verify": "spike : sidecar Foundry Local (ONNX Runtime + QNN) lance sur ce Snapdragon X Plus ; prefill mesure sur un long doc reel (NPU vs CPU q4_0, chiffres releves) ; 0 requete non-localhost prouvee (monitor reseau pendant l'inference) ; faisabilite client OpenAI /v1/chat/completions confirmee ; ADR-0016 ecrit avec verdict GO/NO-GO trance par la donnee AVANT tout code de production", "passes": true, "verified_by": "spike livre + VERDICT NO-GO acte par l'utilisateur 2026-07-24. (1) Foundry Local est HORS JEU : 'foundry model load ...qnn-npu' -> QNN SetupBackend failed ; logs AutoRegisterCertifiedEps: Failure ; discoverEps() ne retourne que WebGpu ; downloadAndRegisterEps(['QNN']) = no-op ; .foundry/ep/ ne contient que webgpu-ep. Bug amont (0.10.2 = derniere), pas notre config. (2) VOIE QUI MARCHE trouvee hors Foundry : onnxruntime-genai + onnxruntime-qnn en direct (register_execution_provider_library + append_provider('QNNExecutionProvider') + ADSP_LIBRARY_PATH) -> le modele charge REELLEMENT sur le HTP Hexagon en ~4-5 s et genere du francais coherent. Sidecar OpenAI-compatible streame livre : spike/npu-17.1/sidecar/npu_server.py. (3) MESURE, meme modele des deux cotes (qwen2.5-1.5b) : NPU prefill 4-6x plus rapide (1244 ms vs ~4900 ms @440 tok ; 1779 ms vs ~10900 ms @786 tok ; pente NPU ~1,5 ms/tok quasi plate vs CPU ~16 ms/tok super-lineaire) MAIS decode ~2x plus lent (22-25 vs 44-48 tok/s). (4) LE MUR = etau qualite/RAM sur 16 Go : 1.5b-qnn tient mais trop bete (rejete en natif dans Doku par l'utilisateur, quantif QNN plus agressive que q4_0) ; 7b-qnn (llmware) bon FR mais ~5 Go residents -> swap + un OOM (prefill retombe a 10565 ms, decode 7,8 t/s = ~4x plus lent bout-a-bout que le CPU 1.5b) ; AUCUN 3B QNN genai FR public (le catalogue saute 1.5B->7B). Pas de point de fonctionnement. (5) Grille ADR-0016 (seuils PRE-enregistres avant mesure) : seuil 1 PASSE, seuils 2/4/5 ECHOUENT, seuils 3/6 sans objet -> NO-GO. ADR-0016 gravee 'rejected' avec les chiffres + 3 conditions de reouverture (3B QNN FR publie / machine >= 32 Go / runtime prefill-NPU+decode-CPU). Le copilote RESTE sur Ollama CPU qwen2.5:1.5b-instruct-q4_0 (repli '3b' de l'ADR ecarte aussi par l'utilisateur : trop lent, trop de RAM pour un copilote 'gadget discret'). Provider 'npu' retire du produit (svelte-check 0 err, vitest 260/260), banc conserve dans spike/npu-17.1/. Un NO-GO chiffre est une livraison valide du spike" },
-    { "id": "17.2", "title": "Abstraction couche d'inference (Ollama <-> Foundry) + client OpenAI", "verify": "GATED sur 17.1=GO. natif : couche d'inference abstraite (Ollama et Foundry Local commutables derriere une interface) ; client OpenAI /v1/chat/completions (streaming NDJSON/SSE, annulation < 500 ms) ; copilote fonctionne via Foundry avec 0 reseau re-prouve ; gestion modeles ONNX ; re-packaging ARM64 verifie", "passes": false, "verified_by": "ANNULEE 2026-07-24 — la gate ne s'est jamais ouverte : 17.1 a trance NO-GO (ADR-0016 rejected). Story jamais codee, par conception (spike-first). Reste a false volontairement : ce n'est PAS une dette, c'est une branche fermee. A ne rouvrir qu'avec l'Epic 17, sous l'une des 3 conditions de reouverture de l'ADR-0016" },
-    { "id": "19.1", "title": "Explorateur : nouvelle note, nouveau dossier, tri (affordances mortes)", "verify": "natif : explorateur ouvert sur un dossier -> 'Nouvelle note' / 'Nouveau dossier' ouvrent une saisie EN PLACE dans la liste (Entree cree, Echap annule) ; nom valide AVANT ecriture (caracteres interdits, noms reserves Windows, conflit insensible a la casse) et aucun ecrasement silencieux ; une note creee s'ouvre aussitot ; 'Trier' propose Nom / Modifie le / Type avec inversion asc-desc, PERSISTE entre sessions, dossiers toujours en tete ; le 4e bouton ('Tout replier') est retire (explorateur plat)", "passes": true, "verified_by": "valide en natif par l'utilisateur 2026-07-24 : les 4 boutons de l'en-tete explorateur sont reels. Saisie EN PLACE (ligne d'input dans la liste, Entree cree / Echap annule / blur annule), la note creee s'ouvre aussitot, le dossier apparait sans ouvrir. Tri Nom/Modifie le/Type avec inversion asc-desc au re-clic, persiste dans settings (validation champ par champ au chargement : un settings corrompu ne casse pas le tri), dossiers TOUJOURS en tete quel que soit l'ordre. 4e bouton 'Tout replier' retire (l'explorateur est plat, rien a replier). Couche pure explorer.ts : sortEntries(entries, sort) (mtime absent -> relegue en fin, jamais melange aux dates reelles), normalizeNewName (ajoute .md si pas d'extension supportee, refuse caracteres interdits Windows / noms reserves CON-NUL-COM1 / point-espace final / . et .. / >120 car), nameExists insensible a la casse (Windows l'est : creer notes.md a cote de Notes.md ecrasait). Aucun ecrasement silencieux : conflit verifie sur la liste ET re-verifie sur disque (exists) avant ecriture dans createFileAt/createDirAt. readDirectory(path, withTimes) ne paie le stat par entree QUE si le tri est 'modified' (sinon gros dossier penalise pour rien), batche par 64. Boutons desactives hors Tauri (mode navigateur) et sans dossier cible. Capability fs:allow-mkdir elargie de $APPDATA/** a ** (coherent avec write-text-file et rename deja en **) — signalee et acceptee par l'utilisateur. svelte-check 0 err, vitest 274/274 (+14 tests explorer)" },
-    { "id": "19.2", "title": "Panneau Parametres (engrenage du ruban) : Apparence + Donnees + A propos", "verify": "natif : clic sur l'engrenage du ruban -> modale Parametres centree ; Echap et clic sur le fond la ferment, le focus est piege dedans ; Apparence = theme (clair/sombre) et largeur du document (etroit/confortable/pleine largeur), appliques immediatement et persistes ; Donnees = purge de l'historique des versions et purge de l'index semantique, chacune en DEUX temps (Purger -> Confirmer) et definitive, avec compte-rendu de ce qui a ete supprime ; A propos = nom, version, '100 % hors-ligne' ; les modeles IA ne sont PAS dupliques (renvoi vers le copilote)", "passes": true, "verified_by": "valide en natif par l'utilisateur 2026-07-27 (sprint 16) : engrenage du ruban -> modale Parametres centree ; Echap et clic sur le fond ferment, focus piege ; Apparence (theme + largeur) appliquee immediatement et persistee ; purges Donnees (historique versions + index semantique) eprouvees en DEUX temps sur un vrai historique, definitives, avec compte-rendu ; A propos = nom, version, 100 % hors-ligne ; modeles IA non dupliques (renvoi copilote)" },
-    { "id": "19.3", "title": "Bouton logo -> A propos (plus de bouton muet)", "verify": "natif : clic sur le logo Doku du ruban -> ouvre la modale Parametres avec la section A propos mise en avant (surlignee et amenee dans le champ de vision) ; le logo a un title et un aria-label explicites", "passes": true, "verified_by": "valide en natif par l'utilisateur 2026-07-27 (sprint 16) : clic sur le logo -> modale Parametres ouverte avec la section A propos surlignee et amenee en vue ; title + aria-label presents" },
-    { "id": "19.4", "title": "Sceller la v2.2 : bump version 2.2.0 + installateur ARM64 verifie", "verify": "package.json ET src-tauri/tauri.conf.json a 2.2.0 (la carte A propos affiche Doku v2.2.0) ; npm run build OK ; npm run tauri build -> installateur NSIS arm64 genere ; app INSTALLEE lancee : ouvrir un .md, sauver, copilote genere, assoc .pdf intacte. Ne se scelle qu'APRES validation de 19.2 et 19.3", "passes": true, "verified_by": "valide par l'utilisateur 2026-07-27 : versions 2.2.0 partout (package.json+lock, tauri.conf.json, Cargo.toml+lock), npm run build OK, installateur NSIS arm64 genere (Doku_2.2.0_arm64-setup.exe) AVEC habillage D.A. complet (BMPs + template custom base tauri-cli 2.11.4, installateur en francais) ; app installee smoke-testee par l'utilisateur, gate 19.2/19.3 respectee. Bonus hors sprint : habillage NSIS (design, pas d'entree ledger)" }
-  ]
+    "sprint":  17,
+    "features":  [
+                     {
+                         "id":  "1.1",
+                         "title":  "Ouverture reelle via dialogue + I/O natif (Ctrl+O)",
+                         "verify":  "npm run tauri dev -\u003e Ctrl+O sur un vrai .md -\u003e contenu reel affiche (pas la demo)",
+                         "passes":  true,
+                         "verified_by":  "npm run tauri dev — Ctrl+O sur vrai .md, valide utilisateur 2026-07-09"
+                     },
+                     {
+                         "id":  "3.2",
+                         "title":  "Sauvegarde atomique + indicateur modifie (Ctrl+S)",
+                         "verify":  "editer + Ctrl+S -\u003e fichier ecrit via tmp+rename, badge dirty disparait",
+                         "passes":  true,
+                         "verified_by":  "Ctrl+S sur vrai fichier, valide utilisateur (tmp+rename) 2026-07-09 ; flux dirty-\u003eenregistre Playwright"
+                     },
+                     {
+                         "id":  "3.4",
+                         "title":  "Confirmation de fermeture non sauvee",
+                         "verify":  "fermer un onglet dirty -\u003e dialogue Sauver/Ignorer/Annuler",
+                         "passes":  true,
+                         "verified_by":  "Playwright : dirty+Ctrl+W -\u003e dialogue ; Annuler/Ignorer/Sauver OK ; non-dirty ferme direct (2026-07-09)"
+                     },
+                     {
+                         "id":  "2.2",
+                         "title":  "Nouvel onglet actif + differenciateur d\u0027homonymes",
+                         "verify":  "ouvrir 2 fichiers homonymes -\u003e dossier parent affiche en differenciateur",
+                         "passes":  true,
+                         "verified_by":  "npm test tabs (7 tests) + Playwright : 2x notes.md -\u003e Notes/Archives, noms uniques sans suffixe (2026-07-09)"
+                     },
+                     {
+                         "id":  "3.3",
+                         "title":  "Round-trip Markdown sans perte + tests auto",
+                         "verify":  "npm run test roundtrip -\u003e corpus ouvert+sauve identique octet pour octet (hors normalisation documentee)",
+                         "passes":  true,
+                         "verified_by":  "npm test : 19/19 (corpus LF+CRLF byte-identique apres edition ; mixte normalise dominante) 2026-07-09"
+                     },
+                     {
+                         "id":  "2.3",
+                         "title":  "Instance unique + double-clic/association de fichiers",
+                         "verify":  "double-clic .md hors app -\u003e ouvre/focus l\u0027instance existante + nouvel onglet ; assoc .md/.html apres install",
+                         "passes":  true,
+                         "verified_by":  "valide en natif par l\u0027utilisateur (release ARM64) : instance unique + arg + associations NSIS apres install (2026-07-09)"
+                     },
+                     {
+                         "id":  "1.4",
+                         "title":  "Sanitization du HTML inline (allowlist)",
+                         "verify":  "doc avec \u003cscript\u003e/onclick -\u003e aucun script execute au rendu",
+                         "passes":  true,
+                         "verified_by":  "Playwright : \u003cscript\u003e/onerror dans l\u0027editeur = texte, non execute (chemin CM6 sur par construction) ; primitive sanitizeHtml DOMPurify 6 tests jsdom (2026-07-09)"
+                     },
+                     {
+                         "id":  "4.1",
+                         "title":  "Explorateur de dossier reel",
+                         "verify":  "sidebar Fichiers liste le dossier du doc actif (dossiers puis fichiers tries) ; clic -\u003e onglet",
+                         "passes":  true,
+                         "verified_by":  "scan vrai dossier valide en natif par l\u0027utilisateur ; logique+nav+clic Playwright + 14 tests (2026-07-09)"
+                     },
+                     {
+                         "id":  "4.2",
+                         "title":  "Etat sidebar persistant (masquee par defaut)",
+                         "verify":  "replier la sidebar, relancer -\u003e reste masquee ; etat persiste (settings.json)",
+                         "passes":  true,
+                         "verified_by":  "Playwright : defaut masquee ; ouvrir-\u003ereload reste ouverte ; fermer-\u003ereload reste fermee (localStorage doku-settings) 2026-07-09"
+                     },
+                     {
+                         "id":  "2.5",
+                         "title":  "Restauration de session (onglets + actif)",
+                         "verify":  "ouvrir des onglets, relancer -\u003e memes onglets + actif ; fichier disparu signale puis retire",
+                         "passes":  true,
+                         "verified_by":  "restauration + banniere fichier disparu validees en natif par l\u0027utilisateur ; save+banniere Playwright (2026-07-09)"
+                     },
+                     {
+                         "id":  "1.3",
+                         "title":  "Rendu GFM : coloration des blocs de code",
+                         "verify":  "bloc code fence lang affiche avec coloration syntaxique dans le WYSIWYG",
+                         "passes":  true,
+                         "verified_by":  "Playwright : coloration JS + TS (keywords/types/fonctions/proprietes/strings/nombres/operateurs) via codeLanguages + dokuHighlight enrichi (2026-07-09)"
+                     },
+                     {
+                         "id":  "1.5",
+                         "title":  "Images locales (relatives + placeholder)",
+                         "verify":  "image relative affichee (resolue au dossier du fichier) ; image manquante -\u003e placeholder discret",
+                         "passes":  true,
+                         "verified_by":  "vraie image locale affichee (valide natif utilisateur) ; placeholder Playwright + 6 tests (2026-07-09)"
+                     },
+                     {
+                         "id":  "4.4",
+                         "title":  "Resolution \u0026 navigation des wikilinks",
+                         "verify":  "clic sur [[note]] avec note.md dans le dossier/sous-dossiers -\u003e ouvre l\u0027onglet",
+                         "passes":  true,
+                         "verified_by":  "clic wikilink vers fichier non ouvert -\u003e ouvre (valide natif utilisateur) ; onglet ouvert Playwright + 7 tests (2026-07-09)"
+                     },
+                     {
+                         "id":  "6.2",
+                         "title":  "Largeur de colonne reglable (3 crans)",
+                         "verify":  "3 crans ~65ch/~80ch/pleine appliques immediatement + persistes",
+                         "passes":  true,
+                         "verified_by":  "Playwright : cycle 680/820/none via bouton doc-head, applique immediat, persiste au reload (settings) 2026-07-09"
+                     },
+                     {
+                         "id":  "6.3",
+                         "title":  "Mode focus (masque le chrome)",
+                         "verify":  "F9 masque titlebar/sidebar/barres ; Echap restaure",
+                         "passes":  true,
+                         "verified_by":  "Playwright : F9 -\u003e titlebar/sidebar/doc-head masques, editeur reste ; Echap restaure tout (2026-07-09)"
+                     },
+                     {
+                         "id":  "5.1",
+                         "title":  "Vue HTML rendue (sandbox)",
+                         "verify":  ".html s\u0027ouvre rendu dans iframe sandbox (sans script ni reseau)",
+                         "passes":  true,
+                         "verified_by":  "Playwright : recette.html rendu dans iframe sandbox=\"\" + CSP default-src none injectee, editeur masque ; sandboxDoc 4 tests (2026-07-09)"
+                     },
+                     {
+                         "id":  "5.2",
+                         "title":  "HTML : edition source + refresh",
+                         "verify":  "bascule source .html editable ; Ctrl+S rafraichit le rendu",
+                         "passes":  true,
+                         "verified_by":  "Playwright : Ctrl+/ rendu\u003c-\u003esource HTML colore (lang-html), retour rendu ; srcdoc reactif au contenu (2026-07-09)"
+                     },
+                     {
+                         "id":  "3.6",
+                         "title":  "Mode source Ctrl+/ (formaliser)",
+                         "verify":  "Ctrl+/ -\u003e source coloree, curseur conserve, retour WYSIWYG sans perte",
+                         "passes":  true,
+                         "verified_by":  "Playwright : Ctrl+/ -\u003e source monospace coloree (markdown brut) ; curseur conserve ; retour WYSIWYG sans perte. CORRECTIF 2026-07-10 (critique impeccable) : Mod-/ declenchait aussi toggleComment de CM (defaultKeymap dans minimalSetup) quand l\u0027editeur avait le focus -\u003e commentait la ligne + salissait le doc. Neutralise via suppressToggleComment (Prec.highest no-op) dans editor.ts ; re-verifie editeur focus : H1 intact, caption \u0027enregistre\u0027, aucun \u0027\u003c!--\u0027 (2026-07-10)"
+                     },
+                     {
+                         "id":  "4.6",
+                         "title":  "Table des matieres (highlight au scroll)",
+                         "verify":  "TOC H1-H3 ; titre courant surligne au scroll ; clic navigue",
+                         "passes":  true,
+                         "verified_by":  "Playwright : scroll 700-\u003eDecisions, 1500-\u003eA faire (scroll-spy) ; hierarchie H1-H3 + clic scrollToLine deja OK (2026-07-09)"
+                     },
+                     {
+                         "id":  "3.5",
+                         "title":  "Rechargement sur modification externe",
+                         "verify":  "fichier modifie sur disque + focus -\u003e propose recharger (silencieux si pas de modif locale)",
+                         "passes":  true,
+                         "verified_by":  "valide en natif par l\u0027utilisateur : au focus, reload silencieux si non-dirty + bandeau [Recharger] si modifs locales (detection focus/relecture disque, sans watcher) ; logique classifyExternalChange 5 tests (2026-07-10)"
+                     },
+                     {
+                         "id":  "6.1",
+                         "title":  "Theme creme persistant",
+                         "verify":  "theme creme par defaut ; bascule persiste entre sessions",
+                         "passes":  true,
+                         "verified_by":  "acquis S2 : couche settings loadSettings/saveSettings (localStorage doku-settings), validee Playwright reload (4.2) 2026-07-09"
+                     },
+                     {
+                         "id":  "8.1",
+                         "title":  "Build ARM64 natif",
+                         "verify":  "binaire ARM64 natif (aucune emulation) ; demarrage \u003c 1.5s",
+                         "passes":  true,
+                         "verified_by":  "acquis S2 : tauri build release -\u003e Target: arm64, exe+NSIS+MSI generes 2026-07-09"
+                     },
+                     {
+                         "id":  "8.2",
+                         "title":  "Installateur NSIS + associations",
+                         "verify":  "installateur ; .md/.html associes apres install",
+                         "passes":  true,
+                         "verified_by":  "acquis S2 (2.3) : fileAssociations NSIS, associations validees en natif apres install par l\u0027utilisateur 2026-07-09"
+                     },
+                     {
+                         "id":  "2.4",
+                         "title":  "Glisser-deposer de fichiers dans la fenetre",
+                         "verify":  "glisser un .md sur la fenetre -\u003e ouvert dans un onglet",
+                         "passes":  true,
+                         "verified_by":  "valide en natif par l\u0027utilisateur : drop d\u0027un fichier supporte -\u003e ouvert dans un onglet + overlay au survol ; multi-fichiers OK ; format non supporte -\u003e bandeau ; dedup onglet existant. onDragDropEvent du webview Tauri (zero Rust), openDropped -\u003e openPath (garde 1.2) (2026-07-10)"
+                     },
+                     {
+                         "id":  "1.2",
+                         "title":  "Detection d\u0027encodage \u0026 fichiers non supportes",
+                         "verify":  "ouvrir un fichier non-UTF-8/binaire -\u003e message clair, aucun plantage ni corruption",
+                         "passes":  true,
+                         "verified_by":  "valide en natif par l\u0027utilisateur : Ctrl+O sur binaire-test.txt (octets NUL) -\u003e bandeau \u0027fichier binaire\u0027 ; latin1-test.txt (UTF-8 invalide) -\u003e bandeau \u0027encodage non pris en charge\u0027 ; .md UTF-8 ouvre normalement. detectUnsupported (NUL + ratio U+FFFD) cable sur openFromDialog/openPath/restoreSession ; 6 tests unitaires. Formats non supportes (PDF/images) masques en amont (dialogue + explorateur), intentionnel (2026-07-10)"
+                     },
+                     {
+                         "id":  "5.3",
+                         "title":  "Support .txt (editeur simple)",
+                         "verify":  "ouvrir un .txt -\u003e editeur CM6 nu (sans live preview), sauvegarde fiable round-trip",
+                         "passes":  true,
+                         "verified_by":  "Playwright : courses.txt -\u003e texte brut monospace, 0 decoration live-preview (# et ** litteraux), Plan sans faux titre, edition -\u003e dirty ; round-trip via serializeDoc/detectLineEnding (kind-agnostique, deja teste LF+CRLF) sur chemin de save partage (2026-07-10)"
+                     },
+                     {
+                         "id":  "8.3",
+                         "title":  "Zero requete reseau au runtime",
+                         "verify":  "monitorer le reseau app lancee -\u003e aucune requete sortante",
+                         "passes":  true,
+                         "verified_by":  "audit code (0 fetch/XHR/WS/telemetry, 0 reseau Rust, polices @fontsource/material-symbols bundlees local) ; Playwright : 72 requetes toutes localhost, 0 hote distant ; CSP \u0027connect-src self ipc\u0027 ajoutee (bloque le phone-home) et validee en natif par l\u0027utilisateur (app pleinement fonctionnelle : IPC/asset/srcdoc OK) (2026-07-10)"
+                     },
+                     {
+                         "id":  "1.6",
+                         "title":  "Gros fichiers (\u003e= ~2 Mo) reactifs",
+                         "verify":  "ouvrir un fichier \u003e= 2 Mo -\u003e pas de gel \u003e 200 ms ; bascule mode source proposee au-dela du seuil",
+                         "passes":  true,
+                         "verified_by":  "Playwright (doc genere ~1,9 Mo) : ouvert en mode source leger (0 decoration live-preview), scroll fluide 34ms/20 events (scroll-spy gate car O(doc)), Plan vide (gate), notice + \u0027Afficher l\u0027apercu\u0027 -\u003e forcePreview bascule en apercu sans gel ; non-regression notes.md (preview+Plan intacts). Cause du gel = docHeadings O(doc) au scroll, corrige par le gating heavy (2026-07-10)"
+                     },
+                     {
+                         "id":  "7.1",
+                         "title":  "Epinglage always-on-top",
+                         "verify":  "activer l\u0027epinglage (bouton/raccourci) -\u003e fenetre reste au-dessus d\u0027une autre app, etat visible, re-clic desactive",
+                         "passes":  true,
+                         "verified_by":  "valide en natif par l\u0027utilisateur : Ctrl+Maj+T + bouton -\u003e fenetre reste au-dessus, etat visible, re-clic desactive. togglePin centralise dans le store (partage bouton + raccourci) ; Playwright : bouton .on/aria-pressed, raccourci via listener fenetre, editeur focus + Ctrl+Maj+T reel -\u003e pin bascule SANS muter le doc (piege CM6 defaultKeymap Shift-Mod-t evite) ; svelte-check 0 err, 82 tests (2026-07-10)"
+                     },
+                     {
+                         "id":  "7.2",
+                         "title":  "SnapshotService (copie a la save + purge)",
+                         "verify":  "sauver un fichier plusieurs fois -\u003e historique liste des snapshots dates avec apercu ; purge auto (20 versions / 30 j)",
+                         "passes":  true,
+                         "verified_by":  "listing valide en natif par l\u0027utilisateur : editions + Ctrl+S repetes -\u003e panneau Historique liste les versions datees avec apercu (plus recente en haut). Stockage %APPDATA%/\u003capp\u003e/snapshots/\u003csha1(chemin)\u003e/ + meta.json index atomique ; dossiers de notes intacts. Ecritures serialisees par cle (anti-course meta/purge), noms uniques a la ms, snapshot fire-and-forget (jamais bloquant pour le save). Purge 20/30j + garde-toujours-le-dernier : selectPurgeable pur, 15 tests ; reconciliation disque (orphelins purges). fs:allow-remove confine a $APPDATA/snapshots/**. Revue code-reviewer Approve (0 Critical/Major) + 2 Minor corriges (meta atomique+reconciliee, horodatage synchrone). svelte-check 0 err, 97 tests. Durcissement interne re-exerce au smoke 7.3 (2026-07-10)"
+                     },
+                     {
+                         "id":  "7.3",
+                         "title":  "Restauration depuis l\u0027historique",
+                         "verify":  "restaurer une version -\u003e le fichier courant est snapshotte d\u0027abord puis remplace (aucune perte)",
+                         "passes":  true,
+                         "verified_by":  "valide en natif par l\u0027utilisateur : clic sur une version -\u003e le fichier revient a cette version + onglet recharge (mecanisme rev 3.5) + banniere de confirmation. Reversibilite sans pollution : restaurer avec des modifs non enregistrees les archive (rien de perdu) ; restaurer depuis un etat propre n\u0027ajoute PAS de doublon (l\u0027etat courant est deja dans l\u0027historique) -\u003e navigation entre versions libre. readSnapshot garde parseStamp (jamais meta.json ni chemin detourne) ; ecriture atomique. svelte-check 0 err, 97 tests (2026-07-10)"
+                     },
+                     {
+                         "id":  "4.5",
+                         "title":  "Desambiguisation \u0026 creation de wikilink",
+                         "verify":  "clic sur [[note-inexistante]] -\u003e propose creer note.md a cote ; [[cible-ambigue]] -\u003e menu de candidats",
+                         "passes":  true,
+                         "verified_by":  "valide en natif par l\u0027utilisateur : clic sur [[note-inexistante]] -\u003e prompt \u0027Creer note.md\u0027 -\u003e fichier cree dans le dossier du doc actif + ouvert (garde anti-ecrasement : ouvre si deja cree) ; [[homonymes]] -\u003e menu de candidats (nom + dossier) ; cible unique -\u003e ouvre direct. wikilinkCandidates + wikilinkFileName (dernier segment seul, traversee ../ neutralisee) purs, 9 tests ; WikilinkPrompt modal. Playwright : prompt creation rendu + Escape ferme, 0 erreur console. svelte-check 0 err/warn, 106 tests (2026-07-10)"
+                     },
+                     {
+                         "id":  "3.7",
+                         "title":  "Widgets tableaux \u0026 images (rendu + edition source au clic)",
+                         "verify":  "un tableau/une image dans le WYSIWYG -\u003e rendu en widget ; clic sur le widget -\u003e revele/edite la source correspondante",
+                         "passes":  true,
+                         "verified_by":  "valide en natif par l\u0027utilisateur : un .md avec tableau GFM -\u003e rendu en tableau style (.cm-lp-table) ; clic -\u003e source \u0027| ... |\u0027 revelee, edition d\u0027une cellule -\u003e clic ailleurs -\u003e re-rendu, Ctrl+S round-trip ; image -\u003e clic revele la source \u0027![...]\u0027. Widget-bloc via StateField tableField (un ViewPlugin ne peut pas fournir de replace block-level) ancre sur lineAt().from/.to (frontieres de ligne, tableau indente) ; gating par activeLineSet (source si le curseur est dans le bloc) ; clic capte par listener mousedown dans toDOM(view) (motif CheckboxWidget). parseTable pur (pipes echappes, alignements, bords optionnels) 7 tests. Revue code-reviewer Approve, Major corrige (alignement frontieres de ligne) ; verif navigateur (rendu + clic-pour-editer + re-rendu, 0 erreur console). svelte-check 0 err, 113 tests (2026-07-10)"
+                     },
+                     {
+                         "id":  "3.1",
+                         "title":  "Edition live preview en place (formaliser)",
+                         "verify":  "taper dans un bloc -\u003e edition en place, syntaxe revelee au curseur, re-rendu a la sortie du bloc",
+                         "passes":  true,
+                         "verified_by":  "Playwright (navigateur, chemin pur CM6) : curseur sur la ligne H1 -\u003e \u0027# Mes notes de projet\u0027 (marqueur revele) ; curseur deplace sur le paragraphe -\u003e \u0027Mes notes de projet\u0027 (# re-masque) = syntaxe revelee au curseur / re-rendue a la sortie du bloc (HIDDEN_MARKS gates par la ligne du curseur, live-preview.ts). Edition en place : frappe -\u003e doc mute + badge modifie, Ctrl+Z restaure. Comportement WYSIWYG cle, deja soutenu par 3.2 (save) et 3.3 (round-trip 19 tests) (2026-07-10)"
+                     },
+                     {
+                         "id":  "4.3",
+                         "title":  "Fichiers non supportes grises/masques (formaliser)",
+                         "verify":  "dossier mixte -\u003e les non supportes (pdf/images) sont masques/grises dans l\u0027explorateur, aucune ouverture binaire",
+                         "passes":  true,
+                         "verified_by":  "tests unitaires explorer.test.ts (isSupportedFile png/pdf -\u003e false ; visibleEntries filtre b.png) + Playwright : explorateur du dossier demo -\u003e \u0027..\u0027 + dossiers (archives, Projets) puis fichiers supportes tries (courses.txt, idees.md, notes.md, recette.html, todo.md), image.png MASQUE. Choix utilisateur \u0027garder masques\u0027 (pas grises) ; visibleEntries = dossiers + isSupportedFile, aucune ouverture binaire (2026-07-10)"
+                     },
+                     {
+                         "id":  "9.1",
+                         "title":  "Spike : strategie d\u0027index recherche (memoire vs scan)",
+                         "verify":  "spike documente : sur corpus ~1000 fichiers (~5 Mo), comparaison scan-a-la-volee vs index-memoire, decision tranchee par mesure (cible \u003c 300 ms), note/ADR ecrite avant de coder 9.2",
+                         "passes":  true,
+                         "verified_by":  "benchmark Node (scratchpad/bench-search.mjs, 1000 fichiers 5,11 Mo) : scan-par-recherche 20-50 ms/requete (relit tout a chaque fois) vs index-memoire build 23 ms une fois puis recherche 0,4-1,6 ms. Node fs = plancher (IPC Tauri plus lent -\u003e ecart creuse en faveur de l\u0027index). Decision = index-en-memoire (scan-once + cache + invalidation), \u003e 200x de marge sous 300 ms, aligne pattern WikilinkResolver ; aucune lib tierce. Documente en ADR-0007 avec forme du SearchService pour 9.2 (2026-07-13)"
+                     },
+                     {
+                         "id":  "9.2",
+                         "title":  "Moteur de recherche (scan dossier, casse-insensible, anti-perime)",
+                         "verify":  "npm test recherche : scan dossier + sous-dossiers, casse-insensible, extraits de contexte, \u003c 300 ms sur ~1000 fichiers ; non-supportes/binaires ignores (detectUnsupported) ; requete modifiee annule la precedente (req-token)",
+                         "passes":  true,
+                         "verified_by":  "valide en natif par l\u0027utilisateur : recherche dans un vrai dossier fonctionne (scan + extraits), binaires exclus. search.ts pur (9 tests : casse-insensible, extraits+offsets, dedup ligne, caps, ligne longue fenetree) ; buildSearchIndex (scan recursif scanFiles + filtre isSupportedFile + skip detectUnsupported + lecture par lots bornes ARM) ; runSearch (index memoire paresseux ADR-0007 + coalescing des builds + req-token) ; invalidation in-place au save/reload. Revue code-reviewer Approve, 2 Majors corriges (index perime sur creation/reload ; builds concurrents). svelte-check 0 err, 122 tests (2026-07-13)"
+                     },
+                     {
+                         "id":  "9.3",
+                         "title":  "Panneau de recherche (Ctrl+Maj+F, resultats surlignes)",
+                         "verify":  "Playwright/natif : Ctrl+Maj+F -\u003e panneau ; requete -\u003e liste fichiers + extraits (terme surligne) ; \u0027Aucun resultat\u0027 clair si vide",
+                         "passes":  true,
+                         "verified_by":  "valide en natif par l\u0027utilisateur. Playwright (demo) : Ctrl+Maj+F -\u003e panneau + focus input ; \u0027pdf\u0027 -\u003e notes.md:31 + idees.md:5 avec terme surligne (\u003cmark\u003e, pas de {@html}) + n de ligne, casse-insensible ; requete sans match -\u003e \u0027Aucun resultat\u0027 ; requete vide -\u003e hint ; clic resultat -\u003e onglet ouvert ; 0 erreur console. Vue \u0027search\u0027 de la Sidebar (ruban + input as-you-type -\u003e runSearch), rendu AIR. svelte-check 0 err (2026-07-13)"
+                     },
+                     {
+                         "id":  "9.4",
+                         "title":  "Saut vers l\u0027occurrence au clic",
+                         "verify":  "clic sur un resultat -\u003e fichier ouvert dans un onglet scrolle sur l\u0027occurrence (ligne visible, terme mis en evidence) — valide natif",
+                         "passes":  true,
+                         "verified_by":  "valide en natif par l\u0027utilisateur : clic sur un resultat -\u003e ouvre le fichier, saute a la ligne du mot (centre) et l\u0027ENCADRE (cadre visible qui s\u0027estompe). openSearchHit pose un pending-reveal avant openPath ; DocumentView le consomme apres montage de l\u0027onglet (effet declare apres le switch d\u0027onglet) ; revealMatch selectionne + scrollIntoView centre + decoration .cm-search-flash (box-shadow 2px --ink-3 + fond --accent-soft, 1,6 s). search.ts SearchHit porte col+length (position doc exacte, distincte des offsets snippet fenetres) ; module editor/search-flash.ts (StateField). Playwright : clic \u0027coller\u0027 -\u003e idees.md ouvert, \u0027Coller\u0027 selectionne + encadre (box-shadow computed), 0 erreur. svelte-check 0 err, 123 tests (2026-07-13)"
+                     },
+                     {
+                         "id":  "10.1",
+                         "title":  "Spike : pipeline export PDF (window.print vs PrintToPdfAsync)",
+                         "verify":  "spike documente : essai natif ARM64 de l\u0027impression WebView2 par dialogue (window.print) vs PrintToPdfAsync (COM), fidelite + UX tranchees, piege #5199 (PDF supprime si webview disposee trop tot) note, note/ADR avant 10.2",
+                         "passes":  true,
+                         "verified_by":  "valide en natif par l\u0027utilisateur : bouton \u0027Exporter en PDF\u0027 -\u003e dialogue d\u0027impression WebView2 -\u003e \u0027Enregistrer au format PDF\u0027 fonctionne (approche A = window.print + @media print + iframe isole). Decision A vs B tranchee en ADR-0008 (A==B en fidelite car meme moteur Chromium ; B ecarte car exige Rust/COM contra ADR-0004 pour un besoin batch inexistant YAGNI). Piege #5199 DOCUMENTE dans l\u0027ADR (ne jamais disposer la webview pendant l\u0027impression ; teardown iframe differe). Scaffold : src/lib/export/print.ts (buildPrintHtml + exportViaPrint, iframe sandbox=\u0027allow-modals allow-same-origin\u0027 SANS allow-scripts + CSP \u0027default-src none\u0027 injectee = defense en profondeur), refactor html.ts (paperCss/injectHead reutilisables). Revue critic : 2 corrections (iframe sandboxe ; renderMarkdown SORTI du spike -\u003e l\u0027app n\u0027a aucun renderer md, rendu MD-\u003eHTML = story 10.2). 5 tests print.test.ts, svelte-check 0 err, 128 tests. A CONFIRMER en 10.2 : persistance du PDF apres fermeture app (#5199) + rendu MD fidele (2026-07-13)"
+                     },
+                     {
+                         "id":  "10.2",
+                         "title":  "Export PDF (@media print, fidele WYSIWYG)",
+                         "verify":  "natif : \u0027Exporter -\u003e PDF\u0027 sur un .md/.html affiche -\u003e PDF fidele au rendu (chrome masque, sauts de page, marges), 100% hors-ligne",
+                         "passes":  true,
+                         "verified_by":  "valide en natif par l\u0027utilisateur : \u0027Exporter en PDF\u0027 sur un .md -\u003e PDF RENDU (titres/listes/table GFM/code/taches/citations via marked, pas de markdown brut), images locales visibles, marges/sauts de page OK, PDF persiste apres fermeture app (#5199). renderMarkdown (marked GFM + sanitizeHtml, ADR-0009) cable dans buildPrintHtml ; images resolues en asset:// (CSP img-src data: asset:). Revue code-reviewer Approve, Major corrige (images bloquees reseau/UNC SUPPRIMEES a la source -\u003e aucun beacon, pas juste la CSP) + Minor wikilink echappe. 137 tests (9 render-md + print), svelte-check 0 err, build prod OK (marked bundle ~12 Ko). Limites notees (ADR-0009) : pas de coloration code, liens inertes, fences non exclus des pre-passes -\u003e 10.3 (2026-07-13)"
+                     },
+                     {
+                         "id":  "10.3",
+                         "title":  "Export HTML autonome (styles + images inline, sanitize)",
+                         "verify":  "\u0027Exporter -\u003e HTML autonome\u0027 -\u003e un seul .html avec styles inline (AIR) + images en data:, sanitize (aucun script), ouvrable hors-ligne dans n\u0027importe quel navigateur",
+                         "passes":  true,
+                         "verified_by":  "valide en natif par l\u0027utilisateur 2026-07-14 : Exporter en HTML autonome -\u003e .html ouvert hors-ligne dans un navigateur tiers, image inline (data:) visible, styles AIR appliques, aucun script"
+                     },
+                     {
+                         "id":  "10.4",
+                         "title":  "Export DOCX (lib OOXML) — stretch",
+                         "verify":  "\u0027Exporter -\u003e DOCX\u0027 -\u003e .docx ouvrable dans Word (titres/gras/italique/listes/liens/tableaux/code, fidelite raisonnable) ; elements non mappables -\u003e texte brut sans planter",
+                         "passes":  true,
+                         "verified_by":  "valide en natif par l\u0027utilisateur 2026-07-14 : Exporter en DOCX -\u003e .docx ouvert dans Word/LibreOffice, titres/gras/italique/listes/lien/table/code rendus (fidelite raisonnable)"
+                     },
+                     {
+                         "id":  "11.1",
+                         "title":  "Viewer PDF.js bundle local (lecture seule, scroll/zoom, worker sous CSP)",
+                         "verify":  "natif : ouvrir un .pdf -\u003e rendu lecture seule via PDF.js bundle (100% hors-ligne), scroll multi-pages + zoom ; 1re page \u003c 1s (PDF 10 Mo) ; worker autorise sous CSP (worker-src \u0027self\u0027 blob:) ; octets lus via plugin-fs readFile (Uint8Array)",
+                         "passes":  true,
+                         "verified_by":  "valide en natif par l\u0027utilisateur 2026-07-14 : Ctrl+O un vrai .pdf -\u003e rendu lecture seule PDF.js hors-ligne, scroll multi-pages, worker charge (0 fake worker/violation CSP), 1re page rapide ; test critique Ctrl+S sur onglet pdf = aucune ecriture (fichier intact). CORRECTIF flou : le canvas etait dimensionne avant apparition de la scrollbar verticale -\u003e `max-width:100%` reechantillonnait le canvas d\u0027un facteur non-entier -\u003e flou leger ; corrige par `scrollbar-gutter: stable` (gouttiere reservee en amont, clientWidth stable) + plafond DPR 2-\u003e3 (nettete si echelle Windows \u003e200%). svelte-check 0 err"
+                     },
+                     {
+                         "id":  "11.2",
+                         "title":  ".pdf comme format supporte (explorateur/associations, lecture seule)",
+                         "verify":  ".pdf ajoute a isSupportedFile -\u003e visible/ouvrable dans explorateur + associations ; aucun mode edition propose",
+                         "passes":  true,
+                         "verified_by":  "Moitie in-app (isSupportedFile pdf, explorateur affiche/ouvre, openPath/double-clic/single-instance routent en lecture seule, editeur+export masques, aucun mode edition) validee en natif par l\u0027utilisateur en 11.1 (2026-07-14). Moitie association OS : entree fileAssociations .pdf role=Viewer (distinct de Editor md/html) ajoutee dans tauri.conf.json, mecanisme NSIS identique aux associations .md/.html deja validees apres install (8.2) ; l\u0027utilisateur valide sur confiance (2026-07-14), confirmation au prochain build+install. file_from_args (Rust) est agnostique a l\u0027extension -\u003e zero Rust ajoute. 156 tests, svelte-check 0 err"
+                     },
+                     {
+                         "id":  "12.1",
+                         "title":  "Coller une image -\u003e fichier lie + insertion du lien",
+                         "verify":  "natif : doc Markdown enregistre -\u003e Ctrl+V d\u0027une image -\u003e ecrite a cote (nom unique jamais ecrasant) + ![](chemin-relatif) insere au curseur ; doc non enregistre -\u003e demande de sauver ; presse-papier texte -\u003e insertion normale ; echec ecriture -\u003e message clair, aucun lien casse",
+                         "passes":  true,
+                         "verified_by":  "valide en natif par l\u0027utilisateur 2026-07-14 : Ctrl+V d\u0027une image dans un .md enregistre -\u003e fichier image-AAAAMMJJ-HHMMSS.png ecrit a cote + ![](nom) insere au curseur (apercu OK) ; 2e collage -\u003e ~1 (jamais ecrasant) ; presse-papier texte -\u003e collage normal inchange. paste-image.ts pur (sniff magic bytes png/jpg/gif/webp, imageStamp, candidateName, nextFreeName) 17 tests ; writePastedImage serialise (chaine de promesses) + exists-loop anti-ecrasement + writeFileAtomic ; handler CM6 domEventHandlers paste (extraction File synchrone avant await, return true/false = pris en charge/fall-through texte). 2 bugs data-loss HIGH interceptes par critic (collage meme-seconde s\u0027ecrasant -\u003e serialisation ; insertion dans le MAUVAIS onglet via editeur partage -\u003e garde app.activeId===tabId). Gardes : non-enregistre/dossier absent/format non reconnu/\u003e25Mo/echec ecriture -\u003e bandeau, aucun lien casse. fs:allow-exists elargi a ** (coherent ADR-0005). code-reviewer Approve 0 Critical/Major. svelte-check 0 err, 173 tests"
+                     },
+                     {
+                         "id":  "13.1",
+                         "title":  "Spike : sidecar Ollama ARM64 (externalBin, serve, generate, port ephemere)",
+                         "verify":  "natif : ollama.exe ARM64 lance en externalBin sur un port ephemere -\u003e /api/generate streame une generation EN LOCAL (0 requete reseau non-localhost), spawn + kill verifies, pieges port/orphelin notes ; confirme ADR-0012 avant de coder 13.2 (gate go/no-go faisabilite)",
+                         "passes":  true,
+                         "verified_by":  "valide en natif par l\u0027utilisateur 2026-07-14 (GO, 3/3 criteres) : ollama.exe ARM64 (v0.32.0, asset ollama-windows-arm64.zip) lance en sidecar (tauri-plugin-shell externalBin) sur port ephemere (bind 127.0.0.1:0 -\u003e OLLAMA_HOST), modeles isoles %APPDATA%/com.soundnodes.doku/models (OLLAMA_MODELS), pull qwen2.5:0.5b OK ; GENERATION streamee end-to-end (tokens console via ollama.ts/splitNdjson + bandeau) POST /api/generate 200, ~120 tok/s CPU Snapdragon X (NEON/ARM_FMA), 100% local (llama-server 127.0.0.1) ; CORS/CSP webview-\u003esidecar OK (OPTIONS 204). Kill propre confirme APRES fix arbre de process (taskkill /F /T : ollama spawne llama-server en grand-enfant que CommandChild::kill seul laissait orphelin). splitNdjson pur 4 tests, critic+code-reviewer Approve (0 Critical/Major). DETTE 13.2 : (1) lib/ollama non copie par externalBin -\u003e hand-copie dans target/debug pour le dev ; empaqueter via bundle.resources + OLLAMA_LIBRARY_PATH via resource_dir() pour le build ; (2) taskkill -\u003e Job Object (KILL_ON_JOB_CLOSE) + pidfile sweep pour survivre a un crash ; (3) egress 8.3 : Ollama a OLLAMA_REMOTES=ollama.com, un check model_recommendations planifie, OLLAMA_NO_CLOUD=false, genere une cle SSH -\u003e neutraliser (OLLAMA_NO_CLOUD, telemetrie off) et re-verifier 0 reseau au repos ; (4) CORS : Ollama fusionne notre OLLAMA_ORIGINS avec une liste permissive par defaut"
+                     },
+                     {
+                         "id":  "13.2",
+                         "title":  "SidecarManager (port ephemere, readiness-poll, kill, pidfile)",
+                         "verify":  "copilote active -\u003e Doku demarre le sidecar sur un port libre choisi dynamiquement + readiness-poll avant le 1er appel ; kill a la fermeture (0 orphelin) ; pidfile -\u003e sweep d\u0027un residu au demarrage ; port occupe/echec -\u003e message clair, app intacte (Rust minimal : spawn+port+kill+proxy)",
+                         "passes":  true,
+                         "verified_by":  "valide en natif par l\u0027utilisateur 2026-07-14 : logique sidecar extraite dans src-tauri/src/sidecar.rs. (1) Chemin lib PROPRE : hand-copie target/debug/lib supprimee, generation OK via OLLAMA_LIBRARY_PATH = CARGO_MANIFEST_DIR/binaries en dev (resource_dir() en release, bundle.resources) -\u003e plus de hack. (2) KILL AU CRASH confirme : End task brutal de doku.exe (sans handler Destroyed) -\u003e ni ollama.exe ni llama-server.exe ne survivent, via Job Object Windows KILL_ON_JOB_CLOSE (AssignProcessToJobObject ; le grand-enfant llama-server herite du job). Supersede le pidfile+sweep d\u0027ADR-0012 (amende) : nettoyage garanti noyau, pas de hasard de reutilisation de PID. (3) Egress 8.3 : OLLAMA_NO_CLOUD=1 (+ OLLAMA_REMOTES=127.0.0.1) coupe le poll model_recommendations-\u003eollama.com. windows 0.61 (deja dans l\u0027arbre). critic (1 HIGH resource_dir dev -\u003e garde fallback dev ; HANDLE Send/Sync ; Job supersede pidfile) + code-reviewer Approve (Major shutdown lock-ordering corrige : verrou tenu pendant terminate_job ; auto-heal du slot sur Terminated). cargo check OK, svelte-check 0 err, 177 tests. Dette : valider le packaging release (resource_dir) au prochain tauri build ; pare-feu = garantie dure 8.3"
+                     },
+                     {
+                         "id":  "13.3",
+                         "title":  "OllamaClient (generate stream, tags, pull, delete, annulation)",
+                         "verify":  "sidecar pret -\u003e generate streame (NDJSON) et s\u0027annule \u003c 500 ms (AbortController) ; tags/pull(progress)/delete exposes ; 0 requete non-localhost a l\u0027inference",
+                         "passes":  true,
+                         "verified_by":  "valide en natif par l\u0027utilisateur 2026-07-14 : src/lib/ollama.ts (socle ecrit+streame au spike 13.1). generate accepte un AbortSignal -\u003e abort coupe le fetch, arret quasi-instantane cote client ET serveur (Ollama stoppe a la deconnexion), texte partiel rendu sans exception (AbortError avale). Annulation testee natif via bouton stop du widget spike (prompt long -\u003e stop -\u003e flux coupe \u003c 500 ms, bandeau \u0027annulee : \u003cpartiel\u003e\u0027). deleteModel(port,name) -\u003e DELETE /api/delete (exerce par la purge 13.4). tags/pull(progress) deja en place. splitNdjson pur 4 tests. svelte-check 0 err, 177 tests. Petit diff TS, self-review"
+                     },
+                     {
+                         "id":  "13.4",
+                         "title":  "Gestion des modeles (liste, pull+progress, actif persistant, taille/purge)",
+                         "verify":  "panneau modeles -\u003e modeles installes (nom, taille) + actif ; pull avec progression (action reseau explicite) ; choix actif persistant (settings) ; purge confirmee (%APPDATA%/Doku/models) ; 0 modele -\u003e onboarding vers un pull",
+                         "passes":  true,
+                         "verified_by":  "valide en natif par l\u0027utilisateur 2026-07-16 : vue sidebar \u0027Copilote\u0027 (bouton ruban smart_toy) -\u003e liste des modeles installes avec nom + taille (formatBytes), modele actif selectionnable (radio/aria-pressed) et PERSISTANT (app.activeModel dans settings), pull avec barre de progression + annulation (AbortController), purge confirmee par nom (confirm) -\u003e DELETE /api/delete, etat 0 modele -\u003e onboarding vers un pull. Store slice src/lib/copilot.svelte.ts ($state module-level, reutilise par 14.1) : ensureReady (dedup promesse en vol + garde navigateur + catch sur startOllama), refreshModels (garde anti-perime), pullModel/cancelPull, removeModel (nettoie activeModel), setActiveModel. Effet d\u0027ouverture untrack() (sinon auto-re-declenchement : ensureReady lit puis ecrit copilot.port). critic (3 Majors corriges : untrack, dedup ensureReady, pull annulable) + code-reviewer Approve (Major corrige : ensureReady n\u0027attrapait pas un startOllama qui THROW -\u003e rejet non gere + etat \u0027Aucun modele\u0027 trompeur ; + abort pendant la phase de connexion, aria-pressed). svelte-check 0 err, 177 tests. Epic 13 clos = fondation copilote complete"
+                     },
+                     {
+                         "id":  "14.0",
+                         "title":  "Coquille panneau droit (aside) + chrome + relocalisation UI modeles (13.4)",
+                         "verify":  "natif : bouton collapse (coin haut-droit du doc) ouvre/ferme un panneau aside 344px a droite ; a l\u0027ouverture les controles fenetre migrent du header principal vers l\u0027en-tete du chat et le coin haut-droit du doc passe a angle droit (haut-gauche seul arrondi) ; a la fermeture ils reviennent et le doc s\u0027arrondit 14px 14px 0 0 ; anime doku-panel-in ; comportement OK EN RELEASE aussi (gotcha fermeture fenetre dev/release S2) ; l\u0027UI de gestion des modeles (13.4) est deplacee dans ce panneau (page atteinte via l\u0027icone layers), logique copilot.svelte.ts inchangee",
+                         "passes":  true,
+                         "verified_by":  "valide en natif par l\u0027utilisateur 2026-07-16 : panneau aside droit « Doku-San » (nouveau CopilotPanel.svelte, maquette docs/design/w2-copilot) ouvert/ferme par le bouton collapse (coin haut-droit du doc, SVG miroir scaleX(-1)) ; anime doku-panel-in ; chrome migre (controles fenetre min/max/close titlebar\u003c-\u003een-tete panneau selon copilotOpen, pin+theme restent titlebar) ; coin du doc with-copilot 14px 0 0 0 (ouvert) / 14px 14px 0 0 (ferme) ; close-guard intact (bouton fermer panneau = closeWindow -\u003e onCloseRequested unique -\u003e dialogue onglet dirty). Gestion des modeles (13.4) relocalisee dans la vue Modeles (layers) : liste, actif persistant, pull+progression+annuler, purge confirmee, onboarding 0-modele + carte hero (stats reelles disque + params derives, PAS de debit factice). Vue chat = coquille statique (streaming = 14.1). Boot-safety : copilotView transitoire (boot \u0027chat\u0027), coquille chat ne lit jamais le moteur -\u003e aucun spawn Ollama au boot ; ensureReady uniquement a l\u0027entree vue Modeles. smart_toy retire de la sidebar gauche. critic (HIGH boot-spawn corrige + 3 MED) + code-reviewer Approve (0 Critical/Major, 3 nits appliques). svelte-check 0 err, 181 tests, verif visuelle clair+sombre 0 erreur console"
+                     },
+                     {
+                         "id":  "14.1",
+                         "title":  "Panneau copilote (chat, streaming, annuler, rendu MD sanitize)",
+                         "verify":  "natif : Ctrl+Maj+I / bouton sidebar -\u003e panneau chat ; message envoye -\u003e reponse streamee token-par-token, annulable \u003c 500 ms ; rendu Markdown sanitize (pas de {@html} brut) et copiable ; changement d\u0027onglet pendant la generation -\u003e generation non perturbee, resultat attache a la conversation ; OllamaSpike.svelte supprime",
+                         "passes":  true,
+                         "verified_by":  "valide en natif par l\u0027utilisateur 2026-07-16 : chat reel dans le panneau droit (vue chat de CopilotPanel) -\u003e question sur le doc courant -\u003e reponse STREAMEE token-par-token (bulle texte brut pendant le stream, rendu Markdown a la fin : listes/code/table), copiable ; bouton stop coupe \u003c 500 ms en gardant le partiel ; changement d\u0027onglet pendant la generation -\u003e non perturbee (contexte capture a l\u0027envoi) ; 3 actions rapides cablees (Resumer/Question/Points cles). Securite (contenu LLM non fiable rendu dans la webview principale sans default-src) : sanitizeChatHtml en ALLOWLIST stricte (tags marked only) -\u003e tout vecteur reseau supprime (img/video/audio/source/svg use/link/input src/style), robuste aux versions ; CSP main durcie (media-src/base-uri/form-action none) ; test de non-regression reseau (payload hostile -\u003e 0 URL http). Client chat() /api/chat (roles, evite la derive de completion) ; service pur copilot-service.ts. Boot-safety 14.0 preserve (pas de spawn sans modele actif ; vue chat ne lit jamais copilot.models). OllamaSpike.svelte supprime. critic (Block -\u003e 3 HIGH reseau corriges) + code-reviewer Approve (0 Critical/Major, 3 nits appliques). svelte-check 0 err, 196 tests (+15 : copilot-service 10, sanitizeChatHtml reseau hostile 5)"
+                     },
+                     {
+                         "id":  "14.2",
+                         "title":  "Resumer le document (md/txt/html/PDF, map-reduce si \u003e contexte)",
+                         "verify":  "natif : doc md/txt/html/PDF affiche -\u003e \u0027Resumer\u0027 (ou sur la selection) -\u003e resume streame ; doc \u003e fenetre de contexte -\u003e segmentation map-reduce (AUCUNE troncature silencieuse) ; PDF scanne sans texte -\u003e message clair",
+                         "passes":  true,
+                         "verified_by":  "natif 2026-07-16 (resume streame en 1 passe sur note ~14k car ; map-reduce borne + num_ctx fixe = 0 troncature)"
+                     },
+                     {
+                         "id":  "14.3",
+                         "title":  "Q\u0026A sur le document courant (ancree, refus d\u0027inventer)",
+                         "verify":  "natif : question sur le doc affiche -\u003e reponse ancree sur son contenu ; info absente du doc -\u003e \u0027je ne trouve pas cela dans ce document\u0027 (pas d\u0027invention) ; 0 requete reseau",
+                         "passes":  true,
+                         "verified_by":  "natif 2026-07-16 (ancrage + phrase de refus exacte ; num_ctx 16384 anti-troncature ; badge lecture partielle \u003e seuil ; lecture complete des gros docs deleguee au RAG Epic 15)"
+                     },
+                     {
+                         "id":  "13.5",
+                         "title":  "Packaging release du sidecar (build ARM64 + install)",
+                         "verify":  "npm run tauri build -\u003e installateur execute -\u003e lancer Doku INSTALLE (hors dev) : le copilote genere (lib/ollama embarquee via bundle.resources, resolue par resource_dir()) ; double-clic sur un .pdf -\u003e ouvre en lecture seule (association OS). Solde les dettes S11 (chemin release jamais prouve) et S10 (assoc .pdf validee sur confiance)",
+                         "passes":  true,
+                         "verified_by":  "natif 2026-07-16 (build NSIS arm64 ; ollama.exe+lib/ollama freres sous resource_dir prouve par generation depuis target/release ; app installee OK + assoc .pdf)"
+                     },
+                     {
+                         "id":  "16.1",
+                         "title":  "Reformuler une selection (stretch)",
+                         "verify":  "natif : texte selectionne en edition -\u003e \u0027Reformuler\u0027 (clarifier / raccourcir / ton) -\u003e proposition ; accepter -\u003e remplace (ou insere apres) ; refuser -\u003e texte d\u0027origine INTACT (zero perte)",
+                         "passes":  true,
+                         "verified_by":  "natif 2026-07-16 (selection -\u003e Clarifier/Raccourcir/Ton -\u003e proposition streamee ; accepter remplace + Ctrl+Z restaure ; refuser -\u003e texte intact ; garde zero-perte onglet+region ; valide avec gemma4:e2b puis qwen2.5 3b/1.5b instruct-q4_0)"
+                     },
+                     {
+                         "id":  "16.2",
+                         "title":  "Corriger orthographe \u0026 grammaire (stretch)",
+                         "verify":  "natif : texte (selection ou doc) -\u003e \u0027Corriger\u0027 -\u003e version corrigee SANS changer le sens ni le Markdown ; appliquee -\u003e relisible et annulable (Ctrl+Z restaure)",
+                         "passes":  true,
+                         "verified_by":  "natif 2026-07-20 : menu de selection -\u003e Corriger -\u003e apercu EN PLACE (streaming puis diff mot a mot), accepter remplace en une transaction + Ctrl+Z restaure, refuser/Echap -\u003e texte intact. Absorbee par le chantier w3 (4e verbe + apercu diff, panneau sans cartes Proposition). Valide utilisateur"
+                     },
+                     {
+                         "id":  "15.1",
+                         "title":  "Spike : stack RAG (embedding local, format d\u0027index, perf/qualite ARM)",
+                         "verify":  "spike documente sur corpus ~10^2-10^3 notes FR : modele d\u0027embedding via Ollama + index vectoriel compares PAR LA MESURE (qualite top-k FR, temps d\u0027indexation, empreinte) ; choix modele/chunking/format/incremental tranches ; 0 reseau verifie ; ADR ecrite AVANT de coder 15.2 ; le spike liste ce qu\u0027il ne couvre pas",
+                         "passes":  true,
+                         "verified_by":  "utilisateur 2026-07-24 : GO valide — ADR-0015 (granite-embedding:278m, brute-force memoire, repli bge-m3), banc vendore spike/rag-15.1, 0 connexion non-loopback"
+                     },
+                     {
+                         "id":  "15.2",
+                         "title":  "Index d\u0027embeddings incremental (%APPDATA%/Doku/rag, hash, borne ARM)",
+                         "verify":  "natif : indexer un vrai dossier de notes -\u003e chunking + embeddings locaux stockes sous %APPDATA%/Doku/rag ; ajout/modif/suppression d\u0027une note -\u003e re-index incremental (hash) ; app reactive pendant l\u0027indexation (borne ARM) ; 0 requete reseau",
+                         "passes":  true,
+                         "verified_by":  "utilisateur 2026-07-24 : natif — dossier reel indexe (progression visible, app reactive), modif -\u003e 1 seul fichier re-embedde, suppression -\u003e passages retires, 0 connexion non-loopback (re-preuve 8.3)"
+                     },
+                     {
+                         "id":  "15.3",
+                         "title":  "Q\u0026A dossier avec citations sources + mode document courant",
+                         "verify":  "natif : question en mode dossier -\u003e passages top-k recuperes + reponse citant les notes sources (nom cliquable -\u003e ouvre le fichier) ; mode document courant : un doc \u003e fenetre de contexte est interroge en entier via l\u0027index (remplace le badge lecture partielle de 14.3)",
+                         "passes":  true,
+                         "verified_by":  "utilisateur 2026-07-24 : natif — question dossier -\u003e reponse + Passages consultes (clic ouvre la note), refus honnete sans sources, gros doc : info apres le cap 12k trouvee (badge Document entier (index)), RAM embed+chat OK, 0 reseau"
+                     },
+                     {
+                         "id":  "18.1",
+                         "title":  "Extraction texte PDF (couche pure + service, detection PDF scanne)",
+                         "verify":  "natif : PDF avec couche texte -\u003e texte extrait par page via pdf.js getTextContent, assemble dans l\u0027ordre de lecture ; PDF scanne / sans couche texte -\u003e detecte et signale clairement (pas d\u0027OCR, pas de faux texte) ; extraction cache par onglet (pas re-extraite a chaque action) ; le spike liste ce qu\u0027elle NE couvre PAS (multi-colonnes, CJK sans CMap)",
+                         "passes":  true,
+                         "verified_by":  "utilisateur 2026-07-24 : natif (conjoint 18.2) — texte extrait par page (getTextContent) assemble dans l\u0027ordre ; PDF scanne detecte et signale (pas d\u0027OCR) ; cache par onglet (path+size) ; non-couverts documentes dans pdf-text.ts"
+                     },
+                     {
+                         "id":  "18.2",
+                         "title":  "Copilote sur PDF (resume + Q\u0026A + gros PDF via index ephemere)",
+                         "verify":  "natif : PDF texte affiche -\u003e Resumer -\u003e resume streame (map-reduce si \u003e fenetre) ; Q\u0026A ancree sur le contenu du PDF ; gros PDF \u003e fenetre -\u003e interroge en entier via l\u0027index ephemere (15.3) ; PDF scanne -\u003e message honnete au lieu d\u0027un faux resume ; 0 reseau",
+                         "passes":  true,
+                         "verified_by":  "utilisateur 2026-07-24 : natif — PDF texte resume (map-reduce) + Q\u0026A ancree ; gros PDF interroge en entier via l\u0027index ephemere ; PDF scanne -\u003e notice honnete (pas de faux resume) ; 0 reseau (extraction pdf.js locale)"
+                     },
+                     {
+                         "id":  "18.3",
+                         "title":  "PDF dans l\u0027index du dossier (RAG)",
+                         "verify":  "natif : un dossier contenant des .pdf -\u003e indexes (texte extrait) au meme titre que les notes ; question en mode dossier -\u003e passages d\u0027un PDF recuperes et cite comme source (clic -\u003e ouvre le PDF) ; PDF scanne ignore proprement ; cout d\u0027extraction borne pendant l\u0027indexation ; 0 reseau",
+                         "passes":  true,
+                         "verified_by":  "utilisateur 2026-07-24 : natif — dossier avec .pdf indexe (texte extrait), question dossier -\u003e passage PDF cite (clic ouvre le PDF), PDF scanne ignore (marqueur), refresh incremental sans re-extraction, 0 reseau"
+                     },
+                     {
+                         "id":  "17.1",
+                         "title":  "Spike Foundry Local (NPU) : mesure prefill NPU vs CPU + re-preuve 0-reseau -\u003e ADR-0016 GO/NO-GO",
+                         "verify":  "spike : sidecar Foundry Local (ONNX Runtime + QNN) lance sur ce Snapdragon X Plus ; prefill mesure sur un long doc reel (NPU vs CPU q4_0, chiffres releves) ; 0 requete non-localhost prouvee (monitor reseau pendant l\u0027inference) ; faisabilite client OpenAI /v1/chat/completions confirmee ; ADR-0016 ecrit avec verdict GO/NO-GO trance par la donnee AVANT tout code de production",
+                         "passes":  true,
+                         "verified_by":  "spike livre + VERDICT NO-GO acte par l\u0027utilisateur 2026-07-24. (1) Foundry Local est HORS JEU : \u0027foundry model load ...qnn-npu\u0027 -\u003e QNN SetupBackend failed ; logs AutoRegisterCertifiedEps: Failure ; discoverEps() ne retourne que WebGpu ; downloadAndRegisterEps([\u0027QNN\u0027]) = no-op ; .foundry/ep/ ne contient que webgpu-ep. Bug amont (0.10.2 = derniere), pas notre config. (2) VOIE QUI MARCHE trouvee hors Foundry : onnxruntime-genai + onnxruntime-qnn en direct (register_execution_provider_library + append_provider(\u0027QNNExecutionProvider\u0027) + ADSP_LIBRARY_PATH) -\u003e le modele charge REELLEMENT sur le HTP Hexagon en ~4-5 s et genere du francais coherent. Sidecar OpenAI-compatible streame livre : spike/npu-17.1/sidecar/npu_server.py. (3) MESURE, meme modele des deux cotes (qwen2.5-1.5b) : NPU prefill 4-6x plus rapide (1244 ms vs ~4900 ms @440 tok ; 1779 ms vs ~10900 ms @786 tok ; pente NPU ~1,5 ms/tok quasi plate vs CPU ~16 ms/tok super-lineaire) MAIS decode ~2x plus lent (22-25 vs 44-48 tok/s). (4) LE MUR = etau qualite/RAM sur 16 Go : 1.5b-qnn tient mais trop bete (rejete en natif dans Doku par l\u0027utilisateur, quantif QNN plus agressive que q4_0) ; 7b-qnn (llmware) bon FR mais ~5 Go residents -\u003e swap + un OOM (prefill retombe a 10565 ms, decode 7,8 t/s = ~4x plus lent bout-a-bout que le CPU 1.5b) ; AUCUN 3B QNN genai FR public (le catalogue saute 1.5B-\u003e7B). Pas de point de fonctionnement. (5) Grille ADR-0016 (seuils PRE-enregistres avant mesure) : seuil 1 PASSE, seuils 2/4/5 ECHOUENT, seuils 3/6 sans objet -\u003e NO-GO. ADR-0016 gravee \u0027rejected\u0027 avec les chiffres + 3 conditions de reouverture (3B QNN FR publie / machine \u003e= 32 Go / runtime prefill-NPU+decode-CPU). Le copilote RESTE sur Ollama CPU qwen2.5:1.5b-instruct-q4_0 (repli \u00273b\u0027 de l\u0027ADR ecarte aussi par l\u0027utilisateur : trop lent, trop de RAM pour un copilote \u0027gadget discret\u0027). Provider \u0027npu\u0027 retire du produit (svelte-check 0 err, vitest 260/260), banc conserve dans spike/npu-17.1/. Un NO-GO chiffre est une livraison valide du spike"
+                     },
+                     {
+                         "id":  "17.2",
+                         "title":  "Abstraction couche d\u0027inference (Ollama \u003c-\u003e Foundry) + client OpenAI",
+                         "verify":  "GATED sur 17.1=GO. natif : couche d\u0027inference abstraite (Ollama et Foundry Local commutables derriere une interface) ; client OpenAI /v1/chat/completions (streaming NDJSON/SSE, annulation \u003c 500 ms) ; copilote fonctionne via Foundry avec 0 reseau re-prouve ; gestion modeles ONNX ; re-packaging ARM64 verifie",
+                         "passes":  false,
+                         "verified_by":  "ANNULEE 2026-07-24 — la gate ne s\u0027est jamais ouverte : 17.1 a trance NO-GO (ADR-0016 rejected). Story jamais codee, par conception (spike-first). Reste a false volontairement : ce n\u0027est PAS une dette, c\u0027est une branche fermee. A ne rouvrir qu\u0027avec l\u0027Epic 17, sous l\u0027une des 3 conditions de reouverture de l\u0027ADR-0016"
+                     },
+                     {
+                         "id":  "19.1",
+                         "title":  "Explorateur : nouvelle note, nouveau dossier, tri (affordances mortes)",
+                         "verify":  "natif : explorateur ouvert sur un dossier -\u003e \u0027Nouvelle note\u0027 / \u0027Nouveau dossier\u0027 ouvrent une saisie EN PLACE dans la liste (Entree cree, Echap annule) ; nom valide AVANT ecriture (caracteres interdits, noms reserves Windows, conflit insensible a la casse) et aucun ecrasement silencieux ; une note creee s\u0027ouvre aussitot ; \u0027Trier\u0027 propose Nom / Modifie le / Type avec inversion asc-desc, PERSISTE entre sessions, dossiers toujours en tete ; le 4e bouton (\u0027Tout replier\u0027) est retire (explorateur plat)",
+                         "passes":  true,
+                         "verified_by":  "valide en natif par l\u0027utilisateur 2026-07-24 : les 4 boutons de l\u0027en-tete explorateur sont reels. Saisie EN PLACE (ligne d\u0027input dans la liste, Entree cree / Echap annule / blur annule), la note creee s\u0027ouvre aussitot, le dossier apparait sans ouvrir. Tri Nom/Modifie le/Type avec inversion asc-desc au re-clic, persiste dans settings (validation champ par champ au chargement : un settings corrompu ne casse pas le tri), dossiers TOUJOURS en tete quel que soit l\u0027ordre. 4e bouton \u0027Tout replier\u0027 retire (l\u0027explorateur est plat, rien a replier). Couche pure explorer.ts : sortEntries(entries, sort) (mtime absent -\u003e relegue en fin, jamais melange aux dates reelles), normalizeNewName (ajoute .md si pas d\u0027extension supportee, refuse caracteres interdits Windows / noms reserves CON-NUL-COM1 / point-espace final / . et .. / \u003e120 car), nameExists insensible a la casse (Windows l\u0027est : creer notes.md a cote de Notes.md ecrasait). Aucun ecrasement silencieux : conflit verifie sur la liste ET re-verifie sur disque (exists) avant ecriture dans createFileAt/createDirAt. readDirectory(path, withTimes) ne paie le stat par entree QUE si le tri est \u0027modified\u0027 (sinon gros dossier penalise pour rien), batche par 64. Boutons desactives hors Tauri (mode navigateur) et sans dossier cible. Capability fs:allow-mkdir elargie de $APPDATA/** a ** (coherent avec write-text-file et rename deja en **) — signalee et acceptee par l\u0027utilisateur. svelte-check 0 err, vitest 274/274 (+14 tests explorer)"
+                     },
+                     {
+                         "id":  "19.2",
+                         "title":  "Panneau Parametres (engrenage du ruban) : Apparence + Donnees + A propos",
+                         "verify":  "natif : clic sur l\u0027engrenage du ruban -\u003e modale Parametres centree ; Echap et clic sur le fond la ferment, le focus est piege dedans ; Apparence = theme (clair/sombre) et largeur du document (etroit/confortable/pleine largeur), appliques immediatement et persistes ; Donnees = purge de l\u0027historique des versions et purge de l\u0027index semantique, chacune en DEUX temps (Purger -\u003e Confirmer) et definitive, avec compte-rendu de ce qui a ete supprime ; A propos = nom, version, \u0027100 % hors-ligne\u0027 ; les modeles IA ne sont PAS dupliques (renvoi vers le copilote)",
+                         "passes":  true,
+                         "verified_by":  "valide en natif par l\u0027utilisateur 2026-07-27 (sprint 16) : engrenage du ruban -\u003e modale Parametres centree ; Echap et clic sur le fond ferment, focus piege ; Apparence (theme + largeur) appliquee immediatement et persistee ; purges Donnees (historique versions + index semantique) eprouvees en DEUX temps sur un vrai historique, definitives, avec compte-rendu ; A propos = nom, version, 100 % hors-ligne ; modeles IA non dupliques (renvoi copilote)"
+                     },
+                     {
+                         "id":  "19.3",
+                         "title":  "Bouton logo -\u003e A propos (plus de bouton muet)",
+                         "verify":  "natif : clic sur le logo Doku du ruban -\u003e ouvre la modale Parametres avec la section A propos mise en avant (surlignee et amenee dans le champ de vision) ; le logo a un title et un aria-label explicites",
+                         "passes":  true,
+                         "verified_by":  "valide en natif par l\u0027utilisateur 2026-07-27 (sprint 16) : clic sur le logo -\u003e modale Parametres ouverte avec la section A propos surlignee et amenee en vue ; title + aria-label presents"
+                     },
+                     {
+                         "id":  "19.4",
+                         "title":  "Sceller la v2.2 : bump version 2.2.0 + installateur ARM64 verifie",
+                         "verify":  "package.json ET src-tauri/tauri.conf.json a 2.2.0 (la carte A propos affiche Doku v2.2.0) ; npm run build OK ; npm run tauri build -\u003e installateur NSIS arm64 genere ; app INSTALLEE lancee : ouvrir un .md, sauver, copilote genere, assoc .pdf intacte. Ne se scelle qu\u0027APRES validation de 19.2 et 19.3",
+                         "passes":  true,
+                         "verified_by":  "valide par l\u0027utilisateur 2026-07-27 : versions 2.2.0 partout (package.json+lock, tauri.conf.json, Cargo.toml+lock), npm run build OK, installateur NSIS arm64 genere (Doku_2.2.0_arm64-setup.exe) AVEC habillage D.A. complet (BMPs + template custom base tauri-cli 2.11.4, installateur en francais) ; app installee smoke-testee par l\u0027utilisateur, gate 19.2/19.3 respectee. Bonus hors sprint : habillage NSIS (design, pas d\u0027entree ledger)"
+                     },
+                     {
+                         "id":  "20.1",
+                         "title":  "Revelation de la syntaxe Markdown a la demande (socle)",
+                         "verify":  "natif : dans un .md en apercu, taper un titre / du gras / une liste -\u003e les marqueurs (###, **, -) RESTENT masques pendant la frappe ; poser le curseur ne revele plus rien ; Tab hors tableau OU Ctrl+/ revele la source ; Echap sort de l\u0027editeur au clavier ; npm test vert (roundtrip.test.ts inclus) et fichier relu identique octet pour octet",
+                         "passes":  true,
+                         "verified_by":  "valide en natif par l\u0027utilisateur 2026-07-30 : ecriture sans voir les marqueurs, Tab hors tableau et Ctrl+/ revelent la source, Echap annule ; aucune regression sur checkboxes/wikilinks/images ; 281 tests verts dont roundtrip"
+                     },
+                     {
+                         "id":  "20.2",
+                         "title":  "Edition en place des cellules de tableau",
+                         "verify":  "natif sur le vrai document de verdicts (~100 lignes) : cliquer dans une cellule et taper -\u003e saisie DANS la cellule, le tableau ne s\u0027effondre jamais en markdown brut ; seule la cellule modifiee est reecrite (reste du bloc intact : pipes, alignements, cellules vides, \\\\| echappes) ; Tab / Maj+Tab passent a la cellule suivante / precedente",
+                         "passes":  true,
+                         "verified_by":  "valide en natif par l\u0027utilisateur 2026-07-30 (Doku) : clic dans une case -\u003e saisie dans la case, Tab/Maj+Tab enchainent, Entree valide, Echap annule. Verifie AUSSI en navigateur reel (clics Playwright) : source prouvee \u0027| 1 | o01.wav | pub | court |\u0027 avec en-tete/delimiteurs/ligne 2 intacts au caractere pres. 2 bugs trouves par cette verif navigateur (selection du bloc entier ; texte ecrit en tete de document) - invisibles en jsdom"
+                     },
+                     {
+                         "id":  "20.3",
+                         "title":  "Actions de structure du tableau (+/- ligne, +/- colonne)",
+                         "verify":  "natif : ajouter/supprimer une ligne et une colonne depuis le tableau rendu ; la ligne de delimiteurs reste coherente (meme nombre de colonnes, alignements conserves) ; suppression de la derniere ligne/colonne ne produit jamais un tableau invalide",
+                         "passes":  false,
+                         "verified_by":  ""
+                     },
+                     {
+                         "id":  "20.4",
+                         "title":  "Formatage sur selection \u0026 insertions de blocs",
+                         "verify":  "natif : Ctrl+B / Ctrl+I / Ctrl+K enveloppent la selection (**gras**, *italique*, [texte](url)) et RE-appuyer retire le formatage (toggle, pas d\u0027empilement) ; menu d\u0027effets (barre, code inline, titres) accessible depuis le popover de selection EXISTANT ; insertions de blocs : separateur ---, tableau vierge, liste, citation, bloc de code",
+                         "passes":  false,
+                         "verified_by":  ""
+                     }
+                 ]
 }
