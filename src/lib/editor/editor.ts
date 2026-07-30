@@ -4,9 +4,10 @@ import { Compartment, EditorState, Prec, type Extension } from '@codemirror/stat
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown'
 import { html } from '@codemirror/lang-html'
 import { languages } from '@codemirror/language-data'
-import { HighlightStyle, syntaxHighlighting } from '@codemirror/language'
+import { HighlightStyle, syntaxHighlighting, syntaxTree } from '@codemirror/language'
 import { tags } from '@lezer/highlight'
 import { livePreview } from './live-preview'
+import { revealScopeField, setRevealScope } from './reveal'
 
 // Typographie du document — source : maquette W1 (article Source Serif 4).
 const dokuHighlight = HighlightStyle.define([
@@ -161,13 +162,21 @@ const dokuTheme = EditorView.theme({
     margin: '12px 0',
     fontFamily: 'var(--font-sans)',
     fontSize: '14.5px',
-    cursor: 'pointer',
   },
   '.cm-lp-table th, .cm-lp-table td': {
     border: '1px solid var(--line-2)',
     padding: '7px 13px',
     textAlign: 'left',
     verticalAlign: 'top',
+    // Les cellules sont saisissables (20.2) : curseur texte, pas curseur de clic.
+    cursor: 'text',
+  },
+  // Cellule en cours de saisie : un halo discret suffit à situer le point d'entrée,
+  // sans le contour dur d'un `outline` par défaut.
+  '.cm-lp-table th:focus, .cm-lp-table td:focus': {
+    outline: 'none',
+    background: 'var(--accent-soft)',
+    boxShadow: 'inset 0 0 0 2px var(--line-3)',
   },
   '.cm-lp-table th': {
     background: 'var(--surface-hover)',
@@ -266,8 +275,49 @@ export const livePreviewComp = new Compartment()
 // (no-op prioritaire) ; l'event remonte quand même à la fenêtre pour la bascule.
 const suppressToggleComment = Prec.highest(keymap.of([{ key: 'Mod-/', run: () => true }]))
 
+// Tab = révélation de la syntaxe du bloc courant (ADR-0017, 20.1).
+//
+// Contexte du choix : Ctrl+Tab est déjà pris (cycle d'onglets, App.svelte) ; Tab nu était
+// libre. Dans un TABLEAU, Tab servira à naviguer de cellule en cellule (story 20.2) — d'où
+// la garde `insideTable` ci-dessous, posée dès maintenant pour que 20.2 s'y branche sans
+// re-toucher au keymap.
+//
+// Échap rend la main : il annule la révélation, et si rien n'est révélé il laisse l'event
+// filer (le focus sort de l'éditeur) — Tab étant pris, il ne faut pas piéger la navigation
+// clavier dans l'éditeur.
+function insideTable(state: EditorState): boolean {
+  const pos = state.selection.main.head
+  let node = syntaxTree(state).resolveInner(pos, -1)
+  for (; node; node = node.parent!) if (node.name === 'Table') return true
+  return false
+}
+
+const revealKeymap = Prec.highest(
+  keymap.of([
+    {
+      key: 'Tab',
+      run(view) {
+        // Dans un tableau, Tab appartient à la navigation de cellules (20.2) : ne pas
+        // consommer l'event ici, sinon on casserait l'enchaînement de saisie.
+        if (insideTable(view.state)) return false
+        const current = view.state.field(revealScopeField, false) ?? 'none'
+        view.dispatch({ effects: setRevealScope.of(current === 'none' ? 'block' : 'none') })
+        return true
+      },
+    },
+    {
+      key: 'Escape',
+      run(view) {
+        if ((view.state.field(revealScopeField, false) ?? 'none') === 'none') return false
+        view.dispatch({ effects: setRevealScope.of('none') })
+        return true
+      },
+    },
+  ]),
+)
+
 export function previewExtensions(): Extension[] {
-  return [livePreview(), syntaxHighlighting(dokuHighlight)]
+  return [livePreview(), revealKeymap, syntaxHighlighting(dokuHighlight)]
 }
 
 export function sourceExtensions(): Extension[] {

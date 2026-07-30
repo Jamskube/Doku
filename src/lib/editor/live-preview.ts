@@ -15,8 +15,11 @@ import {
 import { convertFileSrc } from '@tauri-apps/api/core'
 import { isTauri } from '../tauri'
 import { isBlockedImageUrl, resolveLocalImagePath } from '../images'
-import { parseTable } from '../table'
+import { escapeCellText, parseTable, tableCellSpans, type CellAlign } from '../table'
+
+type CellAlignStyle = CellAlign
 import { rephrasePreviewRange, setRephrasePreview } from './rephrase-preview'
+import { revealScopeField, setRevealScope } from './reveal'
 
 // Dossier du document courant (fourni par état, dans DocumentView) — sert à
 // résoudre les images relatives.
@@ -122,9 +125,14 @@ const HEADING_LINE = new Map([
   ['ATXHeading3', 'cm-lp-h3'],
 ])
 
-// Lignes portant une sélection : c'est là que la syntaxe se révèle (édition en place).
+// Lignes où la syntaxe est révélée (ADR-0017, 20.1).
+//
+// La révélation n'est plus un effet de bord du curseur : elle n'a lieu que si
+// l'utilisateur l'a DEMANDÉE (`revealScopeField` = 'block', posé par Tab). Sans geste,
+// l'ensemble est vide → on écrit dans le rendu, les marqueurs restent masqués.
 function activeLineSet(state: EditorState): Set<number> {
   const set = new Set<number>()
+  if ((state.field(revealScopeField, false) ?? 'none') === 'none') return set
   for (const r of state.selection.ranges) {
     const a = state.doc.lineAt(r.from).number
     const b = state.doc.lineAt(r.to).number
@@ -274,6 +282,39 @@ class TableWidget extends WidgetType {
     return o.md === this.md && o.from === this.from
   }
 
+  // Écrire dans une cellule change `md` → CM6 remplacerait le DOM et TUERAIT le focus
+  // en pleine saisie (Tab d'une cellule à l'autre deviendrait inutilisable). On met donc
+  // à jour le DOM existant en place : seule la cellule qui n'a plus la bonne valeur est
+  // retouchée, et jamais celle que l'utilisateur est en train d'éditer.
+  updateDOM(dom: HTMLElement, view: EditorView): boolean {
+    const parsed = parseTable(this.md)
+    if (!parsed || dom.tagName !== 'TABLE') return false
+    const active = document.activeElement
+    for (const el of Array.from(dom.querySelectorAll<HTMLElement>('th[data-line], td[data-line]'))) {
+      if (el === active) continue // ne jamais écraser la cellule en cours de frappe
+      const line = Number(el.dataset.line)
+      const col = Number(el.dataset.col)
+      const next = line === 0 ? (parsed.headers[col] ?? '') : (parsed.rows[line - 2]?.[col] ?? '')
+      if (el.textContent !== next) el.textContent = next
+    }
+    void view
+    return true
+  }
+
+  // Écrit UNE cellule dans la source (20.2). Remplacement d'un intervalle de quelques
+  // caractères — jamais une regénération du bloc (ADR-0002, warning critique n°1) : les
+  // pipes, le padding, les alignements et les cellules voisines ne sont pas touchés.
+  private commitCell(view: EditorView, line: number, col: number, raw: string): void {
+    const md = view.state.sliceDoc(this.from, this.from + this.md.length)
+    const span = tableCellSpans(md).find((s) => s.line === line && s.col === col)
+    if (!span) return
+    const next = escapeCellText(raw)
+    if (md.slice(span.from, span.to) === next) return // rien à écrire
+    view.dispatch({
+      changes: { from: this.from + span.from, to: this.from + span.to, insert: next },
+    })
+  }
+
   toDOM(view: EditorView) {
     const parsed = parseTable(this.md)
     if (!parsed) {
@@ -283,42 +324,111 @@ class TableWidget extends WidgetType {
     }
     const table = document.createElement('table')
     table.className = 'cm-lp-table'
-    // Clic-pour-éditer (3.7) : place le curseur sur la source → la ligne devient
-    // active → le markdown du tableau se révèle (motif CheckboxWidget).
-    table.addEventListener('mousedown', (e) => {
-      e.preventDefault()
-      view.dispatch({ selection: { anchor: this.from } })
-      view.focus()
-    })
+    // Le widget vit DANS la zone contenteditable de CM6. Sans ce `false`, CodeMirror
+    // considère le tableau comme du contenu qu'il gère lui-même : un clic sélectionne
+    // alors le bloc entier au lieu d'entrer dans la case. On rend donc le tableau
+    // non-éditable, et on rouvre l'édition case par case (îlots `contenteditable`).
+    table.contentEditable = 'false'
+    // Le widget est dans la zone éditable de CM6 : sans cette barrière, la frappe et le
+    // collage faits dans une case remontent à l'éditeur, qui les écrit dans le document
+    // à la position de SON curseur (bug constaté en navigateur : le texte atterrissait
+    // en tête de tableau). Les cases restent éditables, mais l'event ne sort plus du widget.
+    for (const type of ['beforeinput', 'input', 'keypress', 'paste', 'cut', 'compositionstart', 'compositionend']) {
+      table.addEventListener(type, (e) => e.stopPropagation())
+    }
+
+    // Cellule éditable EN PLACE (20.2). Le widget se re-peuple lui-même à chaque toDOM :
+    // la virtualisation CM6 détruit le DOM hors viewport, un contenu posé de l'extérieur
+    // reviendrait vide (gotcha connue des widgets).
+    const cells: HTMLElement[] = []
+    const makeCell = (tag: 'th' | 'td', text: string, line: number, col: number, align: CellAlignStyle) => {
+      const el = document.createElement(tag)
+      el.textContent = text
+      el.contentEditable = 'true'
+      el.spellcheck = false
+      // Focusable explicitement : un `contenteditable` seul n'est pas fiablement
+      // atteignable au clavier (et ne l'est pas du tout sous jsdom, donc intestable).
+      el.tabIndex = -1
+      el.dataset.line = String(line)
+      el.dataset.col = String(col)
+      if (align) el.style.textAlign = align
+      cells.push(el)
+
+      // CM6 pose sa propre sélection sur un mousedown dans son contenu : sans cette
+      // interception, cliquer dans une case sélectionne tout le tableau. On prend la
+      // main et on place le focus dans la case visée.
+      el.addEventListener('mousedown', (e) => {
+        e.stopPropagation()
+      })
+
+      // Écriture à la sortie de la cellule : une frappe par caractère ferait re-rendre
+      // le widget à chaque touche (et perdrait le focus). On écrit au blur / Entrée / Tab.
+      el.addEventListener('blur', () => this.commitCell(view, line, col, el.textContent ?? ''))
+
+      el.addEventListener('keydown', (e) => {
+        if (e.key === 'Tab') {
+          // Tab NAVIGUE entre les cellules — c'est ce qui rend une saisie de 100 lignes
+          // praticable, et la raison pour laquelle Tab ne bascule pas la source ici (ADR-0017).
+          e.preventDefault()
+          e.stopPropagation()
+          const i = cells.indexOf(el)
+          const next = cells[i + (e.shiftKey ? -1 : 1)]
+          if (next) {
+            next.focus()
+            // Curseur en fin de cellule (on vient y saisir, pas relire).
+            const r = document.createRange()
+            r.selectNodeContents(next)
+            r.collapse(false)
+            const sel = window.getSelection()
+            sel?.removeAllRanges()
+            sel?.addRange(r)
+          } else {
+            el.blur() // dernière cellule : on valide et on sort
+          }
+          return
+        }
+        if (e.key === 'Enter') {
+          e.preventDefault()
+          e.stopPropagation()
+          el.blur() // valide la saisie ; pas de retour à la ligne dans une cellule GFM
+          return
+        }
+        if (e.key === 'Escape') {
+          e.preventDefault()
+          e.stopPropagation()
+          el.textContent = text // annule : on restaure la valeur d'origine
+          el.blur()
+          return
+        }
+        // Les autres touches restent locales à la cellule : sans ça, CM6 les capterait
+        // et éditerait le document par-dessous.
+        e.stopPropagation()
+      })
+
+      return el
+    }
 
     const thead = document.createElement('thead')
     const htr = document.createElement('tr')
-    parsed.headers.forEach((h, i) => {
-      const th = document.createElement('th')
-      th.textContent = h
-      if (parsed.aligns[i]) th.style.textAlign = parsed.aligns[i]!
-      htr.appendChild(th)
-    })
+    parsed.headers.forEach((h, i) => htr.appendChild(makeCell('th', h, 0, i, parsed.aligns[i])))
     thead.appendChild(htr)
     table.appendChild(thead)
 
     const tbody = document.createElement('tbody')
-    for (const row of parsed.rows) {
+    parsed.rows.forEach((row, r) => {
       const tr = document.createElement('tr')
-      parsed.headers.forEach((_, i) => {
-        const td = document.createElement('td')
-        td.textContent = row[i] ?? ''
-        if (parsed.aligns[i]) td.style.textAlign = parsed.aligns[i]!
-        tr.appendChild(td)
-      })
+      // +2 : l'en-tête et la ligne de délimiteurs précèdent le corps dans la source.
+      parsed.headers.forEach((_, i) => tr.appendChild(makeCell('td', row[i] ?? '', r + 2, i, parsed.aligns[i])))
       tbody.appendChild(tr)
-    }
+    })
     table.appendChild(tbody)
     return table
   }
 
+  // `false` : les events doivent atteindre les cellules éditables (focus, frappe,
+  // sélection). Avec `true`, CM6 les avalerait et la saisie serait impossible.
   ignoreEvent() {
-    return true // le clic est géré par le listener mousedown attaché dans toDOM
+    return false
   }
 }
 
@@ -343,11 +453,14 @@ function buildTableDecorations(state: EditorState): DecorationSet {
       // tableau interdit le widget-bloc : deux replaces partiellement superposés = rendu
       // indéfini CM6. Le tableau reste en source tant que l'aperçu vit.
       if (preview && preview.from <= to && from <= preview.to) return false
+      // Depuis l'ADR-0017, `activeLines` n'est peuplé QUE sur geste explicite de
+      // révélation. Le curseur seul ne fait donc plus tomber le tableau : on peut
+      // cliquer dans une cellule et y saisir (20.2) sans voir la source resurgir.
       const first = state.doc.lineAt(from).number
       const last = state.doc.lineAt(to).number
-      let active = false
-      for (let n = first; n <= last; n++) if (activeLines.has(n)) { active = true; break }
-      if (!active) {
+      let revealed = false
+      for (let n = first; n <= last; n++) if (activeLines.has(n)) { revealed = true; break }
+      if (!revealed) {
         decos.push(
           Decoration.replace({ widget: new TableWidget(state.sliceDoc(from, to), from), block: true }).range(from, to),
         )
@@ -364,7 +477,12 @@ const tableField = StateField.define<DecorationSet>({
     // Recalcul sur édition, changement de curseur, avancée du parseur (le tableau peut
     // être sous la frontière d'analyse au chargement), ou pose/retrait d'un aperçu de
     // reformulation (les tables qu'il chevauchait doivent re-rendre leur widget).
-    if (tr.docChanged || tr.selection || syntaxTree(tr.state) !== syntaxTree(tr.startState) || tr.effects.some((e) => e.is(setRephrasePreview))) {
+    if (
+      tr.docChanged ||
+      tr.selection ||
+      syntaxTree(tr.state) !== syntaxTree(tr.startState) ||
+      tr.effects.some((e) => e.is(setRephrasePreview) || e.is(setRevealScope))
+    ) {
       return buildTableDecorations(tr.state)
     }
     return deco
@@ -383,13 +501,21 @@ export function livePreview() {
         }
 
         update(update: ViewUpdate) {
-          if (update.docChanged || update.selectionSet || update.viewportChanged) {
+          // `transactions.some(...)` est indispensable : sans lui, presser Tab changerait
+          // l'état de révélation sans jamais recalculer les décorations (rien à l'écran).
+          if (
+            update.docChanged ||
+            update.selectionSet ||
+            update.viewportChanged ||
+            update.transactions.some((tr) => tr.effects.some((e) => e.is(setRevealScope)))
+          ) {
             this.decorations = buildDecorations(update.view)
           }
         }
       },
       { decorations: (v) => v.decorations },
     ),
+    revealScopeField,
     tableField,
     EditorView.domEventHandlers({
       mousedown(e) {
