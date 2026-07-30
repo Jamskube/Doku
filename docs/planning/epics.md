@@ -325,6 +325,17 @@ _Source : docs/planning/PRD-v2.md · Architecture : docs/planning/architecture-v
 | 19.2 | Panneau Paramètres (l'engrenage du ruban) | M | P1 | Given le bouton ⚙ du ruban, when je clique, then un panneau **Paramètres** s'ouvre et **regroupe les réglages aujourd'hui éparpillés** (thème, largeur de colonne, modèle de chat, modèle d'embedding, purge des instantanés/index) ; chaque réglage est **persisté** ; aucun réglage n'est dupliqué sans être synchronisé avec son emplacement d'origine |
 | 19.3 | Bouton logo : « À propos » ou retrait | S | P2 | Given le logo Doku du ruban, when je clique, then soit une carte **À propos** s'affiche (version, licence, « 100 % hors-ligne »), soit le logo **cesse d'être un bouton** (élément décoratif, non focusable). Décision à prendre — l'état actuel (bouton focusable qui ne fait rien) est exclu |
 
+## Epic 20 : Édition WYSIWYG assumée — révélation à la demande, tableaux saisissables, formatage (FR-3, FR-7) — v2.3
+
+Né de l'**usage réel** de la v2.2.0 (action High des rétros S15/S16), sur un document dont le tableau *est* le contenu. Cadré par l'[ADR-0017](../adr/0017-revelation-syntaxe-a-la-demande.md), qui amende le volet « syntaxe révélée au curseur » de l'ADR-0002 **sans toucher** à la fidélité octet pour octet.
+
+| # | Story | Size | Prio | Acceptance |
+|---|-------|------|------|------------|
+| 20.1 | Révélation de la syntaxe à la demande (socle) | M | P1 | Given un `.md` en aperçu, when j'écris un titre, du gras ou une liste, then les marqueurs (`###`, `**`, `-`) **restent masqués pendant la frappe** — poser le curseur ne révèle plus rien ; when je presse **Tab hors tableau** ou **Ctrl+/**, then la source se révèle (bascule explicite, Ctrl+/ inchangé = document entier) ; **Échap** sort de l'éditeur au clavier (pas de piège au Tab) ; round-trip **octet pour octet** re-prouvé par les tests existants |
+| 20.2 | Édition en place des cellules de tableau | L | P1 | Given un tableau rendu, when je clique dans une cellule et je tape, then je saisis **dans la cellule** — le tableau ne s'effondre jamais en markdown brut ; à la validation, **seule cette cellule** est réécrite dans la source (le reste du bloc intact, pipes et alignements préservés) ; **Tab / Maj+Tab** passent à la cellule suivante/précédente (Tab en dernière cellule → cellule suivante créée ou ligne suivante, comportement à trancher au dev) ; un `\|` échappé ou une cellule vide restent corrects après écriture |
+| 20.3 | Actions de structure du tableau | M | P1 | Given le curseur dans un tableau rendu, when j'utilise les affordances du tableau, then je peux **ajouter/supprimer une ligne** et **ajouter/supprimer une colonne** ; la ligne de délimiteurs (`---`, `:--`) est **maintenue cohérente** (même nombre de colonnes, alignements conservés) ; suppression de la dernière ligne/colonne gérée sans produire un tableau invalide |
+| 20.4 | Formatage sur sélection & insertions de blocs | M | P1 | Given une sélection, when **Ctrl+B / Ctrl+I / Ctrl+K**, then elle est enveloppée en `**gras**` / `*italique*` / `[texte](url)` — **ré-appuyer retire** le formatage (toggle), pas d'empilement ; un **menu d'effets** (barré, code inline, titres) est accessible depuis le popover de sélection **existant** (celui de la reformulation, pas une seconde barre concurrente) ; insertions de blocs autonomes : séparateur `---`, tableau vierge, liste, citation, bloc de code |
+
 ---
 
 ## Stories reportées / hors décomposition (non prêtes)
