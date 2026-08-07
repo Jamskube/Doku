@@ -122,6 +122,62 @@ export function baseName(path: string): string {
   return trimmed.slice(trimmed.lastIndexOf(sep) + 1)
 }
 
+// --- Arborescence dépliable ---
+
+// Ligne d'arbre prête à rendre : l'entrée, son chemin complet et sa profondeur
+// (0 = enfant direct de la racine affichée). L'indentation visuelle en découle.
+export type TreeRow = { entry: FsEntry; path: string; depth: number }
+
+// Garde-fou contre les boucles de jonctions/liens Windows (C:\a\lien\a\lien\…) :
+// au-delà, on arrête de descendre — un vrai projet n'a pas 16 niveaux utiles.
+export const MAX_TREE_DEPTH = 16
+
+// Aplatit l'arborescence en lignes ordonnées : pour chaque dossier DÉPLIÉ dont les
+// enfants sont chargés (présents dans childrenByDir), ses entrées visibles suivent
+// immédiatement, indentées. Un dossier déplié mais pas encore chargé n'affiche rien
+// (le chargement paresseux remplira childrenByDir et re-rendra). Pure : aucune I/O.
+export function flattenTree(
+  rootDir: string,
+  childrenByDir: ReadonlyMap<string, FsEntry[]>,
+  expanded: ReadonlySet<string>,
+  sort: ExplorerSort = DEFAULT_SORT,
+): TreeRow[] {
+  const rows: TreeRow[] = []
+  const walk = (dir: string, depth: number) => {
+    if (depth > MAX_TREE_DEPTH) return
+    const children = childrenByDir.get(dir)
+    if (!children) return
+    for (const entry of visibleEntries(children, sort)) {
+      const path = joinPath(dir, entry.name)
+      rows.push({ entry, path, depth })
+      if (entry.isDir && expanded.has(path)) walk(path, depth + 1)
+    }
+  }
+  walk(rootDir, 0)
+  return rows
+}
+
+// Dossiers dépliés à re-matérialiser au rendu : ceux atteignables depuis la racine
+// (la persistance peut contenir des chemins d'autres racines — ils restent stockés
+// mais ne déclenchent aucun chargement tant qu'on n'affiche pas leur racine).
+export function reachableExpanded(
+  rootDir: string,
+  expanded: ReadonlySet<string>,
+): string[] {
+  const sep = sepOf(rootDir)
+  const prefix = rootDir.endsWith(sep) ? rootDir : rootDir + sep
+  return [...expanded]
+    .filter((p) => p.startsWith(prefix))
+    .sort((a, b) => a.length - b.length)
+}
+
+// Validation d'un état déplié venu du stockage (settings potentiellement corrompus) :
+// tableau de chaînes non vides, borné — tout le reste est jeté sans casser le boot.
+export function validateExpandedPaths(value: unknown): string[] {
+  if (!Array.isArray(value)) return []
+  return value.filter((v): v is string => typeof v === 'string' && v.length > 0).slice(0, 300)
+}
+
 export type PathCrumb = { label: string; path: string }
 
 // Segments cliquables d'un chemin. Les racines Windows, POSIX et UNC restent de

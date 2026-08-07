@@ -1,9 +1,10 @@
 <script lang="ts">
-  import { app, activeTab, docHeadings, isDirty, loadSnapshotsForActive, openPath, openSearchHit, openSettings, refreshExplorer, restoreSnapshot, runSearch, scrollToLine, setExplorerSort, toggleSidebarView } from '../lib/stores.svelte'
-  import { joinPath, nameExists, normalizeNewName, parentPath, pathCrumbs, visibleEntries, type FsEntry, type SortKey } from '../lib/explorer'
+  import { app, activeTab, collapseExplorer, docHeadings, isDirty, loadSnapshotsForActive, openPath, openSearchHit, openSettings, refreshExplorer, restoreSnapshot, runSearch, scrollToLine, setExplorerSort, toggleExplorerExpanded, toggleSidebarView } from '../lib/stores.svelte'
+  import { flattenTree, joinPath, nameExists, normalizeNewName, parentPath, pathCrumbs, reachableExpanded, type FsEntry, type SortKey, type TreeRow } from '../lib/explorer'
   import { createDirAt, createFileAt, isTauri, openFolderDialog, readDirectory } from '../lib/tauri'
   import { DEMO_DIR } from '../lib/demo'
   import DokuMark from '../lib/DokuMark.svelte'
+  import { untrack } from 'svelte'
 
   // Plan : titres du Markdown seulement (un .txt/.html n'en a pas), et pas pour un
   // gros fichier (docHeadings O(doc) + DOM de milliers de titres gèlerait — 1.6).
@@ -15,7 +16,6 @@
   const targetDir = $derived(app.explorerDir ?? parentPath(activeTab()?.path ?? null))
   const activeDocumentDir = $derived(parentPath(activeTab()?.path ?? null))
   const breadcrumbs = $derived(targetDir ? pathCrumbs(targetDir) : [])
-  let entries = $state<FsEntry[]>([])
   let navigationHistory = $state<string[]>([])
   let navigationIndex = $state(-1)
   let breadcrumbBar = $state<HTMLDivElement | null>(null)
@@ -37,23 +37,58 @@
     })
   })
 
+  // Cache des enfants par dossier (racine + dossiers dépliés). Rempli paresseusement :
+  // flattenTree ne descend que dans les dossiers présents ici, chaque dossier déplié
+  // manquant déclenche UNE lecture (garde `loading`) puis re-rend. Invalidé en bloc
+  // au changement de racine, de tri (le stat n'est payé que si tri par date) ou après
+  // une création (nonce).
+  let childrenByDir = $state(new Map<string, FsEntry[]>())
+  const loading = new Set<string>()
+
+  const expandedSet = $derived(new Set(app.explorerExpanded))
+  const treeRows = $derived(targetDir ? flattenTree(targetDir, childrenByDir, expandedSet, app.explorerSort) : [])
+  const hasExpanded = $derived(targetDir ? reachableExpanded(targetDir, expandedSet).length > 0 : false)
+  // Compat création en place : la liste de la racine sert aux contrôles de conflit.
+  const entries = $derived(targetDir ? (childrenByDir.get(targetDir) ?? []) : [])
+
+  async function loadChildren(dir: string) {
+    if (loading.has(dir)) return
+    loading.add(dir)
+    try {
+      const raw = isTauri ? await readDirectory(dir, app.explorerSort.key === 'modified') : DEMO_DIR
+      // Map réassignée (pas mutée) : $state ne tracke pas Map.set en profondeur fiable
+      // pour un $derived — la réassignation garantit le re-rendu.
+      const next = new Map(childrenByDir)
+      next.set(dir, raw)
+      childrenByDir = next
+    } catch {
+      // Dossier illisible (droits, disparu) : entrée vide pour ne pas boucler.
+      const next = new Map(childrenByDir)
+      next.set(dir, [])
+      childrenByDir = next
+    } finally {
+      loading.delete(dir)
+    }
+  }
+
   $effect(() => {
     const dir = targetDir
-    const sort = app.explorerSort
+    void app.explorerSort
     void app.explorerNonce // dépendance explicite : rejoue après une création
-    if (!dir) {
-      entries = []
-      return
-    }
-    let cancelled = false
-    ;(async () => {
-      // Le stat par entrée n'est payé que si l'on trie effectivement par date.
-      const raw = isTauri ? await readDirectory(dir, sort.key === 'modified') : DEMO_DIR
-      if (!cancelled) entries = visibleEntries(raw, sort)
-    })()
-    return () => {
-      cancelled = true
-    }
+    childrenByDir = new Map()
+    loading.clear()
+    // untrack : loadChildren lit childrenByDir AVANT tout await en mode navigateur
+    // (DEMO_DIR synchrone) → sans lui, l'effet se re-déclenche en boucle (vécu).
+    if (dir) untrack(() => void loadChildren(dir))
+  })
+
+  // Charge les enfants des dossiers dépliés visibles pas encore en cache.
+  // `untrack` sur l'appel : loadChildren lit et écrit childrenByDir (self-retrigger sinon).
+  $effect(() => {
+    const dir = targetDir
+    if (!dir) return
+    const missing = reachableExpanded(dir, expandedSet).filter((p) => !childrenByDir.has(p))
+    if (missing.length) untrack(() => missing.forEach((p) => void loadChildren(p)))
   })
 
   // --- Création d'une note / d'un dossier (saisie en place, 19.1) ---
@@ -142,11 +177,16 @@
     sortMenu = false
   }
 
-  function openEntry(entry: FsEntry) {
-    if (!targetDir) return
-    const full = joinPath(targetDir, entry.name)
-    if (entry.isDir) navigateTo(full)
-    else openPath(full)
+  // Clic dossier = déplier/replier EN PLACE (l'arborescence est la navigation) ;
+  // double-clic dossier = en faire la racine affichée (le clic simple aura toggle
+  // deux fois → état net inchangé, puis on descend). Clic fichier = ouvrir.
+  function onRowClick(row: TreeRow) {
+    if (row.entry.isDir) toggleExplorerExpanded(row.path)
+    else void openPath(row.path)
+  }
+
+  function onRowDblClick(row: TreeRow) {
+    if (row.entry.isDir) navigateTo(row.path)
   }
 
   function navigateTo(dir: string | null) {
@@ -264,6 +304,12 @@
               disabled={!canCreate}
               onclick={() => startCreate('dir')}
             ><span class="msr" style="font-size:19px">create_new_folder</span></button>
+            <button
+              title="Tout replier"
+              aria-label="Replier tous les dossiers"
+              disabled={!hasExpanded}
+              onclick={() => targetDir && collapseExplorer(targetDir)}
+            ><span class="msr" style="font-size:19px">unfold_less</span></button>
             <div
               class="sort-wrap"
               onfocusout={(e) => {
@@ -354,19 +400,27 @@
               </div>
               {#if createError}<p class="newerr" role="alert">{createError}</p>{/if}
             {/if}
-            {#each entries as entry (entry.name)}
-              {@const full = joinPath(targetDir, entry.name)}
-              {@const open = app.tabs.find((t) => t.path === full)}
+            {#each treeRows as row (row.path)}
+              {@const open = app.tabs.find((t) => t.path === row.path)}
+              {@const expanded = row.entry.isDir && expandedSet.has(row.path)}
               <button
                 class="row"
-                class:current={!entry.isDir && activeTab()?.path === full}
-                title={entry.name}
-                onclick={() => openEntry(entry)}
+                class:current={!row.entry.isDir && activeTab()?.path === row.path}
+                title={row.path}
+                aria-expanded={row.entry.isDir ? expanded : undefined}
+                style={`padding-left: ${10 + row.depth * 16}px`}
+                onclick={() => onRowClick(row)}
+                ondblclick={() => onRowDblClick(row)}
               >
-                <span class="msr fold">{entry.isDir ? 'folder' : 'description'}</span>
-                <span class="label grow" class:strong={entry.isDir}>{entry.name}</span>
+                {#if row.entry.isDir}
+                  <span class="msr twist" class:open={expanded} aria-hidden="true">chevron_right</span>
+                  <span class="msr fold">{expanded ? 'folder_open' : 'folder'}</span>
+                {:else}
+                  <span class="twist-spacer" aria-hidden="true"></span>
+                  <span class="msr fold">description</span>
+                {/if}
+                <span class="label grow" class:strong={row.entry.isDir}>{row.entry.name}</span>
                 {#if open && isDirty(open)}<span class="filedot">●</span>{/if}
-                {#if entry.isDir}<span class="msr folder-arrow" aria-hidden="true">chevron_right</span>{/if}
               </button>
             {:else}
               <p class="empty">Dossier vide</p>
@@ -672,7 +726,19 @@
   .label.strong { font-weight: 500; }
   .label.grow { flex: 1; }
   .filedot { font-size: 8px; color: var(--ink); flex-shrink: 0; }
-  .folder-arrow { flex: 0 0 auto; font-size: 16px; color: var(--ink-5); }
+  /* Chevron de dépliage : pivote à 90° quand le dossier est ouvert. */
+  .twist {
+    flex: 0 0 auto;
+    font-size: 16px;
+    color: var(--ink-5);
+    transition: transform 140ms ease;
+  }
+  .twist.open { transform: rotate(90deg); }
+  /* Aligne les fichiers sur les libellés des dossiers (largeur du chevron + gap). */
+  .twist-spacer { flex: 0 0 16px; }
+  @media (prefers-reduced-motion: reduce) {
+    .twist { transition: none; }
+  }
 
   .folder-empty {
     min-height: 220px;

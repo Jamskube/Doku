@@ -9,6 +9,10 @@ import {
   pathCrumbs,
   nameExists,
   normalizeNewName,
+  flattenTree,
+  reachableExpanded,
+  validateExpandedPaths,
+  MAX_TREE_DEPTH,
   type FsEntry,
 } from './explorer'
 
@@ -171,5 +175,92 @@ describe('pathCrumbs', () => {
       { label: 'partage', path: '\\\\serveur\\partage' },
       { label: 'Notes', path: '\\\\serveur\\partage\\Notes' },
     ])
+  })
+})
+
+describe('flattenTree', () => {
+  const kids = new Map<string, FsEntry[]>([
+    ['C:\\notes', [dir('projets'), file('a.md'), file('z.md')]],
+    ['C:\\notes\\projets', [dir('doku'), file('plan.md')]],
+    ['C:\\notes\\projets\\doku', [file('adr.md')]],
+  ])
+
+  it('racine seule quand rien n est deplie', () => {
+    const rows = flattenTree('C:\\notes', kids, new Set())
+    expect(rows.map((r) => r.entry.name)).toEqual(['projets', 'a.md', 'z.md'])
+    expect(rows.every((r) => r.depth === 0)).toBe(true)
+  })
+
+  it('insere les enfants d un dossier deplie juste apres lui, indentes', () => {
+    const rows = flattenTree('C:\\notes', kids, new Set(['C:\\notes\\projets']))
+    expect(rows.map((r) => r.entry.name)).toEqual(['projets', 'doku', 'plan.md', 'a.md', 'z.md'])
+    expect(rows.map((r) => r.depth)).toEqual([0, 1, 1, 0, 0])
+    expect(rows[1].path).toBe('C:\\notes\\projets\\doku')
+  })
+
+  it('descend recursivement dans les dossiers deplies imbriques', () => {
+    const expanded = new Set(['C:\\notes\\projets', 'C:\\notes\\projets\\doku'])
+    const rows = flattenTree('C:\\notes', kids, expanded)
+    expect(rows.map((r) => r.entry.name)).toEqual(['projets', 'doku', 'adr.md', 'plan.md', 'a.md', 'z.md'])
+    expect(rows.map((r) => r.depth)).toEqual([0, 1, 2, 1, 0, 0])
+  })
+
+  it('un dossier deplie mais aux enfants NON charges ne montre rien (lazy)', () => {
+    const partial = new Map<string, FsEntry[]>([['C:\\notes', [dir('projets')]]])
+    const rows = flattenTree('C:\\notes', partial, new Set(['C:\\notes\\projets']))
+    expect(rows.map((r) => r.entry.name)).toEqual(['projets'])
+  })
+
+  it('dossiers en tete a chaque niveau, tri applique par niveau', () => {
+    const m = new Map<string, FsEntry[]>([
+      ['C:\\n', [file('b.md'), dir('zz'), file('a.md')]],
+      ['C:\\n\\zz', [file('y.md'), dir('aa')]],
+    ])
+    const rows = flattenTree('C:\\n', m, new Set(['C:\\n\\zz']))
+    expect(rows.map((r) => r.entry.name)).toEqual(['zz', 'aa', 'y.md', 'a.md', 'b.md'])
+  })
+
+  it('borne la profondeur (boucle de jonctions)', () => {
+    // Chaine artificielle a\a\a\... qui se re-deplie sans fin.
+    const m = new Map<string, FsEntry[]>()
+    const expanded = new Set<string>()
+    let p = 'C:\\loop'
+    for (let i = 0; i < 40; i++) {
+      m.set(p, [dir('a')])
+      p = p + '\\a'
+      expanded.add(p)
+    }
+    const rows = flattenTree('C:\\loop', m, expanded)
+    expect(rows.length).toBeLessThanOrEqual(MAX_TREE_DEPTH + 1)
+  })
+})
+
+describe('reachableExpanded', () => {
+  it('ne garde que les chemins sous la racine, tries du plus court au plus long', () => {
+    const expanded = new Set(['C:\\notes\\projets\\doku', 'C:\\notes\\projets', 'D:\\autre\\dossier'])
+    expect(reachableExpanded('C:\\notes', expanded)).toEqual(['C:\\notes\\projets', 'C:\\notes\\projets\\doku'])
+  })
+  it('ne confond pas prefixe de nom et sous-dossier', () => {
+    const expanded = new Set(['C:\\notes-bis\\x'])
+    expect(reachableExpanded('C:\\notes', expanded)).toEqual([])
+  })
+  it('accepte une racine deja terminee par un separateur', () => {
+    expect(reachableExpanded('C:\\', new Set(['C:\\a']))).toEqual(['C:\\a'])
+  })
+})
+
+describe('validateExpandedPaths', () => {
+  it('accepte un tableau de chaines', () => {
+    expect(validateExpandedPaths(['C:\\a', 'C:\\b'])).toEqual(['C:\\a', 'C:\\b'])
+  })
+  it('jette tout ce qui n est pas une chaine non vide', () => {
+    expect(validateExpandedPaths(['ok', '', 42, null, {}])).toEqual(['ok'])
+  })
+  it('rejette un non-tableau sans jeter', () => {
+    expect(validateExpandedPaths('C:\\a')).toEqual([])
+    expect(validateExpandedPaths(undefined)).toEqual([])
+  })
+  it('borne la taille a 300', () => {
+    expect(validateExpandedPaths(Array(500).fill('x')).length).toBe(300)
   })
 })

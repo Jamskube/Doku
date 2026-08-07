@@ -1,7 +1,7 @@
 import type { EditorView } from '@codemirror/view'
 import { DEMO_DIR, DEMO_TABS } from './demo'
 import { detectLineEnding } from './editor/editor'
-import { baseName, DEFAULT_SORT, isSupportedFile, joinPath, parentPath, type ExplorerSort, type SortKey } from './explorer'
+import { baseName, DEFAULT_SORT, isSupportedFile, joinPath, parentPath, validateExpandedPaths, type ExplorerSort, type SortKey } from './explorer'
 import { detectUnsupported } from './encoding'
 import { DEFAULT_EMBED_MODEL } from './rag'
 import { ragFileChanged } from './rag-index.svelte'
@@ -99,6 +99,9 @@ export const app = $state({
   // Compteur bumpé après une création : force l'effet de relecture du dossier à
   // rejouer (targetDir n'a pas changé, donc lui seul ne re-déclencherait rien).
   explorerNonce: 0,
+  // Dossiers dépliés de l'arborescence (chemins absolus, persistés). Les chemins
+  // d'autres racines restent stockés : redevenir visible re-déplie tel quel.
+  explorerExpanded: [] as string[],
   // Notification flottante transitoire (ex. fichiers de session introuvables).
   banner: null as AppNotice | null,
   // Proposition de rechargement (modif externe + modifs locales) — non modale.
@@ -156,6 +159,7 @@ export function loadSettings() {
       if (sort && (sort.key === 'name' || sort.key === 'modified' || sort.key === 'type')) {
         app.explorerSort = { key: sort.key, order: sort.order === 'desc' ? 'desc' : 'asc' }
       }
+      app.explorerExpanded = validateExpandedPaths(s.explorerExpanded)
     }
   } catch {
     // settings corrompus/indisponibles : valeurs par défaut
@@ -178,6 +182,7 @@ export function saveSettings() {
         copilotProvider: app.copilotProvider,
         copilotOpen: app.copilotOpen,
         explorerSort: app.explorerSort,
+        explorerExpanded: app.explorerExpanded,
       }),
     )
   } catch {
@@ -586,6 +591,25 @@ export function setExplorerSort(key: SortKey) {
 // Force l'explorateur à relire le dossier courant (après une création, ou à la demande).
 export function refreshExplorer() {
   app.explorerNonce++
+}
+
+// Déplie/replie un dossier de l'arborescence (persisté). Replier un dossier ne
+// replie PAS ses descendants : re-déplier retrouve l'état antérieur tel quel.
+export function toggleExplorerExpanded(path: string) {
+  const idx = app.explorerExpanded.indexOf(path)
+  if (idx >= 0) app.explorerExpanded.splice(idx, 1)
+  else app.explorerExpanded.push(path)
+  saveSettings()
+}
+
+// « Tout replier » (revenu avec l'arborescence — retiré en 19.1 quand la liste était
+// plate) : ne vide que les chemins sous la racine affichée, les autres racines gardent
+// leur état déplié.
+export function collapseExplorer(prefix: string) {
+  const sep = prefix.includes('\\') ? '\\' : '/'
+  const root = prefix.endsWith(sep) ? prefix : prefix + sep
+  app.explorerExpanded = app.explorerExpanded.filter((p) => !p.startsWith(root))
+  saveSettings()
 }
 
 export function openSettings(focus: 'about' | null = null) {
