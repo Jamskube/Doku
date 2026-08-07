@@ -34,8 +34,70 @@
     void targetDir
     queueMicrotask(() => {
       if (breadcrumbBar) breadcrumbBar.scrollLeft = breadcrumbBar.scrollWidth
+      updateCrumbFades()
     })
   })
+
+  // --- Fil d'Ariane : défilement horizontal (molette + drag souris + tactile natif).
+  // La scrollbar est masquée : sans ces gestes, un chemin profond devient inatteignable.
+  let crumbFadeLeft = $state(false)
+  let crumbFadeRight = $state(false)
+  let crumbPointer: { id: number; startX: number; startLeft: number } | null = null
+  let crumbDragged = false
+
+  function updateCrumbFades() {
+    const el = breadcrumbBar
+    if (!el) {
+      crumbFadeLeft = crumbFadeRight = false
+      return
+    }
+    crumbFadeLeft = el.scrollLeft > 2
+    crumbFadeRight = el.scrollLeft + el.clientWidth < el.scrollWidth - 2
+  }
+
+  function onCrumbWheel(e: WheelEvent) {
+    const el = breadcrumbBar
+    if (!el || el.scrollWidth <= el.clientWidth) return
+    e.preventDefault()
+    el.scrollLeft += Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY
+  }
+
+  function onCrumbPointerDown(e: PointerEvent) {
+    // Souris uniquement : le tactile défile nativement (touch-action: pan-x).
+    if (e.button !== 0 || e.pointerType !== 'mouse' || !breadcrumbBar) return
+    crumbPointer = { id: e.pointerId, startX: e.clientX, startLeft: breadcrumbBar.scrollLeft }
+    crumbDragged = false
+  }
+
+  function onCrumbPointerMove(e: PointerEvent) {
+    if (!crumbPointer || e.pointerId !== crumbPointer.id || !breadcrumbBar) return
+    const dx = e.clientX - crumbPointer.startX
+    // Seuil : en deçà c'est un clic sur un segment, pas un drag.
+    if (!crumbDragged && Math.abs(dx) < 4) return
+    if (!crumbDragged) {
+      crumbDragged = true
+      breadcrumbBar.setPointerCapture(e.pointerId)
+    }
+    breadcrumbBar.scrollLeft = crumbPointer.startLeft - dx
+  }
+
+  function onCrumbPointerUp(e: PointerEvent) {
+    if (crumbPointer && e.pointerId === crumbPointer.id && crumbDragged) {
+      breadcrumbBar?.releasePointerCapture(e.pointerId)
+      // Le click généré par ce relâchement est avalé (capture) ; si aucun click ne
+      // suit (relâché hors bouton), le timer remet le flag pour le clic suivant.
+      setTimeout(() => (crumbDragged = false), 0)
+    }
+    crumbPointer = null
+  }
+
+  function onCrumbClickCapture(e: MouseEvent) {
+    if (crumbDragged) {
+      e.preventDefault()
+      e.stopPropagation()
+      crumbDragged = false
+    }
+  }
 
   // Cache des enfants par dossier (racine + dossiers dépliés). Rempli paresseusement :
   // flattenTree ne descend que dans les dossiers présents ici, chaque dossier déplié
@@ -361,7 +423,21 @@
             </button>
           </div>
 
-          <div class="breadcrumbs" bind:this={breadcrumbBar} aria-label="Chemin du dossier">
+          <!-- svelte-ignore a11y_no_static_element_interactions (couche de défilement : les vraies cibles sont les boutons enfants, accessibles au clavier) -->
+          <div
+            class="breadcrumbs"
+            class:fade-left={crumbFadeLeft}
+            class:fade-right={crumbFadeRight}
+            bind:this={breadcrumbBar}
+            aria-label="Chemin du dossier"
+            onwheel={onCrumbWheel}
+            onpointerdown={onCrumbPointerDown}
+            onpointermove={onCrumbPointerMove}
+            onpointerup={onCrumbPointerUp}
+            onpointercancel={onCrumbPointerUp}
+            onclickcapture={onCrumbClickCapture}
+            onscroll={updateCrumbFades}
+          >
             {#each breadcrumbs as crumb, index (crumb.path)}
               {#if index > 0}<span class="msr crumb-separator" aria-hidden="true">chevron_right</span>{/if}
               <button
@@ -622,8 +698,23 @@
     background: var(--surface-hover);
     scrollbar-width: none;
     overscroll-behavior-x: contain;
+    /* Tactile : défilement horizontal natif ; le drag souris est géré en JS. */
+    touch-action: pan-x;
   }
   .breadcrumbs::-webkit-scrollbar { display: none; }
+  /* Fondus aux bords : signalent le chemin masqué (la scrollbar est cachée). */
+  .breadcrumbs.fade-left {
+    -webkit-mask-image: linear-gradient(90deg, transparent, #000 22px);
+    mask-image: linear-gradient(90deg, transparent, #000 22px);
+  }
+  .breadcrumbs.fade-right {
+    -webkit-mask-image: linear-gradient(270deg, transparent, #000 22px);
+    mask-image: linear-gradient(270deg, transparent, #000 22px);
+  }
+  .breadcrumbs.fade-left.fade-right {
+    -webkit-mask-image: linear-gradient(90deg, transparent, #000 22px, #000 calc(100% - 22px), transparent);
+    mask-image: linear-gradient(90deg, transparent, #000 22px, #000 calc(100% - 22px), transparent);
+  }
   .breadcrumbs button {
     max-width: 86px;
     height: 26px;
