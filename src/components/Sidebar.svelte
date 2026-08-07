@@ -167,14 +167,15 @@
     }
   }
 
-  // --- Menu de tri ---
-  let sortMenu = $state(false)
+  // --- Menu d'en-tête (actions rares + tri) ---
+  let headerMenu = $state(false)
   const SORT_LABELS: Record<SortKey, string> = { name: 'Nom', modified: 'Modifié le', type: 'Type' }
   const SORT_KEYS: SortKey[] = ['name', 'modified', 'type']
 
+  // Le menu reste ouvert : re-cliquer la clé active inverse le sens, et l'utilisateur
+  // voit la flèche basculer — le fermer forcerait deux ouvertures pour un aller-retour.
   function chooseSort(key: SortKey) {
     setExplorerSort(key)
-    sortMenu = false
   }
 
   // Clic dossier = déplier/replier EN PLACE (l'arborescence est la navigation) ;
@@ -207,10 +208,6 @@
     navigationIndex += 1
     cancelCreate()
     app.explorerDir = navigationHistory[navigationIndex]
-  }
-
-  function navigateUp() {
-    navigateTo(parentPath(targetDir))
   }
 
   function followActiveDocument() {
@@ -284,14 +281,9 @@
       <div class="panel-head">
         {#if app.sidebarView === 'files'}
           <span class="panel-title">Fichiers</span>
+          <!-- Hiérarchie de fréquence : créer (2 boutons) reste visible, le reste
+               (ouvrir un dossier, suivre le doc, tout replier, trier) vit dans UN menu. -->
           <div class="actions">
-            <button
-              class="choose-folder"
-              title={isTauri ? 'Choisir un dossier' : 'Disponible dans l’application'}
-              aria-label="Choisir un dossier"
-              disabled={!isTauri}
-              onclick={() => void chooseFolder()}
-            ><span class="msr" style="font-size:18px">folder_open</span><span class="action-label">Ouvrir</span></button>
             <button
               title={canCreate ? 'Nouvelle note' : createHint}
               aria-label="Nouvelle note"
@@ -304,28 +296,44 @@
               disabled={!canCreate}
               onclick={() => startCreate('dir')}
             ><span class="msr" style="font-size:19px">create_new_folder</span></button>
-            <button
-              title="Tout replier"
-              aria-label="Replier tous les dossiers"
-              disabled={!hasExpanded}
-              onclick={() => targetDir && collapseExplorer(targetDir)}
-            ><span class="msr" style="font-size:19px">unfold_less</span></button>
             <div
               class="sort-wrap"
               onfocusout={(e) => {
-                if (!e.currentTarget.contains(e.relatedTarget as Node | null)) sortMenu = false
+                if (!e.currentTarget.contains(e.relatedTarget as Node | null)) headerMenu = false
               }}
             >
               <button
-                class:active={sortMenu}
-                title="Trier ({SORT_LABELS[app.explorerSort.key]})"
-                aria-label="Trier"
+                class:active={headerMenu}
+                title="Plus d’options"
+                aria-label="Plus d’options"
                 aria-haspopup="menu"
-                aria-expanded={sortMenu}
-                onclick={() => (sortMenu = !sortMenu)}
-              ><span class="msr" style="font-size:19px">sort</span></button>
-              {#if sortMenu}
-                <div class="sort-menu" role="menu" tabindex="-1" onkeydown={(e) => { if (e.key === 'Escape') sortMenu = false }}>
+                aria-expanded={headerMenu}
+                onclick={() => (headerMenu = !headerMenu)}
+              ><span class="msr" style="font-size:19px">more_horiz</span></button>
+              {#if headerMenu}
+                <div class="sort-menu" role="menu" tabindex="-1" onkeydown={(e) => { if (e.key === 'Escape') headerMenu = false }}>
+                  <button role="menuitem" disabled={!isTauri} onclick={() => { headerMenu = false; void chooseFolder() }}>
+                    <span class="tick msr">folder_open</span>
+                    <span class="grow">Ouvrir un dossier…</span>
+                  </button>
+                  <button
+                    role="menuitem"
+                    disabled={!activeDocumentDir || activeDocumentDir === targetDir}
+                    onclick={() => { headerMenu = false; followActiveDocument() }}
+                  >
+                    <span class="tick msr">my_location</span>
+                    <span class="grow">Aller au document actif</span>
+                  </button>
+                  <button
+                    role="menuitem"
+                    disabled={!hasExpanded}
+                    onclick={() => { headerMenu = false; if (targetDir) collapseExplorer(targetDir) }}
+                  >
+                    <span class="tick msr">unfold_less</span>
+                    <span class="grow">Tout replier</span>
+                  </button>
+                  <div class="menu-sep" role="separator"></div>
+                  <span class="menu-head">Trier par</span>
                   {#each SORT_KEYS as key (key)}
                     <button role="menuitem" class:on={app.explorerSort.key === key} onclick={() => chooseSort(key)}>
                       <span class="tick msr">{app.explorerSort.key === key ? 'check' : ''}</span>
@@ -350,18 +358,6 @@
             </button>
             <button class="nav-btn" title="Suivant" aria-label="Dossier suivant" disabled={navigationIndex >= navigationHistory.length - 1} onclick={navigateForward}>
               <span class="msr">arrow_forward</span>
-            </button>
-            <button class="nav-btn" title="Dossier parent" aria-label="Remonter au dossier parent" disabled={!parentPath(targetDir)} onclick={navigateUp}>
-              <span class="msr">arrow_upward</span>
-            </button>
-            <button
-              class="nav-btn"
-              title="Dossier du document actif"
-              aria-label="Aller au dossier du document actif"
-              disabled={!activeDocumentDir || activeDocumentDir === targetDir}
-              onclick={followActiveDocument}
-            >
-              <span class="msr">my_location</span>
             </button>
           </div>
 
@@ -578,8 +574,6 @@
   .actions button:hover:not(:disabled) { background: var(--surface-hover); color: var(--ink); }
   .actions button:disabled { opacity: 0.35; cursor: default; }
   .actions button.active { background: var(--surface-hover); color: var(--ink); }
-  .actions button.choose-folder { width: auto; gap: 4px; padding: 0 8px; }
-  .action-label { font-size: 11px; font-weight: 550; }
 
   .explorer-nav {
     height: 39px;
@@ -657,7 +651,7 @@
     top: 30px;
     right: 0;
     z-index: 20;
-    min-width: 168px;
+    min-width: 208px;
     padding: 4px;
     background: var(--surface);
     border: 1px solid var(--line-2);
@@ -679,11 +673,15 @@
     text-align: left;
     cursor: pointer;
   }
-  .sort-menu button:hover { background: var(--surface-hover); color: var(--ink); }
+  .sort-menu button:hover:not(:disabled) { background: var(--surface-hover); color: var(--ink); }
+  .sort-menu button:disabled { color: var(--ink-5); cursor: default; }
   .sort-menu button.on { color: var(--ink); font-weight: 500; }
   .sort-menu .tick { font-size: 15px; width: 15px; flex-shrink: 0; }
-  .sort-menu .grow { flex: 1; }
+  .sort-menu .grow { flex: 1; white-space: nowrap; }
   .sort-menu .arrow { font-size: 15px; color: var(--ink-4); }
+  .menu-sep { height: 1px; margin: 4px 2px; background: var(--line-1); }
+  /* Intitulé de section du menu — libellé, pas action : non focusable, teinte retirée. */
+  .menu-head { display: block; padding: 5px 6px 3px; font-size: 11px; font-weight: 550; color: var(--ink-4); }
 
   /* Saisie du nom en place : mêmes métriques qu'une .row pour ne pas faire sauter la liste. */
   .newrow { display: flex; align-items: center; gap: 5px; height: 28px; padding: 0 6px; }
