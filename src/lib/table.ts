@@ -121,3 +121,121 @@ export function tableCellSpans(md: string): CellSpan[] {
 export function escapeCellText(text: string): string {
   return text.replace(/\r?\n/g, ' ').replace(/(?<!\\)\|/g, '\\|').trim()
 }
+
+// --- Actions de structure (story 20.3) --------------------------------------------
+//
+// Ajouter/supprimer une ligne ou une colonne. Contrairement à l'édition d'une cellule
+// (20.2, remplacement chirurgical), ces opérations changent la FORME du tableau : elles
+// réécrivent donc le bloc — mais elles ne touchent QUE ce bloc, et le reste du document
+// est intact. L'invariant non négociable : la sortie est toujours un tableau GFM valide
+// (même nombre de colonnes partout, ligne de délimiteurs cohérente, alignements conservés).
+
+// Découpe le bloc en lignes utiles, en mémorisant l'indentation d'origine pour la restituer.
+function blockLines(md: string): { indent: string; rows: string[][]; delim: string[] } | null {
+  const raw = md.split('\n').filter((l) => l.trim().length > 0)
+  if (raw.length < 2 || !DELIM.test(raw[1].trim())) return null
+  const indent = /^\s*/.exec(raw[0])![0]
+  const delim = splitRow(raw[1])
+  const rows = raw.filter((_, i) => i !== 1).map(splitRow)
+  return { indent, rows, delim }
+}
+
+// Un délimiteur qui PRÉSERVE l'alignement d'une colonne (`:--`, `--:`, `:--:`, `---`).
+function delimFor(align: CellAlign): string {
+  if (align === 'center') return ':---:'
+  if (align === 'right') return '---:'
+  if (align === 'left') return ':---'
+  return '---'
+}
+
+function alignOf(delimCell: string): CellAlign {
+  const c = delimCell.trim()
+  const left = c.startsWith(':')
+  const right = c.endsWith(':')
+  if (left && right) return 'center'
+  if (right) return 'right'
+  if (left) return 'left'
+  return null
+}
+
+// Réassemble un tableau à partir de ses lignes logiques. Toutes les lignes sont
+// normalisées au même nombre de colonnes : c'est ce qui garantit la validité GFM.
+function render(indent: string, rows: string[][], aligns: CellAlign[]): string {
+  const cols = aligns.length
+  // `splitRow` DÉ-échappe (`\|` → `|`) : réécrire tel quel scinderait la cellule en deux
+  // colonnes au prochain parse. On ré-échappe donc systématiquement à l'assemblage.
+  const pad = (r: string[]) => Array.from({ length: cols }, (_, i) => escapeCellText(r[i] ?? ''))
+  const line = (cells: string[]) => `${indent}| ${cells.join(' | ')} |`
+  const out: string[] = []
+  out.push(line(pad(rows[0] ?? [])))
+  out.push(`${indent}| ${aligns.map(delimFor).join(' | ')} |`)
+  for (let i = 1; i < rows.length; i++) out.push(line(pad(rows[i])))
+  return out.join('\n')
+}
+
+export type TableOp =
+  | { kind: 'addRowBelow'; row: number }
+  | { kind: 'addRowAbove'; row: number }
+  | { kind: 'deleteRow'; row: number }
+  | { kind: 'addColRight'; col: number }
+  | { kind: 'addColLeft'; col: number }
+  | { kind: 'deleteCol'; col: number }
+
+// Applique une action de structure. `row` est l'index de ligne DANS LE BLOC source
+// (0 = en-tête, 1 = délimiteurs, 2+ = corps), cohérent avec `tableCellSpans`.
+// Renvoie null si l'opération est impossible ou produirait un tableau invalide —
+// l'appelant n'écrit alors rien (jamais de tableau cassé dans le document).
+export function applyTableOp(md: string, op: TableOp): string | null {
+  const parsed = blockLines(md)
+  if (!parsed) return null
+  const { indent, delim } = parsed
+  const rows = parsed.rows.map((r) => [...r])
+  const aligns = delim.map(alignOf)
+  const cols = aligns.length
+
+  // Index source (avec la ligne de délimiteurs) → index dans `rows` (sans elle).
+  const toLogical = (srcRow: number) => (srcRow === 0 ? 0 : srcRow - 1)
+
+  switch (op.kind) {
+    case 'addRowBelow':
+    case 'addRowAbove': {
+      const empty = Array.from({ length: cols }, () => '')
+      // Au-dessus de l'en-tête n'a pas de sens (ce serait un nouvel en-tête) : on insère
+      // alors en première ligne de CORPS, ce qui est l'intention réelle.
+      const li = toLogical(op.row)
+      const at = op.kind === 'addRowBelow' ? li + 1 : Math.max(1, li)
+      rows.splice(at, 0, empty)
+      return render(indent, rows, aligns)
+    }
+    case 'deleteRow': {
+      const li = toLogical(op.row)
+      if (li === 0) return null // supprimer l'en-tête détruirait le tableau
+      if (rows.length <= 2) return null // garder au moins une ligne de corps
+      rows.splice(li, 1)
+      return render(indent, rows, aligns)
+    }
+    case 'addColRight':
+    case 'addColLeft': {
+      const at = op.kind === 'addColRight' ? op.col + 1 : op.col
+      if (at < 0 || at > cols) return null
+      const nextAligns = [...aligns]
+      nextAligns.splice(at, 0, null)
+      const nextRows = rows.map((r) => {
+        const c = Array.from({ length: cols }, (_, i) => r[i] ?? '')
+        c.splice(at, 0, '')
+        return c
+      })
+      return render(indent, nextRows, nextAligns)
+    }
+    case 'deleteCol': {
+      if (cols <= 1) return null // un tableau sans colonne n'existe pas
+      if (op.col < 0 || op.col >= cols) return null
+      const nextAligns = aligns.filter((_, i) => i !== op.col)
+      const nextRows = rows.map((r) => {
+        const c = Array.from({ length: cols }, (_, i) => r[i] ?? '')
+        return c.filter((_, i) => i !== op.col)
+      })
+      return render(indent, nextRows, nextAligns)
+    }
+  }
+}

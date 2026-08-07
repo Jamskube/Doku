@@ -170,6 +170,8 @@ const dokuTheme = EditorView.theme({
     verticalAlign: 'top',
     // Les cellules sont saisissables (20.2) : curseur texte, pas curseur de clic.
     cursor: 'text',
+    // Ancre des boutons d'action de structure (20.3).
+    position: 'relative',
   },
   // Cellule en cours de saisie : un halo discret suffit à situer le point d'entrée,
   // sans le contour dur d'un `outline` par défaut.
@@ -178,6 +180,38 @@ const dokuTheme = EditorView.theme({
     background: 'var(--accent-soft)',
     boxShadow: 'inset 0 0 0 2px var(--line-3)',
   },
+  // Actions de structure (20.3) : invisibles au repos, révélées au survol de la cellule.
+  // Le document reste calme tant qu'on ne s'en approche pas (principe « le chrome s'efface »).
+  '.cm-lp-tools': {
+    position: 'absolute',
+    top: '2px',
+    right: '3px',
+    // Toujours présents dans le layout, mais quasi invisibles au repos : ils se révèlent
+    // au survol / focus. `display:none` les rendait inatteignables (y compris aux tests),
+    // et une cible qui n'existe pas tant qu'on ne la survole pas est fragile à l'usage.
+    display: 'inline-flex',
+    opacity: '0',
+    transition: 'opacity 120ms ease-out',
+    gap: '2px',
+    userSelect: 'none',
+  },
+  '.cm-lp-table th:hover .cm-lp-tools, .cm-lp-table td:hover .cm-lp-tools': { opacity: '1' },
+  '.cm-lp-table th:focus-within .cm-lp-tools, .cm-lp-table td:focus-within .cm-lp-tools': { opacity: '1' },
+  '.cm-lp-tool:focus-visible': { opacity: '1', outline: '2px solid var(--line-3)' },
+  '.cm-lp-tool': {
+    width: '17px',
+    height: '17px',
+    lineHeight: '15px',
+    padding: '0',
+    border: '1px solid var(--line-2)',
+    borderRadius: '5px',
+    background: 'var(--cream-content)',
+    color: 'var(--ink-4)',
+    fontFamily: 'var(--font-sans)',
+    fontSize: '11px',
+    cursor: 'pointer',
+  },
+  '.cm-lp-tool:hover': { color: 'var(--ink)', borderColor: 'var(--line-3)' },
   '.cm-lp-table th': {
     background: 'var(--surface-hover)',
     fontWeight: '600',

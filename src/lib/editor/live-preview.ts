@@ -15,7 +15,7 @@ import {
 import { convertFileSrc } from '@tauri-apps/api/core'
 import { isTauri } from '../tauri'
 import { isBlockedImageUrl, resolveLocalImagePath } from '../images'
-import { escapeCellText, parseTable, tableCellSpans, type CellAlign } from '../table'
+import { applyTableOp, escapeCellText, parseTable, tableCellSpans, type CellAlign, type TableOp } from '../table'
 
 type CellAlignStyle = CellAlign
 import { rephrasePreviewRange, setRephrasePreview } from './rephrase-preview'
@@ -268,6 +268,22 @@ function buildDecorations(view: EditorView): DecorationSet {
 }
 
 // Widget-bloc d'un tableau GFM (3.7). Rendu en `<table>` ; les cellules restent du
+// Bornes ACTUELLES du bloc tableau qui commence à `from`. Indispensable dès qu'on écrit :
+// la taille du bloc change à chaque édition, et une longueur mémorisée devient fausse.
+// On s'étend ligne à ligne tant que la ligne ressemble à une ligne de tableau.
+function currentTableRange(state: EditorState, from: number): { from: number; to: number } | null {
+  const first = state.doc.lineAt(from)
+  const isTableLine = (text: string) => text.includes('|') && text.trim().length > 0
+  if (!isTableLine(first.text)) return null
+  let last = first
+  for (let n = first.number + 1; n <= state.doc.lines; n++) {
+    const l = state.doc.line(n)
+    if (!isTableLine(l.text)) break
+    last = l
+  }
+  return { from: first.from, to: last.to }
+}
+
 // texte brut (le formatage inline dans les cellules est hors scope v1 — au clic, la
 // source markdown complète se révèle pour édition).
 class TableWidget extends WidgetType {
@@ -295,7 +311,15 @@ class TableWidget extends WidgetType {
       const line = Number(el.dataset.line)
       const col = Number(el.dataset.col)
       const next = line === 0 ? (parsed.headers[col] ?? '') : (parsed.rows[line - 2]?.[col] ?? '')
-      if (el.textContent !== next) el.textContent = next
+      // Ne toucher qu'au NŒUD TEXTE : écraser `textContent` supprimerait les boutons
+      // d'action de structure logés dans la cellule.
+      const tools = el.querySelector('.cm-lp-tools')
+      const clone = el.cloneNode(true) as HTMLElement
+      clone.querySelector('.cm-lp-tools')?.remove()
+      if ((clone.textContent ?? '') !== next) {
+        el.textContent = next
+        if (tools) el.appendChild(tools)
+      }
     }
     void view
     return true
@@ -305,14 +329,33 @@ class TableWidget extends WidgetType {
   // caractères — jamais une regénération du bloc (ADR-0002, warning critique n°1) : les
   // pipes, le padding, les alignements et les cellules voisines ne sont pas touchés.
   private commitCell(view: EditorView, line: number, col: number, raw: string): void {
-    const md = view.state.sliceDoc(this.from, this.from + this.md.length)
+    // Bornes relues dans le document (même raison que `runOp` : la taille du bloc bouge).
+    const range = currentTableRange(view.state, this.from)
+    if (!range) return
+    const md = view.state.sliceDoc(range.from, range.to)
     const span = tableCellSpans(md).find((s) => s.line === line && s.col === col)
     if (!span) return
     const next = escapeCellText(raw)
     if (md.slice(span.from, span.to) === next) return // rien à écrire
     view.dispatch({
-      changes: { from: this.from + span.from, to: this.from + span.to, insert: next },
+      changes: { from: range.from + span.from, to: range.from + span.to, insert: next },
     })
+  }
+
+  // Action de structure (20.3). Contrairement à l'écriture d'une cellule, la forme du
+  // tableau change → on réécrit LE BLOC (et lui seul). `applyTableOp` renvoie null quand
+  // l'action produirait un tableau invalide : dans ce cas on n'écrit rien.
+  private runOp(view: EditorView, op: TableOp): void {
+    // `this.md` est la valeur FIGÉE à la création du widget : après une édition, la
+    // longueur réelle du bloc a changé. S'y fier écraserait la ligne suivante (bug
+    // constaté en navigateur : la 2e ligne du tableau disparaissait). On relit donc les
+    // bornes du bloc dans le document courant, en s'étendant sur les lignes du tableau.
+    const range = currentTableRange(view.state, this.from)
+    if (!range) return
+    const md = view.state.sliceDoc(range.from, range.to)
+    const next = applyTableOp(md, op)
+    if (next === null || next === md) return
+    view.dispatch({ changes: { from: range.from, to: range.to, insert: next } })
   }
 
   toDOM(view: EditorView) {
@@ -354,6 +397,14 @@ class TableWidget extends WidgetType {
       if (align) el.style.textAlign = align
       cells.push(el)
 
+      // Le texte de la cellule EXCLUT les boutons d'action (sinon leurs libellés « + / − »
+      // seraient écrits dans le document à la validation).
+      const cellText = () => {
+        const clone = el.cloneNode(true) as HTMLElement
+        clone.querySelector('.cm-lp-tools')?.remove()
+        return clone.textContent ?? ''
+      }
+
       // CM6 pose sa propre sélection sur un mousedown dans son contenu : sans cette
       // interception, cliquer dans une case sélectionne tout le tableau. On prend la
       // main et on place le focus dans la case visée.
@@ -361,9 +412,41 @@ class TableWidget extends WidgetType {
         e.stopPropagation()
       })
 
+      // Actions de structure au survol (20.3) : boutons discrets dans la cellule, plutôt
+      // qu'un menu à aller chercher. Ils n'apparaissent qu'au survol (CSS) et agissent sur
+      // la ligne / la colonne de CETTE cellule.
+      const tools = document.createElement('span')
+      tools.className = 'cm-lp-tools'
+      tools.contentEditable = 'false'
+      const addTool = (label: string, title: string, op: TableOp) => {
+        const b = document.createElement('button')
+        b.type = 'button'
+        b.className = 'cm-lp-tool'
+        b.textContent = label
+        b.title = title
+        b.tabIndex = -1
+        // `mousedown` : agir AVANT que le blur de la cellule ne déplace le focus.
+        b.addEventListener('mousedown', (e) => {
+          e.preventDefault()
+          e.stopPropagation()
+          this.runOp(view, op)
+        })
+        tools.appendChild(b)
+      }
+      if (line === 0) {
+        // En-tête : la colonne est l'unité qui a du sens.
+        addTool('+', 'Ajouter une colonne à droite', { kind: 'addColRight', col })
+        addTool('−', 'Supprimer cette colonne', { kind: 'deleteCol', col })
+      } else if (col === 0) {
+        // Première cellule d'une ligne de corps : actions de ligne.
+        addTool('+', 'Ajouter une ligne en dessous', { kind: 'addRowBelow', row: line })
+        addTool('−', 'Supprimer cette ligne', { kind: 'deleteRow', row: line })
+      }
+      if (tools.childElementCount > 0) el.appendChild(tools)
+
       // Écriture à la sortie de la cellule : une frappe par caractère ferait re-rendre
       // le widget à chaque touche (et perdrait le focus). On écrit au blur / Entrée / Tab.
-      el.addEventListener('blur', () => this.commitCell(view, line, col, el.textContent ?? ''))
+      el.addEventListener('blur', () => this.commitCell(view, line, col, cellText()))
 
       el.addEventListener('keydown', (e) => {
         if (e.key === 'Tab') {
