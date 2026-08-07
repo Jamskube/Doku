@@ -373,9 +373,12 @@
     display: flex;
     align-items: stretch;
     padding-left: 4px;
-    height: 40px;
+    height: var(--chrome-titlebar-height);
     flex-shrink: 0;
-    background: var(--cream-base);
+    background: transparent;
+    -webkit-backdrop-filter: blur(24px) saturate(145%);
+    backdrop-filter: blur(24px) saturate(145%);
+    box-shadow: inset 0 1px 0 var(--chrome-material-filet);
     user-select: none;
   }
 

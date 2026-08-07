@@ -1,0 +1,924 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Doku Material Lab</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      font-family: Inter, "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
+      background: #0d0e12;
+      color: #f2f3f6;
+      font-synthesis: none;
+    }
+
+    * { box-sizing: border-box; }
+    html, body { min-height: 100%; margin: 0; }
+    body { background: #0d0e12; }
+    button, input, textarea { font: inherit; }
+    button { color: inherit; }
+
+    .lab {
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .lab-header {
+      min-height: 58px;
+      display: flex;
+      align-items: center;
+      gap: 18px;
+      padding: 9px 18px;
+      border-bottom: 1px solid rgb(255 255 255 / 0.08);
+      background: #111217;
+    }
+
+    .lab-title { min-width: 0; }
+    .lab-title h1 {
+      margin: 0;
+      font-size: 15px;
+      font-weight: 600;
+      letter-spacing: -0.01em;
+    }
+    .lab-title p {
+      margin: 3px 0 0;
+      color: rgb(242 243 246 / 0.58);
+      font-size: 11.5px;
+    }
+
+    .lab-actions {
+      margin-left: auto;
+      display: flex;
+      align-items: center;
+      gap: 7px;
+    }
+
+    .lab-button {
+      min-height: 34px;
+      padding: 0 12px;
+      border: 1px solid rgb(255 255 255 / 0.10);
+      border-radius: 8px;
+      background: rgb(255 255 255 / 0.045);
+      cursor: pointer;
+      font-size: 12px;
+      transition: background 140ms ease, border-color 140ms ease, transform 100ms ease;
+    }
+    .lab-button:hover { background: rgb(255 255 255 / 0.075); border-color: rgb(255 255 255 / 0.16); }
+    .lab-button:active { transform: scale(0.96); }
+    .lab-button.primary { background: #e9ebf2; border-color: #e9ebf2; color: #17181d; }
+    .lab-button.primary:hover { background: #fff; border-color: #fff; }
+    .lab-button:focus-visible,
+    input:focus-visible,
+    textarea:focus-visible,
+    summary:focus-visible {
+      outline: 2px solid #9aa9e9;
+      outline-offset: 2px;
+    }
+
+    .status {
+      min-width: 94px;
+      color: rgb(242 243 246 / 0.56);
+      font-size: 11.5px;
+      text-align: right;
+    }
+
+    .workspace {
+      flex: 1;
+      min-height: 0;
+      display: grid;
+      grid-template-columns: 332px minmax(0, 1fr);
+    }
+
+    .controls {
+      min-height: 0;
+      padding: 16px 14px 32px;
+      border-right: 1px solid rgb(255 255 255 / 0.08);
+      background: #111217;
+      overflow-y: auto;
+    }
+
+    .controls-intro {
+      margin: 0 6px 14px;
+      color: rgb(242 243 246 / 0.62);
+      font-size: 11.5px;
+      line-height: 1.45;
+    }
+
+    details {
+      border-top: 1px solid rgb(255 255 255 / 0.08);
+    }
+    details:last-of-type { border-bottom: 1px solid rgb(255 255 255 / 0.08); }
+    summary {
+      min-height: 46px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      cursor: pointer;
+      list-style: none;
+      user-select: none;
+    }
+    summary::-webkit-details-marker { display: none; }
+    summary::before {
+      content: "›";
+      width: 16px;
+      color: rgb(242 243 246 / 0.45);
+      font-size: 18px;
+      transform: rotate(0deg);
+      transition: transform 150ms cubic-bezier(0.22, 1, 0.36, 1);
+    }
+    details[open] summary::before { transform: rotate(90deg); }
+    .summary-copy { min-width: 0; display: grid; gap: 2px; }
+    .summary-copy strong { font-size: 12.5px; font-weight: 550; }
+    .summary-copy small { color: rgb(242 243 246 / 0.48); font-size: 10.5px; }
+
+    .control-list {
+      display: grid;
+      gap: 13px;
+      padding: 1px 4px 17px 26px;
+    }
+
+    .field {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 7px 10px;
+    }
+    .field label {
+      color: rgb(242 243 246 / 0.76);
+      font-size: 11.5px;
+    }
+    .field output {
+      min-width: 58px;
+      color: rgb(242 243 246 / 0.52);
+      font-family: "Cascadia Mono", Consolas, monospace;
+      font-size: 10.5px;
+      text-align: right;
+      font-variant-numeric: tabular-nums;
+    }
+    .field input[type="range"] {
+      grid-column: 1 / -1;
+      width: 100%;
+      height: 18px;
+      margin: 0;
+      accent-color: #95a6e6;
+      cursor: pointer;
+    }
+
+    .color-control {
+      grid-column: 1 / -1;
+      display: grid;
+      grid-template-columns: 34px minmax(0, 1fr);
+      gap: 8px;
+    }
+    .color-control input[type="color"] {
+      width: 34px;
+      height: 30px;
+      padding: 2px;
+      border: 1px solid rgb(255 255 255 / 0.12);
+      border-radius: 7px;
+      background: rgb(255 255 255 / 0.04);
+      cursor: pointer;
+    }
+    .color-control input[type="text"] {
+      min-width: 0;
+      height: 30px;
+      padding: 0 9px;
+      border: 1px solid rgb(255 255 255 / 0.10);
+      border-radius: 7px;
+      background: #0d0e12;
+      color: #f2f3f6;
+      font-family: "Cascadia Mono", Consolas, monospace;
+      font-size: 11.5px;
+      text-transform: uppercase;
+    }
+
+    .preview-area {
+      min-width: 0;
+      padding: 22px;
+      overflow: auto;
+    }
+
+    .preview-heading {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 12px;
+    }
+    .preview-heading h2 { margin: 0; font-size: 12.5px; font-weight: 550; }
+    .preview-heading span {
+      color: rgb(242 243 246 / 0.48);
+      font-family: "Cascadia Mono", Consolas, monospace;
+      font-size: 10.5px;
+    }
+
+    .preview-shell {
+      width: 100%;
+      min-width: 760px;
+      min-height: 590px;
+      display: grid;
+      grid-template-columns: 224px minmax(320px, 1fr) 310px;
+      grid-template-rows: 40px minmax(550px, 1fr);
+      border-radius: 15px;
+      overflow: hidden;
+      box-shadow: 0 22px 70px rgb(0 0 0 / 0.38), inset 0 1px 0 rgb(255 255 255 / 0.075);
+      color: #eef0f4;
+    }
+
+    .doku-sidebar {
+      grid-column: 1;
+      grid-row: 1 / 3;
+      min-width: 0;
+      display: grid;
+      grid-template-columns: 44px minmax(0, 1fr);
+    }
+    .doku-rail {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 7px;
+      padding: 9px 0 12px;
+      border-right: 1px solid rgb(255 255 255 / 0.055);
+    }
+    .doku-mark {
+      width: 27px;
+      height: 27px;
+      display: grid;
+      place-items: center;
+      margin-bottom: 5px;
+      border-radius: 8px;
+      background: rgb(255 255 255 / 0.90);
+      color: #1a1b22;
+      font-size: 13px;
+      font-weight: 700;
+    }
+    .rail-icon {
+      width: 30px;
+      height: 30px;
+      display: grid;
+      place-items: center;
+      border-radius: 8px;
+      color: rgb(238 240 244 / 0.62);
+      font-size: 13px;
+    }
+    .rail-icon.active { background: rgb(255 255 255 / 0.09); color: #fff; }
+    .rail-spacer { flex: 1; }
+
+    .doku-files { min-width: 0; padding: 10px 8px; }
+    .file-actions {
+      height: 24px;
+      display: flex;
+      justify-content: flex-end;
+      gap: 5px;
+      color: rgb(238 240 244 / 0.45);
+      font-size: 11px;
+    }
+    .file-root {
+      margin: 2px 5px 6px;
+      color: rgb(238 240 244 / 0.48);
+      font-size: 10px;
+    }
+    .file-row {
+      height: 27px;
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      padding: 0 7px;
+      border-radius: 6px;
+      color: rgb(238 240 244 / 0.73);
+      font-size: 11px;
+    }
+    .file-row::before { content: "□"; color: rgb(238 240 244 / 0.45); }
+    .file-row.current { background: rgb(255 255 255 / 0.09); color: #fff; }
+
+    .doku-topbar {
+      grid-column: 2 / 4;
+      grid-row: 1;
+      min-width: 0;
+      display: flex;
+      align-items: flex-end;
+      gap: 4px;
+      padding: 0 9px;
+      box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.075);
+    }
+    .fake-tab {
+      height: 34px;
+      min-width: 112px;
+      display: flex;
+      align-items: center;
+      padding: 0 12px;
+      border-radius: 10px 10px 0 0;
+      color: rgb(238 240 244 / 0.50);
+      font-size: 11px;
+    }
+    .fake-tab.active { background: #2e2e34; color: #f1f2f5; }
+    .fake-tab.short { min-width: 86px; }
+    .top-spacer { flex: 1; }
+    .top-action {
+      width: 29px;
+      height: 32px;
+      display: grid;
+      place-items: center;
+      color: rgb(238 240 244 / 0.60);
+      font-size: 13px;
+    }
+
+    .doku-document {
+      grid-column: 2;
+      grid-row: 2;
+      min-width: 0;
+      padding: 32px 42px;
+      border-radius: 14px 14px 0 0;
+      background: #2e2e34;
+      color: #f0eee8;
+      overflow: hidden;
+    }
+    .doc-title {
+      margin: 0 0 28px;
+      font-family: Georgia, "Times New Roman", serif;
+      font-size: clamp(25px, 3vw, 36px);
+      line-height: 1.08;
+      font-weight: 650;
+    }
+    .doc-copy {
+      max-width: 590px;
+      margin: 0 0 20px;
+      color: rgb(240 238 232 / 0.90);
+      font-family: Georgia, "Times New Roman", serif;
+      font-size: 15px;
+      line-height: 1.75;
+    }
+    .doc-subtitle {
+      margin: 34px 0 17px;
+      font-family: Georgia, "Times New Roman", serif;
+      font-size: 21px;
+      font-weight: 650;
+    }
+    .code-lines {
+      margin-top: 28px;
+      padding: 17px;
+      border-radius: 5px;
+      background: #3a3a43;
+      color: rgb(240 242 246 / 0.72);
+      font-family: "Cascadia Mono", Consolas, monospace;
+      font-size: 11px;
+      line-height: 1.65;
+    }
+
+    .doku-chat {
+      grid-column: 3;
+      grid-row: 2;
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      padding: 62px 18px 14px;
+      border-radius: 0 14px 0 0;
+      background: #2e2e34;
+      color: #eef0f4;
+    }
+    .chat-hero { text-align: center; }
+    .chat-symbol {
+      width: 42px;
+      height: 42px;
+      display: grid;
+      place-items: center;
+      margin: 0 auto 14px;
+      border-radius: 13px;
+      background: #f1f2f5;
+      color: #1a1b22;
+      font-size: 18px;
+    }
+    .chat-hero strong { display: block; font-size: 14px; font-weight: 650; }
+    .chat-hero p { margin: 7px auto 24px; color: rgb(238 240 244 / 0.54); font-size: 10.5px; line-height: 1.45; }
+    .suggestions {
+      overflow: hidden;
+      border: 1px solid rgb(255 255 255 / 0.12);
+      border-radius: 13px;
+    }
+    .suggestion {
+      height: 54px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 0 11px;
+      border-bottom: 1px solid rgb(255 255 255 / 0.10);
+      font-size: 10.5px;
+    }
+    .suggestion:last-child { border-bottom: 0; }
+    .suggestion::before {
+      content: "◇";
+      width: 26px;
+      height: 26px;
+      display: grid;
+      place-items: center;
+      border-radius: 8px;
+      background: rgb(255 255 255 / 0.07);
+      color: rgb(238 240 244 / 0.70);
+    }
+    .chat-spacer { flex: 1; }
+    .composer {
+      min-height: 76px;
+      padding: 11px;
+      border-radius: 14px;
+      background: #3d3d45;
+      color: rgb(238 240 244 / 0.52);
+      font-size: 11px;
+    }
+
+    .json-panel {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 8px 12px;
+      margin-top: 18px;
+      padding-top: 16px;
+      border-top: 1px solid rgb(255 255 255 / 0.08);
+    }
+    .json-panel label { font-size: 12px; font-weight: 550; }
+    .json-panel p {
+      grid-column: 1 / -1;
+      margin: -2px 0 2px;
+      color: rgb(242 243 246 / 0.52);
+      font-size: 11px;
+    }
+    .json-panel textarea {
+      grid-column: 1 / -1;
+      width: 100%;
+      min-height: 190px;
+      resize: vertical;
+      padding: 12px;
+      border: 1px solid rgb(255 255 255 / 0.10);
+      border-radius: 9px;
+      background: #111217;
+      color: rgb(242 243 246 / 0.78);
+      font-family: "Cascadia Mono", Consolas, monospace;
+      font-size: 11px;
+      line-height: 1.5;
+    }
+
+    @media (max-width: 980px) {
+      .workspace { grid-template-columns: 1fr; }
+      .controls {
+        max-height: none;
+        border-right: 0;
+        border-bottom: 1px solid rgb(255 255 255 / 0.08);
+        overflow: visible;
+      }
+      .preview-area { padding: 16px; }
+    }
+
+    @media (max-width: 680px) {
+      .lab-header { align-items: flex-start; flex-wrap: wrap; }
+      .lab-actions { width: 100%; margin-left: 0; flex-wrap: wrap; }
+      .status { flex: 1; }
+      .controls { padding-inline: 10px; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { transition-duration: 0.01ms !important; }
+    }
+  </style>
+</head>
+<body>
+  <div class="lab">
+    <header class="lab-header">
+      <div class="lab-title">
+        <h1>Doku Material Lab</h1>
+        <p>Réglez chaque couche de la matière sombre, puis exportez le résultat.</p>
+      </div>
+      <div class="lab-actions">
+        <button class="lab-button" id="resetButton" type="button">Réinitialiser</button>
+        <button class="lab-button" id="downloadButton" type="button">Télécharger JSON</button>
+        <button class="lab-button primary" id="copyButton" type="button">Copier le JSON</button>
+        <span class="status" id="status" role="status" aria-live="polite">Sauvegarde locale</span>
+      </div>
+    </header>
+
+    <div class="workspace">
+      <aside class="controls" aria-label="Réglages de la matière">
+        <p class="controls-intro">Le premier groupe agit directement sur le coin gauche. Les autres couches restent indépendantes pour éviter de perdre une combinaison intéressante.</p>
+        <div id="controls"></div>
+      </aside>
+
+      <main class="preview-area">
+        <div class="preview-heading">
+          <h2>Aperçu Doku</h2>
+          <span id="baseLabel">#14151A</span>
+        </div>
+
+        <div class="preview-shell" id="previewShell">
+          <aside class="doku-sidebar" aria-label="Aperçu de la sidebar">
+            <div class="doku-rail">
+              <div class="doku-mark">D</div>
+              <div class="rail-icon active">▣</div>
+              <div class="rail-icon">⌕</div>
+              <div class="rail-icon">☷</div>
+              <div class="rail-icon">↶</div>
+              <div class="rail-spacer"></div>
+              <div class="rail-icon">⚙</div>
+            </div>
+            <div class="doku-files">
+              <div class="file-actions">＋ &nbsp; ▤ &nbsp; ≡</div>
+              <div class="file-root">NOTES</div>
+              <div class="file-row">archives</div>
+              <div class="file-row">Projets</div>
+              <div class="file-row">idées.md</div>
+              <div class="file-row current">notes.md</div>
+              <div class="file-row">todo.md</div>
+            </div>
+          </aside>
+
+          <header class="doku-topbar" aria-label="Aperçu du header">
+            <div class="fake-tab active">notes.md &nbsp; ×</div>
+            <div class="fake-tab short">idées.md</div>
+            <div class="fake-tab short">todo.md</div>
+            <div class="top-spacer"></div>
+            <div class="top-action">•••</div>
+            <div class="top-action">☼</div>
+            <div class="top-action">−</div>
+            <div class="top-action">□</div>
+            <div class="top-action">×</div>
+          </header>
+
+          <article class="doku-document">
+            <h3 class="doc-title">Mes notes de projet</h3>
+            <p class="doc-copy">Ce document sert de démonstration au rendu de Doku. La matière doit entourer la page sans attirer davantage l’attention que le contenu.</p>
+            <h4 class="doc-subtitle">Décisions</h4>
+            <p class="doc-copy">Le coin gauche peut devenir plus profond sans transformer toute la coque en noir uniforme.</p>
+            <div class="code-lines">// aperçu du contraste<br />const matière = "personnalisée";<br />exporter(matière);</div>
+          </article>
+
+          <aside class="doku-chat" aria-label="Aperçu du chat">
+            <div class="chat-hero">
+              <div class="chat-symbol">♧</div>
+              <strong>Bonjour, que puis-je faire ?</strong>
+              <p>Discutez avec votre document ou partez d’une suggestion.</p>
+            </div>
+            <div class="suggestions">
+              <div class="suggestion">Résumer le document</div>
+              <div class="suggestion">Poser une question</div>
+              <div class="suggestion">Extraire les points clés</div>
+            </div>
+            <div class="chat-spacer"></div>
+            <div class="composer">Demandez à Doku-San…</div>
+          </aside>
+        </div>
+
+        <section class="json-panel" aria-labelledby="jsonLabel">
+          <label id="jsonLabel" for="jsonOutput">Configuration exportée</label>
+          <span id="jsonSize"></span>
+          <p>Copiez ce JSON et renvoyez-le dans la conversation : chaque valeur correspond directement à une couche intégrable dans Doku.</p>
+          <textarea id="jsonOutput" readonly spellcheck="false"></textarea>
+        </section>
+      </main>
+    </div>
+  </div>
+
+  <script>
+    const STORAGE_KEY = "doku-material-lab-v1";
+
+    const defaults = {
+      schema: "doku.chrome-material.v1",
+      base: "#19191A",
+      noise: { opacity: 0.014 },
+      topSheen: { color: "#FFFFFF", opacity: 0.035, stop: 80 },
+      leftShade: {
+        color: "#000000",
+        opacity: 0.19,
+        width: 77,
+        height: 164,
+        x: 81,
+        y: 22,
+        stop: 57
+      },
+      coolGlow: {
+        color: "#031035",
+        opacity: 0.20,
+        width: 80,
+        height: 142,
+        x: 43,
+        y: 76,
+        stop: 92
+      },
+      bottomDepth: {
+        color: "#000A29",
+        opacity: 0.115,
+        width: 90,
+        height: 72,
+        x: 41,
+        y: 107,
+        stop: 67
+      },
+      flare: {
+        color: "#FFFFFF",
+        opacity: 0.1,
+        angle: 120,
+        start: 48,
+        peak: 87,
+        end: 42
+      }
+    };
+
+    const groups = [
+      {
+        title: "Base et grain",
+        hint: "La couleur générale de la coque",
+        open: true,
+        fields: [
+          { path: "base", label: "Couleur de base", type: "color" },
+          { path: "noise.opacity", label: "Opacité du grain", min: 0, max: 0.10, step: 0.001, format: "opacity" }
+        ]
+      },
+      {
+        title: "Ombre du coin gauche",
+        hint: "La couche à régler en priorité",
+        open: true,
+        fields: [
+          { path: "leftShade.color", label: "Couleur", type: "color" },
+          { path: "leftShade.opacity", label: "Opacité", min: 0, max: 0.60, step: 0.005, format: "opacity" },
+          { path: "leftShade.width", label: "Largeur", min: 20, max: 160, step: 1, format: "percent" },
+          { path: "leftShade.height", label: "Hauteur", min: 30, max: 200, step: 1, format: "percent" },
+          { path: "leftShade.x", label: "Position X", min: -30, max: 100, step: 1, format: "percent" },
+          { path: "leftShade.y", label: "Position Y", min: -30, max: 130, step: 1, format: "percent" },
+          { path: "leftShade.stop", label: "Fondu", min: 20, max: 100, step: 1, format: "percent" }
+        ]
+      },
+      {
+        title: "Lueur froide",
+        hint: "Le reflet bleu-gris supérieur",
+        fields: [
+          { path: "coolGlow.color", label: "Couleur", type: "color" },
+          { path: "coolGlow.opacity", label: "Opacité", min: 0, max: 0.35, step: 0.005, format: "opacity" },
+          { path: "coolGlow.width", label: "Largeur", min: 20, max: 160, step: 1, format: "percent" },
+          { path: "coolGlow.height", label: "Hauteur", min: 30, max: 180, step: 1, format: "percent" },
+          { path: "coolGlow.x", label: "Position X", min: -30, max: 100, step: 1, format: "percent" },
+          { path: "coolGlow.y", label: "Position Y", min: -30, max: 130, step: 1, format: "percent" },
+          { path: "coolGlow.stop", label: "Fondu", min: 20, max: 100, step: 1, format: "percent" }
+        ]
+      },
+      {
+        title: "Profondeur basse",
+        hint: "La teinte présente en bas de la sidebar",
+        fields: [
+          { path: "bottomDepth.color", label: "Couleur", type: "color" },
+          { path: "bottomDepth.opacity", label: "Opacité", min: 0, max: 0.35, step: 0.005, format: "opacity" },
+          { path: "bottomDepth.width", label: "Largeur", min: 20, max: 170, step: 1, format: "percent" },
+          { path: "bottomDepth.height", label: "Hauteur", min: 20, max: 160, step: 1, format: "percent" },
+          { path: "bottomDepth.x", label: "Position X", min: -30, max: 120, step: 1, format: "percent" },
+          { path: "bottomDepth.y", label: "Position Y", min: -20, max: 140, step: 1, format: "percent" },
+          { path: "bottomDepth.stop", label: "Fondu", min: 20, max: 100, step: 1, format: "percent" }
+        ]
+      },
+      {
+        title: "Reflet supérieur",
+        hint: "La lumière verticale du haut",
+        fields: [
+          { path: "topSheen.color", label: "Couleur", type: "color" },
+          { path: "topSheen.opacity", label: "Opacité", min: 0, max: 0.30, step: 0.005, format: "opacity" },
+          { path: "topSheen.stop", label: "Fin du reflet", min: 5, max: 80, step: 1, format: "percent" }
+        ]
+      },
+      {
+        title: "Reflet diagonal",
+        hint: "Le reflet transversal très discret",
+        fields: [
+          { path: "flare.color", label: "Couleur", type: "color" },
+          { path: "flare.opacity", label: "Opacité", min: 0, max: 0.20, step: 0.002, format: "opacity" },
+          { path: "flare.angle", label: "Angle", min: 0, max: 180, step: 1, format: "angle" },
+          { path: "flare.start", label: "Début", min: 0, max: 80, step: 1, format: "percent" },
+          { path: "flare.peak", label: "Centre", min: 10, max: 90, step: 1, format: "percent" },
+          { path: "flare.end", label: "Fin", min: 20, max: 100, step: 1, format: "percent" }
+        ]
+      }
+    ];
+
+    const controlsRoot = document.getElementById("controls");
+    const previewShell = document.getElementById("previewShell");
+    const jsonOutput = document.getElementById("jsonOutput");
+    const jsonSize = document.getElementById("jsonSize");
+    const status = document.getElementById("status");
+    const baseLabel = document.getElementById("baseLabel");
+
+    let state = loadState();
+
+    function clone(value) {
+      return JSON.parse(JSON.stringify(value));
+    }
+
+    function loadState() {
+      try {
+        const saved = JSON.parse(localStorage.getItem(STORAGE_KEY));
+        if (saved && saved.schema === defaults.schema) return mergeState(clone(defaults), saved);
+      } catch (_) {
+        localStorage.removeItem(STORAGE_KEY);
+      }
+      return clone(defaults);
+    }
+
+    function mergeState(target, source) {
+      Object.keys(target).forEach(function (key) {
+        if (!(key in source)) return;
+        if (target[key] && typeof target[key] === "object" && !Array.isArray(target[key])) {
+          mergeState(target[key], source[key]);
+        } else {
+          target[key] = source[key];
+        }
+      });
+      return target;
+    }
+
+    function getPath(path) {
+      return path.split(".").reduce(function (value, key) { return value[key]; }, state);
+    }
+
+    function setPath(path, value) {
+      const keys = path.split(".");
+      const last = keys.pop();
+      const parent = keys.reduce(function (entry, key) { return entry[key]; }, state);
+      parent[last] = value;
+    }
+
+    function formatValue(value, format) {
+      if (format === "opacity") return (value * 100).toFixed(value < 0.1 ? 1 : 0) + "%";
+      if (format === "percent") return value + "%";
+      if (format === "angle") return value + "°";
+      return String(value);
+    }
+
+    function makeField(field) {
+      const wrapper = document.createElement("div");
+      wrapper.className = "field";
+
+      const id = "field-" + field.path.replaceAll(".", "-");
+      const label = document.createElement("label");
+      label.htmlFor = id;
+      label.textContent = field.label;
+      wrapper.appendChild(label);
+
+      if (field.type === "color") {
+        const holder = document.createElement("div");
+        holder.className = "color-control";
+
+        const color = document.createElement("input");
+        color.type = "color";
+        color.id = id;
+        color.value = getPath(field.path);
+        color.dataset.path = field.path;
+
+        const text = document.createElement("input");
+        text.type = "text";
+        text.value = getPath(field.path);
+        text.maxLength = 7;
+        text.dataset.path = field.path;
+        text.setAttribute("aria-label", field.label + " en hexadécimal");
+
+        color.addEventListener("input", function () {
+          setPath(field.path, color.value.toUpperCase());
+          text.value = color.value.toUpperCase();
+          render();
+        });
+        text.addEventListener("change", function () {
+          const next = text.value.trim().toUpperCase();
+          if (/^#[0-9A-F]{6}$/.test(next)) {
+            setPath(field.path, next);
+            color.value = next;
+            render();
+          } else {
+            text.value = getPath(field.path);
+          }
+        });
+
+        holder.append(color, text);
+        wrapper.appendChild(holder);
+        return wrapper;
+      }
+
+      const output = document.createElement("output");
+      output.htmlFor = id;
+      output.textContent = formatValue(getPath(field.path), field.format);
+      wrapper.appendChild(output);
+
+      const input = document.createElement("input");
+      input.type = "range";
+      input.id = id;
+      input.min = field.min;
+      input.max = field.max;
+      input.step = field.step;
+      input.value = getPath(field.path);
+      input.dataset.path = field.path;
+      input.addEventListener("input", function () {
+        const next = Number(input.value);
+        setPath(field.path, next);
+        output.textContent = formatValue(next, field.format);
+        render();
+      });
+      wrapper.appendChild(input);
+      return wrapper;
+    }
+
+    function buildControls() {
+      controlsRoot.replaceChildren();
+      groups.forEach(function (group) {
+        const details = document.createElement("details");
+        details.open = Boolean(group.open);
+
+        const summary = document.createElement("summary");
+        const copy = document.createElement("span");
+        copy.className = "summary-copy";
+        const title = document.createElement("strong");
+        title.textContent = group.title;
+        const hint = document.createElement("small");
+        hint.textContent = group.hint;
+        copy.append(title, hint);
+        summary.appendChild(copy);
+
+        const list = document.createElement("div");
+        list.className = "control-list";
+        group.fields.forEach(function (field) { list.appendChild(makeField(field)); });
+
+        details.append(summary, list);
+        controlsRoot.appendChild(details);
+      });
+    }
+
+    function rgb(hex, opacity) {
+      const value = hex.replace("#", "");
+      const red = parseInt(value.slice(0, 2), 16);
+      const green = parseInt(value.slice(2, 4), 16);
+      const blue = parseInt(value.slice(4, 6), 16);
+      return "rgb(" + red + " " + green + " " + blue + " / " + opacity + ")";
+    }
+
+    function noiseUrl(opacity) {
+      const svg = "<svg xmlns='http://www.w3.org/2000/svg' width='144' height='144'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='.82' numOctaves='3' stitchTiles='stitch'/><feColorMatrix type='saturate' values='0'/></filter><rect width='144' height='144' filter='url(#n)' opacity='" + opacity + "'/></svg>";
+      return "url(\"data:image/svg+xml," + encodeURIComponent(svg) + "\")";
+    }
+
+    function radial(layer) {
+      return "radial-gradient(" + layer.width + "% " + layer.height + "% at " + layer.x + "% " + layer.y + "%, " + rgb(layer.color, layer.opacity) + ", transparent " + layer.stop + "%)";
+    }
+
+    function materialBackground() {
+      return [
+        noiseUrl(state.noise.opacity),
+        "linear-gradient(180deg, " + rgb(state.topSheen.color, state.topSheen.opacity) + ", transparent " + state.topSheen.stop + "%)",
+        radial(state.leftShade),
+        radial(state.coolGlow),
+        radial(state.bottomDepth),
+        "linear-gradient(" + state.flare.angle + "deg, transparent " + state.flare.start + "%, " + rgb(state.flare.color, state.flare.opacity) + " " + state.flare.peak + "%, transparent " + state.flare.end + "%)",
+        state.base
+      ].join(", ");
+    }
+
+    function render() {
+      previewShell.style.background = materialBackground();
+      baseLabel.textContent = state.base;
+      const json = JSON.stringify(state, null, 2);
+      jsonOutput.value = json;
+      jsonSize.textContent = new Blob([json]).size + " octets";
+      localStorage.setItem(STORAGE_KEY, json);
+      status.textContent = "Sauvegardé";
+      clearTimeout(render.statusTimer);
+      render.statusTimer = setTimeout(function () { status.textContent = "Sauvegarde locale"; }, 900);
+    }
+
+    async function copyJson() {
+      const value = jsonOutput.value;
+      try {
+        await navigator.clipboard.writeText(value);
+      } catch (_) {
+        jsonOutput.focus();
+        jsonOutput.select();
+        document.execCommand("copy");
+      }
+      status.textContent = "JSON copié";
+    }
+
+    function downloadJson() {
+      const blob = new Blob([jsonOutput.value], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = "doku-material-theme.json";
+      anchor.click();
+      URL.revokeObjectURL(url);
+      status.textContent = "JSON téléchargé";
+    }
+
+    function reset() {
+      state = clone(defaults);
+      localStorage.removeItem(STORAGE_KEY);
+      buildControls();
+      render();
+      status.textContent = "Valeurs réinitialisées";
+    }
+
+    document.getElementById("copyButton").addEventListener("click", copyJson);
+    document.getElementById("downloadButton").addEventListener("click", downloadJson);
+    document.getElementById("resetButton").addEventListener("click", reset);
+
+    buildControls();
+    render();
+  </script>
+</body>
+</html>

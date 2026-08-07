@@ -223,7 +223,13 @@
 <SettingsDialog />
 
 <style>
-  .app { position: relative; height: 100%; display: flex; background: var(--cream-base); }
+  .app {
+    position: relative;
+    height: 100%;
+    display: flex;
+    background: var(--chrome-material);
+    background-color: var(--chrome-material-base);
+  }
   .main {
     flex: 1 1 0;
     min-width: 0;
@@ -303,7 +309,7 @@
     border-radius: 5px;
   }
   .banner-close:hover { background: var(--surface-hover); color: var(--ink); }
-  .stage { flex: 1; min-height: 0; display: flex; background: var(--cream-base); }
+  .stage { flex: 1; min-height: 0; display: flex; background: transparent; }
   .page {
     position: relative;
     flex: 1;

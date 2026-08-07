@@ -354,7 +354,10 @@
     flex: 0 0 auto;
     width: 0;
     overflow: hidden;
-    background: var(--cream-base);
+    background: transparent;
+    -webkit-backdrop-filter: blur(24px) saturate(145%);
+    backdrop-filter: blur(24px) saturate(145%);
+    box-shadow: inset 0 1px 0 var(--chrome-material-filet);
     transition: width 220ms cubic-bezier(0.22, 1, 0.36, 1);
   }
   .sidebar.open { width: 296px; }
@@ -400,7 +403,7 @@
   .rib.active { background: var(--accent-soft); color: var(--ink); }
   .spacer { flex: 1; }
 
-  .panel { flex: 1; min-width: 0; display: flex; flex-direction: column; border-left: 1px solid var(--line-1); }
+  .panel { flex: 1; min-width: 0; display: flex; flex-direction: column; border-left: 1px solid var(--chrome-material-divider); }
   .panel-head { height: 41px; flex-shrink: 0; display: flex; align-items: center; justify-content: flex-end; padding: 0 8px 0 14px; }
   .actions { display: flex; align-items: center; gap: 1px; }
   .actions button {
