@@ -646,42 +646,60 @@
 
   /* Menu de tri : ancré sous le bouton, aligné à droite pour ne pas déborder du panneau. */
   .sort-wrap { position: relative; display: inline-flex; }
+  /* Même matériau que .app-menu (TitleBar) : sans bordure — fond cream-tint,
+     anneau d'élévation + ombre portée, rayon 13px, entrée animée. Si l'un change,
+     changer l'autre. */
   .sort-menu {
     position: absolute;
-    top: 30px;
+    top: 34px;
     right: 0;
-    z-index: 20;
-    min-width: 208px;
-    padding: 4px;
-    background: var(--surface);
-    border: 1px solid var(--line-2);
-    border-radius: 8px;
-    box-shadow: 0 8px 24px rgb(0 0 0 / 0.14);
+    z-index: 40;
+    min-width: 224px;
+    padding: 6px;
+    border-radius: 13px;
+    background: var(--cream-tint);
+    box-shadow:
+      0 0 0 1px var(--elevation-ring),
+      0 12px 30px rgba(var(--shadow-rgb), 0.18);
+    animation: sidebar-menu-in 150ms cubic-bezier(0.22, 1, 0.36, 1);
+    transform-origin: top right;
   }
   .sort-menu button {
     width: 100%;
-    height: 28px;
+    height: 36px;
     display: flex;
     align-items: center;
-    gap: 6px;
-    padding: 0 6px;
+    gap: 9px;
+    padding: 0 9px;
     background: transparent;
     border: 0;
-    border-radius: 6px;
+    border-radius: 7px;
     color: var(--ink-2);
-    font-size: 13px;
+    font-family: var(--font-sans);
+    font-size: 12.5px;
     text-align: left;
     cursor: pointer;
+    transition: background 130ms ease, color 130ms ease, scale 100ms ease;
   }
   .sort-menu button:hover:not(:disabled) { background: var(--surface-hover); color: var(--ink); }
-  .sort-menu button:disabled { color: var(--ink-5); cursor: default; }
+  .sort-menu button:hover:not(:disabled) .tick { color: var(--ink-2); }
+  .sort-menu button:active:not(:disabled) { scale: 0.96; }
+  .sort-menu button:focus-visible { outline: 2px solid var(--line-3); outline-offset: -2px; }
+  .sort-menu button:disabled { opacity: 0.38; cursor: default; }
   .sort-menu button.on { color: var(--ink); font-weight: 500; }
-  .sort-menu .tick { font-size: 15px; width: 15px; flex-shrink: 0; }
-  .sort-menu .grow { flex: 1; white-space: nowrap; }
+  .sort-menu .tick { font-size: 17px; width: 18px; flex: 0 0 auto; color: var(--ink-4); }
+  .sort-menu .grow { flex: 1; min-width: 0; white-space: nowrap; }
   .sort-menu .arrow { font-size: 15px; color: var(--ink-4); }
-  .menu-sep { height: 1px; margin: 4px 2px; background: var(--line-1); }
+  .menu-sep { height: 1px; margin: 5px 7px; background: var(--line-1); }
   /* Intitulé de section du menu — libellé, pas action : non focusable, teinte retirée. */
-  .menu-head { display: block; padding: 5px 6px 3px; font-size: 11px; font-weight: 550; color: var(--ink-4); }
+  .menu-head { display: block; padding: 6px 9px 3px; font-size: 10.5px; font-weight: 550; color: var(--ink-4); }
+  @keyframes sidebar-menu-in {
+    from { opacity: 0; transform: translateY(-3px) scale(0.985); }
+    to { opacity: 1; transform: translateY(0) scale(1); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .sort-menu { animation: none; }
+  }
 
   /* Saisie du nom en place : mêmes métriques qu'une .row pour ne pas faire sauter la liste. */
   .newrow { display: flex; align-items: center; gap: 5px; height: 28px; padding: 0 6px; }
