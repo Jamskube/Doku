@@ -6,6 +6,7 @@ import {
   parentPath,
   joinPath,
   baseName,
+  pathCrumbs,
   nameExists,
   normalizeNewName,
   type FsEntry,
@@ -145,4 +146,30 @@ describe('joinPath', () => {
 describe('baseName', () => {
   it('Windows', () => expect(baseName('G:\\Notes\\a.md')).toBe('a.md'))
   it('POSIX', () => expect(baseName('/home/x/a.md')).toBe('a.md'))
+})
+
+describe('pathCrumbs', () => {
+  it('conserve une racine Windows navigable', () => {
+    expect(pathCrumbs('G:\\Notes\\Projets')).toEqual([
+      { label: 'G:', path: 'G:\\' },
+      { label: 'Notes', path: 'G:\\Notes' },
+      { label: 'Projets', path: 'G:\\Notes\\Projets' },
+    ])
+  })
+
+  it('conserve une racine POSIX navigable', () => {
+    expect(pathCrumbs('/home/nicos/Notes')).toEqual([
+      { label: '/', path: '/' },
+      { label: 'home', path: '/home' },
+      { label: 'nicos', path: '/home/nicos' },
+      { label: 'Notes', path: '/home/nicos/Notes' },
+    ])
+  })
+
+  it('gère un partage UNC', () => {
+    expect(pathCrumbs('\\\\serveur\\partage\\Notes')).toEqual([
+      { label: 'partage', path: '\\\\serveur\\partage' },
+      { label: 'Notes', path: '\\\\serveur\\partage\\Notes' },
+    ])
+  })
 })

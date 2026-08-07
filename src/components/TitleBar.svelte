@@ -368,6 +368,7 @@
 
 <style>
   .titlebar {
+    --titlebar-control-height: 32px;
     position: relative;
     z-index: 20;
     display: flex;
@@ -386,7 +387,7 @@
   .rail-btn {
     position: relative;
     width: 40px;
-    height: 32px;
+    height: var(--titlebar-control-height);
     border: 0;
     border-radius: 6px;
     background: transparent;
@@ -413,7 +414,7 @@
   }
   .document-menu-trigger {
     width: 40px;
-    height: 40px;
+    height: var(--titlebar-control-height);
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -517,7 +518,7 @@
   .tabs {
     flex: 1;
     display: flex;
-    align-items: flex-end;
+    align-items: center;
     gap: 3px;
     padding: 0 4px;
     min-width: 0;
@@ -529,7 +530,7 @@
     align-items: center;
     gap: 7px;
     padding: 0 8px 0 13px;
-    height: 34px;
+    height: var(--titlebar-control-height);
     min-width: 0;
     border: 1px solid transparent;
     border-bottom-width: 0;
@@ -540,9 +541,22 @@
     cursor: pointer;
     transition: background 140ms ease, color 140ms ease;
   }
-  .tab:hover { background: var(--surface-hover); color: var(--ink-2); }
+  .tab:not(.active)::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: 9px;
+    background: var(--surface-hover);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 140ms ease;
+  }
+  .tab:not(.active):hover { color: var(--ink-2); }
+  .tab:not(.active):hover::before { opacity: 1; }
+  .tab:not(.active) > :global(*) { position: relative; z-index: 1; }
   .tab.active {
     background: var(--cream-content);
+    box-shadow: 0 4px 0 var(--cream-content);
     color: var(--ink);
     font-weight: 500;
     z-index: 2;
@@ -552,7 +566,7 @@
   .tab.active::after {
     content: '';
     position: absolute;
-    bottom: 0;
+    bottom: -4px;
     width: 11px;
     height: 11px;
     pointer-events: none;
@@ -595,8 +609,9 @@
   .close:hover { background: var(--surface-hover); color: var(--ink); }
 
   .new-tab {
+    position: relative;
     width: 32px;
-    height: 33px;
+    height: var(--titlebar-control-height);
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -605,14 +620,26 @@
     border-radius: 8px;
     color: var(--ink-4);
     cursor: pointer;
-    transition: color 140ms ease, background 140ms ease;
+    transition: color 140ms ease;
   }
-  .new-tab:hover { background: var(--surface-hover); color: var(--ink); }
+  .new-tab::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: 9px;
+    background: var(--surface-hover);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 140ms ease;
+  }
+  .new-tab:hover { color: var(--ink); }
+  .new-tab:hover::before { opacity: 1; }
+  .new-tab .msr { position: relative; z-index: 1; }
 
   .win-controls { display: flex; align-items: center; gap: 2px; padding-right: 2px; flex-shrink: 0; }
   .ctrl {
     width: 36px;
-    height: 32px;
+    height: var(--titlebar-control-height);
     display: inline-flex;
     align-items: center;
     justify-content: center;

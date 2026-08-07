@@ -51,22 +51,38 @@
     const tab = app.tabs.find((t) => t.id === tabId)
     if (!tab) return
     if (!tab.path) {
-      app.banner = 'Enregistrez le document avant de coller une image.'
+      app.banner = {
+        tone: 'warning',
+        title: 'Document non enregistré',
+        message: 'Enregistrez le document avant de coller une image.',
+      }
       return
     }
     const dir = parentPath(tab.path)
     if (!dir) {
-      app.banner = 'Impossible de localiser le dossier du document.'
+      app.banner = {
+        tone: 'error',
+        title: 'Dossier introuvable',
+        message: 'Impossible de localiser le dossier du document.',
+      }
       return
     }
     if (file.size > MAX_PASTE_IMAGE) {
-      app.banner = 'Image trop volumineuse (max 25 Mo).'
+      app.banner = {
+        tone: 'warning',
+        title: 'Image trop volumineuse',
+        message: 'La taille maximale autorisée est de 25 Mo.',
+      }
       return
     }
     const bytes = new Uint8Array(await file.arrayBuffer())
     const ext = sniffImageExt(bytes)
     if (!ext) {
-      app.banner = "Format d'image du presse-papier non reconnu."
+      app.banner = {
+        tone: 'error',
+        title: 'Image non reconnue',
+        message: "Le format de l’image dans le presse-papier n’est pas pris en charge.",
+      }
       return
     }
     let name: string | null
@@ -74,7 +90,11 @@
       name = await writePastedImage(dir, bytes, imageStamp(new Date()), ext)
     } catch (err) {
       console.error("Écriture de l'image collée échouée", err)
-      app.banner = "Échec de l'écriture de l'image ; aucun lien inséré."
+      app.banner = {
+        tone: 'error',
+        title: 'Collage impossible',
+        message: 'L’image n’a pas pu être enregistrée ; aucun lien n’a été inséré.',
+      }
       return
     }
     if (!name) return // navigateur : no-op
@@ -82,7 +102,11 @@
     // l'écriture, NE PAS insérer le lien dans le mauvais document (le fichier est bien
     // écrit → aucune perte).
     if (app.activeId !== tabId) {
-      app.banner = 'Image enregistrée ; lien non inséré (onglet changé).'
+      app.banner = {
+        tone: 'warning',
+        title: 'Onglet changé',
+        message: 'L’image a été enregistrée, mais son lien n’a pas été inséré.',
+      }
       return
     }
     view.dispatch(view.state.replaceSelection(imageMarkdown(name)))

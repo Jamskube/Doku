@@ -1,4 +1,16 @@
 /* Tokens AIR — source de vérité : docs/design/w1/Doku W1 - Fenetre principale.dc.html */
+@property --chrome-material-cool-x {
+  syntax: '<percentage>';
+  inherits: true;
+  initial-value: 43%;
+}
+
+@property --chrome-material-cool-y {
+  syntax: '<percentage>';
+  inherits: true;
+  initial-value: 76%;
+}
+
 :root {
   --desk: #dedacf;
   --cream-base: #F4F1E9;
@@ -30,6 +42,8 @@
   --window-close-active: #B5232D;
   --chrome-titlebar-height: 40px;
   --chrome-material-base: #DFDCD4;
+  --chrome-material-cool-x: 0%;
+  --chrome-material-cool-y: 0%;
   --chrome-material-sheen: rgb(255 255 255 / 0.44);
   --chrome-material-cool: rgb(196 210 239 / 0.24);
   --chrome-material-depth: rgb(96 86 137 / 0.075);
@@ -40,7 +54,7 @@
   --chrome-material:
     var(--chrome-material-noise),
     linear-gradient(180deg, var(--chrome-material-sheen), transparent 30%),
-    radial-gradient(80% 110% at 0% 0%, var(--chrome-material-cool), transparent 58%),
+    radial-gradient(80% 110% at var(--chrome-material-cool-x) var(--chrome-material-cool-y), var(--chrome-material-cool), transparent 58%),
     radial-gradient(90% 72% at 16% 100%, var(--chrome-material-depth), transparent 70%),
     linear-gradient(112deg, transparent 34%, var(--chrome-material-flare) 49%, transparent 64%),
     var(--chrome-material-base);
@@ -50,6 +64,7 @@
   --ok-text: #38714B;
   --warn-text: #8A5F26;
   --err-text: #A9412F;
+  --danger-action-text: #B51D2A;
   --font-sans: 'Geist', -apple-system, BlinkMacSystemFont, sans-serif;
   --font-mono: 'Geist Mono', ui-monospace, monospace;
   --font-serif: 'Source Serif 4 Variable', 'Iowan Old Style', Georgia, serif;
@@ -81,11 +96,14 @@
   --ok-text: #8FC9A0;
   --warn-text: #DFB35F;
   --err-text: #E08D7B;
+  --danger-action-text: #FF5D68;
   --window-close: #D93641;
   --window-close-active: #BE2731;
-  --chrome-material-base: #19191A;
+  --chrome-material-base: #16171A;
+  --chrome-material-cool-x: 43%;
+  --chrome-material-cool-y: 76%;
   --chrome-material-sheen: rgb(255 255 255 / 0.035);
-  --chrome-material-cool: rgb(3 16 53 / 0.20);
+  --chrome-material-cool: rgb(58 52 74 / 0.25);
   --chrome-material-depth: rgb(0 10 41 / 0.115);
   --chrome-material-flare: rgb(255 255 255 / 0.10);
   --chrome-material-filet: rgb(255 255 255 / 0.075);
@@ -95,10 +113,16 @@
     var(--chrome-material-noise),
     linear-gradient(180deg, var(--chrome-material-sheen), transparent 80%),
     radial-gradient(77% 164% at 81% 22%, rgb(0 0 0 / 0.19), transparent 57%),
-    radial-gradient(80% 142% at 43% 76%, var(--chrome-material-cool), transparent 92%),
+    radial-gradient(80% 142% at var(--chrome-material-cool-x) var(--chrome-material-cool-y), var(--chrome-material-cool), transparent 92%),
     radial-gradient(90% 72% at 41% 107%, var(--chrome-material-depth), transparent 67%),
     linear-gradient(120deg, transparent 48%, var(--chrome-material-flare) 87%, transparent 42%),
     var(--chrome-material-base);
+}
+
+:root[data-doku-runtime='tauri'] {
+  transition:
+    --chrome-material-cool-x 180ms cubic-bezier(0.22, 1, 0.36, 1),
+    --chrome-material-cool-y 180ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }

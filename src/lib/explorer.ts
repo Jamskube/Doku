@@ -121,3 +121,48 @@ export function baseName(path: string): string {
   const trimmed = path.endsWith(sep) ? path.slice(0, -1) : path
   return trimmed.slice(trimmed.lastIndexOf(sep) + 1)
 }
+
+export type PathCrumb = { label: string; path: string }
+
+// Segments cliquables d'un chemin. Les racines Windows, POSIX et UNC restent de
+// vrais chemins navigables : le fil d'Ariane ne reconstruit jamais un chemin à
+// partir du libellé affiché.
+export function pathCrumbs(path: string): PathCrumb[] {
+  const sep = sepOf(path)
+  const trimmed = path.length > 1 && path.endsWith(sep) ? path.slice(0, -1) : path
+
+  if (sep === '\\' && /^[A-Za-z]:/.test(trimmed)) {
+    const root = `${trimmed.slice(0, 2)}\\`
+    const parts = trimmed.slice(2).split('\\').filter(Boolean)
+    const crumbs: PathCrumb[] = [{ label: trimmed.slice(0, 2), path: root }]
+    let current = root
+    for (const part of parts) {
+      current = joinPath(current, part)
+      crumbs.push({ label: part, path: current })
+    }
+    return crumbs
+  }
+
+  if (sep === '\\' && trimmed.startsWith('\\\\')) {
+    const parts = trimmed.slice(2).split('\\').filter(Boolean)
+    if (parts.length >= 2) {
+      let current = `\\\\${parts[0]}\\${parts[1]}`
+      const crumbs: PathCrumb[] = [{ label: parts[1], path: current }]
+      for (const part of parts.slice(2)) {
+        current = joinPath(current, part)
+        crumbs.push({ label: part, path: current })
+      }
+      return crumbs
+    }
+  }
+
+  const absolute = trimmed.startsWith('/')
+  const parts = trimmed.split('/').filter(Boolean)
+  const crumbs: PathCrumb[] = absolute ? [{ label: '/', path: '/' }] : []
+  let current = absolute ? '/' : ''
+  for (const part of parts) {
+    current = current ? joinPath(current, part) : part
+    crumbs.push({ label: part, path: current })
+  }
+  return crumbs
+}

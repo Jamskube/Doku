@@ -1,7 +1,7 @@
 <script lang="ts">
   import { app, activeTab, docHeadings, isDirty, loadSnapshotsForActive, openPath, openSearchHit, openSettings, refreshExplorer, restoreSnapshot, runSearch, scrollToLine, setExplorerSort, toggleSidebarView } from '../lib/stores.svelte'
-  import { baseName, joinPath, nameExists, normalizeNewName, parentPath, visibleEntries, type FsEntry, type SortKey } from '../lib/explorer'
-  import { createDirAt, createFileAt, isTauri, readDirectory } from '../lib/tauri'
+  import { joinPath, nameExists, normalizeNewName, parentPath, pathCrumbs, visibleEntries, type FsEntry, type SortKey } from '../lib/explorer'
+  import { createDirAt, createFileAt, isTauri, openFolderDialog, readDirectory } from '../lib/tauri'
   import { DEMO_DIR } from '../lib/demo'
   import DokuMark from '../lib/DokuMark.svelte'
 
@@ -13,7 +13,29 @@
 
   // Dossier explorateur : navigation explicite, sinon dossier du document actif.
   const targetDir = $derived(app.explorerDir ?? parentPath(activeTab()?.path ?? null))
+  const activeDocumentDir = $derived(parentPath(activeTab()?.path ?? null))
+  const breadcrumbs = $derived(targetDir ? pathCrumbs(targetDir) : [])
   let entries = $state<FsEntry[]>([])
+  let navigationHistory = $state<string[]>([])
+  let navigationIndex = $state(-1)
+  let breadcrumbBar = $state<HTMLDivElement | null>(null)
+
+  // L'historique suit toutes les navigations, y compris celles provoquées par
+  // l'ouverture d'un fichier. Revenir/avancer repositionne d'abord l'index pour que
+  // l'effet reconnaisse la destination et ne la repousse pas dans la pile.
+  $effect(() => {
+    const dir = targetDir
+    if (!dir || navigationHistory[navigationIndex] === dir) return
+    navigationHistory = [...navigationHistory.slice(0, navigationIndex + 1), dir]
+    navigationIndex = navigationHistory.length - 1
+  })
+
+  $effect(() => {
+    void targetDir
+    queueMicrotask(() => {
+      if (breadcrumbBar) breadcrumbBar.scrollLeft = breadcrumbBar.scrollWidth
+    })
+  })
 
   $effect(() => {
     const dir = targetDir
@@ -123,8 +145,43 @@
   function openEntry(entry: FsEntry) {
     if (!targetDir) return
     const full = joinPath(targetDir, entry.name)
-    if (entry.isDir) app.explorerDir = full
+    if (entry.isDir) navigateTo(full)
     else openPath(full)
+  }
+
+  function navigateTo(dir: string | null) {
+    if (!dir || dir === targetDir) return
+    cancelCreate()
+    app.explorerDir = dir
+  }
+
+  function navigateBack() {
+    if (navigationIndex <= 0) return
+    navigationIndex -= 1
+    cancelCreate()
+    app.explorerDir = navigationHistory[navigationIndex]
+  }
+
+  function navigateForward() {
+    if (navigationIndex >= navigationHistory.length - 1) return
+    navigationIndex += 1
+    cancelCreate()
+    app.explorerDir = navigationHistory[navigationIndex]
+  }
+
+  function navigateUp() {
+    navigateTo(parentPath(targetDir))
+  }
+
+  function followActiveDocument() {
+    if (!activeDocumentDir || activeDocumentDir === targetDir) return
+    cancelCreate()
+    app.explorerDir = null
+  }
+
+  async function chooseFolder() {
+    const selected = await openFolderDialog(targetDir)
+    if (selected) navigateTo(selected)
   }
 
   // Charge l'historique du fichier actif quand le panneau est ouvert ; recharge au
@@ -186,7 +243,15 @@
     <div class="panel">
       <div class="panel-head">
         {#if app.sidebarView === 'files'}
+          <span class="panel-title">Fichiers</span>
           <div class="actions">
+            <button
+              class="choose-folder"
+              title={isTauri ? 'Choisir un dossier' : 'Disponible dans l’application'}
+              aria-label="Choisir un dossier"
+              disabled={!isTauri}
+              onclick={() => void chooseFolder()}
+            ><span class="msr" style="font-size:18px">folder_open</span><span class="action-label">Ouvrir</span></button>
             <button
               title={canCreate ? 'Nouvelle note' : createHint}
               aria-label="Nouvelle note"
@@ -231,16 +296,47 @@
         {/if}
       </div>
 
+      {#if app.sidebarView === 'files' && targetDir}
+        <div class="explorer-nav">
+          <div class="nav-controls">
+            <button class="nav-btn" title="Précédent" aria-label="Dossier précédent" disabled={navigationIndex <= 0} onclick={navigateBack}>
+              <span class="msr">arrow_back</span>
+            </button>
+            <button class="nav-btn" title="Suivant" aria-label="Dossier suivant" disabled={navigationIndex >= navigationHistory.length - 1} onclick={navigateForward}>
+              <span class="msr">arrow_forward</span>
+            </button>
+            <button class="nav-btn" title="Dossier parent" aria-label="Remonter au dossier parent" disabled={!parentPath(targetDir)} onclick={navigateUp}>
+              <span class="msr">arrow_upward</span>
+            </button>
+            <button
+              class="nav-btn"
+              title="Dossier du document actif"
+              aria-label="Aller au dossier du document actif"
+              disabled={!activeDocumentDir || activeDocumentDir === targetDir}
+              onclick={followActiveDocument}
+            >
+              <span class="msr">my_location</span>
+            </button>
+          </div>
+
+          <div class="breadcrumbs" bind:this={breadcrumbBar} aria-label="Chemin du dossier">
+            {#each breadcrumbs as crumb, index (crumb.path)}
+              {#if index > 0}<span class="msr crumb-separator" aria-hidden="true">chevron_right</span>{/if}
+              <button
+                class:current={index === breadcrumbs.length - 1}
+                title={crumb.path}
+                aria-label={`Ouvrir ${crumb.path}`}
+                disabled={index === breadcrumbs.length - 1}
+                onclick={() => navigateTo(crumb.path)}
+              >{crumb.label}</button>
+            {/each}
+          </div>
+        </div>
+      {/if}
+
       <div class="panel-body">
         {#if app.sidebarView === 'files'}
           {#if targetDir}
-            <div class="crumb">{baseName(targetDir)}</div>
-            {#if parentPath(targetDir)}
-              <button class="row up" onclick={() => (app.explorerDir = parentPath(targetDir))}>
-                <span class="msr fold">drive_folder_upload</span>
-                <span class="label">..</span>
-              </button>
-            {/if}
             {#if creating}
               <div class="newrow">
                 <span class="msr fold">{creating === 'dir' ? 'create_new_folder' : 'description'}</span>
@@ -270,12 +366,18 @@
                 <span class="msr fold">{entry.isDir ? 'folder' : 'description'}</span>
                 <span class="label grow" class:strong={entry.isDir}>{entry.name}</span>
                 {#if open && isDirty(open)}<span class="filedot">●</span>{/if}
+                {#if entry.isDir}<span class="msr folder-arrow" aria-hidden="true">chevron_right</span>{/if}
               </button>
             {:else}
               <p class="empty">Dossier vide</p>
             {/each}
           {:else}
-            <p class="empty">Ouvrez un fichier pour explorer son dossier</p>
+            <div class="folder-empty">
+              <span class="msr" aria-hidden="true">folder_open</span>
+              <strong>Choisissez un dossier</strong>
+              <p>Accédez directement à l’emplacement que vous souhaitez parcourir.</p>
+              <button disabled={!isTauri} onclick={() => void chooseFolder()}>Ouvrir un dossier</button>
+            </div>
           {/if}
         {:else if app.sidebarView === 'plan'}
           <div class="plan">
@@ -404,23 +506,95 @@
   .spacer { flex: 1; }
 
   .panel { flex: 1; min-width: 0; display: flex; flex-direction: column; border-left: 1px solid var(--chrome-material-divider); }
-  .panel-head { height: 41px; flex-shrink: 0; display: flex; align-items: center; justify-content: flex-end; padding: 0 8px 0 14px; }
+  .panel-head { height: 43px; flex-shrink: 0; display: flex; align-items: center; justify-content: space-between; gap: 6px; padding: 0 8px 0 12px; }
+  .panel-title { min-width: 0; font-size: 12.5px; font-weight: 600; color: var(--ink-2); }
   .actions { display: flex; align-items: center; gap: 1px; }
   .actions button {
-    width: 26px;
-    height: 26px;
+    width: 28px;
+    height: 28px;
     display: inline-flex;
     align-items: center;
     justify-content: center;
     background: transparent;
     border: 0;
-    border-radius: 6px;
+    border-radius: 7px;
     color: var(--ink-4);
     cursor: pointer;
   }
   .actions button:hover:not(:disabled) { background: var(--surface-hover); color: var(--ink); }
   .actions button:disabled { opacity: 0.35; cursor: default; }
   .actions button.active { background: var(--surface-hover); color: var(--ink); }
+  .actions button.choose-folder { width: auto; gap: 4px; padding: 0 8px; }
+  .action-label { font-size: 11px; font-weight: 550; }
+
+  .explorer-nav {
+    height: 39px;
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    padding: 0 8px;
+    border-bottom: 1px solid var(--line-1);
+  }
+  .nav-controls {
+    display: flex;
+    align-items: center;
+    gap: 1px;
+    flex: 0 0 auto;
+    padding: 2px;
+    border-radius: 9px;
+    background: var(--surface-hover);
+  }
+  .nav-btn {
+    width: 25px;
+    height: 28px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: 0;
+    border-radius: 7px;
+    background: transparent;
+    color: var(--ink-3);
+    cursor: pointer;
+    transition: background-color 140ms ease, color 140ms ease, transform 100ms ease;
+  }
+  .nav-btn .msr { font-size: 17px; }
+  .nav-btn:hover:not(:disabled) { background: var(--surface-hover); color: var(--ink); }
+  .nav-btn:active:not(:disabled) { transform: scale(0.96); }
+  .nav-btn:disabled { opacity: 0.28; cursor: default; }
+  .breadcrumbs {
+    min-width: 0;
+    flex: 1;
+    display: flex;
+    align-items: center;
+    overflow-x: auto;
+    height: 30px;
+    padding: 2px 4px;
+    border-radius: 9px;
+    background: var(--surface-hover);
+    scrollbar-width: none;
+    overscroll-behavior-x: contain;
+  }
+  .breadcrumbs::-webkit-scrollbar { display: none; }
+  .breadcrumbs button {
+    max-width: 86px;
+    height: 26px;
+    flex: 0 0 auto;
+    padding: 0 5px;
+    overflow: hidden;
+    border: 0;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--ink-4);
+    font: inherit;
+    font-size: 11.5px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    cursor: pointer;
+  }
+  .breadcrumbs button:hover:not(:disabled) { background: var(--surface-hover); color: var(--ink); }
+  .breadcrumbs button.current { max-width: 120px; color: var(--ink-2); font-weight: 600; opacity: 1; cursor: default; }
+  .crumb-separator { flex: 0 0 auto; font-size: 14px; color: var(--ink-5); }
 
   /* Menu de tri : ancré sous le bouton, aligné à droite pour ne pas déborder du panneau. */
   .sort-wrap { position: relative; display: inline-flex; }
@@ -474,18 +648,18 @@
   .newname:focus { outline: 2px solid var(--line-3); outline-offset: 1px; }
   .newerr { margin: 2px 6px 4px 30px; font-size: 11.5px; color: var(--danger, #b4442f); line-height: 1.35; }
 
-  .panel-body { flex: 1; overflow-y: auto; min-height: 0; padding: 4px 8px 16px; }
+  .panel-body { flex: 1; overflow-y: auto; min-height: 0; padding: 5px 8px 16px; }
 
   .row {
     width: 100%;
     display: flex;
     align-items: center;
     gap: 5px;
-    height: 28px;
+    height: 30px;
     padding: 0 6px;
     background: transparent;
     border: 0;
-    border-radius: 6px;
+    border-radius: 7px;
     cursor: pointer;
     color: var(--ink-2);
     text-align: left;
@@ -493,20 +667,46 @@
   .row:hover { background: var(--surface-hover); color: var(--ink); }
   .row.current { background: var(--accent-soft); color: var(--ink); }
   .row.current .label { font-weight: 500; }
-  .row.up { color: var(--ink-4); }
   .fold { font-size: 19px; color: var(--ink-4); }
   .label { font-size: 13px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .label.strong { font-weight: 500; }
   .label.grow { flex: 1; }
   .filedot { font-size: 8px; color: var(--ink); flex-shrink: 0; }
-  .crumb {
-    font-size: 11px;
-    color: var(--ink-4);
-    font-weight: 500;
-    padding: 2px 8px 6px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+  .folder-arrow { flex: 0 0 auto; font-size: 16px; color: var(--ink-5); }
+
+  .folder-empty {
+    min-height: 220px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 24px 16px;
+    text-align: center;
+  }
+  .folder-empty > .msr { margin-bottom: 9px; font-size: 27px; color: var(--ink-4); }
+  .folder-empty strong { font-size: 12.5px; color: var(--ink-2); }
+  .folder-empty p { max-width: 22ch; margin: 5px 0 13px; font-size: 11.5px; line-height: 1.45; color: var(--ink-4); text-wrap: pretty; }
+  .folder-empty button {
+    min-height: 32px;
+    padding: 0 14px;
+    border: 0;
+    border-radius: 999px;
+    background: var(--ink);
+    color: var(--cream-content);
+    font: inherit;
+    font-size: 11.5px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .folder-empty button:hover:not(:disabled) { background: var(--ink-2); }
+  .folder-empty button:disabled { opacity: 0.4; cursor: default; }
+  .actions button:focus-visible,
+  .nav-btn:focus-visible,
+  .breadcrumbs button:focus-visible,
+  .row:focus-visible,
+  .folder-empty button:focus-visible {
+    outline: 2px solid var(--line-3);
+    outline-offset: 1px;
   }
 
   .plan { padding-top: 4px; }

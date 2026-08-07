@@ -261,6 +261,17 @@ export async function openFileDialog(): Promise<{ path: string; name: string; co
   return { path, name, content }
 }
 
+export async function openFolderDialog(defaultPath?: string | null): Promise<string | null> {
+  if (!isTauri) return null
+  const { open } = await import('@tauri-apps/plugin-dialog')
+  const path = await open({
+    directory: true,
+    multiple: false,
+    defaultPath: defaultPath ?? undefined,
+  })
+  return typeof path === 'string' ? path : null
+}
+
 // Intercepte la fermeture de la fenêtre : `handler` renvoie true si la fermeture
 // est autorisée (rien à sauver, ou choix Sauver/Ignorer honoré). Réutilise close()
 // (déjà autorisé) via un drapeau, sans permission `destroy`.

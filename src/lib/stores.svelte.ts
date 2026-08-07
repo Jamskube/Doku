@@ -19,6 +19,13 @@ export type SidebarView = 'files' | 'plan' | 'history' | 'search'
 export type CopilotView = 'chat' | 'models'
 export type CopilotProvider = 'ollama' | 'openai'
 export type ColumnWidth = 'narrow' | 'wide' | 'full'
+export type NoticeTone = 'error' | 'warning' | 'success'
+
+export interface AppNotice {
+  tone: NoticeTone
+  title: string
+  message: string
+}
 
 // Largeur de la colonne de lecture (variable CSS --doc-width, consommée par
 // l'éditeur). full = pas de max-width.
@@ -92,8 +99,8 @@ export const app = $state({
   // Compteur bumpé après une création : force l'effet de relecture du dossier à
   // rejouer (targetDir n'a pas changé, donc lui seul ne re-déclencherait rien).
   explorerNonce: 0,
-  // Bannière d'information transitoire (ex. fichiers de session introuvables).
-  banner: null as string | null,
+  // Notification flottante transitoire (ex. fichiers de session introuvables).
+  banner: null as AppNotice | null,
   // Proposition de rechargement (modif externe + modifs locales) — non modale.
   reloadPrompt: null as { tabId: number; name: string } | null,
   // Un fichier est glissé au-dessus de la fenêtre (overlay de dépôt, 2.4).
@@ -235,7 +242,11 @@ export async function restoreSession() {
   const active = session?.activePath ? app.tabs.find((t) => t.path === session!.activePath) : undefined
   if (active) app.activeId = active.id
   if (missing.length) {
-    app.banner = `${missing.length} fichier(s) introuvable(s), retiré(s) de la session : ${missing.map(baseName).join(', ')}`
+    app.banner = {
+      tone: 'warning',
+      title: 'Session ajustée',
+      message: `${missing.length} fichier(s) introuvable(s), retiré(s) de la session : ${missing.map(baseName).join(', ')}`,
+    }
   }
   sessionReady = true
 }
@@ -374,7 +385,11 @@ export async function createWikilinkTarget() {
     await writeTextFileAtomic(path, '')
   } catch (err) {
     console.error('Création de note échouée', err)
-    app.banner = `Impossible de créer « ${p.fileName} ».`
+    app.banner = {
+      tone: 'error',
+      title: 'Création impossible',
+      message: `Impossible de créer « ${p.fileName} ».`,
+    }
     return
   }
   await openPath(path)
@@ -502,13 +517,17 @@ export async function openPath(path: string) {
     content = await readTextFileAt(path)
   } catch {
     // Tauri readTextFile lève sur UTF-8 invalide → format/encodage non supporté.
-    app.banner = `Impossible d'ouvrir « ${baseName(path)} » : lecture ou encodage non pris en charge.`
+    app.banner = {
+      tone: 'error',
+      title: 'Ouverture impossible',
+      message: `Impossible d'ouvrir « ${baseName(path)} » : lecture ou encodage non pris en charge.`,
+    }
     return
   }
   if (content == null) return
   const reason = detectUnsupported(content, baseName(path))
   if (reason) {
-    app.banner = reason
+    app.banner = { tone: 'error', title: 'Fichier non pris en charge', message: reason }
     return
   }
   openTab(baseName(path), path, content)
@@ -520,7 +539,11 @@ export async function openPath(path: string) {
 export async function openDropped(path: string) {
   const name = baseName(path)
   if (!isSupportedFile(name)) {
-    app.banner = `« ${name} » : format non pris en charge.`
+    app.banner = {
+      tone: 'error',
+      title: 'Format non pris en charge',
+      message: `« ${name} » ne peut pas être ouvert dans Doku.`,
+    }
     return
   }
   await openPath(path)
@@ -691,7 +714,11 @@ export async function restoreSnapshot(name: string) {
   const key = await snapshotKey(path)
   const content = await readSnapshot(key, name)
   if (content == null) {
-    app.banner = 'Version introuvable — elle a peut-être été purgée.'
+    app.banner = {
+      tone: 'warning',
+      title: 'Version introuvable',
+      message: 'Cette version a peut-être été purgée de l’historique.',
+    }
     void loadSnapshotsForActive()
     return
   }
@@ -705,13 +732,21 @@ export async function restoreSnapshot(name: string) {
     await writeTextFileAtomic(path, content)
   } catch (err) {
     console.error('Restauration échouée', err)
-    app.banner = `Impossible de restaurer « ${tab.name} » (erreur d'écriture).`
+    app.banner = {
+      tone: 'error',
+      title: 'Restauration impossible',
+      message: `Impossible de restaurer « ${tab.name} » à cause d’une erreur d’écriture.`,
+    }
     return
   }
   applyDiskContent(tab, content)
-  app.banner = preserved
-    ? "Version restaurée. Vos modifications non enregistrées ont été ajoutées à l'historique."
-    : 'Version restaurée.'
+  app.banner = {
+    tone: 'success',
+    title: 'Version restaurée',
+    message: preserved
+      ? 'Vos modifications non enregistrées ont été ajoutées à l’historique.'
+      : 'Le document utilise maintenant cette version.',
+  }
   await loadSnapshotsForActive()
 }
 
@@ -761,7 +796,11 @@ export async function reloadPromptedTab() {
   try {
     disk = await readTextFileAt(tab.path)
   } catch {
-    app.banner = `Impossible de recharger « ${tab.name} » : fichier illisible ou supprimé.`
+    app.banner = {
+      tone: 'error',
+      title: 'Rechargement impossible',
+      message: `« ${tab.name} » est illisible ou a été supprimé.`,
+    }
     return
   }
   if (disk != null) applyDiskContent(tab, disk)
@@ -771,7 +810,7 @@ export function dismissReloadPrompt() {
   app.reloadPrompt = null
 }
 
-// --- Modal de confirmation (Sauver / Ignorer / Annuler) ---
+// --- Modal de confirmation (Enregistrer / Ne pas enregistrer / Annuler) ---
 
 export type CloseChoice = 'save' | 'discard' | 'cancel'
 
@@ -800,8 +839,8 @@ export async function requestCloseTab(id: number) {
   const tab = app.tabs.find((t) => t.id === id)
   if (tab && isDirty(tab)) {
     const choice = await askSave(
-      'Modifications non enregistrées',
-      `« ${tab.name} » contient des modifications non enregistrées.`,
+      'Enregistrer les modifications ?',
+      `Voulez-vous enregistrer les modifications apportées à « ${tab.name} » avant de fermer ?`,
     )
     if (choice === 'cancel') return
     if (choice === 'save' && !(await saveTab(tab))) return

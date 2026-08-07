@@ -36,13 +36,17 @@
       if (!file) return
       const reason = detectUnsupported(file.content, file.name)
       if (reason) {
-        app.banner = reason
+        app.banner = { tone: 'error', title: 'Fichier non pris en charge', message: reason }
         return
       }
       openTab(file.name, file.path, file.content)
     } catch (err) {
       console.error('Ouverture du fichier échouée', err)
-      app.banner = "Impossible d'ouvrir le fichier (erreur de lecture ou d'encodage)."
+      app.banner = {
+        tone: 'error',
+        title: 'Ouverture impossible',
+        message: "Le fichier n’a pas pu être lu ou son encodage n’est pas pris en charge.",
+      }
     }
   }
 
@@ -55,10 +59,10 @@
       const dirty = app.tabs.filter(isDirty)
       if (dirty.length === 0) return true
       const choice = await askSave(
-        'Modifications non enregistrées',
+        'Enregistrer les modifications ?',
         dirty.length === 1
-          ? `« ${dirty[0].name} » contient des modifications non enregistrées.`
-          : `${dirty.length} documents contiennent des modifications non enregistrées.`,
+          ? `Voulez-vous enregistrer les modifications apportées à « ${dirty[0].name} » avant de quitter ?`
+          : `Voulez-vous enregistrer les modifications de ${dirty.length} documents avant de quitter ?`,
       )
       if (choice === 'cancel') return false
       if (choice === 'save') {
@@ -164,23 +168,41 @@
   {#if !app.focus}<Sidebar />{/if}
   <div class="main" class:copilot-expanded={app.copilotExpanded}>
     {#if !app.focus}<TitleBar onOpen={openFromDialog} />{/if}
-    {#if app.banner && !app.focus}
-      <div class="banner" role="status">
-        <span class="msr" style="font-size:18px">error</span>
-        <span class="banner-msg">{app.banner}</span>
-        <button class="banner-close" onclick={() => (app.banner = null)} aria-label="Fermer">
-          <span class="msr" style="font-size:16px">close</span>
-        </button>
-      </div>
-    {/if}
-    {#if app.reloadPrompt && !app.focus}
-      <div class="banner reload" role="status">
-        <span class="msr" style="font-size:18px">sync</span>
-        <span class="banner-msg">« {app.reloadPrompt.name} » a été modifié en dehors de Doku. Vos modifications locales seront perdues au rechargement.</span>
-        <button class="banner-action" onclick={() => void reloadPromptedTab()}>Recharger</button>
-        <button class="banner-close" onclick={dismissReloadPrompt} aria-label="Ignorer">
-          <span class="msr" style="font-size:16px">close</span>
-        </button>
+    {#if !app.focus && (app.banner || app.reloadPrompt)}
+      <div class="notice-stack" aria-live="polite">
+        {#if app.banner}
+          <div
+            class="notice"
+            class:error={app.banner.tone === 'error'}
+            class:warning={app.banner.tone === 'warning'}
+            class:success={app.banner.tone === 'success'}
+            role={app.banner.tone === 'error' ? 'alert' : 'status'}
+          >
+            <span class="notice-icon msr" aria-hidden="true">
+              {app.banner.tone === 'success' ? 'check' : app.banner.tone === 'warning' ? 'warning' : 'priority_high'}
+            </span>
+            <span class="notice-copy">
+              <strong>{app.banner.title}</strong>
+              <span>{app.banner.message}</span>
+            </span>
+            <button class="notice-close" onclick={() => (app.banner = null)} aria-label="Fermer la notification">
+              <span class="msr" aria-hidden="true">close</span>
+            </button>
+          </div>
+        {/if}
+        {#if app.reloadPrompt}
+          <div class="notice reload" role="status">
+            <span class="notice-icon msr" aria-hidden="true">sync</span>
+            <span class="notice-copy">
+              <strong>Fichier modifié sur le disque</strong>
+              <span>« {app.reloadPrompt.name} » a changé ailleurs. Le recharger remplacera vos modifications locales.</span>
+            </span>
+            <button class="notice-action" onclick={() => void reloadPromptedTab()}>Recharger</button>
+            <button class="notice-close" onclick={dismissReloadPrompt} aria-label="Ignorer la notification">
+              <span class="msr" aria-hidden="true">close</span>
+            </button>
+          </div>
+        {/if}
       </div>
     {/if}
     <div class="stage">
@@ -231,6 +253,7 @@
     background-color: var(--chrome-material-base);
   }
   .main {
+    position: relative;
     flex: 1 1 0;
     min-width: 0;
     display: flex;
@@ -268,47 +291,97 @@
     font-size: 14px;
   }
   .drop-hint > .msr { color: var(--ink-3); }
-  .banner {
-    flex: none;
+  .notice-stack {
+    position: absolute;
+    z-index: 30;
+    top: calc(var(--chrome-titlebar-height) + 12px);
+    left: 50%;
+    width: min(540px, calc(100% - 32px));
+    display: grid;
+    gap: 8px;
+    pointer-events: none;
+    transform: translateX(-50%);
+  }
+  .notice {
+    pointer-events: auto;
     display: flex;
     align-items: center;
-    gap: 10px;
-    padding: 8px 16px;
-    background: rgba(var(--ink-rgb), 0.04);
-    border-bottom: 1px solid var(--line-2);
+    gap: 12px;
+    min-height: 58px;
+    padding: 10px 10px 10px 12px;
+    border-radius: 16px;
+    background: var(--cream-base);
     color: var(--ink-2);
-    font-size: 12.5px;
+    box-shadow:
+      0 0 0 1px var(--elevation-ring),
+      0 12px 32px rgba(var(--shadow-rgb), 0.22);
+    animation: notice-in 180ms cubic-bezier(0.22, 1, 0.36, 1) both;
   }
-  .banner > .msr { color: var(--warn); flex: none; }
-  .banner.reload > .msr { color: var(--ink-3); }
-  .banner-msg { flex: 1; min-width: 0; }
-  .banner-action {
-    flex: none;
-    min-height: 24px;
-    padding: 4px 12px;
-    border-radius: 7px;
-    border: 1px solid var(--line-2);
-    background: var(--ink);
-    color: var(--cream-content);
-    font-size: 12px;
-    cursor: pointer;
-    transition: background 140ms ease;
-  }
-  .banner-action:hover { background: var(--ink-2); }
-  .banner-close {
+  .notice-icon {
     flex: none;
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 24px;
-    height: 24px;
+    width: 34px;
+    height: 34px;
+    border-radius: 11px;
+    background: var(--accent-soft);
+    color: var(--ink-3);
+    font-size: 18px;
+  }
+  .notice.error .notice-icon { background: color-mix(in srgb, var(--err) 14%, transparent); color: var(--err-text); }
+  .notice.warning .notice-icon { background: color-mix(in srgb, var(--warn) 16%, transparent); color: var(--warn-text); }
+  .notice.success .notice-icon { background: color-mix(in srgb, var(--ok) 16%, transparent); color: var(--ok-text); }
+  .notice-copy {
+    flex: 1;
+    min-width: 0;
+    display: grid;
+    gap: 2px;
+    font-size: 12px;
+    line-height: 1.35;
+  }
+  .notice-copy strong { color: var(--ink); font-size: 12.5px; font-weight: 620; }
+  .notice-copy > span { color: var(--ink-3); overflow-wrap: anywhere; }
+  .notice-action {
+    flex: none;
+    min-height: 32px;
+    padding: 6px 14px;
+    border-radius: 999px;
+    border: 0;
+    background: var(--ink);
+    color: var(--cream-content);
+    font: 600 12px var(--font-sans);
+    cursor: pointer;
+    transition: transform 100ms ease, opacity 140ms ease;
+  }
+  .notice-action:hover { opacity: 0.88; }
+  .notice-action:active { transform: scale(0.97); }
+  .notice-close {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 30px;
+    height: 30px;
     border: 0;
     background: transparent;
     color: var(--ink-4);
     cursor: pointer;
-    border-radius: 5px;
+    border-radius: 999px;
+    transition: background 140ms ease, color 140ms ease, transform 100ms ease;
   }
-  .banner-close:hover { background: var(--surface-hover); color: var(--ink); }
+  .notice-close .msr { font-size: 17px; }
+  .notice-close:hover { background: var(--surface-hover); color: var(--ink); }
+  .notice-close:active { transform: scale(0.94); }
+  .notice-action:focus-visible,
+  .notice-close:focus-visible { outline: 2px solid var(--line-3); outline-offset: 2px; }
+  @keyframes notice-in {
+    from { opacity: 0; transform: translateY(-7px) scale(0.98); }
+    to { opacity: 1; transform: translateY(0) scale(1); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .notice { animation: none; }
+  }
   .stage { flex: 1; min-height: 0; display: flex; background: transparent; }
   .page {
     position: relative;
@@ -326,20 +399,36 @@
   /* Bouton d'ouverture du copilote, coin haut-droit du document (maquette w2-copilot). */
   .collapse-btn {
     position: absolute;
-    top: 9px;
+    top: 8px;
     right: 12px;
     z-index: 5;
-    width: 28px;
-    height: 28px;
+    width: 32px;
+    height: 32px;
     display: inline-flex;
     align-items: center;
     justify-content: center;
     border: 0;
-    border-radius: 7px;
-    background: transparent;
-    color: var(--ink-4);
+    border-radius: 9px;
+    background: var(--cream-base);
+    color: var(--ink-2);
+    box-shadow:
+      0 0 0 1px var(--elevation-ring),
+      0 4px 12px rgba(var(--shadow-rgb), 0.16);
     cursor: pointer;
+    transition:
+      background-color 140ms ease,
+      color 140ms ease,
+      box-shadow 140ms ease,
+      transform 100ms ease;
   }
   .collapse-btn:hover,
-  .collapse-btn.on { background: var(--surface-hover); color: var(--ink); }
+  .collapse-btn.on {
+    background: var(--cream-tint);
+    color: var(--ink);
+    box-shadow:
+      0 0 0 1px var(--elevation-ring),
+      0 5px 14px rgba(var(--shadow-rgb), 0.20);
+  }
+  .collapse-btn:active { transform: scale(0.96); }
+  .collapse-btn:focus-visible { outline: 2px solid var(--line-3); outline-offset: 2px; }
 </style>
