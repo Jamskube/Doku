@@ -20,7 +20,7 @@ Rappels de cadrage :
 | 20.1 | Révélation de la syntaxe à la demande (socle) | M | ✅ DONE | Validée en natif 2026-07-30. `revealScopeField` + geste Tab / Ctrl+/ ; ledger flippé |
 | 20.2 | Édition en place des cellules de tableau | L | ✅ DONE | Validée en natif 2026-07-30. **2 bugs trouvés par vérif navigateur, invisibles en jsdom** (voir Progress Log) ; ledger flippé |
 | 20.3 | Actions de structure du tableau (± ligne, ± colonne) | M | ✅ DONE | Validée en natif 2026-08-10. Codée le 7/08 sans revue, auditée le 10/08 : 6 bugs corrigés (3 chaînes de corruption) ; ledger flippé |
-| 20.4 | Formatage sur sélection & insertions de blocs | M | ⬜ TODO | Gated 20.1. Se greffe sur le popover de sélection **existant** (16.1), pas de seconde barre flottante |
+| 20.4 | Formatage sur sélection & insertions de blocs | M | 🟡 EN VALIDATION | Livrée 10/08 (EPCT complet : critic 3 Critical évités + code-review 3 Major corrigés), vérif navigateur aux vrais gestes. Reste le test natif utilisateur |
 
 ## Blockers
 _None_
@@ -71,3 +71,7 @@ _None_
   6. Échap restaurait la valeur de création du widget, pas la dernière committée → capture au focus.
 - Validations : 371 tests (+4 régressions ciblées sur les bugs ci-dessus), svelte-check 0 err, matrice navigateur complète (± ligne/colonne, saisie clic + Tab dans cellules neuves, refus dernière ligne/colonne, alignements `:--`/`--:` conservés, édition au-dessus puis action, bloc à pipe adjacent intact, deux thèmes, 0 erreur console).
 - **20.3 validée en natif par l'utilisateur** (même jour) → ledger flippé, sprint à **3/4**. Reste 20.4 (formatage sur sélection & insertions de blocs, gated 20.1 ✅).
+- **20.4 livrée** (même jour, EPCT complet). Couche pure `src/lib/format.ts` (enveloppe, titres, préfixes de ligne, gabarits) + glue `src/lib/editor/format-commands.ts` — la détection « déjà formaté » vient de l'**arbre syntaxique** (nœuds StrongEmphasis/Emphasis/Strikethrough/InlineCode/Link), jamais d'heuristique de chaîne. Ctrl+B/I/K en `Prec.highest` (**le defaultKeymap liait déjà Mod-i** = selectParentSyntax — même piège que Mod-/, attrapé par le critic). Popover : rangée de 5 effets + tiroir « Titres & blocs » (H1-H3, liste, citation, bloc de code, séparateur, tableau), tiroirs mutuellement exclusifs, hauteur mesurée généralisée. 11 icônes ajoutées au subset (94, 13,6 Ko).
+- Critic (plan) : 3 Critical évités avant le code — Mod-i déjà lié ; détection par l'arbre (un Ctrl+I dans `` `code *x*` `` aurait supprimé des octets du code) ; `---` collé sous un paragraphe = titre setext. Code-review (diff) : 3 Major corrigés — biais de côté `resolveInner` (Ctrl+B muet en bordure de marqueur) ; zones URL/Image inscriptibles (un gras détruisait le lien) ; opérations de ligne déchiquetant un bloc de code traversé. + setext sans soulignement orphelin, rembourrage des code spans, marqueurs de liste remplacés (jamais `- * item`).
+- Décision assumée : Ctrl+B **muet dans une cellule de tableau** (les îlots 20.2 stopPropagation) — no-op accepté, noté ici pour ne pas être redécouvert en bug.
+- 415 tests (408 → 415 après régressions de revue ; +48 sur la journée), svelte-check 0 err, vérif navigateur aux vrais gestes (clics + clavier réel, deux thèmes, 0 erreur console). **En attente de validation native.**

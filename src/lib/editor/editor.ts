@@ -6,6 +6,7 @@ import { html } from '@codemirror/lang-html'
 import { languages } from '@codemirror/language-data'
 import { HighlightStyle, syntaxHighlighting, syntaxTree } from '@codemirror/language'
 import { tags } from '@lezer/highlight'
+import { formatKeymap } from './format-commands'
 import { livePreview } from './live-preview'
 import { revealScopeField, setRevealScope } from './reveal'
 
@@ -381,6 +382,9 @@ export function baseExtensions(sourceMode: boolean, extra: Extension[] = []): Ex
     dokuTheme,
     livePreviewComp.of(sourceMode ? sourceExtensions() : previewExtensions()),
     suppressToggleComment,
+    // Formatage Markdown (20.4) : éditeur md seulement — un .txt n'a pas de gras,
+    // un .html source non plus (les keymaps de txt/htmlSource ne l'embarquent pas).
+    formatKeymap,
     ...extra,
   ]
 }

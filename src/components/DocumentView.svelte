@@ -12,6 +12,19 @@
   import { writePastedImage } from '../lib/tauri'
   import { imageMarkdown, imageStamp, sniffImageExt } from '../lib/paste-image'
   import { acceptRephrase, cancelRephrase, copilot, rephrase, rephraseSelection, retryRephrase } from '../lib/copilot.svelte'
+  import {
+    insertHr,
+    insertTable,
+    setHeading,
+    toggleBold,
+    toggleInlineCode,
+    toggleItalic,
+    toggleLink,
+    toggleList,
+    toggleQuote,
+    toggleStrike,
+    wrapCodeBlock,
+  } from '../lib/editor/format-commands'
   import { diffWords, type RephraseMode } from '../lib/copilot-service'
   import DokuMark from '../lib/DokuMark.svelte'
   import PdfView from './PdfView.svelte'
@@ -128,6 +141,7 @@
   let renderedRev = -1
   let selectionMenu = $state<{ left: number; top: number } | null>(null)
   let selectionMenuExpanded = $state(false)
+  let selectionMenuInsertOpen = $state(false)
   let selectionMenuConfig = $state(false)
   let selectionMenuEl: HTMLElement | undefined = $state()
   let selectionMenuTimer: ReturnType<typeof setTimeout> | undefined
@@ -161,9 +175,10 @@
     selectionMenu = null
     selectionMenuExpanded = false
     selectionMenuConfig = false
+    selectionMenuInsertOpen = false
   }
 
-  function positionSelectionMenu(currentView: EditorView, expanded = selectionMenuExpanded) {
+  function positionSelectionMenu(currentView: EditorView) {
     const sel = currentView.state.selection.main
     if (sel.empty || copilot.generating || rephrase.current || activeTab()?.kind === 'pdf') {
       selectionMenu = null
@@ -178,13 +193,18 @@
 
     const menuWidth = 264
     // Hauteur MESURÉE (la constante de repli dérivait à chaque verbe ajouté — critique du
-    // plan 21.x). Décomposition exacte quel que soit l'état du tiroir (replié, déplié, en
-    // transition) : chrome = hauteur totale − hauteur RENDUE du tiroir ; hauteur cible =
-    // chrome (+ contenu du tiroir via scrollHeight, mesurable même replié, si déplié).
+    // plan 21.x). Décomposition exacte quel que soit l'état des DEUX tiroirs (réécriture,
+    // insertion — mutuellement exclusifs) : chrome = hauteur totale − hauteurs RENDUES des
+    // tiroirs ; hauteur cible = chrome + contenu (scrollHeight) du tiroir qui s'ouvre.
     // Replis calibrés pour la toute première ouverture (menu pas encore dans le DOM).
-    const inner = selectionMenuEl?.querySelector<HTMLElement>('.selection-rewrite-inner')
-    const chromeH = selectionMenuEl && inner ? selectionMenuEl.offsetHeight - inner.offsetHeight : undefined
-    const menuHeight = expanded ? (chromeH !== undefined ? chromeH + (inner?.scrollHeight ?? 0) : 416) : (chromeH ?? 180)
+    const rewInner = selectionMenuEl?.querySelector<HTMLElement>('.selection-rewrite-inner')
+    const insInner = selectionMenuEl?.querySelector<HTMLElement>('.selection-insert-inner')
+    const chromeH = selectionMenuEl
+      ? selectionMenuEl.offsetHeight - (rewInner?.offsetHeight ?? 0) - (insInner?.offsetHeight ?? 0)
+      : undefined
+    const drawerH = selectionMenuExpanded ? (rewInner?.scrollHeight ?? 0) : selectionMenuInsertOpen ? (insInner?.scrollHeight ?? 0) : 0
+    const anyOpen = selectionMenuExpanded || selectionMenuInsertOpen
+    const menuHeight = chromeH !== undefined ? chromeH + drawerH : anyOpen ? 470 : 230
     const viewportMargin = 12
     const gap = 8
     const anchorX = end.left
@@ -215,6 +235,11 @@
       selectionMenu = null
       selectionMenuExpanded = false
       selectionMenuConfig = false
+      selectionMenuInsertOpen = false
+      return
+    }
+    if (suppressMenuOnce) {
+      suppressMenuOnce = false
       return
     }
     selectionMenuTimer = setTimeout(() => positionSelectionMenu(currentView), 120)
@@ -222,8 +247,43 @@
 
   function toggleRewriteOptions() {
     selectionMenuExpanded = !selectionMenuExpanded
+    selectionMenuInsertOpen = false
     selectionMenuConfig = selectionMenuExpanded && copilotNeedsSetup
-    if (view) positionSelectionMenu(view, selectionMenuExpanded)
+    if (view) positionSelectionMenu(view)
+  }
+
+  function toggleInsertOptions() {
+    selectionMenuInsertOpen = !selectionMenuInsertOpen
+    selectionMenuExpanded = false
+    selectionMenuConfig = false
+    if (view) positionSelectionMenu(view)
+  }
+
+  // mousedown : preventDefault SEUL — ne pas voler focus/sélection à l'éditeur
+  // (motif rephrase-preview) ; l'action part au click.
+  function keepEditorFocus(e: MouseEvent) {
+    e.preventDefault()
+  }
+
+  // Effets inline (gras, italique…) : la sélection persiste → le menu reste ouvert
+  // pour enchaîner (Ctrl+B puis Ctrl+I), l'updateListener le repositionne.
+  function runFormat(cmd: (v: EditorView) => boolean) {
+    if (!view) return
+    cmd(view)
+    view.focus()
+  }
+
+  // Actions du tiroir (titres, blocs) : le geste est complet → le menu se referme.
+  // Les opérations de ligne gardent la sélection → l'updateListener republierait le
+  // menu aussitôt ; on avale UNE publication (le prochain geste le rouvrira).
+  let suppressMenuOnce = false
+  function runInsertAction(cmd: (v: EditorView) => boolean) {
+    if (!view) return
+    const v = view
+    hideSelectionMenu()
+    suppressMenuOnce = true
+    cmd(v)
+    v.focus()
   }
 
   async function copySelection() {
@@ -279,7 +339,7 @@
   function runSelectionAction(mode: RephraseMode) {
     if (copilotNeedsSetup) {
       selectionMenuConfig = true
-      if (view) positionSelectionMenu(view, true)
+      if (view) positionSelectionMenu(view)
       return
     }
     hideSelectionMenu()
@@ -536,6 +596,26 @@
       role="menu"
       aria-label="Actions sur la sélection"
     >
+      {#if activeTab()?.kind === 'md'}
+        <div class="selection-format-row" role="group" aria-label="Mise en forme">
+          <button class="selection-format-btn" title="Gras (Ctrl+B)" aria-label="Gras" onmousedown={keepEditorFocus} onclick={() => runFormat(toggleBold)}>
+            <span class="msr">format_bold</span>
+          </button>
+          <button class="selection-format-btn" title="Italique (Ctrl+I)" aria-label="Italique" onmousedown={keepEditorFocus} onclick={() => runFormat(toggleItalic)}>
+            <span class="msr">format_italic</span>
+          </button>
+          <button class="selection-format-btn" title="Barré" aria-label="Barré" onmousedown={keepEditorFocus} onclick={() => runFormat(toggleStrike)}>
+            <span class="msr">strikethrough_s</span>
+          </button>
+          <button class="selection-format-btn" title="Code inline" aria-label="Code inline" onmousedown={keepEditorFocus} onclick={() => runFormat(toggleInlineCode)}>
+            <span class="msr">code</span>
+          </button>
+          <button class="selection-format-btn" title="Lien (Ctrl+K)" aria-label="Lien" onmousedown={keepEditorFocus} onclick={() => runFormat(toggleLink)}>
+            <span class="msr">link</span>
+          </button>
+        </div>
+        <div class="selection-menu-sep"></div>
+      {/if}
       <button class="selection-menu-action" role="menuitem" onclick={copySelection}>
         <span class="msr">content_copy</span><span class="selection-menu-label">Copier</span><kbd>Ctrl+C</kbd>
       </button>
@@ -546,6 +626,55 @@
         <span class="msr">content_paste</span><span class="selection-menu-label">Coller</span><kbd>Ctrl+V</kbd>
       </button>
       <div class="selection-menu-sep"></div>
+      {#if activeTab()?.kind === 'md'}
+        <button
+          class="selection-menu-action selection-menu-rewrite"
+          class:open={selectionMenuInsertOpen}
+          role="menuitem"
+          aria-haspopup="true"
+          aria-expanded={selectionMenuInsertOpen}
+          onclick={toggleInsertOptions}
+        >
+          <span class="msr">format_h1</span>
+          <span class="selection-menu-label">Titres &amp; blocs</span>
+          <span class="msr selection-menu-chevron">chevron_right</span>
+        </button>
+        <div
+          class="selection-rewrite-options"
+          class:open={selectionMenuInsertOpen}
+          role="group"
+          aria-label="Titres et blocs"
+          aria-hidden={!selectionMenuInsertOpen}
+          inert={!selectionMenuInsertOpen}
+        >
+          <div class="selection-insert-inner">
+            <button class="selection-menu-action selection-menu-subaction" role="menuitem" onmousedown={keepEditorFocus} onclick={() => runInsertAction((v) => setHeading(v, 1))}>
+              <span class="msr">format_h1</span><span>Titre 1</span>
+            </button>
+            <button class="selection-menu-action selection-menu-subaction" role="menuitem" onmousedown={keepEditorFocus} onclick={() => runInsertAction((v) => setHeading(v, 2))}>
+              <span class="msr">format_h2</span><span>Titre 2</span>
+            </button>
+            <button class="selection-menu-action selection-menu-subaction" role="menuitem" onmousedown={keepEditorFocus} onclick={() => runInsertAction((v) => setHeading(v, 3))}>
+              <span class="msr">format_h3</span><span>Titre 3</span>
+            </button>
+            <button class="selection-menu-action selection-menu-subaction" role="menuitem" onmousedown={keepEditorFocus} onclick={() => runInsertAction(toggleList)}>
+              <span class="msr">format_list_bulleted</span><span>Liste</span>
+            </button>
+            <button class="selection-menu-action selection-menu-subaction" role="menuitem" onmousedown={keepEditorFocus} onclick={() => runInsertAction(toggleQuote)}>
+              <span class="msr">format_quote</span><span>Citation</span>
+            </button>
+            <button class="selection-menu-action selection-menu-subaction" role="menuitem" onmousedown={keepEditorFocus} onclick={() => runInsertAction(wrapCodeBlock)}>
+              <span class="msr">code</span><span>Bloc de code</span>
+            </button>
+            <button class="selection-menu-action selection-menu-subaction" role="menuitem" onmousedown={keepEditorFocus} onclick={() => runInsertAction(insertHr)}>
+              <span class="msr">horizontal_rule</span><span>Séparateur</span>
+            </button>
+            <button class="selection-menu-action selection-menu-subaction" role="menuitem" onmousedown={keepEditorFocus} onclick={() => runInsertAction(insertTable)}>
+              <span class="msr">table</span><span>Tableau</span>
+            </button>
+          </div>
+        </div>
+      {/if}
       <button
         class="selection-menu-action selection-menu-rewrite"
         class:open={selectionMenuExpanded}
@@ -747,6 +876,23 @@
     font-variant-numeric: tabular-nums;
   }
   .selection-menu-sep { height: 1px; margin: 5px 7px; background: var(--line-1); }
+  .selection-format-row { display: flex; gap: 2px; padding: 1px 2px; }
+  .selection-format-btn {
+    flex: 1;
+    height: 32px;
+    display: grid;
+    place-items: center;
+    border: 0;
+    border-radius: 8px;
+    background: transparent;
+    color: var(--ink-3);
+    cursor: pointer;
+    transition: background 140ms ease, color 140ms ease, scale 100ms ease;
+  }
+  .selection-format-btn .msr { font-size: 18px; }
+  .selection-format-btn:hover { background: var(--surface-hover); color: var(--ink); }
+  .selection-format-btn:focus-visible { outline: 2px solid var(--line-3); outline-offset: -2px; }
+  .selection-format-btn:active { scale: 0.92; }
   .selection-menu-action {
     width: 100%;
     height: 40px;
@@ -804,7 +950,8 @@
       opacity 130ms ease-in;
   }
   .selection-rewrite-options.open { grid-template-rows: 1fr; opacity: 1; }
-  .selection-rewrite-inner { min-height: 0; overflow: hidden; }
+  .selection-rewrite-inner,
+  .selection-insert-inner { min-height: 0; overflow: hidden; }
   .selection-menu-subaction {
     height: 38px;
     padding-left: 39px;
