@@ -158,16 +158,21 @@
   })
 
   // Copilote non configuré : le clic sur un verbe affiche une note dans le popover au lieu de
-  // lancer une génération vouée à l'échec (brief w3 « Aucun modèle actif »).
-  const copilotNeedsSetup = $derived(
-    app.copilotProvider === 'ollama'
-      ? !app.activeModel
-      : copilot.openAiAuthenticated === false || copilot.openAiPreferredAvailable === false,
-  )
+  // lancer une génération vouée à l'échec (brief w3 « Aucun modèle actif »). Chaque
+  // fournisseur lit SON état — en MiniMax, l'état du compte OpenAI n'a rien à dire ici.
+  const copilotNeedsSetup = $derived.by(() => {
+    if (app.copilotProvider === 'openai')
+      return copilot.openAiAuthenticated === false || copilot.openAiPreferredAvailable === false
+    if (app.copilotProvider === 'minimax')
+      return copilot.minimaxStatus !== null && (!copilot.minimaxStatus.keyPresent || copilot.minimaxStatus.keyRejected)
+    return !app.activeModel
+  })
   const setupNote = $derived(
     app.copilotProvider === 'openai'
       ? 'Compte OpenAI non connecté — connectez-le dans Modèles, ou choisissez un modèle local.'
-      : 'Aucun modèle actif — choisissez ou téléchargez un modèle pour utiliser Doku-San.',
+      : app.copilotProvider === 'minimax'
+        ? 'Clé MiniMax non connectée — connectez-la dans Modèles, ou choisissez un modèle local.'
+        : 'Aucun modèle actif — choisissez ou téléchargez un modèle pour utiliser Doku-San.',
   )
 
   function hideSelectionMenu() {

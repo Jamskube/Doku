@@ -17,7 +17,13 @@ export type SidebarView = 'files' | 'plan' | 'history' | 'search'
 // 'chat' (coquille statique, ne démarre PAS le moteur) ; 'models' déclenche
 // ensureReady à l'ouverture (intention explicite) — évite un spawn Ollama au boot.
 export type CopilotView = 'chat' | 'models'
-export type CopilotProvider = 'ollama' | 'openai'
+export type CopilotProvider = 'ollama' | 'openai' | 'minimax'
+
+// LE prédicat cloud — badge, budget de contexte, refresh, personas et libellés d'erreur
+// lisent tous celui-ci : deux ternaires divergents = la régression badge/décision de S13.
+export function isCloudProvider(p: CopilotProvider): boolean {
+  return p !== 'ollama'
+}
 export type ColumnWidth = 'narrow' | 'wide' | 'full'
 export type NoticeTone = 'error' | 'warning' | 'success'
 
@@ -73,8 +79,11 @@ export const app = $state({
   // Modèle d'EMBEDDING (index sémantique 15.2, ADR-0015) — réglage distinct du modèle
   // de chat ; persisté. '' = effacé (supprimé du disque) : l'UI repropose le défaut.
   embedModel: DEFAULT_EMBED_MODEL,
-  // Ollama reste le fournisseur local par défaut ; OpenAI est une option cloud explicite.
+  // Ollama reste le fournisseur local par défaut ; OpenAI et MiniMax sont des options
+  // cloud explicites (ADR-0014, ADR-0018).
   copilotProvider: 'ollama' as CopilotProvider,
+  // Modèle MiniMax choisi (liste dynamique à la connexion) ; persisté. '' = défaut.
+  minimaxModel: '',
   // Panneau copilote droit (14.0) : ouvert/fermé, persisté (settings) comme sidebarOpen.
   copilotOpen: false,
   // Le composant du panneau est chargé/monté paresseusement (App.svelte) : son code +
@@ -159,7 +168,9 @@ export function loadSettings() {
       }
       if (typeof s.activeModel === 'string') app.activeModel = s.activeModel
       if (typeof s.embedModel === 'string') app.embedModel = s.embedModel
-      if (s.copilotProvider === 'ollama' || s.copilotProvider === 'openai') app.copilotProvider = s.copilotProvider
+      if (s.copilotProvider === 'ollama' || s.copilotProvider === 'openai' || s.copilotProvider === 'minimax')
+        app.copilotProvider = s.copilotProvider
+      if (typeof s.minimaxModel === 'string') app.minimaxModel = s.minimaxModel
       if (typeof s.copilotOpen === 'boolean') app.copilotOpen = s.copilotOpen
       // Réglage validé champ par champ : un settings corrompu ne doit pas faire
       // planter le tri (sortEntries recevrait une clé inconnue et ne trierait plus).
@@ -188,6 +199,7 @@ export function saveSettings() {
         activeModel: app.activeModel,
         embedModel: app.embedModel,
         copilotProvider: app.copilotProvider,
+        minimaxModel: app.minimaxModel,
         copilotOpen: app.copilotOpen,
         explorerSort: app.explorerSort,
         explorerExpanded: app.explorerExpanded,

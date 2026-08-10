@@ -15,7 +15,17 @@ describe('subset Material Symbols', () => {
     const manifest = new Set<string>(
       JSON.parse(readFileSync(join(ROOT, 'src', 'assets', 'material-symbols-manifest.json'), 'utf8')),
     )
-    const used = collectIconNames(join(ROOT, 'src'))
+    // Même filtre de faux positifs que le script : l'extraction attrape aussi des
+    // littéraux qui ne sont pas des icônes ('asc', 'minimax'…) — seuls les noms
+    // présents dans la table officielle des codepoints comptent. Revers assumé : une
+    // icône au nom FAUTIF est filtrée aussi (le tofu se voit à la vérif visuelle).
+    const codepoints = new Set(
+      readFileSync(join(ROOT, 'scripts', 'material-symbols-rounded.codepoints'), 'utf8')
+        .split('\n')
+        .map((line) => line.split(' ')[0])
+        .filter(Boolean),
+    )
+    const used = collectIconNames(join(ROOT, 'src')).filter((n) => codepoints.has(n))
     const missing = used.filter((n) => !manifest.has(n))
     expect(missing, 'icônes hors subset — relancer node scripts/subset-icons.mjs').toEqual([])
   })

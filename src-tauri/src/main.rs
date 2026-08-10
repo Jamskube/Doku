@@ -4,9 +4,13 @@
 // de vie du sidecar Ollama, isolé dans `sidecar.rs`.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod compat;
 mod openai;
+mod secrets;
 mod sidecar;
+mod sse;
 
+use compat::CompatState;
 use openai::OpenAiState;
 use sidecar::OllamaState;
 use tauri::{Emitter, Listener, Manager, WindowEvent};
@@ -36,6 +40,7 @@ fn main() {
         .plugin(tauri_plugin_opener::init())
         .manage(OllamaState::new().expect("création du Job Object du sidecar Ollama"))
         .manage(OpenAiState::default())
+        .manage(CompatState::default())
         .invoke_handler(tauri::generate_handler![
             sidecar::start_ollama,
             sidecar::stop_ollama,
@@ -46,6 +51,11 @@ fn main() {
             openai::openai_disconnect,
             openai::stream_openai,
             openai::cancel_openai,
+            compat::compat_status,
+            compat::compat_set_key,
+            compat::compat_disconnect,
+            compat::stream_compat,
+            compat::cancel_compat,
         ])
         .on_window_event(|window, event| {
             // Arrêt du sidecar à la destruction de la fenêtre. Filet de sécurité : même si ce

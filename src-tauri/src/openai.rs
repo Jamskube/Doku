@@ -1,3 +1,5 @@
+use crate::secrets::{delete_secret, read_secret, write_secret};
+use crate::sse::{find_sse_boundary, parse_sse_event, SseEvent};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
@@ -22,6 +24,8 @@ const OPENAI_CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
 const PREFERRED_MODEL: &str = "gpt-5.6-luna";
 const ACCESS_TOKEN_TARGET: &str = "Doku/OpenAI Codex/access-token";
 const REFRESH_TOKEN_TARGET: &str = "Doku/OpenAI Codex/refresh-token";
+// Nom du secret dans les messages d'erreur de la couche secrets partagée (ADR-0018).
+const SECRET_WHAT: &str = "la session OpenAI";
 const DEVICE_CODE_LIFETIME: Duration = Duration::from_secs(15 * 60);
 
 pub struct OpenAiState {
@@ -104,104 +108,6 @@ struct TokenResponse {
     refresh_token: String,
 }
 
-#[cfg(windows)]
-fn wide(value: &str) -> Vec<u16> {
-    value.encode_utf16().chain(std::iter::once(0)).collect()
-}
-
-#[cfg(windows)]
-fn write_secret(target: &str, value: &str) -> Result<(), String> {
-    use windows::{
-        core::PWSTR,
-        Win32::Security::Credentials::{
-            CredWriteW, CREDENTIALW, CRED_PERSIST_LOCAL_MACHINE, CRED_TYPE_GENERIC,
-        },
-    };
-
-    let mut target = wide(target);
-    let mut username = wide("Doku");
-    let mut blob = value.as_bytes().to_vec();
-    let credential = CREDENTIALW {
-        Type: CRED_TYPE_GENERIC,
-        TargetName: PWSTR(target.as_mut_ptr()),
-        CredentialBlobSize: blob.len() as u32,
-        CredentialBlob: blob.as_mut_ptr(),
-        Persist: CRED_PERSIST_LOCAL_MACHINE,
-        UserName: PWSTR(username.as_mut_ptr()),
-        ..Default::default()
-    };
-    unsafe { CredWriteW(&credential, 0) }
-        .map_err(|_| "Impossible de protéger la session OpenAI dans Windows.".to_string())
-}
-
-#[cfg(windows)]
-fn read_secret(target: &str) -> Result<Option<String>, String> {
-    use std::{ptr::null_mut, slice};
-    use windows::{
-        core::{HRESULT, PCWSTR},
-        Win32::{
-            Foundation::ERROR_NOT_FOUND,
-            Security::Credentials::{CredFree, CredReadW, CREDENTIALW, CRED_TYPE_GENERIC},
-        },
-    };
-
-    let target = wide(target);
-    let mut raw: *mut CREDENTIALW = null_mut();
-    match unsafe { CredReadW(PCWSTR(target.as_ptr()), CRED_TYPE_GENERIC, None, &mut raw) } {
-        Ok(()) => {
-            if raw.is_null() {
-                return Ok(None);
-            }
-            let credential = unsafe { &*raw };
-            let bytes = unsafe {
-                slice::from_raw_parts(
-                    credential.CredentialBlob,
-                    credential.CredentialBlobSize as usize,
-                )
-            };
-            let value = String::from_utf8(bytes.to_vec())
-                .map_err(|_| "La session OpenAI protégée est illisible.".to_string());
-            unsafe { CredFree(raw.cast()) };
-            value.map(Some)
-        }
-        Err(error) if error.code() == HRESULT::from_win32(ERROR_NOT_FOUND.0) => Ok(None),
-        Err(_) => Err("Impossible de lire la session OpenAI protégée.".to_string()),
-    }
-}
-
-#[cfg(windows)]
-fn delete_secret(target: &str) -> Result<(), String> {
-    use windows::{
-        core::{HRESULT, PCWSTR},
-        Win32::{
-            Foundation::ERROR_NOT_FOUND,
-            Security::Credentials::{CredDeleteW, CRED_TYPE_GENERIC},
-        },
-    };
-
-    let target = wide(target);
-    match unsafe { CredDeleteW(PCWSTR(target.as_ptr()), CRED_TYPE_GENERIC, None) } {
-        Ok(()) => Ok(()),
-        Err(error) if error.code() == HRESULT::from_win32(ERROR_NOT_FOUND.0) => Ok(()),
-        Err(_) => Err("Impossible de supprimer la session OpenAI protégée.".to_string()),
-    }
-}
-
-#[cfg(not(windows))]
-fn write_secret(_target: &str, _value: &str) -> Result<(), String> {
-    Err("La connexion OpenAI de Doku est actuellement disponible sous Windows.".to_string())
-}
-
-#[cfg(not(windows))]
-fn read_secret(_target: &str) -> Result<Option<String>, String> {
-    Ok(None)
-}
-
-#[cfg(not(windows))]
-fn delete_secret(_target: &str) -> Result<(), String> {
-    Ok(())
-}
-
 fn jwt_claims(token: &str) -> Option<Value> {
     let payload = token.split('.').nth(1)?;
     let bytes = URL_SAFE_NO_PAD.decode(payload).ok()?;
@@ -250,20 +156,20 @@ async fn exchange_refresh_token(refresh_token: &str) -> Result<TokenResponse, St
 async fn access_token(state: &OpenAiState, force_refresh: bool) -> Result<String, String> {
     let _guard = state.refresh_lock.lock().await;
     if !force_refresh {
-        if let Some(token) = read_secret(ACCESS_TOKEN_TARGET)? {
+        if let Some(token) = read_secret(ACCESS_TOKEN_TARGET, SECRET_WHAT)? {
             if !token_expires_soon(&token) {
                 return Ok(token);
             }
         }
     }
 
-    let refresh = read_secret(REFRESH_TOKEN_TARGET)?
+    let refresh = read_secret(REFRESH_TOKEN_TARGET, SECRET_WHAT)?
         .filter(|token| !token.is_empty())
         .ok_or_else(|| "Aucun compte OpenAI n’est connecté à Doku.".to_string())?;
     let tokens = exchange_refresh_token(&refresh).await?;
-    write_secret(ACCESS_TOKEN_TARGET, &tokens.access_token)?;
+    write_secret(ACCESS_TOKEN_TARGET, &tokens.access_token, SECRET_WHAT)?;
     if !tokens.refresh_token.is_empty() {
-        write_secret(REFRESH_TOKEN_TARGET, &tokens.refresh_token)?;
+        write_secret(REFRESH_TOKEN_TARGET, &tokens.refresh_token, SECRET_WHAT)?;
     }
     Ok(tokens.access_token)
 }
@@ -312,8 +218,8 @@ async fn fetch_models(token: &str) -> Result<Vec<String>, String> {
 
 #[tauri::command]
 pub async fn openai_status(state: State<'_, OpenAiState>) -> Result<OpenAiStatus, String> {
-    let stored = read_secret(ACCESS_TOKEN_TARGET).ok().flatten().is_some()
-        || read_secret(REFRESH_TOKEN_TARGET).ok().flatten().is_some();
+    let stored = read_secret(ACCESS_TOKEN_TARGET, SECRET_WHAT).ok().flatten().is_some()
+        || read_secret(REFRESH_TOKEN_TARGET, SECRET_WHAT).ok().flatten().is_some();
     if !stored {
         return Ok(OpenAiStatus {
             authenticated: false,
@@ -486,9 +392,9 @@ pub async fn openai_auth_poll(
     if tokens.access_token.is_empty() {
         return Err("OpenAI n’a pas fourni de session utilisable.".to_string());
     }
-    write_secret(ACCESS_TOKEN_TARGET, &tokens.access_token)?;
+    write_secret(ACCESS_TOKEN_TARGET, &tokens.access_token, SECRET_WHAT)?;
     if !tokens.refresh_token.is_empty() {
-        write_secret(REFRESH_TOKEN_TARGET, &tokens.refresh_token)?;
+        write_secret(REFRESH_TOKEN_TARGET, &tokens.refresh_token, SECRET_WHAT)?;
     }
     *state.auth_session.lock().expect("openai auth session lock") = None;
     Ok(OpenAiAuthPoll { status: "approved" })
@@ -508,8 +414,8 @@ pub fn openai_auth_cancel(session_id: String, state: State<'_, OpenAiState>) {
 #[tauri::command]
 pub fn openai_disconnect(state: State<'_, OpenAiState>) -> Result<(), String> {
     *state.auth_session.lock().expect("openai auth session lock") = None;
-    delete_secret(ACCESS_TOKEN_TARGET)?;
-    delete_secret(REFRESH_TOKEN_TARGET)
+    delete_secret(ACCESS_TOKEN_TARGET, SECRET_WHAT)?;
+    delete_secret(REFRESH_TOKEN_TARGET, SECRET_WHAT)
 }
 
 #[tauri::command]
@@ -532,40 +438,6 @@ fn send_event(
     channel
         .send(OpenAiStreamEvent { kind, text })
         .map_err(|error| error.to_string())
-}
-
-fn find_sse_boundary(bytes: &[u8]) -> Option<(usize, usize)> {
-    let lf = bytes
-        .windows(2)
-        .position(|window| window == b"\n\n")
-        .map(|index| (index, 2));
-    let crlf = bytes
-        .windows(4)
-        .position(|window| window == b"\r\n\r\n")
-        .map(|index| (index, 4));
-    match (lf, crlf) {
-        (Some(a), Some(b)) => Some(if a.0 <= b.0 { a } else { b }),
-        (Some(a), None) => Some(a),
-        (None, Some(b)) => Some(b),
-        (None, None) => None,
-    }
-}
-
-fn parse_sse_event(bytes: &[u8]) -> Result<Option<Value>, String> {
-    let event =
-        std::str::from_utf8(bytes).map_err(|_| "Flux OpenAI invalide (UTF-8).".to_string())?;
-    let data = event
-        .lines()
-        .filter_map(|line| line.strip_prefix("data:"))
-        .map(str::trim_start)
-        .collect::<Vec<_>>()
-        .join("\n");
-    if data.is_empty() || data == "[DONE]" {
-        return Ok(None);
-    }
-    serde_json::from_str(&data)
-        .map(Some)
-        .map_err(|_| "Événement OpenAI invalide.".to_string())
 }
 
 fn api_error(status: reqwest::StatusCode, body: &str) -> String {
@@ -686,7 +558,8 @@ pub async fn stream_openai(
                     while let Some((index, delimiter_len)) = find_sse_boundary(&buffer) {
                         let event = buffer[..index].to_vec();
                         buffer.drain(..index + delimiter_len);
-                        let Some(json) = parse_sse_event(&event)? else { continue };
+                        // `[DONE]` n'existe pas sur le flux Codex : `response.completed` fait foi.
+                        let SseEvent::Json(json) = parse_sse_event(&event)? else { continue };
                         match json.get("type").and_then(Value::as_str) {
                             Some("response.output_text.delta") => {
                                 if let Some(delta) = json.get("delta").and_then(Value::as_str) {
@@ -731,8 +604,8 @@ pub async fn stream_openai(
 #[cfg(test)]
 mod tests {
     use super::{
-        chatgpt_account_id, find_sse_boundary, parse_sse_event, response_body, token_expires_soon,
-        OpenAiMessage, OpenAiRequest,
+        chatgpt_account_id, parse_sse_event, response_body, token_expires_soon, OpenAiMessage,
+        OpenAiRequest, SseEvent,
     };
     use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -744,14 +617,10 @@ mod tests {
     #[test]
     fn parses_delta_event() {
         let event = b"event: response.output_text.delta\r\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"Salut\"}";
-        let json = parse_sse_event(event).unwrap().unwrap();
+        let SseEvent::Json(json) = parse_sse_event(event).unwrap() else {
+            panic!("delta attendu")
+        };
         assert_eq!(json["delta"], "Salut");
-    }
-
-    #[test]
-    fn recognizes_lf_and_crlf_boundaries() {
-        assert_eq!(find_sse_boundary(b"a\n\nb"), Some((1, 2)));
-        assert_eq!(find_sse_boundary(b"a\r\n\r\nb"), Some((1, 4)));
     }
 
     #[test]

@@ -1,9 +1,10 @@
 <script lang="ts">
   import { untrack } from 'svelte'
-  import { activeTab, app, openPath } from '../lib/stores.svelte'
+  import { activeTab, app, isCloudProvider, openPath } from '../lib/stores.svelte'
   import { closeWindow, isTauri, minimizeWindow, toggleMaximizeWindow } from '../lib/tauri'
   import { formatBytes } from '../lib/ollama'
-  import { beginOpenAiAuth, cancelOpenAiConnection, cancelPull, copilot, disconnectOpenAiAccount, ensureCopilotReady, jumpToCitation, newChat, pullModel, refreshModels, refreshOpenAiStatus, removeModel, retryGeneration, saveMessageAsNote, sendChat, setActiveModel, setCopilotProvider, stopChat, summarizeDoc, type ChatMsg } from '../lib/copilot.svelte'
+  import { beginOpenAiAuth, cancelOpenAiConnection, cancelPull, connectMinimax, copilot, disconnectMinimaxKey, disconnectOpenAiAccount, ensureCopilotReady, jumpToCitation, newChat, pullModel, refreshMinimaxStatus, refreshModels, refreshOpenAiStatus, removeModel, retryGeneration, saveMessageAsNote, sendChat, setActiveModel, setCopilotProvider, stopChat, summarizeDoc, type ChatMsg } from '../lib/copilot.svelte'
+  import { MINIMAX_DEFAULT_MODEL } from '../lib/compat'
   import { DEFAULT_EMBED_MODEL, FALLBACK_EMBED_MODEL, noteTitle } from '../lib/rag'
   import { cancelRagIndexing, deleteRagIndex, ragState, refreshRagIndex } from '../lib/rag-index.svelte'
   import { baseName, parentPath } from '../lib/explorer'
@@ -46,9 +47,20 @@
   $effect(() => {
     if (app.copilotOpen && app.copilotView === 'models') {
       if (app.copilotProvider === 'openai') untrack(() => void refreshOpenAiStatus())
+      else if (app.copilotProvider === 'minimax') untrack(() => void refreshMinimaxStatus())
       else untrack(() => void refreshModels())
     }
   })
+
+  // Connexion MiniMax : la clé ne vit que dans ce champ le temps de la validation —
+  // vidée dès le succès (elle repose ensuite dans le Credential Manager, côté Rust).
+  let minimaxKeyInput = $state('')
+  async function submitMinimaxKey() {
+    const key = minimaxKeyInput.trim()
+    if (!key) return
+    const ok = await connectMinimax(key)
+    if (ok) minimaxKeyInput = ''
+  }
 
   const activeInstalled = $derived(copilot.models.find((m) => m.name === app.activeModel) ?? null)
   const libraryTotal = $derived(copilot.models.reduce((sum, m) => sum + m.size, 0))
@@ -138,9 +150,9 @@
 
   const numberFormatter = new Intl.NumberFormat('fr-FR')
 
-  // Budget de contexte du fournisseur COURANT (21.x) : 12k local (num_ctx), 240k cloud
-  // (fenêtre OpenAI). Badge et comportement (prepareDocMessages) lisent le même seuil.
-  const docBudget = $derived(app.copilotProvider === 'openai' ? MAX_DOC_CHARS_CLOUD : MAX_DOC_CHARS)
+  // Budget de contexte du fournisseur COURANT (21.x) : 12k local (num_ctx), 240k cloud.
+  // Badge et comportement (prepareDocMessages) lisent le MÊME prédicat isCloudProvider.
+  const docBudget = $derived(isCloudProvider(app.copilotProvider) ? MAX_DOC_CHARS_CLOUD : MAX_DOC_CHARS)
 
   // Doc courant tronqué en Q&A (14.3) : signal DÉTERMINISTE à l'utilisateur (ne dépend pas du
   // modèle) — un « je ne trouve pas » peut alors venir de la partie non lue, pas d'une absence.
@@ -331,8 +343,8 @@
         <span class="msr" style="font-size:15px" data-tauri-drag-region>spa</span>
       </span>
       <span class="cop-title" data-tauri-drag-region>Doku-San</span>
-      <span class="cop-local" class:cloud={app.copilotProvider === 'openai'} data-tauri-drag-region>
-        {app.copilotProvider === 'openai' ? 'cloud' : 'local'}
+      <span class="cop-local" class:cloud={isCloudProvider(app.copilotProvider)} data-tauri-drag-region>
+        {isCloudProvider(app.copilotProvider) ? 'cloud' : 'local'}
       </span>
     </div>
     <div class="cop-head-spacer" data-tauri-drag-region></div>
@@ -394,6 +406,15 @@
           >
             <span class="msr">cloud</span>
             <span><strong>OpenAI</strong><small>Compte ChatGPT · cloud</small></span>
+          </button>
+          <button
+            class:active={app.copilotProvider === 'minimax'}
+            role="tab"
+            aria-selected={app.copilotProvider === 'minimax'}
+            onclick={() => setCopilotProvider('minimax')}
+          >
+            <span class="msr">cloud</span>
+            <span><strong>MiniMax</strong><small>Clé API · cloud</small></span>
           </button>
         </div>
 
@@ -480,6 +501,96 @@
             <div class="cop-cloud-privacy">
               <span class="msr">info</span>
               <p><strong>Envoi volontaire vers le cloud.</strong> Quand OpenAI est actif, la question et le contexte affiché sont transmis au service Codex. Le mode Ollama reste entièrement local.</p>
+            </div>
+          </div>
+        {:else if app.copilotProvider === 'minimax'}
+          <div class="cop-openai-view">
+            <div class="cop-cloud-hero">
+              <div class="cop-cloud-head">
+                <span class="cop-cloud-icon"><span class="msr">cloud</span></span>
+                <span class="cop-cloud-name">
+                  <strong>{app.minimaxModel || MINIMAX_DEFAULT_MODEL}</strong>
+                  <small>MiniMax · compatible OpenAI</small>
+                </span>
+                {#if copilot.minimaxChecking || copilot.minimaxConnecting}
+                  <span class="cop-cloud-status checking">Vérification…</span>
+                {:else if copilot.minimaxStatus?.keyRejected}
+                  <span class="cop-cloud-status unavailable">Clé refusée</span>
+                {:else if copilot.minimaxStatus?.connected}
+                  <span class="cop-cloud-status ready"><span class="cop-dot breathe"></span>Connecté</span>
+                {:else}
+                  <span class="cop-cloud-status">À connecter</span>
+                {/if}
+              </div>
+              <div class="cop-cloud-foot">
+                <span><b>M-series</b><small>MODÈLES</small></span>
+                <i></i>
+                <span><b>MiniMax</b><small>FOURNISSEUR</small></span>
+              </div>
+            </div>
+
+            {#if copilot.minimaxStatus?.connected && !copilot.minimaxStatus.keyRejected}
+              <div class="cop-cloud-note ok" role="status">
+                <span class="msr">verified_user</span>
+                <span>
+                  <strong>Clé MiniMax connectée</strong>
+                  <small>La clé est protégée par Windows — elle n'apparaît jamais dans les réglages ni dans les fichiers de Doku.</small>
+                </span>
+              </div>
+              {#if copilot.minimaxStatus.error}
+                <p class="cop-auth-error" role="status">{copilot.minimaxStatus.error}</p>
+              {/if}
+              <label class="cop-mm-model">
+                <span>Modèle</span>
+                <select
+                  value={app.minimaxModel || MINIMAX_DEFAULT_MODEL}
+                  onchange={(e) => (app.minimaxModel = (e.currentTarget as HTMLSelectElement).value)}
+                >
+                  {#each copilot.minimaxStatus.models as model (model)}
+                    <option value={model}>{model}</option>
+                  {/each}
+                </select>
+              </label>
+              <button class="cop-btn-quiet" onclick={() => void disconnectMinimaxKey()}>
+                <span class="msr">logout</span>Déconnecter la clé
+              </button>
+            {:else}
+              <section class="cop-cloud-setup">
+                <h3>{copilot.minimaxStatus?.keyRejected ? 'Reconnecter votre clé MiniMax' : 'Connecter votre clé MiniMax'}</h3>
+                <p>
+                  {copilot.minimaxStatus?.keyRejected
+                    ? 'La clé enregistrée a été refusée par le service. Collez une clé valide pour reprendre.'
+                    : 'Créez une clé API sur platform.minimax.io, puis collez-la ici. Elle est vérifiée avant d’être enregistrée.'}
+                </p>
+                <ol>
+                  <li><span class="msr">verified_user</span><p><strong>Vérifiée avant stockage</strong><small>Clé invalide ou réseau en panne : rien n’est enregistré.</small></p></li>
+                  <li><span class="msr">lock</span><p><strong>Protégée par Windows</strong><small>La clé vit dans le coffre Windows, jamais dans les fichiers de Doku.</small></p></li>
+                </ol>
+                <form
+                  class="cop-mm-connect"
+                  onsubmit={(e) => {
+                    e.preventDefault()
+                    void submitMinimaxKey()
+                  }}
+                >
+                  <input
+                    type="password"
+                    placeholder="Clé API MiniMax"
+                    autocomplete="off"
+                    bind:value={minimaxKeyInput}
+                    disabled={copilot.minimaxConnecting}
+                  />
+                  <button class="cop-btn-fill" type="submit" disabled={copilot.minimaxConnecting || !minimaxKeyInput.trim()}>
+                    <span class="msr">login</span>{copilot.minimaxConnecting ? 'Vérification…' : 'Connecter'}
+                  </button>
+                </form>
+                {#if copilot.minimaxConnectError}<p class="cop-auth-error" role="status">{copilot.minimaxConnectError}</p>{/if}
+              </section>
+            {/if}
+
+            <div class="cop-cloud-privacy">
+              <span class="msr">info</span>
+              <p><strong>Envoi volontaire vers le cloud.</strong> Quand MiniMax est actif, la question et le contexte affiché sont transmis à api.minimax.io. Le mode Ollama reste entièrement local.</p>
             </div>
           </div>
         {:else}
@@ -717,15 +828,27 @@
                    échoué. Le bouton fait le travail (pas de « icône calques » à traduire). -->
               <div class="cop-err-card" role="status">
                 <span class="msr" style="font-size:20px;color:var(--ink-3);flex:0 0 auto">
-                  {m.config === 'openai' ? 'cloud_off' : m.config === 'embed' ? 'database' : 'layers'}
+                  {m.config === 'openai' || m.config === 'minimax' ? 'cloud_off' : m.config === 'embed' ? 'database' : 'layers'}
                 </span>
                 <div>
                   <div class="cop-err-title">
-                    {m.config === 'openai' ? 'Compte OpenAI non connecté' : m.config === 'embed' ? "Modèle d'embedding requis" : 'Aucun modèle actif'}
+                    {m.config === 'openai'
+                      ? 'Compte OpenAI non connecté'
+                      : m.config === 'minimax'
+                        ? 'Clé MiniMax non connectée'
+                        : m.config === 'embed'
+                          ? "Modèle d'embedding requis"
+                          : 'Aucun modèle actif'}
                   </div>
                   <p class="cop-err-msg">{m.content}</p>
                   <button class="cop-err-btn" onclick={() => (app.copilotView = 'models')}>
-                    {m.config === 'openai' ? 'Connecter OpenAI' : m.config === 'embed' ? 'Ouvrir les modèles' : 'Choisir un modèle'}
+                    {m.config === 'openai'
+                      ? 'Connecter OpenAI'
+                      : m.config === 'minimax'
+                        ? 'Connecter MiniMax'
+                        : m.config === 'embed'
+                          ? 'Ouvrir les modèles'
+                          : 'Choisir un modèle'}
                   </button>
                 </div>
               </div>
@@ -970,7 +1093,11 @@
           {/key}
         </div>
         <div class="cop-disclaimer">
-          {app.copilotProvider === 'openai' ? 'OpenAI · contexte envoyé au cloud' : 'Local · rien ne quitte cet appareil'}
+          {app.copilotProvider === 'openai'
+            ? 'OpenAI · contexte envoyé au cloud'
+            : app.copilotProvider === 'minimax'
+              ? 'MiniMax · contexte envoyé au cloud'
+              : 'Local · rien ne quitte cet appareil'}
           <span>·</span> Doku peut se tromper.
         </div>
       </div>
@@ -1212,6 +1339,21 @@
     font-family: var(--font-sans); font-size: 12.5px; font-weight: 500; cursor: pointer;
   }
   .cop-btn-fill:hover { background: var(--ink-2); }
+  .cop-btn-fill:disabled { opacity: 0.55; cursor: default; }
+
+  /* MiniMax : champ clé + sélecteur de modèle */
+  .cop-mm-connect { display: flex; flex-direction: column; gap: 8px; }
+  .cop-mm-connect input {
+    height: 34px; padding: 0 11px; border: 1px solid var(--line-2); border-radius: 9px;
+    background: var(--cream-content); color: var(--ink); font-family: var(--font-mono); font-size: 12px;
+  }
+  .cop-mm-connect input:focus-visible { outline: 2px solid var(--line-3); outline-offset: -1px; }
+  .cop-mm-model { display: flex; flex-direction: column; gap: 6px; padding: 0 2px; }
+  .cop-mm-model > span { font-size: 10.5px; color: var(--ink-4); font-weight: 600; letter-spacing: 0.06em; }
+  .cop-mm-model select {
+    height: 34px; padding: 0 9px; border: 1px solid var(--line-2); border-radius: 9px;
+    background: var(--cream-content); color: var(--ink); font-family: var(--font-sans); font-size: 12.5px;
+  }
 
   /* Sections modèles */
   .cop-sections { padding: 8px 2px; display: flex; flex-direction: column; gap: 20px; }

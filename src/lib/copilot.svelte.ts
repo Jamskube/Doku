@@ -2,7 +2,25 @@
 // (même motif que `app` dans stores.svelte.ts). Le port du sidecar est stable (start_ollama
 // idempotent côté Rust) → on le cache ; `ensureReady` déduplique les appels concurrents
 // (motif indexBuild de la recherche). Le modèle ACTIF (persisté) vit dans `app.activeModel`.
-import { activeTab, app, editorRef, openPath, refreshExplorer, type CopilotProvider, type DocKind } from './stores.svelte'
+import {
+  activeTab,
+  app,
+  editorRef,
+  isCloudProvider,
+  openPath,
+  refreshExplorer,
+  type CopilotProvider,
+  type DocKind,
+} from './stores.svelte'
+import {
+  compatChat,
+  compatGenerate,
+  disconnectCompat,
+  getCompatStatus,
+  MINIMAX_DEFAULT_MODEL,
+  setCompatKey,
+  type CompatStatus,
+} from './compat'
 import { citedNumbers, locateOffset, locatePassage, type CitedPassage } from './citations'
 import { setRephrasePreview } from './editor/rephrase-preview'
 import { joinPath, parentPath } from './explorer'
@@ -61,9 +79,9 @@ export interface ChatMsg {
   streaming?: boolean
   failed?: boolean
   // État de CONFIGURATION (pas un échec de génération) : aucun modèle actif / compte
-  // OpenAI absent / modèle d'EMBEDDING manquant (mode dossier, 15.3). Rendu en carte
-  // neutre avec un bouton vers la vue Modèles — pas en carte d'erreur rouge.
-  config?: 'model' | 'openai' | 'embed'
+  // OpenAI absent / clé MiniMax absente / modèle d'EMBEDDING manquant (mode dossier,
+  // 15.3). Rendu en carte neutre avec un bouton vers la vue Modèles — pas en erreur rouge.
+  config?: 'model' | 'openai' | 'minimax' | 'embed'
   // Message d'INFO de l'app (« dossier pas encore indexé »…) : affiché comme une réponse
   // mais exclu de l'historique envoyé au modèle (ce n'est pas un tour de dialogue).
   notice?: boolean
@@ -115,6 +133,11 @@ export const copilot = $state({
   openAiAuth: null as OpenAiAuthStart | null,
   openAiAuthPhase: 'idle' as 'idle' | 'starting' | 'waiting' | 'error',
   openAiAuthError: '',
+  // MiniMax (ADR-0018) : statut de la clé + connexion en cours. null = jamais interrogé.
+  minimaxStatus: null as CompatStatus | null,
+  minimaxChecking: false,
+  minimaxConnecting: false,
+  minimaxConnectError: '',
 })
 
 let readyPromise: Promise<number | null> | null = null
@@ -342,17 +365,76 @@ export async function disconnectOpenAiAccount(): Promise<void> {
   }
 }
 
+// Aligne le modèle persisté sur la liste réellement servie (un modèle retiré du
+// catalogue laisserait un <select> vide et des requêtes vouées au 404).
+function normalizeMinimaxModel(status: CompatStatus): void {
+  if (!app.minimaxModel || (status.models.length > 0 && !status.models.includes(app.minimaxModel))) {
+    app.minimaxModel = status.models.includes(MINIMAX_DEFAULT_MODEL)
+      ? MINIMAX_DEFAULT_MODEL
+      : (status.models[0] ?? MINIMAX_DEFAULT_MODEL)
+  }
+}
+
+export async function refreshMinimaxStatus(): Promise<CompatStatus | null> {
+  copilot.minimaxChecking = true
+  try {
+    const status = await getCompatStatus('minimax')
+    copilot.minimaxStatus = status
+    if (status.connected) normalizeMinimaxModel(status)
+    return status
+  } catch (error) {
+    // Échec TRANSITOIRE (IPC) : on garde le dernier statut connu — l'écraser en null
+    // ferait mentir la carte (« aucune clé ») alors qu'une clé est peut-être là.
+    console.error('[copilot] minimax status', error)
+    return copilot.minimaxStatus
+  } finally {
+    copilot.minimaxChecking = false
+  }
+}
+
+// Connecte une clé MiniMax : validée côté Rust par un appel à 1 token AVANT stockage —
+// clé invalide ou réseau en panne → erreur affichée, rien n'est écrit nulle part.
+export async function connectMinimax(key: string): Promise<boolean> {
+  if (copilot.minimaxConnecting) return false
+  copilot.minimaxConnecting = true
+  copilot.minimaxConnectError = ''
+  try {
+    const status = await setCompatKey('minimax', key)
+    copilot.minimaxStatus = status
+    normalizeMinimaxModel(status)
+    return true
+  } catch (error) {
+    copilot.minimaxConnectError = error instanceof Error ? error.message : String(error)
+    return false
+  } finally {
+    copilot.minimaxConnecting = false
+  }
+}
+
+export async function disconnectMinimaxKey(): Promise<void> {
+  try {
+    await disconnectCompat('minimax')
+    copilot.minimaxStatus = { keyPresent: false, connected: false, keyRejected: false, models: [] }
+    copilot.minimaxConnectError = ''
+  } catch (error) {
+    console.error('[copilot] minimax disconnect', error)
+    copilot.minimaxConnectError = 'Impossible de supprimer la clé MiniMax.'
+  }
+}
+
 export function setCopilotProvider(provider: CopilotProvider): void {
   app.copilotProvider = provider
   if (provider === 'openai') void refreshOpenAiStatus()
+  if (provider === 'minimax') void refreshMinimaxStatus()
 }
 
 type ProviderRuntime =
   | { provider: 'ollama'; port: number; model: string }
   | { provider: 'openai'; model: typeof OPENAI_MODEL }
+  | { provider: 'minimax'; model: string }
 
 function personaFor(runtime: ProviderRuntime): PersonaProfile {
-  return runtime.provider === 'openai' ? 'cloud' : 'local'
+  return isCloudProvider(runtime.provider) ? 'cloud' : 'local'
 }
 
 async function resolveRuntime(provider: CopilotProvider, localModel: string): Promise<ProviderRuntime | null> {
@@ -361,6 +443,11 @@ async function resolveRuntime(provider: CopilotProvider, localModel: string): Pr
     return copilot.openAiAuthenticated && copilot.openAiPreferredAvailable !== false
       ? { provider: 'openai', model: OPENAI_MODEL }
       : null
+  }
+  if (provider === 'minimax') {
+    const status = copilot.minimaxStatus ?? (await refreshMinimaxStatus())
+    if (!status || !status.keyPresent || status.keyRejected) return null
+    return { provider: 'minimax', model: app.minimaxModel || MINIMAX_DEFAULT_MODEL }
   }
   if (!localModel) return null
   const port = await ensureReady()
@@ -374,6 +461,7 @@ function streamChat(
   signal: AbortSignal,
 ): Promise<string> {
   if (runtime.provider === 'openai') return openAiChat(messages, onToken, signal)
+  if (runtime.provider === 'minimax') return compatChat('minimax', runtime.model, messages, onToken, signal)
   return chat(runtime.port, runtime.model, messages, onToken, signal, {
     num_ctx: COPILOT_NUM_CTX,
     temperature: COPILOT_TEMPERATURE,
@@ -390,6 +478,9 @@ function streamGenerate(
   if (runtime.provider === 'openai') {
     return openAiGenerate(prompt, onToken, signal)
   }
+  if (runtime.provider === 'minimax') {
+    return compatGenerate('minimax', runtime.model, prompt, onToken, signal)
+  }
   return generate(runtime.port, runtime.model, prompt, onToken, signal, {
     num_ctx: COPILOT_NUM_CTX,
     temperature: COPILOT_TEMPERATURE,
@@ -397,18 +488,42 @@ function streamGenerate(
   })
 }
 
+// Carte de config posée quand le fournisseur cloud n'est pas prêt (chip `config`).
+function cloudConfigKind(provider: CopilotProvider): 'openai' | 'minimax' {
+  return provider === 'minimax' ? 'minimax' : 'openai'
+}
+
 function providerSetupMessage(provider: CopilotProvider): string {
-  return provider === 'openai'
-    ? copilot.openAiPreferredAvailable === false
+  if (provider === 'openai') {
+    return copilot.openAiPreferredAvailable === false
       ? 'Votre compte OpenAI est connecté, mais GPT‑5.6 Luna n’est pas disponible pour cet abonnement.'
-      : 'Connectez votre compte OpenAI dans Modèles. Doku ne vous demandera jamais de clé API.'
-    : 'Choisissez ou téléchargez un modèle local pour utiliser le copilote — tout reste sur votre machine.'
+      : 'Connectez votre compte OpenAI dans Modèles. La connexion OpenAI se fait sans clé API.'
+  }
+  if (provider === 'minimax') {
+    return copilot.minimaxStatus?.keyRejected
+      ? 'La clé MiniMax a été refusée par le service. Reconnectez-la dans Modèles.'
+      : 'Connectez votre clé MiniMax dans Modèles pour utiliser ce fournisseur cloud.'
+  }
+  return 'Choisissez ou téléchargez un modèle local pour utiliser le copilote — tout reste sur votre machine.'
+}
+
+const PROVIDER_LABELS: Record<CopilotProvider, string> = {
+  ollama: 'Ollama',
+  openai: 'OpenAI',
+  minimax: 'MiniMax',
 }
 
 function generationFailure(error: unknown, provider: CopilotProvider, fallback: string): string {
-  if (provider !== 'openai') return fallback
+  if (!isCloudProvider(provider)) return fallback
+  // Une clé refusée en cours de session : la carte du fournisseur doit rebasculer
+  // (statut honnête) — refresh en arrière-plan, sans bloquer l'affichage de l'erreur.
+  if (provider === 'minimax') void refreshMinimaxStatus()
   const detail = error instanceof Error ? error.message : typeof error === 'string' ? error : ''
-  return detail.trim() ? `OpenAI : ${detail.trim()}` : fallback
+  if (!detail.trim()) return fallback
+  // Pas de « MiniMax : La clé MiniMax… » — le préfixe n'apporte rien si le détail
+  // nomme déjà le fournisseur.
+  const label = PROVIDER_LABELS[provider]
+  return detail.includes(label) ? detail.trim() : `${label} : ${detail.trim()}`
 }
 
 // Envoie un message au copilote et streame la réponse (14.1). `doc` = SNAPSHOT du document
@@ -509,9 +624,9 @@ export async function sendChat(
     const runtime = await resolveRuntime(provider, localModel)
     if (runtime === null) {
       const message = copilot.messages[idx]
-      if (provider === 'openai') {
+      if (isCloudProvider(provider)) {
         message.content = providerSetupMessage(provider)
-        message.config = 'openai'
+        message.config = cloudConfigKind(provider)
       } else {
         message.content = copilot.error || 'Le moteur IA est indisponible.'
         message.failed = true
@@ -766,10 +881,11 @@ async function prepareDocMessages(
   }
   // Document qui tient dans le budget du FOURNISSEUR : fourni EN ENTIER, découpé en
   // extraits numérotés (chunkText, déterministe — aucun embedding) → citations [n] pour
-  // les deux fournisseurs. Budget local = 12k (num_ctx 16384, au-delà l'index éphémère a
+  // tous les fournisseurs. Budget local = 12k (num_ctx 16384, au-delà l'index éphémère a
   // déjà pris la main ci-dessus) ; budget cloud = 240k (fenêtre 128k tokens d'OpenAI —
-  // le plafond local y tronquait un PDF de 5 pages, vu en usage réel).
-  const docBudget = runtime.provider === 'openai' ? MAX_DOC_CHARS_CLOUD : MAX_DOC_CHARS
+  // le plafond local y tronquait un PDF de 5 pages, vu en usage réel ; MiniMax M2.x =
+  // 204k tokens, M3 = 1M : le même plafond tient largement).
+  const docBudget = isCloudProvider(runtime.provider) ? MAX_DOC_CHARS_CLOUD : MAX_DOC_CHARS
   if (doc.text.trim() && doc.text.length <= docBudget) {
     const { chunks, truncated } = chunkText(doc.text)
     // `truncated` (plafond de chunks) contredirait le « EN ENTIER » du prompt : dans ce
@@ -808,7 +924,7 @@ export async function summarizeDoc(
   const provider = app.copilotProvider
   const localModel = app.activeModel
   const userLabel = mode === 'keypoints' ? 'Quels sont les points clés de ce document ?' : 'Résume ce document.'
-  const reply = (content: string, flags: { failed?: boolean; config?: 'model' | 'openai' } = {}) => {
+  const reply = (content: string, flags: { failed?: boolean; config?: ChatMsg['config'] } = {}) => {
     copilot.messages.push({ role: 'user', content: userLabel })
     copilot.messages.push({ role: 'assistant', content, ...flags })
   }
@@ -863,9 +979,9 @@ export async function summarizeDoc(
     const runtime = await resolveRuntime(provider, localModel)
     if (runtime === null) {
       const m = copilot.messages[idx]
-      if (provider === 'openai') {
+      if (isCloudProvider(provider)) {
         m.content = providerSetupMessage(provider)
-        m.config = 'openai'
+        m.config = cloudConfigKind(provider)
       } else {
         m.content = copilot.error || 'Le moteur IA est indisponible.'
         m.failed = true
@@ -1005,7 +1121,7 @@ async function runRephrase(params: { tabId: number; from: number; to: number; or
     let cur = rephrase.current
     if (cur?.id !== id) return
     if (runtime === null) {
-      if (provider === 'openai') {
+      if (isCloudProvider(provider)) {
         cur.phase = 'config'
         cur.error = providerSetupMessage(provider)
       } else {
