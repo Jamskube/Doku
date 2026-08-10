@@ -1,9 +1,9 @@
 <script lang="ts">
   import { untrack } from 'svelte'
   import { activeTab, app, openPath } from '../lib/stores.svelte'
-  import { closeWindow, minimizeWindow, toggleMaximizeWindow } from '../lib/tauri'
+  import { closeWindow, isTauri, minimizeWindow, toggleMaximizeWindow } from '../lib/tauri'
   import { formatBytes } from '../lib/ollama'
-  import { beginOpenAiAuth, cancelOpenAiConnection, cancelPull, copilot, disconnectOpenAiAccount, ensureCopilotReady, jumpToCitation, newChat, pullModel, refreshModels, refreshOpenAiStatus, removeModel, retryGeneration, sendChat, setActiveModel, setCopilotProvider, stopChat, summarizeDoc, type ChatMsg } from '../lib/copilot.svelte'
+  import { beginOpenAiAuth, cancelOpenAiConnection, cancelPull, copilot, disconnectOpenAiAccount, ensureCopilotReady, jumpToCitation, newChat, pullModel, refreshModels, refreshOpenAiStatus, removeModel, retryGeneration, saveMessageAsNote, sendChat, setActiveModel, setCopilotProvider, stopChat, summarizeDoc, type ChatMsg } from '../lib/copilot.svelte'
   import { DEFAULT_EMBED_MODEL, FALLBACK_EMBED_MODEL, noteTitle } from '../lib/rag'
   import { cancelRagIndexing, deleteRagIndex, ragState, refreshRagIndex } from '../lib/rag-index.svelte'
   import { baseName, parentPath } from '../lib/explorer'
@@ -242,6 +242,27 @@
       await navigator.clipboard.writeText(text)
     } catch (e) {
       console.error('[copilot] copy', e)
+    }
+  }
+
+  // Sauve la réponse d'index `i` en note. Succès : check 2 s (motif authCodeCopied) ;
+  // échec : bannière — un clic sans effet visible violerait « jamais muet » (Epic 19).
+  let noteSavedIdx = $state(-1)
+  async function saveNote(i: number) {
+    const msg = copilot.messages[i]
+    // Garde le double-clic ICI aussi : `disabled` ne s'applique qu'au prochain flush —
+    // un 2e clic dans la même frame afficherait une fausse bannière d'échec.
+    if (!msg || copilot.savingNote) return
+    const path = await saveMessageAsNote(msg)
+    if (path) {
+      noteSavedIdx = i
+      setTimeout(() => (noteSavedIdx = -1), 2000)
+    } else {
+      app.banner = {
+        tone: 'error',
+        title: 'Note non créée',
+        message: 'Impossible d’écrire la note. Vérifiez qu’un dossier est ouvert et accessible en écriture.',
+      }
     }
   }
 
@@ -729,6 +750,20 @@
                   <span class="cop-asst-name">Doku-San</span>
                   <div class="grow"></div>
                   {#if !m.streaming}
+                    {#if isTauri && !m.notice && m.content}
+                      <!-- Sauver en note (21.x) : la réponse devient un fichier .md du dossier
+                           courant — indexable, citable. Feedback succès (check) ET échec
+                           (bannière) : jamais de bouton muet (règle Epic 19). -->
+                      <button
+                        class="cop-copy"
+                        title="Sauver en note"
+                        aria-label="Sauver la réponse en note"
+                        disabled={copilot.savingNote}
+                        onclick={() => void saveNote(i)}
+                      >
+                        <span class="msr" style="font-size:15px">{noteSavedIdx === i ? 'check' : 'save'}</span>
+                      </button>
+                    {/if}
                     <button class="cop-copy" title="Copier" aria-label="Copier la réponse" onclick={() => copyMessage(m.content)}>
                       <span class="msr" style="font-size:15px">content_copy</span>
                     </button>

@@ -381,7 +381,7 @@ export function buildReduceSummaryPrompt(
 // Assistance à la rédaction (FR-7). La sortie REMPLACE la sélection dans l'éditeur → le modèle
 // ne doit renvoyer QUE le texte réécrit (aucun préambule, guillemet ni commentaire), sinon on
 // insérerait du parasite. Zéro invention : même sens, même langue, même mise en forme Markdown.
-export type RephraseMode = 'clarify' | 'shorten' | 'tone' | 'correct'
+export type RephraseMode = 'clarify' | 'shorten' | 'tone' | 'correct' | 'bullets' | 'tasks'
 
 const REPHRASE_TASK: Record<RephraseMode, string> = {
   clarify: 'Reformule le passage ci-dessous en le rendant plus clair et plus facile à lire (phrases simples et directes).',
@@ -389,7 +389,16 @@ const REPHRASE_TASK: Record<RephraseMode, string> = {
   tone: 'Reformule le passage ci-dessous en adoptant un ton plus neutre et professionnel.',
   // 16.2 : correction = changement MINIMAL — jamais de licence de réécriture, quel que soit le persona.
   correct: "Corrige l'orthographe, la grammaire, la conjugaison et la ponctuation du passage ci-dessous, en changeant le moins de mots possible.",
+  // Modes STRUCTURELS (21.x) : transformation mécanique du format, contenu conservé —
+  // « sans rien ajouter ni omettre » dans les deux (un petit modèle invité à découper
+  // « en actions » inventerait des actions depuis un texte non actionnable).
+  bullets: 'Réorganise le passage ci-dessous en liste à puces Markdown (chaque ligne commence par « - »), une idée par puce, sans rien ajouter ni omettre.',
+  tasks: 'Réorganise le passage ci-dessous en liste de cases à cocher Markdown (chaque ligne commence par « - [ ] »), une idée par ligne, sans rien ajouter ni omettre.',
 }
+
+// Modes qui CHANGENT la mise en forme : la règle « conserve la mise en forme » des modes
+// de reformulation contredirait la tâche.
+const STRUCTURAL_MODES: ReadonlySet<RephraseMode> = new Set(['bullets', 'tasks'])
 
 export function buildRephrasePrompt(
   text: string,
@@ -402,11 +411,14 @@ export function buildRephrasePrompt(
         ? 'Tu es Doku-San, un correcteur rigoureux.'
         : "Tu es Doku-San, un éditeur expérimenté. Améliore franchement le passage : tu peux réorganiser les phrases et la structure lorsque cela sert l'objectif demandé."
       : "Tu es Doku-San, l'assistant d'écriture local de l'éditeur Doku."
+  const formatRule = STRUCTURAL_MODES.has(mode)
+    ? "- Le format cible remplace la mise en forme d'origine ; conserve la langue et le sens.\n"
+    : "- Conserve la langue d'origine et la mise en forme Markdown (titres, listes, gras, liens, code).\n"
   return (
     `${role} ${REPHRASE_TASK[mode]}\n` +
     'Règles STRICTES :\n' +
     "- Garde exactement le même sens ; n'ajoute aucune information nouvelle.\n" +
-    "- Conserve la langue d'origine et la mise en forme Markdown (titres, listes, gras, liens, code).\n" +
+    formatRule +
     '- Réponds UNIQUEMENT avec le texte réécrit — sans préambule, sans guillemets, sans commentaire.\n' +
     `\nPassage :\n"""\n${text}\n"""`
   )

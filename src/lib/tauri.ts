@@ -57,6 +57,20 @@ export async function createFileAt(path: string): Promise<boolean> {
   return true
 }
 
+// Variante avec contenu (note générée par Doku-San) : `createNew` fait échouer l'écriture
+// si le nom est pris — garde ATOMIQUE côté OS (pas de fenêtre exists→write), false et
+// l'appelant réessaie avec un suffixe. Jamais d'écrasement silencieux.
+export async function createFileWithContent(path: string, content: string): Promise<boolean> {
+  if (!isTauri) return false
+  const { writeTextFile } = await import('@tauri-apps/plugin-fs')
+  try {
+    await writeTextFile(path, content, { createNew: true })
+    return true
+  } catch {
+    return false
+  }
+}
+
 // Crée un dossier. Même garde : mkdir sur un dossier existant lève, on préfère
 // répondre false et laisser l'appelant afficher « ce nom existe déjà ».
 export async function createDirAt(path: string): Promise<boolean> {

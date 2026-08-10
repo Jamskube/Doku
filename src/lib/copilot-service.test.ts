@@ -284,6 +284,20 @@ describe('buildRephrasePrompt (16.1)', () => {
     expect(t).toMatch(/ton/i)
     expect(c).toMatch(/clair/i)
   })
+  it('modes structurels (21.x) : format cible imposé, jamais « conserve la mise en forme »', () => {
+    const b = buildRephrasePrompt('t', 'bullets')
+    const k = buildRephrasePrompt('t', 'tasks')
+    expect(b).toContain('liste à puces')
+    expect(k).toContain('- [ ]')
+    // Symétrie anti-invention : les deux interdisent d'ajouter ou d'omettre.
+    expect(b).toMatch(/sans rien ajouter ni omettre/)
+    expect(k).toMatch(/sans rien ajouter ni omettre/)
+    // La règle des modes de reformulation contredirait la tâche structurelle.
+    expect(b).not.toMatch(/Conserve la langue d'origine et la mise en forme/)
+    expect(k).not.toMatch(/Conserve la langue d'origine et la mise en forme/)
+    // Les modes existants la gardent.
+    expect(buildRephrasePrompt('t', 'clarify')).toMatch(/Conserve la langue d'origine et la mise en forme/)
+  })
   it('le profil cloud peut réorganiser le passage mais conserve le contrat de remplacement', () => {
     const cloud = buildRephrasePrompt('t', 'clarify', 'cloud')
     expect(cloud).toMatch(/réorganiser/i)

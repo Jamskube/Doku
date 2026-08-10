@@ -2,10 +2,12 @@
 // (même motif que `app` dans stores.svelte.ts). Le port du sidecar est stable (start_ollama
 // idempotent côté Rust) → on le cache ; `ensureReady` déduplique les appels concurrents
 // (motif indexBuild de la recherche). Le modèle ACTIF (persisté) vit dans `app.activeModel`.
-import { activeTab, app, editorRef, openPath, type CopilotProvider, type DocKind } from './stores.svelte'
+import { activeTab, app, editorRef, openPath, refreshExplorer, type CopilotProvider, type DocKind } from './stores.svelte'
 import { citedNumbers, locateOffset, locatePassage, type CitedPassage } from './citations'
 import { setRephrasePreview } from './editor/rephrase-preview'
-import { parentPath } from './explorer'
+import { joinPath, parentPath } from './explorer'
+import { noteContent, noteFileName } from './notes'
+import { createFileWithContent, isTauri } from './tauri'
 import { chunkText, DEFAULT_EMBED_MODEL, noteTitle, RAG_TOP_K } from './rag'
 import { cancelRagIndexing, ragState, searchDocEphemeral, searchRag, type RagHit } from './rag-index.svelte'
 import { chat, deleteModel, generate, listModels, pull, startOllama, waitReady, type OllamaModel } from './ollama'
@@ -79,6 +81,10 @@ export interface ChatMsg {
   // serait du bruit. Absent en mode top-k (le pied liste les passages consultés).
   citedOnly?: boolean
   cited?: number[]
+  // Libellé de la source de la réponse, CAPTURÉ à la fin de la génération (nom du doc ou
+  // « les notes du dossier ») : la provenance d'une note sauvée ne dépend jamais de
+  // l'onglet actif au moment du clic — il a pu changer, elle mentirait.
+  sourceLabel?: string
   // Posé sur une carte `failed` : ce qu'il faut rejouer pour « Réessayer » (la question ou le
   // mode de résumé). Le document est re-capturé au moment du retry (le dossier aussi, 15.3).
   retry?: { kind: 'chat'; question: string; scope: ChatScope } | { kind: 'summary'; mode: SummaryMode }
@@ -93,6 +99,8 @@ export const copilot = $state({
   error: '',
   messages: [] as ChatMsg[],
   generating: false,
+  // Sauvegarde de note en cours (anti double-clic — une seule à la fois suffit).
+  savingNote: false,
   // Portée courante des questions (15.3) — éphémère, choisie dans la face « Contexte ».
   scope: 'doc' as ChatScope,
   // Dernière extraction PDF résolue (18.2) : alimente le badge de contexte HONNÊTEMENT
@@ -544,6 +552,11 @@ export async function sendChat(
     // cliquables sous « je ne trouve pas » seraient trompeuses. Sans `sources` posées,
     // les marqueurs [n] éventuels de la réponse sont retirés au rendu (count = 0).
     const done = copilot.messages[idx]
+    // Provenance capturée MAINTENANT (pas au clic « Sauver en note » : l'onglet actif
+    // aura pu changer). Nom du doc même sans sources (petit doc, réponse libre).
+    if (done?.content && !done.failed) {
+      done.sourceLabel = scope === 'folder' ? 'les notes du dossier' : (doc.name ?? undefined)
+    }
     if (
       sources &&
       done?.content &&
@@ -918,6 +931,8 @@ export async function summarizeDoc(
     if (m) {
       m.streaming = false
       m.status = undefined
+      // Provenance du résumé (pour « Sauver en note ») — capturée ici, pas au clic.
+      if (m.content && !m.failed) m.sourceLabel = doc.name ?? undefined
       // Annulé avant tout texte → tour fantôme (question + réponse vide) : on retire les deux.
       if (m.content === '' && !m.failed) copilot.messages.splice(idx - 1, 2)
     }
@@ -956,7 +971,15 @@ export async function rephraseSelection(mode: RephraseMode): Promise<void> {
   if (!view) return
   const sel = view.state.selection.main
   if (sel.empty) return
-  await runRephrase({ tabId: app.activeId, from: sel.from, to: sel.to, original: view.state.sliceDoc(sel.from, sel.to), mode })
+  let from = sel.from
+  let to = sel.to
+  // Modes structurels : étendre aux frontières de ligne — une liste « - [ ] … » insérée
+  // en milieu de ligne casserait le Markdown (le reste de la ligne collerait à la puce).
+  if (mode === 'bullets' || mode === 'tasks') {
+    from = view.state.doc.lineAt(from).from
+    to = view.state.doc.lineAt(to).to
+  }
+  await runRephrase({ tabId: app.activeId, from, to, original: view.state.sliceDoc(from, to), mode })
 }
 
 async function runRephrase(params: { tabId: number; from: number; to: number; original: string; mode: RephraseMode }): Promise<void> {
@@ -1096,6 +1119,43 @@ export function stopChat(): void {
   // Stop pendant une recherche dossier : annule aussi le refresh d'index inline en cours
   // (son travail d'embed déjà accompli est conservé — checkpoints 15.2).
   if (folderSearching) cancelRagIndexing()
+}
+
+// Sauve une réponse de Doku-San en note .md dans le dossier courant (même résolution que
+// le mode dossier). Nom dérivé de la question qui précède ; conflit de nom → suffixes
+// « (2) »… via l'écriture `createNew` (échec atomique côté OS si le nom est pris).
+// Succès : explorateur rafraîchi + note ouverte. null = échec (l'appelant DOIT le dire —
+// jamais de bouton muet). La note devient un fichier ordinaire : indexable, citable.
+export async function saveMessageAsNote(msg: ChatMsg): Promise<string | null> {
+  if (!isTauri || copilot.savingNote) return null
+  const dir = app.explorerDir ?? parentPath(activeTab()?.path ?? null)
+  if (!dir) return null
+  copilot.savingNote = true
+  try {
+    const i = copilot.messages.indexOf(msg)
+    const prev = i > 0 ? copilot.messages[i - 1] : undefined
+    const question = prev?.role === 'user' ? prev.content : null
+    const sourceNames = msg.sources?.map((s) => s.name).filter((n): n is string => !!n)
+    const content = noteContent(msg.content, {
+      sourceLabel: msg.sourceLabel ?? null,
+      date: new Date(),
+      sourceNames,
+    })
+    for (let attempt = 1; attempt <= 30; attempt++) {
+      const path = joinPath(dir, noteFileName(question, attempt))
+      if (await createFileWithContent(path, content)) {
+        refreshExplorer()
+        await openPath(path)
+        return path
+      }
+    }
+    return null
+  } catch (e) {
+    console.error('[copilot] note', e)
+    return null
+  } finally {
+    copilot.savingNote = false
+  }
 }
 
 // Nouvelle conversation : annule d'abord une génération en cours, puis vide l'historique.

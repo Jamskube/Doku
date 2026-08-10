@@ -51,6 +51,18 @@ export function annotateCitations(html: string, count: number): string {
     .join('')
 }
 
+// Retire TOUS les marqueurs [n] d'un texte Markdown BRUT (sauvegarde en note : hors du
+// panneau, les puces ne pointent vers rien — les laisser serait des références mortes).
+// Les zones de code (blocs ``` et `inline`) sont préservées — un [1] y est du code.
+const MD_CODE_SPLIT = /(```[\s\S]*?```|`[^`\n]*`)/g
+
+export function stripCitationMarkers(text: string): string {
+  return text
+    .split(MD_CODE_SPLIT)
+    .map((seg, i) => (i % 2 === 1 ? seg : seg.replace(MARKER, '').replace(/ +([.,])/g, '$1')))
+    .join('')
+}
+
 // Numéros d'extraits réellement cités dans une réponse (uniques, bornés à 1..max, triés).
 // Sert au pied « Passages cités » du mode document complet : n'afficher que ce que la
 // réponse référence (les extraits = tout le document, la liste complète serait du bruit).

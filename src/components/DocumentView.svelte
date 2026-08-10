@@ -177,7 +177,14 @@
     }
 
     const menuWidth = 264
-    const menuHeight = expanded ? 348 : 180
+    // Hauteur MESURÉE (la constante de repli dérivait à chaque verbe ajouté — critique du
+    // plan 21.x). Décomposition exacte quel que soit l'état du tiroir (replié, déplié, en
+    // transition) : chrome = hauteur totale − hauteur RENDUE du tiroir ; hauteur cible =
+    // chrome (+ contenu du tiroir via scrollHeight, mesurable même replié, si déplié).
+    // Replis calibrés pour la toute première ouverture (menu pas encore dans le DOM).
+    const inner = selectionMenuEl?.querySelector<HTMLElement>('.selection-rewrite-inner')
+    const chromeH = selectionMenuEl && inner ? selectionMenuEl.offsetHeight - inner.offsetHeight : undefined
+    const menuHeight = expanded ? (chromeH !== undefined ? chromeH + (inner?.scrollHeight ?? 0) : 416) : (chromeH ?? 180)
     const viewportMargin = 12
     const gap = 8
     const anchorX = end.left
@@ -578,6 +585,12 @@
             </button>
             <button class="selection-menu-action selection-menu-subaction" role="menuitem" onclick={() => runSelectionAction('correct')}>
               <span class="msr">spellcheck</span><span>Corriger</span>
+            </button>
+            <button class="selection-menu-action selection-menu-subaction" role="menuitem" onclick={() => runSelectionAction('bullets')}>
+              <span class="msr">format_list_bulleted</span><span>En liste à puces</span>
+            </button>
+            <button class="selection-menu-action selection-menu-subaction" role="menuitem" onclick={() => runSelectionAction('tasks')}>
+              <span class="msr">checklist</span><span>En cases à cocher</span>
             </button>
           {/if}
         </div>
