@@ -11,7 +11,8 @@
 import * as pdfjs from 'pdfjs-dist'
 import PdfWorker from 'pdfjs-dist/build/pdf.worker.min.mjs?worker'
 import type { PDFDocumentProxy } from 'pdfjs-dist'
-import { buildPdfExtraction, type PdfExtraction, type PdfTextItem } from './pdf-text'
+import { assemblePageItems, buildPdfExtraction, matchPassageRange, type PdfExtraction, type PdfTextItem } from './pdf-text'
+import { locateOffset } from './citations'
 import { readFileBytes } from './tauri'
 
 pdfjs.GlobalWorkerOptions.workerPort = new PdfWorker()
@@ -82,6 +83,52 @@ export async function extractPdfText(bytes: Uint8Array, signal?: AbortSignal): P
     return buildPdfExtraction(pages)
   } finally {
     await destroy()
+  }
+}
+
+// --- Surlignage d'un passage cité (citations ancrées, 21.x) -----------------------------
+// Rectangles des items de texte couverts par un passage sur UNE page, en FRACTIONS de la
+// page (0..1) : l'overlay se positionne en % du canvas, insensible à l'échelle/DPR. Pas de
+// couche texte pdf.js montée (le viewer reste canvas-only, cf. en-tête) : on ne fait que
+// lire les coordonnées des items. Liste vide si le passage n'est pas retrouvé — l'appelant
+// retombe sur le halo de page, jamais de faux surlignage.
+export interface CitedRect { left: number; top: number; width: number; height: number }
+
+export async function getCitedRects(pdf: PdfDoc, pageNumber: number, passage: string): Promise<CitedRect[]> {
+  const page = await pdf.getPage(pageNumber)
+  try {
+    const viewport = page.getViewport({ scale: 1 })
+    if (!viewport.width || !viewport.height) return []
+    const tc = await page.getTextContent()
+    const items = tc.items as { str?: string; hasEOL?: boolean; transform?: number[]; width?: number }[]
+    const { text, ranges } = assemblePageItems(
+      items.map((it) => ({ str: it.str ?? '', hasEOL: it.hasEOL ?? false })),
+    )
+    const anchor = locateOffset(text, passage)
+    if (!anchor) return []
+    const span = matchPassageRange(text, passage, anchor)
+    const rects: CitedRect[] = []
+    for (let i = 0; i < items.length && rects.length < 300; i++) {
+      const r = ranges[i]
+      if (r.end <= span.start || r.start >= span.end) continue
+      const it = items[i]
+      if (!it.transform || !it.str?.trim()) continue
+      // Position device de l'item : transform de page × transform d'item ; la hauteur de
+      // ligne vient de la matrice (hypot des composantes verticales — gère la rotation).
+      const tx = pdfjs.Util.transform(viewport.transform, it.transform)
+      const h = Math.hypot(tx[2], tx[3])
+      const w = it.width ?? 0
+      if (w <= 0 || h <= 0) continue
+      rects.push({
+        left: tx[4] / viewport.width,
+        top: (tx[5] - h) / viewport.height,
+        width: w / viewport.width,
+        height: h / viewport.height,
+      })
+    }
+    return rects
+  } finally {
+    page.cleanup()
   }
 }
 
