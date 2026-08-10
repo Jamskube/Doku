@@ -19,7 +19,7 @@ Rappels de cadrage :
 |---|-------|------|--------|-------|
 | 20.1 | Révélation de la syntaxe à la demande (socle) | M | ✅ DONE | Validée en natif 2026-07-30. `revealScopeField` + geste Tab / Ctrl+/ ; ledger flippé |
 | 20.2 | Édition en place des cellules de tableau | L | ✅ DONE | Validée en natif 2026-07-30. **2 bugs trouvés par vérif navigateur, invisibles en jsdom** (voir Progress Log) ; ledger flippé |
-| 20.3 | Actions de structure du tableau (± ligne, ± colonne) | M | ⬜ TODO | Gated 20.2. Maintenir la ligne de délimiteurs cohérente (colonnes + alignements) |
+| 20.3 | Actions de structure du tableau (± ligne, ± colonne) | M | 🟡 EN VALIDATION | Codée (7/08) puis auditée et durcie (10/08) : 6 bugs corrigés, vérif navigateur complète. Reste le test natif utilisateur |
 | 20.4 | Formatage sur sélection & insertions de blocs | M | ⬜ TODO | Gated 20.1. Se greffe sur le popover de sélection **existant** (16.1), pas de seconde barre flottante |
 
 ## Blockers
@@ -59,3 +59,15 @@ _None_
 - **20.2 livrée** : `tableCellSpans` + `escapeCellText` (couche pure, `src/lib/table.ts`) → écriture **ciblée cellule** ; `TableWidget` rend des cellules `contenteditable` avec Tab/Maj+Tab, Entrée (valide), Échap (annule) ; `updateDOM` met à jour en place pour ne **jamais** tuer le focus en cours de frappe.
 - ⚠️ **Leçon du sprint (gravée dans AGENTS.md)** : les 10 tests jsdom de 20.2 étaient verts alors que **deux bugs bloquants** subsistaient — le clic sélectionnait le bloc entier, puis (après 1er correctif) la frappe atterrissait **en tête de document**. C'est l'utilisateur qui a signalé le premier et demandé une vraie vérification. Trouvés seulement en pilotant de vrais clics dans un navigateur, puis en **lisant la source via Ctrl+/**. Règle retenue : clic/focus/sélection ⇒ vérif navigateur obligatoire avant de déclarer une story faite.
 - Sprint à **2/4** : restent 20.3 (structure du tableau) et 20.4 (formatage & insertions).
+
+### 2026-08-10
+- **Découverte** : 20.3 avait été **codée le 7/08 dans la session de polish** (commit `d8bc8e6` : couche pure `applyTableOp` + boutons ± au survol) mais était passée **sans revue, sans vérif navigateur, sans entrée de journal** — exactement le trou que la leçon 20.2 interdit (clic/focus ⇒ vérif navigateur obligatoire).
+- Audit EPCT complet : **6 bugs réels corrigés**, tous confirmés par de vrais clics Playwright, dont 3 chaînes de corruption du document :
+  1. `updateDOM` réutilisait le DOM après un changement de géométrie → ligne ajoutée invisible, cellules affichant les valeurs d'une autre ligne **qu'un blur committait ensuite dans la source** ;
+  2. les listeners du DOM réutilisé gardaient un `this.from` figé → après édition au-dessus du tableau, écritures au mauvais offset → remplacé par `posAtDOM` au moment du geste ;
+  3. l'heuristique « ligne à pipe » de `currentTableRange` absorbait un bloc suivant (`- item \| note`) que lezer exclut → réécrit en ligne de tableau → remplacée par le **nœud Table de l'arbre syntaxique** (revue) ;
+  4. cellule vide + îlot de boutons non éditable = **frappe muette** (Chromium ne pose pas de caret exploitable) → restructuration : la saisie vit dans un span interne `.cm-lp-cellin`, les boutons ± dans la cellule non éditable ;
+  5. cliquer ± avec une saisie en cours perdait le texte tapé → blur/commit forcé avant l'action (revue) ;
+  6. Échap restaurait la valeur de création du widget, pas la dernière committée → capture au focus.
+- Validations : 371 tests (+4 régressions ciblées sur les bugs ci-dessus), svelte-check 0 err, matrice navigateur complète (± ligne/colonne, saisie clic + Tab dans cellules neuves, refus dernière ligne/colonne, alignements `:--`/`--:` conservés, édition au-dessus puis action, bloc à pipe adjacent intact, deux thèmes, 0 erreur console).
+- **20.3 en attente de validation native** (critère verify du ledger) — le ledger reste à `passes: false` jusque-là.

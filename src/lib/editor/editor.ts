@@ -173,10 +173,17 @@ const dokuTheme = EditorView.theme({
     // Ancre des boutons d'action de structure (20.3).
     position: 'relative',
   },
+  // La zone de saisie est un span interne à la cellule (le texte seul est éditable,
+  // les boutons ± vivent à côté dans la cellule) : étirée sur toute la cellule pour
+  // que le clic y tombe naturellement, même cellule vide.
+  '.cm-lp-cellin': {
+    display: 'block',
+    minHeight: '1.4em',
+    outline: 'none',
+  },
   // Cellule en cours de saisie : un halo discret suffit à situer le point d'entrée,
   // sans le contour dur d'un `outline` par défaut.
-  '.cm-lp-table th:focus, .cm-lp-table td:focus': {
-    outline: 'none',
+  '.cm-lp-table th:focus-within, .cm-lp-table td:focus-within': {
     background: 'var(--accent-soft)',
     boxShadow: 'inset 0 0 0 2px var(--line-3)',
   },

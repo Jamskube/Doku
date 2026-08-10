@@ -3,6 +3,7 @@
 // une sélection) et remplacent les marqueurs par des widgets.
 // Origine : spike/src/live-preview.ts, validé par mesures le 2026-07-08.
 import { syntaxTree } from '@codemirror/language'
+import type { SyntaxNode } from '@lezer/common'
 import { EditorState, Facet, type Range, StateField } from '@codemirror/state'
 import {
   Decoration,
@@ -275,17 +276,19 @@ function buildDecorations(view: EditorView): DecorationSet {
 // Bornes ACTUELLES du bloc tableau qui commence à `from`. Indispensable dès qu'on écrit :
 // la taille du bloc change à chaque édition, et une longueur mémorisée devient fausse.
 // On s'étend ligne à ligne tant que la ligne ressemble à une ligne de tableau.
-function currentTableRange(state: EditorState, from: number): { from: number; to: number } | null {
-  const first = state.doc.lineAt(from)
-  const isTableLine = (text: string) => text.includes('|') && text.trim().length > 0
-  if (!isTableLine(first.text)) return null
-  let last = first
-  for (let n = first.number + 1; n <= state.doc.lines; n++) {
-    const l = state.doc.line(n)
-    if (!isTableLine(l.text)) break
-    last = l
+// Bornes du bloc tableau contenant `pos`, données par l'ARBRE SYNTAXIQUE — jamais par
+// une heuristique « la ligne contient un pipe » : elle absorberait un bloc suivant que
+// lezer exclut du tableau (`- item | note`, `> citation | x`…) et une action de
+// structure le réécrirait en ligne de tableau (corruption hors bloc, ADR-0002).
+// Étendu aux frontières de ligne, comme l'ancrage des décorations (tableau indenté).
+function currentTableRange(state: EditorState, pos: number): { from: number; to: number } | null {
+  let node: SyntaxNode | null = syntaxTree(state).resolveInner(pos, 1)
+  while (node && node.name !== 'Table') node = node.parent
+  if (!node) return null
+  return {
+    from: state.doc.lineAt(node.from).from,
+    to: state.doc.lineAt(node.to).to,
   }
-  return { from: first.from, to: last.to }
 }
 
 // texte brut (le formatage inline dans les cellules est hors scope v1 — au clic, la
@@ -309,32 +312,48 @@ class TableWidget extends WidgetType {
   updateDOM(dom: HTMLElement, view: EditorView): boolean {
     const parsed = parseTable(this.md)
     if (!parsed || dom.tagName !== 'TABLE') return false
+    // La FORME a-t-elle changé (action de structure 20.3, édition externe) ? Réutiliser le
+    // DOM garderait le mauvais nombre de lignes/colonnes et des listeners liés à l'ancien
+    // widget (bug constaté en navigateur : la ligne ajoutée n'apparaissait pas, puis les
+    // cellules affichaient les valeurs d'une autre ligne — qu'un blur aurait ÉCRITES dans
+    // le document). `false` → CM6 reconstruit via toDOM. La frappe dans une cellule ne
+    // change jamais la géométrie : le chemin préserve-focus de 20.2 reste intact.
+    const trs = Array.from(dom.querySelectorAll('tr'))
+    if (trs.length !== parsed.rows.length + 1) return false
+    if (trs.some((tr) => tr.children.length !== parsed.headers.length)) return false
+    const ths = Array.from(dom.querySelectorAll<HTMLElement>('thead th'))
+    if (ths.some((el, i) => (el.style.textAlign || null) !== parsed.aligns[i])) return false
     const active = document.activeElement
-    for (const el of Array.from(dom.querySelectorAll<HTMLElement>('th[data-line], td[data-line]'))) {
+    for (const el of Array.from(dom.querySelectorAll<HTMLElement>('.cm-lp-cellin'))) {
       if (el === active) continue // ne jamais écraser la cellule en cours de frappe
       const line = Number(el.dataset.line)
       const col = Number(el.dataset.col)
       const next = line === 0 ? (parsed.headers[col] ?? '') : (parsed.rows[line - 2]?.[col] ?? '')
-      // Ne toucher qu'au NŒUD TEXTE : écraser `textContent` supprimerait les boutons
-      // d'action de structure logés dans la cellule.
-      const tools = el.querySelector('.cm-lp-tools')
-      const clone = el.cloneNode(true) as HTMLElement
-      clone.querySelector('.cm-lp-tools')?.remove()
-      if ((clone.textContent ?? '') !== next) {
-        el.textContent = next
-        if (tools) el.appendChild(tools)
-      }
+      if ((el.textContent ?? '') !== next) el.textContent = next
     }
     void view
     return true
   }
 
+  // Bornes RÉELLES du bloc au moment du geste, dérivées du DOM. `this.from` est figé à
+  // la création du widget : quand updateDOM réutilise le DOM, les listeners appartiennent
+  // à un ANCIEN widget dont l'offset ne vaut plus rien dès qu'on a édité au-dessus du
+  // tableau — écrire là écraserait du texte hors tableau. Le DOM, lui, est toujours à sa
+  // place dans la vue : posAtDOM donne la position vraie, à chaque fois.
+  private anchorRange(view: EditorView, table: HTMLElement): { from: number; to: number } | null {
+    if (!table.isConnected) return null
+    try {
+      return currentTableRange(view.state, view.posAtDOM(table))
+    } catch {
+      return null
+    }
+  }
+
   // Écrit UNE cellule dans la source (20.2). Remplacement d'un intervalle de quelques
   // caractères — jamais une regénération du bloc (ADR-0002, warning critique n°1) : les
   // pipes, le padding, les alignements et les cellules voisines ne sont pas touchés.
-  private commitCell(view: EditorView, line: number, col: number, raw: string): void {
-    // Bornes relues dans le document (même raison que `runOp` : la taille du bloc bouge).
-    const range = currentTableRange(view.state, this.from)
+  private commitCell(view: EditorView, table: HTMLElement, line: number, col: number, raw: string): void {
+    const range = this.anchorRange(view, table)
     if (!range) return
     const md = view.state.sliceDoc(range.from, range.to)
     const span = tableCellSpans(md).find((s) => s.line === line && s.col === col)
@@ -349,12 +368,8 @@ class TableWidget extends WidgetType {
   // Action de structure (20.3). Contrairement à l'écriture d'une cellule, la forme du
   // tableau change → on réécrit LE BLOC (et lui seul). `applyTableOp` renvoie null quand
   // l'action produirait un tableau invalide : dans ce cas on n'écrit rien.
-  private runOp(view: EditorView, op: TableOp): void {
-    // `this.md` est la valeur FIGÉE à la création du widget : après une édition, la
-    // longueur réelle du bloc a changé. S'y fier écraserait la ligne suivante (bug
-    // constaté en navigateur : la 2e ligne du tableau disparaissait). On relit donc les
-    // bornes du bloc dans le document courant, en s'étendant sur les lignes du tableau.
-    const range = currentTableRange(view.state, this.from)
+  private runOp(view: EditorView, table: HTMLElement, op: TableOp): void {
+    const range = this.anchorRange(view, table)
     if (!range) return
     const md = view.state.sliceDoc(range.from, range.to)
     const next = applyTableOp(md, op)
@@ -384,12 +399,44 @@ class TableWidget extends WidgetType {
       table.addEventListener(type, (e) => e.stopPropagation())
     }
 
+    // Pose le caret dans la ZONE DE SAISIE d'une cellule (le span .cm-lp-cellin, jamais
+    // le th/td qui héberge aussi les boutons ±), en fin de texte. Un hôte éditable sans
+    // nœud texte peut refuser la frappe (Chromium, bug constaté en navigateur) : on
+    // garantit le nœud d'accueil. `force` ignore une sélection déjà posée (Tab : on
+    // vient saisir, pas relire).
+    const placeCaret = (zone: HTMLElement, force = false) => {
+      const sel = window.getSelection()
+      if (!sel) return
+      const anchor = sel.anchorNode
+      const inText = !force && !!anchor && anchor.nodeType === Node.TEXT_NODE && zone.contains(anchor)
+      if (inText) return // le clic a posé le caret dans le texte : on n'y touche pas
+      const r = document.createRange()
+      let txt = Array.from(zone.childNodes).find((n) => n.nodeType === Node.TEXT_NODE)
+      if (!txt) {
+        // Vide, il est invisible et ne change rien au texte committé.
+        txt = document.createTextNode('')
+        zone.insertBefore(txt, zone.firstChild)
+      }
+      r.selectNodeContents(txt)
+      r.collapse(false)
+      sel.removeAllRanges()
+      sel.addRange(r)
+    }
+
     // Cellule éditable EN PLACE (20.2). Le widget se re-peuple lui-même à chaque toDOM :
     // la virtualisation CM6 détruit le DOM hors viewport, un contenu posé de l'extérieur
     // reviendrait vide (gotcha connue des widgets).
     const cells: HTMLElement[] = []
     const makeCell = (tag: 'th' | 'td', text: string, line: number, col: number, align: CellAlignStyle) => {
-      const el = document.createElement(tag)
+      const cell = document.createElement(tag)
+      if (align) cell.style.textAlign = align
+      // Le texte éditable vit dans un SPAN interne : la cellule elle-même reste non
+      // éditable et héberge l'îlot des boutons ±. Un hôte `contenteditable` dont un
+      // enfant ne l'est pas refuse la frappe quand il est vide (Chromium ne sait pas y
+      // poser de caret exploitable — bug constaté en navigateur sur toute ligne/colonne
+      // fraîchement ajoutée) : on sépare donc strictement zone de saisie et boutons.
+      const el = document.createElement('span')
+      el.className = 'cm-lp-cellin'
       el.textContent = text
       el.contentEditable = 'true'
       el.spellcheck = false
@@ -398,22 +445,23 @@ class TableWidget extends WidgetType {
       el.tabIndex = -1
       el.dataset.line = String(line)
       el.dataset.col = String(col)
-      if (align) el.style.textAlign = align
+      cell.appendChild(el)
       cells.push(el)
 
-      // Le texte de la cellule EXCLUT les boutons d'action (sinon leurs libellés « + / − »
-      // seraient écrits dans le document à la validation).
-      const cellText = () => {
-        const clone = el.cloneNode(true) as HTMLElement
-        clone.querySelector('.cm-lp-tools')?.remove()
-        return clone.textContent ?? ''
-      }
+      const cellText = () => el.textContent ?? ''
 
       // CM6 pose sa propre sélection sur un mousedown dans son contenu : sans cette
       // interception, cliquer dans une case sélectionne tout le tableau. On prend la
-      // main et on place le focus dans la case visée.
-      el.addEventListener('mousedown', (e) => {
+      // main et on place le focus dans la case visée — y compris sur un clic dans le
+      // padding de la cellule, hors de la zone de saisie.
+      cell.addEventListener('mousedown', (e) => {
         e.stopPropagation()
+      })
+      cell.addEventListener('click', (e) => {
+        if (e.target === cell) {
+          el.focus()
+          placeCaret(el, true)
+        }
       })
 
       // Actions de structure au survol (20.3) : boutons discrets dans la cellule, plutôt
@@ -433,7 +481,14 @@ class TableWidget extends WidgetType {
         b.addEventListener('mousedown', (e) => {
           e.preventDefault()
           e.stopPropagation()
-          this.runOp(view, op)
+          // Une saisie en cours est d'abord validée (blur → commitCell) : sans ça, la
+          // réécriture du bloc repartirait du document SANS le texte tapé, et la
+          // reconstruction du widget (géométrie changée) le perdrait définitivement.
+          const active = document.activeElement
+          if (active instanceof HTMLElement && active.classList.contains('cm-lp-cellin') && table.contains(active)) {
+            active.blur()
+          }
+          this.runOp(view, table, op)
         })
         tools.appendChild(b)
       }
@@ -446,11 +501,22 @@ class TableWidget extends WidgetType {
         addTool('+', 'Ajouter une ligne en dessous', { kind: 'addRowBelow', row: line })
         addTool('−', 'Supprimer cette ligne', { kind: 'deleteRow', row: line })
       }
-      if (tools.childElementCount > 0) el.appendChild(tools)
+      // Dans la CELLULE, jamais dans la zone de saisie (voir le commentaire du span).
+      if (tools.childElementCount > 0) cell.appendChild(tools)
+
+      // La valeur de référence pour Échap est capturée AU FOCUS : celle de la création du
+      // widget (`text`) devient périmée dès qu'updateDOM a rafraîchi la cellule en place.
+      el.addEventListener('focus', () => {
+        el.dataset.orig = cellText()
+        placeCaret(el)
+      })
+      // Filet post-clic : selon le point d'impact, le navigateur peut n'avoir posé aucun
+      // caret exploitable (cellule vide, clic dans le padding) — on répare après coup.
+      el.addEventListener('click', () => placeCaret(el))
 
       // Écriture à la sortie de la cellule : une frappe par caractère ferait re-rendre
       // le widget à chaque touche (et perdrait le focus). On écrit au blur / Entrée / Tab.
-      el.addEventListener('blur', () => this.commitCell(view, line, col, cellText()))
+      el.addEventListener('blur', () => this.commitCell(view, table, line, col, cellText()))
 
       el.addEventListener('keydown', (e) => {
         if (e.key === 'Tab') {
@@ -463,12 +529,7 @@ class TableWidget extends WidgetType {
           if (next) {
             next.focus()
             // Curseur en fin de cellule (on vient y saisir, pas relire).
-            const r = document.createRange()
-            r.selectNodeContents(next)
-            r.collapse(false)
-            const sel = window.getSelection()
-            sel?.removeAllRanges()
-            sel?.addRange(r)
+            placeCaret(next, true)
           } else {
             el.blur() // dernière cellule : on valide et on sort
           }
@@ -483,7 +544,9 @@ class TableWidget extends WidgetType {
         if (e.key === 'Escape') {
           e.preventDefault()
           e.stopPropagation()
-          el.textContent = text // annule : on restaure la valeur d'origine
+          // Annule : restaure la valeur capturée au focus (celle de la création du
+          // widget serait périmée après un premier passage dans la cellule).
+          el.textContent = el.dataset.orig ?? text
           el.blur()
           return
         }
@@ -492,7 +555,7 @@ class TableWidget extends WidgetType {
         e.stopPropagation()
       })
 
-      return el
+      return cell
     }
 
     const thead = document.createElement('thead')

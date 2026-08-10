@@ -22,8 +22,10 @@ function mount(doc = DOC) {
   })
 }
 
+// La zone de saisie est le span .cm-lp-cellin (le texte seul est éditable ; les
+// boutons ± de 20.3 vivent à côté, dans la cellule non éditable).
 const cells = (view: EditorView) =>
-  Array.from(view.contentDOM.querySelectorAll<HTMLElement>('th[data-line], td[data-line]'))
+  Array.from(view.contentDOM.querySelectorAll<HTMLElement>('.cm-lp-cellin'))
 
 const cellAt = (view: EditorView, line: number, col: number) =>
   cells(view).find((c) => c.dataset.line === String(line) && c.dataset.col === String(col))!
@@ -100,6 +102,34 @@ describe('edition en place des cellules (20.2)', () => {
     view.destroy()
   })
 
+  it('Echap restaure la valeur COMMITTEE, pas celle de la creation du widget (revue 20.3)', () => {
+    const view = mount()
+    const a = cellAt(view, 2, 1)
+    a.dispatchEvent(new FocusEvent('focus'))
+    a.textContent = 'commis.wav'
+    a.dispatchEvent(new FocusEvent('blur'))
+    expect(view.state.doc.toString()).toContain('commis.wav')
+    // re-entree : la reference d'annulation doit etre la valeur committee
+    const b = cellAt(view, 2, 1)
+    b.dispatchEvent(new FocusEvent('focus'))
+    b.textContent = 'poubelle'
+    b.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    const doc = view.state.doc.toString()
+    expect(doc).toContain('commis.wav')
+    expect(doc).not.toContain('poubelle')
+    view.destroy()
+  })
+
+  it('un changement de GEOMETRIE reconstruit le widget (la ligne ajoutee apparait)', () => {
+    const view = mount()
+    const before = cells(view).length
+    const doc = view.state.doc.toString()
+    const at = doc.indexOf('| 2 | o02.wav |  |  |')
+    view.dispatch({ changes: { from: at, to: at, insert: '| 9 | o09.wav |  |  |\n' } })
+    expect(cells(view).length).toBe(before + 4) // une ligne de 4 colonnes en plus
+    view.destroy()
+  })
+
   it('Tab passe a la cellule suivante', () => {
     const view = mount()
     const c = cellAt(view, 2, 1)
@@ -115,6 +145,30 @@ describe('edition en place des cellules (20.2)', () => {
     c.focus()
     c.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', shiftKey: true, bubbles: true }))
     expect(document.activeElement).toBe(cellAt(view, 2, 1))
+    view.destroy()
+  })
+
+  it('cliquer ± avec une saisie en cours VALIDE la saisie avant l action (revue 20.3)', () => {
+    const view = mount()
+    const c = cellAt(view, 2, 2)
+    c.focus()
+    c.textContent = 'pub'
+    // bouton "+ ligne" de la ligne en cours d'edition
+    const tool = view.contentDOM.querySelector<HTMLElement>('[title="Ajouter une ligne en dessous"]')!
+    tool.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }))
+    const doc = view.state.doc.toString()
+    expect(doc).toContain('| 1 | o01.wav | pub |  |') // la saisie n'est pas perdue
+    expect(doc.split('\n').filter((l) => l.startsWith('|')).length).toBe(5) // + une ligne
+    view.destroy()
+  })
+
+  it('une action de structure ne touche JAMAIS un bloc suivant contenant un pipe (revue 20.3)', () => {
+    const view = mount(['| a | b |', '|---|---|', '| 1 | 2 |', '- item | note', ''].join('\n'))
+    const tool = view.contentDOM.querySelector<HTMLElement>('[title="Ajouter une ligne en dessous"]')!
+    tool.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }))
+    const doc = view.state.doc.toString()
+    expect(doc).toContain('- item | note') // la liste est hors tableau, intacte
+    expect(doc).toContain('|  |  |') // la ligne a bien ete ajoutee au tableau
     view.destroy()
   })
 
