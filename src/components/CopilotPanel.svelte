@@ -3,13 +3,30 @@
   import { activeTab, app, openPath } from '../lib/stores.svelte'
   import { closeWindow, minimizeWindow, toggleMaximizeWindow } from '../lib/tauri'
   import { formatBytes } from '../lib/ollama'
-  import { beginOpenAiAuth, cancelOpenAiConnection, cancelPull, copilot, disconnectOpenAiAccount, ensureCopilotReady, newChat, pullModel, refreshModels, refreshOpenAiStatus, removeModel, retryGeneration, sendChat, setActiveModel, setCopilotProvider, stopChat, summarizeDoc } from '../lib/copilot.svelte'
+  import { beginOpenAiAuth, cancelOpenAiConnection, cancelPull, copilot, disconnectOpenAiAccount, ensureCopilotReady, jumpToCitation, newChat, pullModel, refreshModels, refreshOpenAiStatus, removeModel, retryGeneration, sendChat, setActiveModel, setCopilotProvider, stopChat, summarizeDoc, type ChatMsg } from '../lib/copilot.svelte'
   import { DEFAULT_EMBED_MODEL, FALLBACK_EMBED_MODEL, noteTitle } from '../lib/rag'
   import { cancelRagIndexing, deleteRagIndex, ragState, refreshRagIndex } from '../lib/rag-index.svelte'
   import { baseName, parentPath } from '../lib/explorer'
-  import { MAX_DOC_CHARS } from '../lib/copilot-service'
+  import { MAX_DOC_CHARS, MAX_DOC_CHARS_CLOUD } from '../lib/copilot-service'
   import { openOpenAiAuthPage, OPENAI_MODEL } from '../lib/openai'
   import { renderChatMarkdown } from '../lib/export/render-md'
+  import { annotateCitations } from '../lib/citations'
+
+  // Rendu d'une réponse : Markdown assaini PUIS puces de citation (l'annotation opère
+  // après DOMPurify — seul notre markup de puce est injecté). Sans sources (petit doc,
+  // refus honnête), les marqueurs [n] éventuels sont retirés (count = 0).
+  function renderAnswer(m: ChatMsg): string {
+    return annotateCitations(renderChatMarkdown(m.content), m.sources?.length ?? 0)
+  }
+
+  // Clic délégué sur les puces [n] injectées via {@html} (pas de handlers Svelte dedans).
+  function onAnswerClick(e: MouseEvent, m: ChatMsg) {
+    const chip = (e.target as HTMLElement).closest?.('.cop-cite')
+    if (!chip) return
+    const n = Number.parseInt(chip.getAttribute('data-cite') ?? '', 10)
+    const passage = m.sources?.find((s) => s.n === n)
+    if (passage) void jumpToCitation(passage)
+  }
 
   // Modèle conseillé (carte d'onboarding) + suggestions. Toujours des tags -q4_0 explicites
   // (repacking ARM). Dans l'onboarding, le conseillé est déjà en carte → chips sans lui.
@@ -121,11 +138,15 @@
 
   const numberFormatter = new Intl.NumberFormat('fr-FR')
 
+  // Budget de contexte du fournisseur COURANT (21.x) : 12k local (num_ctx), 240k cloud
+  // (fenêtre OpenAI). Badge et comportement (prepareDocMessages) lisent le même seuil.
+  const docBudget = $derived(app.copilotProvider === 'openai' ? MAX_DOC_CHARS_CLOUD : MAX_DOC_CHARS)
+
   // Doc courant tronqué en Q&A (14.3) : signal DÉTERMINISTE à l'utilisateur (ne dépend pas du
   // modèle) — un « je ne trouve pas » peut alors venir de la partie non lue, pas d'une absence.
   const docTruncated = $derived.by(() => {
     const t = activeTab()
-    return !!t && t.kind !== 'pdf' && t.content.length > MAX_DOC_CHARS
+    return !!t && t.kind !== 'pdf' && t.content.length > docBudget
   })
 
   const contextDetails = $derived.by(() => {
@@ -136,7 +157,7 @@
       // première lecture (copilot.pdfDoc). Avant : neutre, honnête (n'affirme rien).
       const ex = copilot.pdfDoc?.path === t.path ? copilot.pdfDoc : null
       if (ex?.scanned) return { count: 1, name: t.name, meta: 'PDF scanné · pas de couche texte (OCR requis)', state: 'PDF image' }
-      if (ex && ex.charCount > MAX_DOC_CHARS) {
+      if (ex && ex.charCount > docBudget) {
         return {
           count: 1,
           name: t.name,
@@ -150,7 +171,7 @@
       return { count: 1, name: t.name, meta: 'PDF · texte lu à la demande', state: 'Document PDF' }
     }
     const format = t.kind === 'md' ? 'Markdown' : t.kind === 'html' ? 'HTML' : 'Texte'
-    const readableChars = Math.min(t.content.length, MAX_DOC_CHARS)
+    const readableChars = Math.min(t.content.length, docBudget)
     return {
       count: 1,
       name: t.name,
@@ -229,12 +250,20 @@
   }
 
   // Suit le bas pendant le streaming, mais seulement si l'utilisateur y était déjà.
+  // Coalescé en rAF : lire scrollHeight force un layout synchrone — à 30-60 tokens/s,
+  // un reflow par token concurrençait le rendu du texte. Un recalage par frame suffit.
+  let scrollFollowScheduled = false
   $effect(() => {
     const n = copilot.messages.length
     const tail = copilot.messages[n - 1]?.content
     void n
     void tail
-    if (atBottom && scroller) scroller.scrollTop = scroller.scrollHeight
+    if (!atBottom || scrollFollowScheduled) return
+    scrollFollowScheduled = true
+    requestAnimationFrame(() => {
+      scrollFollowScheduled = false
+      if (atBottom && scroller) scroller.scrollTop = scroller.scrollHeight
+    })
   })
 </script>
 
@@ -720,20 +749,28 @@
                   <!-- Streaming : texte brut (aucun parse par token) — rendu Markdown à la fin. -->
                   <div class="cop-md-plain">{m.content}</div>
                 {:else}
-                  <!-- Réponse terminée : Markdown assaini (allowlist, 0 réseau). -->
-                  <div class="cop-md">{@html renderChatMarkdown(m.content)}</div>
+                  <!-- Réponse terminée : Markdown assaini (allowlist, 0 réseau) + puces [n].
+                       svelte-ignore : le clic est délégué aux <button> injectés (focusables),
+                       le wrapper n'est pas lui-même interactif. -->
+                  <!-- svelte-ignore a11y_no_static_element_interactions, a11y_click_events_have_key_events -->
+                  <div class="cop-md" onclick={(e) => onAnswerClick(e, m)}>{@html renderAnswer(m)}</div>
                 {/if}
                 {#if m.sources?.length && !m.streaming}
-                  <!-- Citations DÉTERMINISTES (15.3) : les notes dont les passages ont
-                       réellement été fournis au modèle — pas ce qu'il prétend avoir lu. -->
-                  <div class="cop-sources">
-                    <span class="cop-sources-lbl">Passages consultés</span>
-                    {#each m.sources as s (s.path)}
-                      <button class="cop-source-chip" title={s.path} onclick={() => void openPath(s.path)}>
-                        <span class="msr" style="font-size:13px">description</span>{noteTitle(s.name)}
-                      </button>
-                    {/each}
-                  </div>
+                  <!-- Citations DÉTERMINISTES (15.3, ancrées 21.x) : les passages réellement
+                       fournis au modèle — pas ce qu'il prétend avoir lu. Le clic saute au
+                       passage exact (flash). Mode « document complet » (citedOnly) : seuls
+                       les extraits que la réponse cite — la liste entière = tout le doc. -->
+                  {@const shown = m.citedOnly ? m.sources.filter((s) => m.cited?.includes(s.n)) : m.sources}
+                  {#if shown.length}
+                    <div class="cop-sources">
+                      <span class="cop-sources-lbl">{m.citedOnly ? 'Passages cités' : 'Passages consultés'}</span>
+                      {#each shown as s (s.n)}
+                        <button class="cop-source-chip" class:bare={!s.name} title={s.path ?? undefined} onclick={() => void jumpToCitation(s)}>
+                          <span class="cop-source-num">{s.n}</span>{#if s.name}{s.name}{/if}
+                        </button>
+                      {/each}
+                    </div>
+                  {/if}
                 {/if}
               </div>
             {/if}
@@ -909,50 +946,39 @@
 <style>
   .cop-panel {
     --copilot-width: min(400px, calc(100vw - 40px));
+    /* Une seule propriété de taille animée (flex-basis) : width/max-width décrivaient la
+       même boîte et triplaient le travail d'interpolation + diff de style par frame. */
     flex: 0 0 0;
-    width: 0;
-    max-width: 0;
     min-width: 0;
     height: 100%;
     display: flex;
     flex-direction: column;
     background: transparent;
     overflow: hidden;
-    opacity: 0;
-    transform: translateX(22px);
+    /* Ni fondu d'opacité, ni translateX : l'un rendait le panneau transparent alors
+       qu'il occupait encore sa largeur, l'autre décalait le contenu et ouvrait un
+       interstice où le chrome sombre apparaissait (artefact vu en usage réel, 2×).
+       Seule la largeur anime : la carte ancrée à droite est révélée/recouverte par un
+       rideau opaque — même mécanique que la sidebar gauche, qui n'a jamais eu d'artefact. */
     visibility: hidden;
     pointer-events: none;
     contain: layout paint;
     transition:
       flex-grow 240ms cubic-bezier(0.4, 0, 1, 1),
       flex-basis 240ms cubic-bezier(0.4, 0, 1, 1),
-      width 240ms cubic-bezier(0.4, 0, 1, 1),
-      max-width 240ms cubic-bezier(0.4, 0, 1, 1),
-      opacity 130ms ease-in,
-      transform 200ms cubic-bezier(0.4, 0, 1, 1),
       visibility 0s linear 240ms;
   }
   .cop-panel.open {
     flex-basis: var(--copilot-width);
-    width: var(--copilot-width);
-    max-width: var(--copilot-width);
-    opacity: 1;
-    transform: translateX(0);
     visibility: visible;
     pointer-events: auto;
     transition:
       flex-grow 240ms cubic-bezier(0.4, 0, 1, 1),
       flex-basis 240ms cubic-bezier(0.4, 0, 1, 1),
-      width 240ms cubic-bezier(0.4, 0, 1, 1),
-      max-width 240ms cubic-bezier(0.4, 0, 1, 1),
-      opacity 130ms ease-in,
-      transform 200ms cubic-bezier(0.4, 0, 1, 1),
       visibility 0s;
   }
   .cop-panel.open.expanded {
     flex-grow: 1;
-    width: auto;
-    max-width: none;
   }
   .cop-panel > .cop-head,
   .cop-panel > .cop-card {
@@ -1031,7 +1057,7 @@
     overflow: hidden;
   }
   .cop-panel.expanded .cop-card { border-radius: 14px 14px 0 0; }
-  .cop-scroll { flex: 1; min-height: 0; overflow-y: auto; padding: 0 18px; }
+  .cop-scroll { flex: 1; min-height: 0; overflow-y: auto; padding: 0 18px; contain: layout paint; }
   .cop-panel.expanded .cop-scroll {
     padding-inline: max(24px, calc((100% - 760px) / 2));
   }
@@ -1493,11 +1519,34 @@
   .cop-sources { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 10px; }
   .cop-sources-lbl { font-size: 10.5px; color: var(--ink-4); letter-spacing: 0.02em; }
   .cop-source-chip {
-    display: inline-flex; align-items: center; gap: 4px; height: 24px; padding: 0 9px;
+    display: inline-flex; align-items: center; gap: 5px; height: 24px; padding: 0 9px 0 4px;
     border: 1px solid var(--line-2); border-radius: 999px; background: transparent;
     color: var(--ink-3); font-family: var(--font-sans); font-size: 11px; cursor: pointer;
   }
   .cop-source-chip:hover { background: var(--surface-hover); color: var(--ink); }
+  /* Sans nom de note (extraits du document courant) : la puce est juste le numéro. */
+  .cop-source-chip.bare { padding: 0 4px; }
+  .cop-source-num {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 16px; height: 16px; border-radius: 50%;
+    background: var(--accent-soft); color: var(--ink-3);
+    font-size: 10px; font-weight: 600; font-variant-numeric: tabular-nums;
+  }
+
+  /* Puces de citation [n] inline (21.x) — injectées via {@html} après sanitize, d'où le
+     :global. Même vocabulaire visuel que .cop-source-num : la puce inline et le pied
+     désignent le même passage. */
+  .cop-md :global(.cop-cite) {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 16px; height: 16px; margin: 0 1px; padding: 0; border: 0; border-radius: 50%;
+    background: var(--accent-soft); color: var(--ink-3);
+    font-family: var(--font-sans); font-size: 10px; font-weight: 600;
+    font-variant-numeric: tabular-nums; line-height: 1;
+    vertical-align: 2px; cursor: pointer;
+    transition: background 120ms ease, color 120ms ease, transform 100ms ease;
+  }
+  .cop-md :global(.cop-cite:hover) { background: var(--ink); color: var(--cream-content); }
+  .cop-md :global(.cop-cite:active) { transform: scale(0.9); }
 
   :global([data-theme='dark']) .cop-composer-back {
     box-shadow: 0 4px 14px rgba(0, 0, 0, 0.12);
@@ -1519,6 +1568,7 @@
 
   @media (prefers-reduced-motion: reduce) {
     .cop-composer-front { animation: none; }
+    .cop-panel,
     .cop-composer-panel,
     .cop-composer-switch { transition-duration: 0.01ms; }
   }

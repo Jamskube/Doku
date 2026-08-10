@@ -1,13 +1,11 @@
 <script lang="ts">
-  import { onMount } from 'svelte'
+  import { onMount, type Component } from 'svelte'
   import Sidebar from './components/Sidebar.svelte'
   import TitleBar from './components/TitleBar.svelte'
   import DocumentView from './components/DocumentView.svelte'
-  import CopilotPanel from './components/CopilotPanel.svelte'
   import ConfirmDialog from './components/ConfirmDialog.svelte'
   import WikilinkPrompt from './components/WikilinkPrompt.svelte'
-  import SettingsDialog from './components/SettingsDialog.svelte'
-  import { app, activeTab, askSave, checkExternalChanges, cycleTab, dialog, dismissReloadPrompt, initApp, isDirty, openDropped, openPath, openTab, openWikilink, reloadPromptedTab, requestCloseTab, saveSession, saveSettings, saveTab, togglePin, toggleSidebarView } from './lib/stores.svelte'
+  import { app, activeTab, askSave, checkExternalChanges, cycleTab, dialog, dismissReloadPrompt, initApp, isDirty, openCopilot, openDropped, openPath, openTab, openWikilink, reloadPromptedTab, requestCloseTab, saveSession, saveSettings, saveTab, togglePin, toggleSidebarView } from './lib/stores.svelte'
   import { onFileDrop, onOpenFile, onWindowCloseRequested, onWindowFocus, openFileDialog } from './lib/tauri'
   import { detectUnsupported } from './lib/encoding'
 
@@ -15,6 +13,32 @@
   // de app.* dans saveSettings sont suivies par l'effet.
   $effect(() => {
     saveSettings()
+  })
+
+  // Panneau copilote chargé paresseusement : son code + CSS (~90 Ko) sortent du chemin
+  // de démarrage. Préchargé à l'idle pour que la première ouverture soit instantanée ;
+  // l'effet couvre aussi le boot avec panneau restauré ouvert (settings).
+  let CopilotPanelComp: Component | null = $state(null)
+  const loadCopilotPanel = () =>
+    import('./components/CopilotPanel.svelte').then((m) => {
+      CopilotPanelComp = m.default as unknown as Component
+    })
+  $effect(() => {
+    if ((app.copilotOpen || app.copilotMounted) && !CopilotPanelComp) void loadCopilotPanel()
+    // Panneau restauré ouvert au boot (settings) : marquer monté pour que la fermeture
+    // garde le DOM (slide de sortie) au lieu de démonter brutalement.
+    if (app.copilotOpen && !app.copilotMounted) app.copilotMounted = true
+  })
+
+  // Même schéma pour la modale Paramètres : chargée au premier besoin, démontée à la
+  // fermeture (elle ré-initialise son état à chaque ouverture de toute façon).
+  let SettingsDialogComp: Component | null = $state(null)
+  $effect(() => {
+    if (app.settingsOpen && !SettingsDialogComp) {
+      void import('./components/SettingsDialog.svelte').then((m) => {
+        SettingsDialogComp = m.default as unknown as Component
+      })
+    }
   })
 
   // Persiste la session (onglets ouverts + actif), débouncée à 500 ms.
@@ -52,6 +76,11 @@
 
   onMount(() => {
     initApp()
+
+    // Précharge le module du copilote à l'idle : au premier clic, le composant est déjà
+    // en cache et l'ouverture (montage fermé → slide) est instantanée.
+    if ('requestIdleCallback' in window) requestIdleCallback(() => void loadCopilotPanel(), { timeout: 3000 })
+    else setTimeout(() => void loadCopilotPanel(), 1000)
 
     let unlistenClose: (() => void) | null = null
     onWindowCloseRequested(async () => {
@@ -215,11 +244,15 @@
             aria-label="Copilote"
             aria-pressed={app.copilotOpen}
             onclick={() => {
-              app.copilotOpen = !app.copilotOpen
-              // Fermeture → réinitialise en 'chat' : la réouverture repart sur la coquille
-              // sans re-solliciter le moteur (la vue Modèles seule déclenche ensureReady).
-              if (!app.copilotOpen) app.copilotView = 'chat'
-              if (!app.copilotOpen) app.copilotExpanded = false
+              if (app.copilotOpen) {
+                // Fermeture → réinitialise en 'chat' : la réouverture repart sur la coquille
+                // sans re-solliciter le moteur (la vue Modèles seule déclenche ensureReady).
+                app.copilotOpen = false
+                app.copilotView = 'chat'
+                app.copilotExpanded = false
+              } else {
+                openCopilot()
+              }
             }}
           >
             <svg width="17" height="17" viewBox="-0.5 -0.5 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" style="transform:scaleX(-1)"><path d="M5.625 2.1875v10.625M1.875 5.875c0 -1.4 0 -2.1 0.2725 -2.635a2.5 2.5 0 0 1 1.0925 -1.0925C3.775 1.875 4.475 1.875 5.875 1.875h3.25c1.4 0 2.1 0 2.635 0.2725a2.5 2.5 0 0 1 1.0925 1.0925C13.125 3.775 13.125 4.475 13.125 5.875v3.25c0 1.4 0 2.1 -0.2725 2.635a2.5 2.5 0 0 1 -1.0925 1.0925C11.225 13.125 10.525 13.125 9.125 13.125H5.875c-1.4 0 -2.1 0 -2.635 -0.2725a2.5 2.5 0 0 1 -1.0925 -1.0925C1.875 11.225 1.875 10.525 1.875 9.125z"></path></svg>
@@ -229,7 +262,7 @@
       </div>
     </div>
   </div>
-  {#if !app.focus}<CopilotPanel />{/if}
+  {#if !app.focus && (app.copilotMounted || app.copilotOpen) && CopilotPanelComp}<CopilotPanelComp />{/if}
   {#if app.dragging}
     <div class="drop-overlay" role="presentation">
       <div class="drop-hint">
@@ -242,7 +275,7 @@
 
 <ConfirmDialog />
 <WikilinkPrompt />
-<SettingsDialog />
+{#if app.settingsOpen && SettingsDialogComp}<SettingsDialogComp />{/if}
 
 <style>
   .app {

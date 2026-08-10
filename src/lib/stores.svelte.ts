@@ -77,6 +77,10 @@ export const app = $state({
   copilotProvider: 'ollama' as CopilotProvider,
   // Panneau copilote droit (14.0) : ouvert/fermé, persisté (settings) comme sidebarOpen.
   copilotOpen: false,
+  // Le composant du panneau est chargé/monté paresseusement (App.svelte) : son code +
+  // CSS sortent du bundle de démarrage. Ce drapeau (runtime, non persisté) reste vrai
+  // après la première ouverture — le panneau garde ensuite son DOM et son slide.
+  copilotMounted: false,
   // Vue copilote pleine page : transitoire, revient en vue partagée à la fermeture du panneau.
   copilotExpanded: false,
   // Modale Paramètres (19.2) : transitoire — elle ne doit jamais se rouvrir au démarrage.
@@ -122,6 +126,10 @@ export const app = $state({
   // Occurrence à révéler dans l'éditeur après ouverture (clic sur un résultat, 9.4).
   // Consommée par DocumentView une fois l'onglet monté, puis remise à null.
   pendingReveal: null as { path: string; line: number; col: number; length: number } | null,
+  // Page à révéler dans le viewer PDF (citation ancrée sur un PDF). `text` = passage cité :
+  // PdfView surligne ses rectangles dans la page (repli : halo de page si introuvable).
+  // Consommée par PdfView une fois la page créée.
+  pendingPdfReveal: null as { path: string; page: number; text?: string } | null,
 })
 
 // Accès non réactif à la vue CM6 courante (scroll TOC, sauvegarde…)
@@ -300,12 +308,44 @@ export function togglePin() {
 
 loadSettings()
 
+// Ouvre le panneau copilote. Première ouverture : monte d'abord le composant fermé
+// (chargement paresseux dans App.svelte), puis bascule `open` une fois le montage
+// peint — le slide d'entrée joue. Ouvertures suivantes : simple bascule de classe.
+export function openCopilot(view: CopilotView | null = null) {
+  if (view) app.copilotView = view
+  if (app.copilotMounted) {
+    app.copilotOpen = true
+    return
+  }
+  app.copilotMounted = true
+  // Double rAF : la classe `open` bascule après la peinture du montage → le slide joue.
+  // Fallback minuterie : fenêtre occluse/minimisée = rAF gelé — on ouvre quand même
+  // (sans animation, personne ne la voit) plutôt que d'attendre un repaint lointain.
+  let opened = false
+  const open = () => {
+    if (opened) return
+    opened = true
+    app.copilotOpen = true
+  }
+  requestAnimationFrame(() => requestAnimationFrame(open))
+  setTimeout(open, 150)
+}
+
 export function activeTab(): DocTab | undefined {
   return app.tabs.find((t) => t.id === app.activeId)
 }
 
+// Mémo par onglet : isDirty est appelé sur plusieurs chemins de rendu chauds (onglets,
+// explorateur, mode focus) à chaque frappe. La comparaison de chaînes multi-Mo n'est
+// refaite que quand l'une des deux références a changé (===  sur la même référence est O(1)).
+const dirtyMemo = new WeakMap<DocTab, { c: string; s: string; d: boolean }>()
+
 export function isDirty(tab: DocTab): boolean {
-  return tab.content !== tab.savedContent
+  const m = dirtyMemo.get(tab)
+  if (m && m.c === tab.content && m.s === tab.savedContent) return m.d
+  const d = tab.content !== tab.savedContent
+  dirtyMemo.set(tab, { c: tab.content, s: tab.savedContent, d })
+  return d
 }
 
 export function kindFromName(name: string): DocKind {
@@ -584,8 +624,9 @@ export function toggleSidebarView(view: SidebarView) {
 // (sinon on hérite d'un « décroissant » invisible venu d'un autre critère).
 export function setExplorerSort(key: SortKey) {
   const cur = app.explorerSort
+  // Pas de saveSettings() ici : l'$effect d'App.svelte persiste déjà chaque mutation
+  // (un appel explicite doublerait le JSON.stringify + localStorage.setItem).
   app.explorerSort = key === cur.key ? { key, order: cur.order === 'asc' ? 'desc' : 'asc' } : { key, order: 'asc' }
-  saveSettings()
 }
 
 // Force l'explorateur à relire le dossier courant (après une création, ou à la demande).
@@ -599,7 +640,6 @@ export function toggleExplorerExpanded(path: string) {
   const idx = app.explorerExpanded.indexOf(path)
   if (idx >= 0) app.explorerExpanded.splice(idx, 1)
   else app.explorerExpanded.push(path)
-  saveSettings()
 }
 
 // « Tout replier » (revenu avec l'arborescence — retiré en 19.1 quand la liste était
@@ -609,7 +649,6 @@ export function collapseExplorer(prefix: string) {
   const sep = prefix.includes('\\') ? '\\' : '/'
   const root = prefix.endsWith(sep) ? prefix : prefix + sep
   app.explorerExpanded = app.explorerExpanded.filter((p) => !p.startsWith(root))
-  saveSettings()
 }
 
 export function openSettings(focus: 'about' | null = null) {
@@ -628,7 +667,14 @@ export interface Heading {
   line: number
 }
 
+// Mémo 1 entrée : le scroll-spy appelle docHeadings à chaque frame de scroll et le
+// panneau Plan à chaque frappe, toujours sur le contenu de l'onglet actif. Tant que la
+// référence de chaîne n'a pas changé, le split + regex du document entier est épargné.
+let headingsMemoKey: string | null = null
+let headingsMemoVal: Heading[] = []
+
 export function docHeadings(content: string): Heading[] {
+  if (content === headingsMemoKey) return headingsMemoVal
   const out: Heading[] = []
   const lines = content.split('\n')
   let inFence = false
@@ -639,6 +685,8 @@ export function docHeadings(content: string): Heading[] {
     const m = /^(#{1,3})\s+(.+)$/.exec(l)
     if (m) out.push({ level: m[1].length, text: m[2].trim(), line: i + 1 })
   }
+  headingsMemoKey = content
+  headingsMemoVal = out
   return out
 }
 

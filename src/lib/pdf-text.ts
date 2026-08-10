@@ -16,6 +16,52 @@ export interface PdfTextItem {
   hasEOL: boolean
 }
 
+// Position [start, end) de chaque item dans le texte assemblé de SA page — permet de
+// retrouver les items couverts par un passage cité (surlignage dans le viewer).
+export interface PdfItemRange {
+  start: number
+  end: number
+}
+
+// Comme assemblePageText, en notant la plage de chaque item (le `\n` d'un hasEOL est
+// compté dans la plage de l'item qui le porte — sans incidence sur le recouvrement).
+export function assemblePageItems(items: PdfTextItem[]): { text: string; ranges: PdfItemRange[] } {
+  let text = ''
+  const ranges: PdfItemRange[] = []
+  for (const it of items) {
+    const start = text.length
+    if (typeof it.str === 'string') {
+      text += it.str
+      if (it.hasEOL) text += '\n'
+    }
+    ranges.push({ start, end: text.length })
+  }
+  return { text, ranges }
+}
+
+// Plage [start, end) d'un passage cité dans le texte d'une page : ancre par la première
+// ligne du passage (mêmes sondes que locateOffset) puis étend caractère par caractère
+// tant que la page suit le passage — s'arrête à la première divergence (chunk à cheval
+// sur deux pages, blancs normalisés différemment…). Toujours au moins la sonde.
+export function matchPassageRange(
+  pageText: string,
+  passage: string,
+  anchor: { index: number; length: number },
+): PdfItemRange {
+  // Aligne le passage sur son propre début utile (première ligne non vide).
+  let p = 0
+  while (p < passage.length && (passage[p] === '\n' || passage[p] === ' ' || passage[p] === '\t')) p++
+  let k = 0
+  while (
+    anchor.index + k < pageText.length &&
+    p + k < passage.length &&
+    pageText[anchor.index + k] === passage[p + k]
+  ) {
+    k++
+  }
+  return { start: anchor.index, end: anchor.index + Math.max(k, anchor.length) }
+}
+
 export interface PdfExtraction {
   text: string
   pageCount: number
@@ -24,6 +70,10 @@ export interface PdfExtraction {
   // Aucune couche texte utilisable (PDF image/scanné) : l'appelant affiche un message
   // honnête et ne fabrique PAS de faux texte.
   scanned: boolean
+  // Offset de départ du texte de chaque page NON VIDE dans `text` (ordre croissant).
+  // Les pages sans matière (images d'un PDF mixte) n'y figurent pas — `page` garde leur
+  // numéro RÉEL. Sert aux citations ancrées : passage cité → offset → page du viewer.
+  pageStarts: { page: number; start: number }[]
 }
 
 // Seuils du « scanné » : biais assumé vers « NON scanné ». Un faux « scanné » masquerait
@@ -60,10 +110,28 @@ export function detectScanned(charCount: number, pageCount: number): boolean {
 export function buildPdfExtraction(pages: PdfTextItem[][]): PdfExtraction {
   // Trim par page (le dernier item porte souvent un `hasEOL` → `\n` final) puis écarte
   // les pages sans matière (page image d'un PDF mixte) avant la jointure : évite les
-  // sauts de ligne triplés entre pages.
-  const pageTexts = pages.map((p) => assemblePageText(p).trim()).filter(Boolean)
-  const text = pageTexts.join('\n\n')
+  // sauts de ligne triplés entre pages. On note l'offset de départ de chaque page gardée
+  // (numéro RÉEL conservé) pour retrouver la page d'un passage cité.
+  const pageStarts: { page: number; start: number }[] = []
+  let text = ''
+  for (let i = 0; i < pages.length; i++) {
+    const t = assemblePageText(pages[i]).trim()
+    if (!t) continue
+    if (text) text += '\n\n'
+    pageStarts.push({ page: i + 1, start: text.length })
+    text += t
+  }
   const charCount = nonWhitespaceCount(text)
   const scanned = detectScanned(charCount, pages.length)
-  return { text: scanned ? '' : text, pageCount: pages.length, charCount, scanned }
+  return { text: scanned ? '' : text, pageCount: pages.length, charCount, scanned, pageStarts: scanned ? [] : pageStarts }
+}
+
+// Page contenant l'offset donné dans `text` : dernière page dont le départ est ≤ offset.
+export function pageForOffset(pageStarts: { page: number; start: number }[], offset: number): number | null {
+  let found: number | null = null
+  for (const p of pageStarts) {
+    if (p.start > offset) break
+    found = p.page
+  }
+  return found
 }

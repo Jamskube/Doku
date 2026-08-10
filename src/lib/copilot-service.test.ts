@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   buildChatMessages,
+  buildCitedDocChatMessages,
   buildDocContext,
   buildDocIndexChatMessages,
   buildFolderChatMessages,
@@ -14,6 +15,7 @@ import {
   DOC_INDEX_REFUSAL_PHRASE,
   FOLDER_REFUSAL_PHRASE,
   MAX_DOC_CHARS,
+  MAX_DOC_CHARS_CLOUD,
   REFUSAL_PHRASE,
   type DiffSeg,
 } from './copilot-service'
@@ -55,6 +57,13 @@ describe('buildDocContext', () => {
     const ctx = buildDocContext('gros.md', long, 'md')
     expect(ctx).toMatch(/seul son début est fourni|n'a pas été lue/i)
   })
+
+  it('budget cloud (21.x) : un doc au-delà du seuil LOCAL passe entier avec maxChars cloud', () => {
+    const long = 'y'.repeat(MAX_DOC_CHARS + 500) // > 12k mais très en deçà de 240k
+    const ctx = buildDocContext('plan.pdf', long, 'pdf', MAX_DOC_CHARS_CLOUD)
+    expect(ctx).not.toMatch(/seul son début est fourni/i)
+    expect(ctx.length).toBeGreaterThan(MAX_DOC_CHARS) // rien perdu
+  })
   it('gère un nom absent', () => {
     expect(buildDocContext(null, 'a', 'md')).toContain('sans titre')
   })
@@ -66,15 +75,18 @@ describe('buildFolderChatMessages (15.3)', () => {
     { name: 'courses.md', text: 'Acheter de la levure.' },
   ]
 
-  it('system = cadre + passages étiquetés par note ; question + rappel dossier', () => {
+  it('system = cadre + passages NUMÉROTÉS étiquetés par note ; question + rappel dossier', () => {
     const msgs = buildFolderChatMessages({ passages, history: [], question: 'Combien de repos ?' })
     expect(msgs[0].role).toBe('system')
-    expect(msgs[0].content).toContain('Note « recettes.md »')
+    expect(msgs[0].content).toContain('Extrait [1] — note « recettes.md »')
     expect(msgs[0].content).toContain('La pâte repose 30 minutes.')
-    expect(msgs[0].content).toContain('Note « courses.md »')
+    expect(msgs[0].content).toContain('Extrait [2] — note « courses.md »')
+    // Consigne de citation (21.x) : le modèle ne recopie qu'un numéro, jamais un nom.
+    expect(msgs[0].content).toContain('entre crochets')
     const last = msgs[msgs.length - 1]
     expect(last.role).toBe('user')
     expect(last.content).toContain('Combien de repos ?')
+    expect(last.content).toContain('[1]')
     expect(last.content).toContain(FOLDER_REFUSAL_PHRASE)
   })
 
@@ -97,6 +109,32 @@ describe('buildFolderChatMessages (15.3)', () => {
   })
 })
 
+describe('buildCitedDocChatMessages (21.x — document complet en extraits numérotés)', () => {
+  const chunks = ['Premier paragraphe du plan.', 'Le seuil est de 42 Ko.']
+
+  it('fournit le document EN ENTIER en extraits numérotés + consigne de citation', () => {
+    const msgs = buildCitedDocChatMessages({ docName: 'plan.md', chunks, history: [], question: 'Quel seuil ?' })
+    expect(msgs[0].role).toBe('system')
+    expect(msgs[0].content).toContain('plan.md')
+    expect(msgs[0].content).toMatch(/EN ENTIER/)
+    expect(msgs[0].content).toContain('Extrait [1] :')
+    expect(msgs[0].content).toContain('Extrait [2] :')
+    expect(msgs[0].content).toContain('Le seuil est de 42 Ko.')
+    expect(msgs[0].content).toContain('entre crochets')
+    const last = msgs[msgs.length - 1]
+    expect(last.content).toContain('Quel seuil ?')
+    expect(last.content).toContain('[1]')
+    // Le document est entier : la phrase de refus 14.3 « dans ce document » reste honnête.
+    expect(last.content).toContain(REFUSAL_PHRASE)
+  })
+
+  it('persona cloud : consigne de citation présente aussi', () => {
+    const msgs = buildCitedDocChatMessages({ docName: null, chunks, history: [], question: 'Q', persona: 'cloud' })
+    expect(msgs[0].content).toContain('entre crochets')
+    expect(msgs[msgs.length - 1].content).toMatch(/Cite le numéro/)
+  })
+})
+
 describe('buildDocIndexChatMessages (15.3)', () => {
   const passages = [{ text: 'Le délai est de 140 jours.' }]
 
@@ -105,7 +143,9 @@ describe('buildDocIndexChatMessages (15.3)', () => {
     expect(msgs[0].content).toContain('gros.md')
     expect(msgs[0].content).toMatch(/indexé\s+en entier/)
     expect(msgs[0].content).toContain("n'ont pas été relus")
-    expect(msgs[0].content).toContain('Extrait 1')
+    expect(msgs[0].content).toContain('Extrait [1]')
+    // Consigne de citation (21.x) : même contrat que le mode dossier.
+    expect(msgs[0].content).toContain('entre crochets')
     const last = msgs[msgs.length - 1]
     expect(last.content).toContain(DOC_INDEX_REFUSAL_PHRASE)
     // JAMAIS l'ancienne phrase 14.3 : le modèle ne peut pas affirmer une absence sur

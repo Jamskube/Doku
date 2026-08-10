@@ -2,7 +2,7 @@
   import { onMount } from 'svelte'
   import { EditorView } from '@codemirror/view'
   import { EditorState, type Extension } from '@codemirror/state'
-  import { app, activeTab, COLUMN_PX, docHeadings, editorRef, editorSel, forcePreview, isDirty } from '../lib/stores.svelte'
+  import { app, activeTab, COLUMN_PX, docHeadings, editorRef, editorSel, forcePreview, isDirty, openCopilot } from '../lib/stores.svelte'
   import { baseExtensions, htmlSourceExtensions, livePreviewComp, previewExtensions, serializeDoc, sourceExtensions, txtExtensions } from '../lib/editor/editor'
   import { docDirFacet } from '../lib/editor/live-preview'
   import { revealMatch, searchFlashField } from '../lib/editor/search-flash'
@@ -132,6 +132,17 @@
   let selectionMenuEl: HTMLElement | undefined = $state()
   let selectionMenuTimer: ReturnType<typeof setTimeout> | undefined
 
+  // Longueur « utile » de la sélection (compteur du menu), sans la copie qu'un .trim()
+  // ferait à chaque rendu sur une sélection potentiellement multi-Mo.
+  const selCount = $derived.by(() => {
+    const t = editorSel.text
+    let a = 0
+    let b = t.length
+    while (a < b && t.charCodeAt(a) <= 32) a++
+    while (b > a && t.charCodeAt(b - 1) <= 32) b--
+    return b - a
+  })
+
   // Copilote non configuré : le clic sur un verbe affiche une note dans le popover au lieu de
   // lancer une génération vouée à l'échec (brief w3 « Aucun modèle actif »).
   const copilotNeedsSetup = $derived(
@@ -192,7 +203,8 @@
     editorSel.text = sel.empty ? '' : currentView.state.sliceDoc(sel.from, sel.to)
     clearTimeout(selectionMenuTimer)
     // Un aperçu de reformulation en cours a priorité : pas de menu par-dessus le widget.
-    if (sel.empty || !editorSel.text.trim() || rephrase.current) {
+    // /\S/.test évite la copie intégrale qu'un .trim() ferait sur une grande sélection.
+    if (sel.empty || !/\S/.test(editorSel.text) || rephrase.current) {
       selectionMenu = null
       selectionMenuExpanded = false
       selectionMenuConfig = false
@@ -270,8 +282,7 @@
   function openModelSettings() {
     hideSelectionMenu()
     cancelRephrase()
-    app.copilotOpen = true
-    app.copilotView = 'models'
+    openCopilot('models')
   }
 
   function makeState(tabId: number, content: string): EditorState {
@@ -334,9 +345,17 @@
   onMount(() => {
     view = new EditorView({ parent: host! })
     editorRef.view = view
+    // Throttle rAF : le scroll molette émet 60-100 events/s ; un seul updateActiveHeading
+    // par frame suffit (le scroll-spy vise la frame affichée, pas chaque event).
+    let scrollScheduled = false
     const onScroll = () => {
       selectionMenu = null
-      if (view) updateActiveHeading(view)
+      if (scrollScheduled) return
+      scrollScheduled = true
+      requestAnimationFrame(() => {
+        scrollScheduled = false
+        if (view) updateActiveHeading(view)
+      })
     }
     const onSelectionIntent = () => {
       if (!view) return
@@ -362,8 +381,9 @@
       if (selectionMenu) hideSelectionMenu()
     }
     view.scrollDOM.addEventListener('scroll', onScroll, { passive: true })
+    // Pas de listener keyup : toute sélection clavier passe par un dispatch CM6, déjà
+    // couvert par l'updateListener (selectionSet) — le keyup doublait chaque publication.
     view.dom.addEventListener('pointerup', onSelectionIntent)
-    view.dom.addEventListener('keyup', onSelectionIntent)
     window.addEventListener('resize', hideSelectionMenu)
     document.addEventListener('pointerdown', onPointerDown)
     document.addEventListener('keydown', onKeyDown)
@@ -371,7 +391,6 @@
       clearTimeout(selectionMenuTimer)
       view?.scrollDOM.removeEventListener('scroll', onScroll)
       view?.dom.removeEventListener('pointerup', onSelectionIntent)
-      view?.dom.removeEventListener('keyup', onSelectionIntent)
       window.removeEventListener('resize', hideSelectionMenu)
       document.removeEventListener('pointerdown', onPointerDown)
       document.removeEventListener('keydown', onKeyDown)
@@ -530,7 +549,7 @@
       >
         <span class="selection-menu-spark"><span class="msr">auto_awesome</span></span>
         <span class="selection-menu-label">Réécrire avec Doku-San</span>
-        <span class="selection-menu-count">{editorSel.text.trim().length} car.</span>
+        <span class="selection-menu-count">{selCount} car.</span>
         <span class="msr selection-menu-chevron">chevron_right</span>
       </button>
       <div

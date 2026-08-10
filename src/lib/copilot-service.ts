@@ -18,9 +18,14 @@ export interface OllamaMessage {
 // sa structure, synthétiser et expliciter ses inférences sans les faire passer pour des faits.
 export type PersonaProfile = 'local' | 'cloud'
 
-// Cap du texte injecté (14.1). Un doc plus long est tronqué avec marqueur — le résumé
-// robuste des longs docs (segmentation map-reduce) est la story 14.2.
+// Cap du texte injecté (14.1), calibré pour le modèle LOCAL (num_ctx 16384) : au-delà,
+// l'index éphémère prend le relais (15.3). Un doc plus long est tronqué avec marqueur.
 export const MAX_DOC_CHARS = 12000
+// Budget dédié au fournisseur CLOUD (21.x) : la fenêtre d'OpenAI (128k tokens) rend le
+// plafond local ridicule — ~60k tokens de document, marge large pour historique + réponse.
+// Au-delà : troncature signalée 14.3 (pas d'index éphémère en cloud — pas de spawn du
+// sidecar local en douce pour un utilisateur qui a choisi le cloud).
+export const MAX_DOC_CHARS_CLOUD = 240000
 
 export function truncateDoc(text: string, max = MAX_DOC_CHARS): { text: string; truncated: boolean } {
   if (text.length <= max) return { text, truncated: false }
@@ -29,12 +34,12 @@ export function truncateDoc(text: string, max = MAX_DOC_CHARS): { text: string; 
 
 // ContextBuilder : texte de contexte du document courant. PDF → contenu binaire (pas de
 // texte extractible en v2.0 ; l'extraction pdf.js viendra en 14.2/14.3). Vide → signalé.
-export function buildDocContext(name: string | null, content: string, kind: DocKind): string {
+export function buildDocContext(name: string | null, content: string, kind: DocKind, maxChars = MAX_DOC_CHARS): string {
   const title = name ?? 'sans titre'
   // PDF SANS texte extrait (18.1/18.2 non résolu, ou scanné) → signalé. Un PDF AVEC
   // texte extrait est rendu comme un document normal (le texte a été résolu en amont).
   if (kind === 'pdf' && !content.trim()) return `Document « ${title} » (PDF — texte non extractible).`
-  const { text, truncated } = truncateDoc(content)
+  const { text, truncated } = truncateDoc(content, maxChars)
   if (!text.trim()) return `Document « ${title} » (vide).`
   const body = `Document « ${title} » :\n"""\n${text}\n"""`
   // Troncature signalée EXPLICITEMENT au modèle (pas silencieuse, FR-4) : un « je ne trouve pas »
@@ -85,6 +90,42 @@ const CLOUD_GROUNDING_REMINDER =
   "comme telles. N'ajoute du contexte général extérieur que si la demande le justifie, en le distinguant explicitement " +
   "du contenu du document. N'invente jamais un fait attribué au document.)"
 
+// --- Document complet en extraits numérotés (citations ancrées, 21.x) ---------------
+// Un document qui tient en contexte (≤ MAX_DOC_CHARS) est fourni ENTIER mais découpé en
+// extraits numérotés (chunkText) : le modèle peut citer [n] — cas NotebookLM courant —
+// sans embeddings, donc AUSSI avec le fournisseur cloud. Rien n'est omis : la phrase de
+// refus « dans ce document » (14.3) reste honnête, contrairement au mode top-k (15.3).
+const CITED_DOC_REMINDER =
+  `(Travaille uniquement d'après le document ci-dessus, sans inventer d'information qui n'y figure pas. ` +
+  `Cite le numéro des extraits utilisés, ex. [1]. ` +
+  `Si on te demande une information absente du document, réponds « ${REFUSAL_PHRASE} ». ` +
+  `Les tâches sur le texte — orthographe, clarté, résumé, comptage — sont bienvenues.)`
+
+const CLOUD_CITED_DOC_REMINDER =
+  `${CLOUD_GROUNDING_REMINDER.slice(0, -1)} Cite le numéro des extraits utilisés, ex. [1].)`
+
+export function buildCitedDocChatMessages(p: {
+  docName: string | null
+  chunks: string[]
+  history: ChatTurn[]
+  question: string
+  persona?: PersonaProfile
+}): OllamaMessage[] {
+  const persona = p.persona ?? 'local'
+  const base = persona === 'cloud' ? CLOUD_SYSTEM_BASE : LOCAL_SYSTEM_BASE
+  const reminder = persona === 'cloud' ? CLOUD_CITED_DOC_REMINDER : CITED_DOC_REMINDER
+  const title = p.docName ?? 'sans titre'
+  const excerpts = p.chunks.map((c, i) => `Extrait [${i + 1}] :\n"""\n${c}\n"""`).join('\n\n')
+  const system =
+    `${base} ${CITE_INSTRUCTION}\n\nDocument « ${title} », fourni EN ENTIER, découpé en extraits ` +
+    `numérotés :\n\n${excerpts}`
+  return [
+    { role: 'system', content: system },
+    ...p.history.map((t) => ({ role: t.role, content: t.content }) as OllamaMessage),
+    { role: 'user', content: `${p.question}\n\n${reminder}` },
+  ]
+}
+
 // CopilotService : messages /api/chat (system = cadre + contexte doc, puis l'historique, puis
 // la question). Les rôles évitent la dérive de complétion d'un prompt concaténé single-turn.
 export function buildChatMessages(p: {
@@ -94,11 +135,13 @@ export function buildChatMessages(p: {
   history: ChatTurn[]
   question: string
   persona?: PersonaProfile
+  // Budget de contexte du fournisseur (défaut : local). Le cloud passe MAX_DOC_CHARS_CLOUD.
+  maxChars?: number
 }): OllamaMessage[] {
   const persona = p.persona ?? 'local'
   const systemBase = persona === 'cloud' ? CLOUD_SYSTEM_BASE : LOCAL_SYSTEM_BASE
   const reminder = persona === 'cloud' ? CLOUD_GROUNDING_REMINDER : GROUNDING_REMINDER
-  const system = `${systemBase}\n\n${buildDocContext(p.docName, p.docText, p.kind)}`
+  const system = `${systemBase}\n\n${buildDocContext(p.docName, p.docText, p.kind, p.maxChars)}`
   return [
     { role: 'system', content: system },
     ...p.history.map((t) => ({ role: t.role, content: t.content }) as OllamaMessage),
@@ -124,25 +167,33 @@ export interface RagPassage {
 export const FOLDER_REFUSAL_PHRASE = 'Je ne trouve pas cette information dans ces notes.'
 export const DOC_INDEX_REFUSAL_PHRASE = 'Je ne trouve pas cette information dans les extraits consultés de ce document.'
 
+// Consigne de citation (21.x, motif NotebookLM/open-notebook) : les extraits sont
+// numérotés PAR L'APP — le modèle n'a qu'à recopier un chiffre entre crochets. On ne lui
+// demande JAMAIS de recopier un nom ou un id (fragile, surtout pour un modèle 1.5b) ;
+// les puces [n] sont validées côté app (numéro hors liste → retiré au rendu).
+const CITE_INSTRUCTION =
+  "Après chaque information tirée d'un extrait, ajoute le numéro de cet extrait entre " +
+  'crochets, par exemple [2]. Utilise uniquement les numéros des extraits fournis.'
+
 const LOCAL_FOLDER_SYSTEM =
   "Tu es Doku-San, l'assistant local intégré à l'éditeur Doku. Réponds toujours en français, de " +
   'manière concise. Tes réponses se fondent UNIQUEMENT sur les extraits de notes fournis ' +
-  'ci-dessous, jamais sur des connaissances extérieures. Quand tu utilises un extrait, mentionne ' +
-  'le nom de sa note. Si la réponse ne figure pas dans les extraits, réponds exactement ' +
+  `ci-dessous, jamais sur des connaissances extérieures. ${CITE_INSTRUCTION} ` +
+  'Si la réponse ne figure pas dans les extraits, réponds exactement ' +
   `« ${FOLDER_REFUSAL_PHRASE} » sans rien inventer ni compléter.`
 
 const CLOUD_FOLDER_SYSTEM =
   'Tu es Doku-San, un partenaire documentaire attentif intégré à l\'éditeur Doku. Réponds en français. ' +
-  'Appuie ta réponse sur les extraits de notes fournis ci-dessous et cite le nom des notes que tu utilises. ' +
+  `Appuie ta réponse sur les extraits de notes fournis ci-dessous. ${CITE_INSTRUCTION} ` +
   'Tu peux relier les idées entre notes et expliciter tes inférences en les signalant comme telles. ' +
   `Si l'information ne figure pas dans les extraits, dis-le clairement sans l'inventer.`
 
 const FOLDER_REMINDER =
-  `(Réponds uniquement d'après les extraits de notes ci-dessus, en citant le nom des notes utilisées. ` +
-  `Si l'information n'y figure pas, réponds « ${FOLDER_REFUSAL_PHRASE} ».)`
+  `(Réponds uniquement d'après les extraits de notes ci-dessus, en citant le numéro des extraits ` +
+  `utilisés, ex. [1]. Si l'information n'y figure pas, réponds « ${FOLDER_REFUSAL_PHRASE} ».)`
 
 function passagesBlock(passages: RagPassage[]): string {
-  return passages.map((p) => `Note « ${p.name} » :\n"""\n${p.text}\n"""`).join('\n\n')
+  return passages.map((p, i) => `Extrait [${i + 1}] — note « ${p.name} » :\n"""\n${p.text}\n"""`).join('\n\n')
 }
 
 // Q&A « dossier » : system = cadre + passages top-k étiquetés par note.
@@ -164,7 +215,8 @@ export function buildFolderChatMessages(p: {
 }
 
 const DOC_INDEX_REMINDER =
-  `(Réponds uniquement d'après les extraits ci-dessus. Si l'information n'y figure pas, réponds ` +
+  `(Réponds uniquement d'après les extraits ci-dessus, en citant le numéro des extraits utilisés, ` +
+  `ex. [1]. Si l'information n'y figure pas, réponds ` +
   `« ${DOC_INDEX_REFUSAL_PHRASE} » — d'autres passages du document existent mais n'ont pas été relus.)`
 
 // Bases DÉDIÉES au mode extraits : les bases 14.3 imposent l'ancienne phrase de refus
@@ -173,12 +225,14 @@ const DOC_INDEX_REMINDER =
 const LOCAL_DOC_INDEX_SYSTEM =
   "Tu es Doku-San, l'assistant local intégré à l'éditeur Doku. Réponds toujours en français, de " +
   'manière concise. Tes réponses se fondent UNIQUEMENT sur les extraits du document fournis ' +
-  'ci-dessous, jamais sur des connaissances extérieures. Si la réponse ne figure pas dans les ' +
+  `ci-dessous, jamais sur des connaissances extérieures. ${CITE_INSTRUCTION} ` +
+  'Si la réponse ne figure pas dans les ' +
   `extraits, réponds exactement « ${DOC_INDEX_REFUSAL_PHRASE} » sans rien inventer ni compléter.`
 
 const CLOUD_DOC_INDEX_SYSTEM =
   "Tu es Doku-San, un partenaire documentaire attentif intégré à l'éditeur Doku. Réponds en français. " +
-  'Appuie ta réponse sur les extraits du document fournis ci-dessous. Tu peux analyser et faire des ' +
+  `Appuie ta réponse sur les extraits du document fournis ci-dessous. ${CITE_INSTRUCTION} ` +
+  'Tu peux analyser et faire des ' +
   'inférences raisonnables en les signalant comme telles. Si une information ne figure pas dans les ' +
   "extraits, dis-le clairement sans l'inventer — d'autres passages du document existent mais n'ont pas été relus."
 
@@ -196,7 +250,7 @@ export function buildDocIndexChatMessages(p: {
   const persona = p.persona ?? 'local'
   const base = persona === 'cloud' ? CLOUD_DOC_INDEX_SYSTEM : LOCAL_DOC_INDEX_SYSTEM
   const title = p.docName ?? 'sans titre'
-  const excerpts = p.passages.map((x, i) => `Extrait ${i + 1} :\n"""\n${x.text}\n"""`).join('\n\n')
+  const excerpts = p.passages.map((x, i) => `Extrait [${i + 1}] :\n"""\n${x.text}\n"""`).join('\n\n')
   const system =
     `${base}\n\nLe document « ${title} » est plus long que la fenêtre de lecture : il a été indexé ` +
     `en entier${p.indexTruncated ? ' (sa toute fin, au-delà du plafond d\'indexation, exceptée)' : ''} et seuls ` +

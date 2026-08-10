@@ -2,10 +2,11 @@
 // (même motif que `app` dans stores.svelte.ts). Le port du sidecar est stable (start_ollama
 // idempotent côté Rust) → on le cache ; `ensureReady` déduplique les appels concurrents
 // (motif indexBuild de la recherche). Le modèle ACTIF (persisté) vit dans `app.activeModel`.
-import { activeTab, app, editorRef, type CopilotProvider, type DocKind } from './stores.svelte'
+import { activeTab, app, editorRef, openPath, type CopilotProvider, type DocKind } from './stores.svelte'
+import { citedNumbers, locateOffset, locatePassage, type CitedPassage } from './citations'
 import { setRephrasePreview } from './editor/rephrase-preview'
 import { parentPath } from './explorer'
-import { DEFAULT_EMBED_MODEL, noteTitle, RAG_TOP_K } from './rag'
+import { chunkText, DEFAULT_EMBED_MODEL, noteTitle, RAG_TOP_K } from './rag'
 import { cancelRagIndexing, ragState, searchDocEphemeral, searchRag, type RagHit } from './rag-index.svelte'
 import { chat, deleteModel, generate, listModels, pull, startOllama, waitReady, type OllamaModel } from './ollama'
 import {
@@ -23,10 +24,14 @@ import {
 } from './openai'
 import {
   buildChatMessages,
+  buildCitedDocChatMessages,
   buildDocIndexChatMessages,
   buildFolderChatMessages,
+  REFUSAL_PHRASE,
+  DOC_INDEX_REFUSAL_PHRASE,
   FOLDER_REFUSAL_PHRASE,
   MAX_DOC_CHARS,
+  MAX_DOC_CHARS_CLOUD,
   buildReduceSummaryPrompt,
   buildRephrasePrompt,
   buildSegmentSummaryPrompt,
@@ -61,9 +66,19 @@ export interface ChatMsg {
   // mais exclu de l'historique envoyé au modèle (ce n'est pas un tour de dialogue).
   notice?: boolean
   status?: string
-  // Passages top-k réellement fournis au modèle (mode dossier, 15.3) : pied « Passages
-  // consultés » DÉTERMINISTE, cliquable — on ne dépend jamais du modèle pour citer.
-  sources?: { path: string; name: string }[]
+  // Passages top-k réellement fournis au modèle (15.3, enrichi 21.x) : UN PAR EXTRAIT,
+  // numérotés comme dans le prompt. Alimente le pied « Passages consultés » DÉTERMINISTE
+  // ET les puces [n] inline (citations ancrées) — on affiche toujours les passages
+  // réellement fournis, on ne dépend jamais du modèle pour la liste.
+  // `text` = contenu du chunk : le clic le relocalise dans le document (locatePassage).
+  // `path` null = document sans chemin (non enregistré) : puce affichée, saut best-effort
+  // dans l'onglet actif.
+  sources?: CitedPassage[]
+  // Mode « document complet en extraits » (21.x) : les sources couvrent TOUT le document —
+  // le pied n'affiche que les numéros réellement cités (`cited`), la liste complète
+  // serait du bruit. Absent en mode top-k (le pied liste les passages consultés).
+  citedOnly?: boolean
+  cited?: number[]
   // Posé sur une carte `failed` : ce qu'il faut rejouer pour « Réessayer » (la question ou le
   // mode de résumé). Le document est re-capturé au moment du retry (le dossier aussi, 15.3).
   retry?: { kind: 'chat'; question: string; scope: ChatScope } | { kind: 'summary'; mode: SummaryMode }
@@ -498,14 +513,18 @@ export async function sendChat(
     }
     const persona = personaFor(runtime)
     let messages: OllamaMessage[]
-    let sources: RagHit[] | null = null
+    let sources: CitedPassage[] | null = null
+    let wholeDoc = false
     if (scope === 'folder') {
       const prep = await prepareFolderMessages(q, history, persona, runtime, signal, idx)
       if (!prep) return // question soldée (carte config / message d'info posé sur idx)
       messages = prep.messages
       sources = prep.sources
     } else {
-      messages = await prepareDocMessages(q, doc, history, persona, runtime, signal, idx)
+      const prep = await prepareDocMessages(q, doc, history, persona, runtime, signal, idx)
+      messages = prep.messages
+      sources = prep.sources
+      wholeDoc = prep.wholeDoc ?? false
     }
     // num_ctx fixé (14.3) : le doc + la consigne d'ancrage doivent rester en contexte sur plusieurs
     // tours ; au défaut Ollama (4096) l'historique les évincerait par troncature gauche silencieuse.
@@ -522,13 +541,23 @@ export async function sendChat(
       signal,
     )
     // Pied « Passages consultés » déterministe (15.3) — supprimé sur refus : des sources
-    // cliquables sous « je ne trouve pas » seraient trompeuses.
+    // cliquables sous « je ne trouve pas » seraient trompeuses. Sans `sources` posées,
+    // les marqueurs [n] éventuels de la réponse sont retirés au rendu (count = 0).
     const done = copilot.messages[idx]
-    if (sources && done?.content && !done.content.includes(FOLDER_REFUSAL_PHRASE)) {
-      const seen = new Set<string>()
+    if (
+      sources &&
+      done?.content &&
+      !done.content.includes(FOLDER_REFUSAL_PHRASE) &&
+      !done.content.includes(DOC_INDEX_REFUSAL_PHRASE) &&
+      !(wholeDoc && done.content.includes(REFUSAL_PHRASE))
+    ) {
       done.sources = sources
-        .filter((h) => (seen.has(h.path) ? false : (seen.add(h.path), true)))
-        .map((h) => ({ path: h.path, name: h.name }))
+      if (wholeDoc) {
+        // Document complet : le pied n'affiche que les extraits que la réponse cite
+        // vraiment (les sources = tout le document — la liste entière serait du bruit).
+        done.citedOnly = true
+        done.cited = citedNumbers(done.content, sources.length)
+      }
     }
   } catch (e) {
     // Stop pendant la récupération (embed de la requête / du doc) : annulation propre —
@@ -559,6 +588,43 @@ export async function sendChat(
   }
 }
 
+// Saut vers un passage cité (puces [n] / pied « Passages consultés ») : ouvre la note si
+// besoin puis révèle le passage exact (pendingReveal → revealMatch, flash inclus — même
+// chemin que la recherche 9.4). PDF : précision à la PAGE (le viewer canvas n'a pas de
+// grain plus fin) — passage → offset dans le texte extrait → page → scroll + halo.
+// Passage introuvable (fichier modifié depuis l'indexation) : on s'arrête à l'ouverture
+// du fichier — jamais de faux surlignage (FR-4 s'applique aussi à l'UI).
+export async function jumpToCitation(s: CitedPassage): Promise<void> {
+  if (s.path) {
+    await openPath(s.path)
+    const tab = activeTab()
+    if (!tab || tab.path !== s.path) return
+    if (tab.kind === 'pdf') {
+      // getPdfText est caché par chemin : la Q&A vient de faire l'extraction → hit direct.
+      const [{ getPdfText }, { pageForOffset }] = await Promise.all([import('./pdf'), import('./pdf-text')])
+      const ex = await getPdfText(s.path).catch(() => null)
+      if (!ex || ex.scanned) return
+      const hit = locateOffset(ex.text, s.text)
+      if (!hit) return
+      const page = pageForOffset(ex.pageStarts, hit.index)
+      if (page) app.pendingPdfReveal = { path: s.path, page, text: s.text }
+      return
+    }
+    const loc = locatePassage(tab.content, s.text)
+    if (loc) app.pendingReveal = { path: s.path, line: loc.line, col: loc.col, length: loc.length }
+    return
+  }
+  // Document sans chemin (non enregistré) : l'onglet est déjà actif, révélation directe.
+  const tab = activeTab()
+  const view = editorRef.view
+  if (!tab || tab.kind === 'pdf' || !view) return
+  const loc = locatePassage(tab.content, s.text)
+  if (loc) {
+    const { revealMatch } = await import('./editor/search-flash')
+    revealMatch(view, loc.line, loc.col, loc.length)
+  }
+}
+
 // Une recherche dossier est-elle en vol ? stopChat s'en sert pour annuler AUSSI un
 // refresh d'index inline (le signal du chat ne couvre que l'embed de la requête).
 let folderSearching = false
@@ -575,7 +641,7 @@ async function prepareFolderMessages(
   runtime: ProviderRuntime,
   signal: AbortSignal,
   idx: number,
-): Promise<{ messages: OllamaMessage[]; sources: RagHit[] } | null> {
+): Promise<{ messages: OllamaMessage[]; sources: CitedPassage[] } | null> {
   const answer = (content: string, config?: ChatMsg['config']): null => {
     const m = copilot.messages[idx]
     m.content = content
@@ -626,7 +692,9 @@ async function prepareFolderMessages(
       question: q,
       persona,
     }),
-    sources: hits,
+    // Numérotation = ordre des extraits DANS le prompt (buildFolderChatMessages les
+    // numérote dans ce même ordre) : la puce [n] retombe sur le bon chunk.
+    sources: hits.map((h, i) => ({ n: i + 1, path: h.path, name: noteTitle(h.name), text: h.text })),
   }
 }
 
@@ -643,7 +711,7 @@ async function prepareDocMessages(
   runtime: ProviderRuntime,
   signal: AbortSignal,
   idx: number,
-): Promise<OllamaMessage[]> {
+): Promise<{ messages: OllamaMessage[]; sources: CitedPassage[] | null; wholeDoc?: boolean }> {
   // Le texte d'un PDF est désormais résolu en amont (18.2) → un gros PDF passe AUSSI par
   // l'index éphémère (plus de garde `kind !== 'pdf'`).
   if (runtime.provider === 'ollama' && doc.text.length > MAX_DOC_CHARS) {
@@ -667,18 +735,46 @@ async function prepareDocMessages(
         signal,
       )
       if (hits.length > 0) {
-        return buildDocIndexChatMessages({
-          docName: doc.name,
-          passages: hits,
-          history,
-          question: q,
-          persona,
-          indexTruncated: truncated,
-        })
+        return {
+          messages: buildDocIndexChatMessages({
+            docName: doc.name,
+            passages: hits,
+            history,
+            question: q,
+            persona,
+            indexTruncated: truncated,
+          }),
+          // `name` null : les puces du même document n'affichent que leur numéro. Le saut
+          // vers un PDF s'arrête à l'onglet (pas de surlignage dans le viewer) — assumé.
+          sources: hits.map((h, i) => ({ n: i + 1, path: doc.path ?? null, name: null, text: h.text })),
+        }
       }
     }
   }
-  return buildChatMessages({ docName: doc.name, docText: doc.text, kind: doc.kind, history, question: q, persona })
+  // Document qui tient dans le budget du FOURNISSEUR : fourni EN ENTIER, découpé en
+  // extraits numérotés (chunkText, déterministe — aucun embedding) → citations [n] pour
+  // les deux fournisseurs. Budget local = 12k (num_ctx 16384, au-delà l'index éphémère a
+  // déjà pris la main ci-dessus) ; budget cloud = 240k (fenêtre 128k tokens d'OpenAI —
+  // le plafond local y tronquait un PDF de 5 pages, vu en usage réel).
+  const docBudget = runtime.provider === 'openai' ? MAX_DOC_CHARS_CLOUD : MAX_DOC_CHARS
+  if (doc.text.trim() && doc.text.length <= docBudget) {
+    const { chunks, truncated } = chunkText(doc.text)
+    // `truncated` (plafond de chunks) contredirait le « EN ENTIER » du prompt : dans ce
+    // cas improbable (≤ 240k mais > 300 chunks), on retombe sur la troncature signalée.
+    if (chunks.length > 0 && !truncated) {
+      return {
+        messages: buildCitedDocChatMessages({ docName: doc.name, chunks, history, question: q, persona }),
+        sources: chunks.map((text, i) => ({ n: i + 1, path: doc.path ?? null, name: null, text })),
+        wholeDoc: true,
+      }
+    }
+  }
+  // Restants : document vide / PDF sans texte (messages dédiés du ContextBuilder), et
+  // document au-delà du budget cloud (troncature SIGNALÉE 14.3, au budget du fournisseur).
+  return {
+    messages: buildChatMessages({ docName: doc.name, docText: doc.text, kind: doc.kind, history, question: q, persona, maxChars: docBudget }),
+    sources: null,
+  }
 }
 
 // Plafond de passes de réduction : garde-fou contre un modèle qui ne « contracterait » pas ses
@@ -1006,4 +1102,10 @@ export function stopChat(): void {
 export function newChat(): void {
   genController?.abort()
   copilot.messages = []
+}
+
+// Crochet DEV uniquement (vérifications navigateur/Playwright : injecter un message,
+// déclencher un saut de citation). import.meta.env.DEV = false en prod → code mort éliminé.
+if (import.meta.env.DEV) {
+  ;(globalThis as Record<string, unknown>).__dokuCopilot = { copilot, jumpToCitation }
 }
