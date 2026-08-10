@@ -2,8 +2,8 @@
 
 **Goal** : rendre l'édition Markdown **réellement WYSIWYG** — la syntaxe ne se révèle plus que sur demande, les tableaux deviennent saisissables, le formatage courant passe au clavier.
 **Start** : 2026-07-30
-**End** : —
-**Status** : **In progress — 3/4** (20.1, 20.2 et 20.3 validées en natif par l'utilisateur — reste 20.4)
+**End** : 2026-08-10
+**Status** : **Done — 4/4** (les quatre stories validées en natif par l'utilisateur)
 
 Premier sprint **issu de l'usage réel** (action High des rétros S15 et S16 : « utiliser Doku pour de vrai, laisser le prochain epic émerger de l'usage »). Il n'est pas né d'un backlog théorique mais d'une friction rencontrée sur un vrai document : un tableau de ~100 clips à qualifier, où cliquer dans une cellule fait tomber le rendu et transforme la saisie en comptage de pipes.
 
@@ -20,7 +20,7 @@ Rappels de cadrage :
 | 20.1 | Révélation de la syntaxe à la demande (socle) | M | ✅ DONE | Validée en natif 2026-07-30. `revealScopeField` + geste Tab / Ctrl+/ ; ledger flippé |
 | 20.2 | Édition en place des cellules de tableau | L | ✅ DONE | Validée en natif 2026-07-30. **2 bugs trouvés par vérif navigateur, invisibles en jsdom** (voir Progress Log) ; ledger flippé |
 | 20.3 | Actions de structure du tableau (± ligne, ± colonne) | M | ✅ DONE | Validée en natif 2026-08-10. Codée le 7/08 sans revue, auditée le 10/08 : 6 bugs corrigés (3 chaînes de corruption) ; ledger flippé |
-| 20.4 | Formatage sur sélection & insertions de blocs | M | 🟡 EN VALIDATION | Livrée 10/08 (EPCT complet : critic 3 Critical évités + code-review 3 Major corrigés), vérif navigateur aux vrais gestes. Reste le test natif utilisateur |
+| 20.4 | Formatage sur sélection & insertions de blocs | M | ✅ DONE | Validée en natif 2026-08-10. Détection par l'arbre syntaxique, Prec.highest (piège Mod-i), critic 3 Critical + revue 3 Major ; ledger flippé |
 
 ## Blockers
 _None_
@@ -74,4 +74,5 @@ _None_
 - **20.4 livrée** (même jour, EPCT complet). Couche pure `src/lib/format.ts` (enveloppe, titres, préfixes de ligne, gabarits) + glue `src/lib/editor/format-commands.ts` — la détection « déjà formaté » vient de l'**arbre syntaxique** (nœuds StrongEmphasis/Emphasis/Strikethrough/InlineCode/Link), jamais d'heuristique de chaîne. Ctrl+B/I/K en `Prec.highest` (**le defaultKeymap liait déjà Mod-i** = selectParentSyntax — même piège que Mod-/, attrapé par le critic). Popover : rangée de 5 effets + tiroir « Titres & blocs » (H1-H3, liste, citation, bloc de code, séparateur, tableau), tiroirs mutuellement exclusifs, hauteur mesurée généralisée. 11 icônes ajoutées au subset (94, 13,6 Ko).
 - Critic (plan) : 3 Critical évités avant le code — Mod-i déjà lié ; détection par l'arbre (un Ctrl+I dans `` `code *x*` `` aurait supprimé des octets du code) ; `---` collé sous un paragraphe = titre setext. Code-review (diff) : 3 Major corrigés — biais de côté `resolveInner` (Ctrl+B muet en bordure de marqueur) ; zones URL/Image inscriptibles (un gras détruisait le lien) ; opérations de ligne déchiquetant un bloc de code traversé. + setext sans soulignement orphelin, rembourrage des code spans, marqueurs de liste remplacés (jamais `- * item`).
 - Décision assumée : Ctrl+B **muet dans une cellule de tableau** (les îlots 20.2 stopPropagation) — no-op accepté, noté ici pour ne pas être redécouvert en bug.
-- 415 tests (408 → 415 après régressions de revue ; +48 sur la journée), svelte-check 0 err, vérif navigateur aux vrais gestes (clics + clavier réel, deux thèmes, 0 erreur console). **En attente de validation native.**
+- 415 tests (408 → 415 après régressions de revue ; +48 sur la journée), svelte-check 0 err, vérif navigateur aux vrais gestes (clics + clavier réel, deux thèmes, 0 erreur console).
+- **20.4 validée en natif par l'utilisateur** (même jour) → ledger flippé. **Sprint 17 clos à 4/4** — l'édition Markdown est réellement WYSIWYG : syntaxe à la demande, tableaux saisissables et restructurables, formatage au clavier. → `/sprint retro` à la prochaine session.

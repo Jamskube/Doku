@@ -509,8 +509,8 @@
                          "id":  "20.4",
                          "title":  "Formatage sur selection \u0026 insertions de blocs",
                          "verify":  "natif : Ctrl+B / Ctrl+I / Ctrl+K enveloppent la selection (**gras**, *italique*, [texte](url)) et RE-appuyer retire le formatage (toggle, pas d\u0027empilement) ; menu d\u0027effets (barre, code inline, titres) accessible depuis le popover de selection EXISTANT ; insertions de blocs : separateur ---, tableau vierge, liste, citation, bloc de code",
-                         "passes":  false,
-                         "verified_by":  ""
+                         "passes":  true,
+                         "verified_by":  "valide en natif par l'utilisateur 2026-08-10 : Ctrl+B/I/K en toggle sans empilement, rangee de 5 effets + tiroir Titres & blocs sur le popover existant, insertions APRES la selection. Detection par l'ARBRE SYNTAXIQUE (jamais d'heuristique de chaine, lecon 20.3) ; Prec.highest OBLIGATOIRE (defaultKeymap liait deja Mod-i = selectParentSyntax, piege attrape par le critic AVANT code) ; gabarits entre lignes vides (--- colle sous un paragraphe = titre setext) ; zones mortes URL/Image/code (un gras dans une URL detruisait le lien, revue) ; setext converti sans soulignement orphelin ; marqueurs de liste remplaces, jamais empiles. Ctrl+B volontairement muet dans une cellule de tableau (ilots 20.2, no-op assume). Verif navigateur aux vrais gestes + clavier reel, critic 3 Critical evites + code-review 3 Major corriges (commit 4fbecd3). Sprint 17 clos 4/4"
                      }
                  ]
 }
