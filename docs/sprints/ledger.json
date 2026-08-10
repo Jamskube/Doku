@@ -502,8 +502,8 @@
                          "id":  "20.3",
                          "title":  "Actions de structure du tableau (+/- ligne, +/- colonne)",
                          "verify":  "natif : ajouter/supprimer une ligne et une colonne depuis le tableau rendu ; la ligne de delimiteurs reste coherente (meme nombre de colonnes, alignements conserves) ; suppression de la derniere ligne/colonne ne produit jamais un tableau invalide",
-                         "passes":  false,
-                         "verified_by":  ""
+                         "passes":  true,
+                         "verified_by":  "valide en natif par l'utilisateur 2026-08-10 : boutons +/- au survol (colonnes sur l'en-tete, lignes sur la 1re cellule), delimiteurs et alignements conserves, refus derniere ligne/colonne. Histoire singuliere : codee le 7/08 (d8bc8e6) SANS revue ni verif navigateur, auditee le 10/08 (f4b3221) -> 6 bugs reels corriges dont 3 chaines de corruption du document (updateDOM aveugle a la geometrie -> reconstruction ; offsets figes -> posAtDOM au geste ; heuristique ligne-a-pipe -> noeud Table de l'arbre syntaxique ; frappe muette cellule vide+ilot -> saisie dans un span interne .cm-lp-cellin ; clic +/- en pleine saisie -> commit force avant l'action ; Echap -> reference capturee au focus). 371 tests (+4 regressions ciblees), matrice navigateur complete aux vrais clics, revue code-reviewer Approve (2 Majors integres)"
                      },
                      {
                          "id":  "20.4",

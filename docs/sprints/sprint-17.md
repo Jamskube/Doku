@@ -3,7 +3,7 @@
 **Goal** : rendre l'édition Markdown **réellement WYSIWYG** — la syntaxe ne se révèle plus que sur demande, les tableaux deviennent saisissables, le formatage courant passe au clavier.
 **Start** : 2026-07-30
 **End** : —
-**Status** : **In progress — 2/4** (20.1 et 20.2 validées en natif par l'utilisateur)
+**Status** : **In progress — 3/4** (20.1, 20.2 et 20.3 validées en natif par l'utilisateur — reste 20.4)
 
 Premier sprint **issu de l'usage réel** (action High des rétros S15 et S16 : « utiliser Doku pour de vrai, laisser le prochain epic émerger de l'usage »). Il n'est pas né d'un backlog théorique mais d'une friction rencontrée sur un vrai document : un tableau de ~100 clips à qualifier, où cliquer dans une cellule fait tomber le rendu et transforme la saisie en comptage de pipes.
 
@@ -19,7 +19,7 @@ Rappels de cadrage :
 |---|-------|------|--------|-------|
 | 20.1 | Révélation de la syntaxe à la demande (socle) | M | ✅ DONE | Validée en natif 2026-07-30. `revealScopeField` + geste Tab / Ctrl+/ ; ledger flippé |
 | 20.2 | Édition en place des cellules de tableau | L | ✅ DONE | Validée en natif 2026-07-30. **2 bugs trouvés par vérif navigateur, invisibles en jsdom** (voir Progress Log) ; ledger flippé |
-| 20.3 | Actions de structure du tableau (± ligne, ± colonne) | M | 🟡 EN VALIDATION | Codée (7/08) puis auditée et durcie (10/08) : 6 bugs corrigés, vérif navigateur complète. Reste le test natif utilisateur |
+| 20.3 | Actions de structure du tableau (± ligne, ± colonne) | M | ✅ DONE | Validée en natif 2026-08-10. Codée le 7/08 sans revue, auditée le 10/08 : 6 bugs corrigés (3 chaînes de corruption) ; ledger flippé |
 | 20.4 | Formatage sur sélection & insertions de blocs | M | ⬜ TODO | Gated 20.1. Se greffe sur le popover de sélection **existant** (16.1), pas de seconde barre flottante |
 
 ## Blockers
@@ -70,4 +70,4 @@ _None_
   5. cliquer ± avec une saisie en cours perdait le texte tapé → blur/commit forcé avant l'action (revue) ;
   6. Échap restaurait la valeur de création du widget, pas la dernière committée → capture au focus.
 - Validations : 371 tests (+4 régressions ciblées sur les bugs ci-dessus), svelte-check 0 err, matrice navigateur complète (± ligne/colonne, saisie clic + Tab dans cellules neuves, refus dernière ligne/colonne, alignements `:--`/`--:` conservés, édition au-dessus puis action, bloc à pipe adjacent intact, deux thèmes, 0 erreur console).
-- **20.3 en attente de validation native** (critère verify du ledger) — le ledger reste à `passes: false` jusque-là.
+- **20.3 validée en natif par l'utilisateur** (même jour) → ledger flippé, sprint à **3/4**. Reste 20.4 (formatage sur sélection & insertions de blocs, gated 20.1 ✅).
