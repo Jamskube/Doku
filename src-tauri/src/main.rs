@@ -67,6 +67,17 @@ fn main() {
                     let _ = handle.emit("doku://open", path);
                 });
             }
+            // La fenêtre naît invisible ("visible": false) et c'est le frontend qui
+            // l'affiche une fois l'UI peinte (anti flash blanc). Filet de sécurité :
+            // si le JS ne démarre jamais, elle apparaît quand même après 4 s.
+            if let Some(window) = app.get_webview_window("main") {
+                std::thread::spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_secs(4));
+                    if !window.is_visible().unwrap_or(true) {
+                        let _ = window.show();
+                    }
+                });
+            }
             Ok(())
         })
         .run(tauri::generate_context!())

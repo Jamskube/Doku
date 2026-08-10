@@ -147,12 +147,16 @@ function buildDecorations(view: EditorView): DecorationSet {
   const docDir = state.facet(docDirFacet)
 
   const activeLines = activeLineSet(state)
-  const isActive = (from: number, to: number) => {
-    const a = state.doc.lineAt(from).number
-    const b = state.doc.lineAt(to).number
-    for (let n = a; n <= b; n++) if (activeLines.has(n)) return true
-    return false
-  }
+  // Ensemble vide (aucune révélation demandée — le cas permanent hors Tab) : court-circuit
+  // qui épargne 2 doc.lineAt par nœud décoré du viewport, à chaque frappe.
+  const isActive = activeLines.size === 0
+    ? () => false
+    : (from: number, to: number) => {
+        const a = state.doc.lineAt(from).number
+        const b = state.doc.lineAt(to).number
+        for (let n = a; n <= b; n++) if (activeLines.has(n)) return true
+        return false
+      }
 
   for (const { from, to } of view.visibleRanges) {
     syntaxTree(state).iterate({
@@ -557,12 +561,15 @@ function buildTableDecorations(state: EditorState): DecorationSet {
 const tableField = StateField.define<DecorationSet>({
   create: (state) => buildTableDecorations(state),
   update(deco, tr) {
-    // Recalcul sur édition, changement de curseur, avancée du parseur (le tableau peut
-    // être sous la frontière d'analyse au chargement), ou pose/retrait d'un aperçu de
-    // reformulation (les tables qu'il chevauchait doivent re-rendre leur widget).
+    // Recalcul sur édition, avancée du parseur (le tableau peut être sous la frontière
+    // d'analyse au chargement), ou pose/retrait d'un aperçu de reformulation (les tables
+    // qu'il chevauchait doivent re-rendre leur widget). Un mouvement de curseur seul ne
+    // compte que si une révélation est active (ADR-0017 : sinon activeLineSet est vide,
+    // le rendu serait identique — inutile de re-parcourir l'arbre à chaque flèche).
+    const revealActive = (tr.state.field(revealScopeField, false) ?? 'none') !== 'none'
     if (
       tr.docChanged ||
-      tr.selection ||
+      (tr.selection && revealActive) ||
       syntaxTree(tr.state) !== syntaxTree(tr.startState) ||
       tr.effects.some((e) => e.is(setRephrasePreview) || e.is(setRevealScope))
     ) {

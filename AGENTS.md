@@ -22,6 +22,7 @@ Doku — petite application pour **ouvrir, lire et éditer des fichiers Markdown
 - Build : `npm run build` · installateur : `npm run tauri build`
 - Typecheck : `npm run check`
 - Tests : `npm test` (vitest)
+- Icônes : `npm run subset:icons` (réseau requis) — à relancer quand `icons.test.ts` échoue (icône ajoutée hors subset), puis committer `src/assets/material-symbols-*`
 
 ## Conventions
 - Commentaires uniquement sur le code non évident (des identifiants bien nommés font le reste)
@@ -34,6 +35,7 @@ Doku — petite application pour **ouvrir, lire et éditer des fichiers Markdown
 | `src/` | Frontend Svelte 5 (components/, lib/, lib/editor/, assets/) |
 | `src-tauri/` | Hôte Rust minimal — plugins officiels uniquement (ADR-0004) |
 | `spike/` | Bancs d'essai conservés (WYSIWYG S0, RAG 15.1, NPU 17.1) |
+| `scripts/` | Outillage de build manuel (subset d'icônes) — sorties committées |
 | `docs/` | Documentation (planning, adr, design, sprints, journal, archives) |
 | `public/` | Assets statiques servis tels quels par Vite |
 

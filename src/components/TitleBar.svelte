@@ -3,8 +3,6 @@
   import { app, activeTab, requestCloseTab, isDirty, saveTab, setColumnWidth, toggleTheme, togglePin, type ColumnWidth, type DocKind } from '../lib/stores.svelte'
   import { tabDiscriminator } from '../lib/tabs'
   import { parentPath } from '../lib/explorer'
-  import { exportViaPrint } from '../lib/export/print'
-  import { exportStandaloneHtml } from '../lib/export/standalone'
   import { closeWindow, minimizeWindow, readImageDataUrl, saveDocxDialog, saveHtmlDialog, toggleMaximizeWindow } from '../lib/tauri'
   import DokuMark from '../lib/DokuMark.svelte'
 
@@ -46,12 +44,19 @@
     if (tab && tab.kind !== 'pdf') await saveTab(tab)
   }
 
+  // Exports HTML/print en import() dynamique (motif DOCX ci-dessous) : ils tirent
+  // marked + le pipeline de rendu, inutiles au démarrage.
   function exportHtml(tab: ExportTab) {
     if (tab.kind === 'pdf') return
-    exportStandaloneHtml(
-      { kind: tab.kind, name: tab.name, content: tab.content, dir: parentPath(tab.path ?? null) ?? '' },
-      { readImageDataUrl, save: saveHtmlDialog },
-    ).catch((err) => console.error('Export HTML échoué', err))
+    const kind = tab.kind // rétrécissement capturé (perdu sinon dans la closure du .then)
+    import('../lib/export/standalone')
+      .then((m) =>
+        m.exportStandaloneHtml(
+          { kind, name: tab.name, content: tab.content, dir: parentPath(tab.path ?? null) ?? '' },
+          { readImageDataUrl, save: saveHtmlDialog },
+        ),
+      )
+      .catch((err) => console.error('Export HTML échoué', err))
   }
 
   function exportDocx(tab: ExportTab) {
@@ -64,7 +69,10 @@
 
   function exportPrint(tab: ExportTab) {
     if (tab.kind === 'pdf') return
-    exportViaPrint({ kind: tab.kind, name: tab.name, content: tab.content, dir: parentPath(tab.path ?? null) ?? '' })
+    const kind = tab.kind // rétrécissement capturé (perdu sinon dans la closure du .then)
+    import('../lib/export/print')
+      .then((m) => m.exportViaPrint({ kind, name: tab.name, content: tab.content, dir: parentPath(tab.path ?? null) ?? '' }))
+      .catch((err) => console.error('Export impression échoué', err))
   }
 
   function exportActive(format: 'docx' | 'html' | 'pdf') {

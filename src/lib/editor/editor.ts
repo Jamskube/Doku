@@ -246,7 +246,9 @@ const dokuTheme = EditorView.theme({
     verticalAlign: '-4px',
     marginRight: '10px',
     position: 'relative',
-    transition: 'all 140ms ease',
+    // Props ciblées ('all' oblige Blink à diffuser chaque propriété animable à chaque
+    // recalcul de style, pour chaque case du document).
+    transition: 'background-color 140ms ease, border-color 140ms ease',
   },
   '.cm-task-checkbox:hover': { borderColor: 'var(--ink-3)' },
   '.cm-task-checkbox:checked': { background: 'var(--ink)', borderColor: 'var(--ink)' },
@@ -350,12 +352,18 @@ const revealKeymap = Prec.highest(
   ]),
 )
 
+// Singletons : les descripteurs d'extension CM6 sont immuables et partageables entre
+// états. Une identité stable évite au reconfigure() de détruire/recréer le ViewPlugin
+// (et toutes ses décorations) quand la configuration n'a pas réellement changé.
+let previewCache: Extension[] | null = null
+let sourceCache: Extension[] | null = null
+
 export function previewExtensions(): Extension[] {
-  return [livePreview(), revealKeymap, syntaxHighlighting(dokuHighlight)]
+  return (previewCache ??= [livePreview(), revealKeymap, syntaxHighlighting(dokuHighlight)])
 }
 
 export function sourceExtensions(): Extension[] {
-  return [syntaxHighlighting(sourceHighlight)]
+  return (sourceCache ??= [syntaxHighlighting(sourceHighlight)])
 }
 
 export function baseExtensions(sourceMode: boolean, extra: Extension[] = []): Extension[] {

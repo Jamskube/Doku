@@ -49,17 +49,12 @@ export function makeSearchDoc(path: string, name: string, content: string): Sear
 const SNIPPET_MAX = 160
 const CONTEXT_BEFORE = 40
 
-// Numéro de ligne 1-based de la position `index` (compte les \n avant elle).
-function lineAt(content: string, index: number): number {
-  let n = 1
-  for (let i = 0; i < index; i++) if (content.charCodeAt(i) === 10) n++
-  return n
-}
-
 // Construit un extrait autour d'un match : la ligne entière, ou une fenêtre avec
 // ellipses si la ligne dépasse SNIPPET_MAX. `start`/`end` repèrent le terme DANS
-// le snippet renvoyé (décalés si un préfixe « … » a été ajouté).
-function buildHit(content: string, matchIndex: number, matchLen: number): SearchHit {
+// le snippet renvoyé (décalés si un préfixe « … » a été ajouté). `line` est fourni
+// par l'appelant (compté incrémentalement — un match en fin de gros fichier ne
+// re-balaye pas tout le contenu depuis le début).
+function buildHit(content: string, matchIndex: number, matchLen: number, line: number): SearchHit {
   const lineStart = content.lastIndexOf('\n', matchIndex - 1) + 1
   let lineEnd = content.indexOf('\n', matchIndex)
   if (lineEnd < 0) lineEnd = content.length
@@ -75,7 +70,7 @@ function buildHit(content: string, matchIndex: number, matchLen: number): Search
     snippet = prefix + rawLine.slice(winStart, winEnd) + suffix
     start = col - winStart + prefix.length
   }
-  return { line: lineAt(content, lineStart), col, length: matchLen, snippet, start, end: start + matchLen }
+  return { line, col, length: matchLen, snippet, start, end: start + matchLen }
 }
 
 // Cherche `query` (sous-chaîne, casse-insensible) dans tous les documents indexés.
@@ -97,10 +92,15 @@ export function searchDocs(
     let count = 0
     const hits: SearchHit[] = []
     const seenLines = new Set<number>()
+    // Compteur de ligne incrémental : les matches arrivent en ordre croissant, on
+    // n'avance qu'entre deux matches (O(fichier) au total, pas O(somme des offsets)).
+    let pos = 0
+    let line = 1
     while (idx >= 0) {
       count++
       if (hits.length < maxHits) {
-        const hit = buildHit(doc.content, idx, ql.length)
+        for (; pos < idx; pos++) if (doc.content.charCodeAt(pos) === 10) line++
+        const hit = buildHit(doc.content, idx, ql.length, line)
         if (!seenLines.has(hit.line)) {
           seenLines.add(hit.line)
           hits.push(hit)

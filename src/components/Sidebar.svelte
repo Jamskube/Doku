@@ -8,9 +8,15 @@
 
   // Plan : titres du Markdown seulement (un .txt/.html n'en a pas), et pas pour un
   // gros fichier (docHeadings O(doc) + DOM de milliers de titres gèlerait — 1.6).
+  // docHeadings est mémoïsé côté store : la frappe ne re-scanne pas le document.
   const headings = $derived(
     activeTab()?.kind === 'md' && !activeTab()!.heavy ? docHeadings(activeTab()!.content) : [],
   )
+
+  // Chemin actif + onglets par chemin, dérivés UNE fois : le template de l'arbre les
+  // consultait par rangée (deux app.tabs.find × N rangées à chaque rendu).
+  const activePath = $derived(activeTab()?.path ?? null)
+  const tabsByPath = $derived(new Map(app.tabs.filter((t) => t.path).map((t) => [t.path, t])))
 
   // Dossier explorateur : navigation explicite, sinon dossier du document actif.
   const targetDir = $derived(app.explorerDir ?? parentPath(activeTab()?.path ?? null))
@@ -106,6 +112,19 @@
   // une création (nonce).
   let childrenByDir = $state(new Map<string, FsEntry[]>())
   const loading = new Set<string>()
+
+  // Débounce de la recherche : chaque frappe balayait l'index entier (des Mo de texte).
+  // 150 ms suffisent à coalescer une rafale de frappe ; vider le champ réagit immédiatement
+  // (l'état « Tapez pour chercher » ne doit pas traîner).
+  let searchTimer: ReturnType<typeof setTimeout> | undefined
+  function onSearchInput(value: string) {
+    clearTimeout(searchTimer)
+    if (!value.trim()) {
+      runSearch(value)
+      return
+    }
+    searchTimer = setTimeout(() => runSearch(value), 150)
+  }
 
   const expandedSet = $derived(new Set(app.explorerExpanded))
   const treeRows = $derived(targetDir ? flattenTree(targetDir, childrenByDir, expandedSet, app.explorerSort) : [])
@@ -473,11 +492,11 @@
               {#if createError}<p class="newerr" role="alert">{createError}</p>{/if}
             {/if}
             {#each treeRows as row (row.path)}
-              {@const open = app.tabs.find((t) => t.path === row.path)}
+              {@const open = tabsByPath.get(row.path)}
               {@const expanded = row.entry.isDir && expandedSet.has(row.path)}
               <button
                 class="row"
-                class:current={!row.entry.isDir && activeTab()?.path === row.path}
+                class:current={!row.entry.isDir && activePath === row.path}
                 title={row.path}
                 aria-expanded={row.entry.isDir ? expanded : undefined}
                 style={`padding-left: ${10 + row.depth * 16}px`}
@@ -507,7 +526,10 @@
           {/if}
         {:else if app.sidebarView === 'plan'}
           <div class="plan">
-            {#each headings as h (h.line)}
+            <!-- Non keyé volontairement : les rangées sont homogènes, Svelte les met à
+                 jour en place. Keyer sur h.line détruisait/recréait tout le plan à chaque
+                 retour chariot (toutes les lignes suivantes changent de numéro). -->
+            {#each headings as h}
               {#if h.level === 1}
                 <button class="plan-h1" class:active={h.line === app.activeHeadingLine} onclick={() => scrollToLine(h.line)}>{h.text}</button>
               {:else}
@@ -526,7 +548,7 @@
               aria-label="Rechercher dans le dossier"
               value={app.searchQuery}
               bind:this={searchInput}
-              oninput={(e) => runSearch(e.currentTarget.value)}
+              oninput={(e) => onSearchInput(e.currentTarget.value)}
             />
             {#if !app.searchQuery.trim()}
               <p class="empty">Tapez pour chercher dans le dossier et ses sous-dossiers.</p>
@@ -589,7 +611,9 @@
     transition: width 220ms cubic-bezier(0.22, 1, 0.36, 1);
   }
   .sidebar.open { width: 296px; }
-  .inner { width: 296px; height: 100%; display: flex; }
+  /* contain : le contenu (largeur figée) est isolé des invalidations externes — la
+     transition de width de .sidebar ne re-layoute plus l'arbre entier à chaque frame. */
+  .inner { width: 296px; height: 100%; display: flex; contain: layout paint; }
 
   .ribbon {
     flex: 0 0 46px;
@@ -809,7 +833,7 @@
   .newname:focus { outline: 2px solid var(--line-3); outline-offset: 1px; }
   .newerr { margin: 2px 6px 4px 30px; font-size: 11.5px; color: var(--danger, #b4442f); line-height: 1.35; }
 
-  .panel-body { flex: 1; overflow-y: auto; min-height: 0; padding: 5px 8px 16px; }
+  .panel-body { flex: 1; overflow-y: auto; min-height: 0; padding: 5px 8px 16px; contain: layout paint; }
 
   .row {
     width: 100%;

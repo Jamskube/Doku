@@ -23,8 +23,14 @@ export function extensionOf(name: string): string {
   return idx <= 0 ? '' : name.slice(idx + 1).toLowerCase()
 }
 
+// Collators réutilisés : localeCompare avec options reconstruit un collateur ICU à
+// chaque appel (~10-50× plus lent) — sensible quand flattenTree re-trie chaque dossier
+// déplié de l'arbre à chaque invalidation.
+const nameCollator = new Intl.Collator('fr', { sensitivity: 'base' })
+const extCollator = new Intl.Collator('fr')
+
 function byName(a: FsEntry, b: FsEntry): number {
-  return a.name.localeCompare(b.name, 'fr', { sensitivity: 'base' })
+  return nameCollator.compare(a.name, b.name)
 }
 
 // Dossiers TOUJOURS d'abord (convention explorateur) : l'ordre ne s'applique qu'à
@@ -45,7 +51,7 @@ export function sortEntries(entries: FsEntry[], sort: ExplorerSort = DEFAULT_SOR
       return byName(a, b)
     }
     if (sort.key === 'type' && !a.isDir) {
-      const cmp = extensionOf(a.name).localeCompare(extensionOf(b.name), 'fr')
+      const cmp = extCollator.compare(extensionOf(a.name), extensionOf(b.name))
       if (cmp !== 0) return cmp * dir
       return byName(a, b)
     }
@@ -136,6 +142,19 @@ export const MAX_TREE_DEPTH = 16
 // enfants sont chargés (présents dans childrenByDir), ses entrées visibles suivent
 // immédiatement, indentées. Un dossier déplié mais pas encore chargé n'affiche rien
 // (le chargement paresseux remplira childrenByDir et re-rendra). Pure : aucune I/O.
+// Mémo filtrage+tri par tableau d'enfants (référence stable tant que le dossier n'est
+// pas relu) : déplier un dossier ne re-trie plus TOUS les dossiers chargés de l'arbre,
+// seulement ceux dont les entrées ou le tri ont réellement changé.
+const visibleMemo = new WeakMap<FsEntry[], { sort: ExplorerSort; rows: FsEntry[] }>()
+
+function visibleEntriesMemo(children: FsEntry[], sort: ExplorerSort): FsEntry[] {
+  const m = visibleMemo.get(children)
+  if (m && m.sort.key === sort.key && m.sort.order === sort.order) return m.rows
+  const rows = visibleEntries(children, sort)
+  visibleMemo.set(children, { sort: { key: sort.key, order: sort.order }, rows })
+  return rows
+}
+
 export function flattenTree(
   rootDir: string,
   childrenByDir: ReadonlyMap<string, FsEntry[]>,
@@ -147,7 +166,7 @@ export function flattenTree(
     if (depth > MAX_TREE_DEPTH) return
     const children = childrenByDir.get(dir)
     if (!children) return
-    for (const entry of visibleEntries(children, sort)) {
+    for (const entry of visibleEntriesMemo(children, sort)) {
       const path = joinPath(dir, entry.name)
       rows.push({ entry, path, depth })
       if (entry.isDir && expanded.has(path)) walk(path, depth + 1)

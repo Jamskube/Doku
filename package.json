@@ -9,6 +9,7 @@
     "build": "vite build",
     "check": "svelte-check --tsconfig ./tsconfig.json",
     "test": "vitest run",
+    "subset:icons": "node scripts/subset-icons.mjs",
     "tauri": "tauri"
   },
   "dependencies": {
@@ -30,13 +31,13 @@
     "docx": "^9.7.1",
     "dompurify": "^3.4.11",
     "marked": "^18.0.6",
-    "material-symbols": "^0.36.0",
     "pdfjs-dist": "^6.1.200"
   },
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "^7.0.0",
     "@tauri-apps/cli": "^2.10.0",
     "jsdom": "^29.1.1",
+    "material-symbols": "^0.36.0",
     "svelte": "^5.55.0",
     "svelte-check": "^4.4.0",
     "typescript": "~6.0.2",

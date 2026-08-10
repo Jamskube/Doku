@@ -57,9 +57,27 @@ function button(label: string, cls: string, onClick: () => void, disabled = fals
 function render(): void {
   const el = container
   if (!el) return
-  el.replaceChildren()
   const s = snapshot
   const h = handlers
+  // Chemin rapide du streaming : seul le texte grandit token par token — muter le
+  // textContent du corps existant évite de reconstruire tout le widget (head, hint,
+  // listeners) 30-60 fois par seconde pendant la génération.
+  if (s && h && s.phase === 'streaming' && el.dataset.phase === 'streaming') {
+    const body = el.querySelector('.cm-rephrase-body')
+    if (body) {
+      body.textContent = s.text
+      return
+    }
+    if (s.text) {
+      const d = document.createElement('span')
+      d.className = 'cm-rephrase-body'
+      d.textContent = s.text
+      el.appendChild(d)
+      return
+    }
+    return
+  }
+  el.replaceChildren()
   if (!s || !h) return
   el.dataset.phase = s.phase
   const block = (cls: string) => {
