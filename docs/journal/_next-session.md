@@ -1,16 +1,18 @@
 # Next session pointer
-_Updated: 2026-08-07 17:50_
+_Updated: 2026-08-10 15:30_
 
 ## Where I left off
-Grosse journée navigation, pilotée par l'usage réel. Matin : passe de polish visuel (chrome animé, dialogues, notifications flottantes) — commitée en début de 2ᵉ partie. Après-midi, sur demandes directes de l'utilisateur : **l'explorateur est passé en arborescence dépliable** (chevron, chargement paresseux, état persisté, double-clic = nouvelle racine, « Tout replier » de retour), **l'en-tête a été apaisé** (9 → 5 contrôles, actions rares dans un menu ⋯ au matériau app-menu sans bordure), et **le fil d'Ariane est devenu défilable** (molette, drag souris avec seuil anti-clic, tactile natif, fondus aux bords). 330 tests (+13 sur les primitives d'arbre pures), tout vérifié au vrai clic (Playwright, port 1421, deux thèmes). **Tout est commité ET poussé** (`2718da3`). Installateur `Doku_2.2.0_arm64-setup.exe` rebuilé (17:43) — l'utilisateur allait le réinstaller.
+Journée majeure en trois actes, tout commité ET poussé (`b7b8dd4`). (1) **Optimisation totale** : dist −57 % (10,4 → 4,5 Mo), subset d'icônes 5,1 Mo → 12,5 Ko (outillage `scripts/` + test garde-fou), boot sans flash blanc, lazy loading copilote/Paramètres, chemins chauds assainis — et deux bugs de fond corrigés au passage (police Geist jamais appliquée ; artefact du panneau copilote → rideau largeur seule). (2) **Citations ancrées NotebookLM** : puces `[n]` cliquables → saut au passage exact (flash éditeur, **surlignage ambré dans les PDF** à la page près), extraits numérotés côté app (fiable même sur qwen 1.5b), budget de contexte par fournisseur (12k local / 240k cloud), validé par l'utilisateur sur PDF réel en OpenAI. (3) **Sauver une réponse en note .md** (provenance capturée à la génération) + **réécritures structurelles de sélection** (puces, cases à cocher) — cycle complet /plan → /critic → /epct → code-review (6 Major attrapés et corrigés en tout). 367 tests (330 → 367). Installateur recompilé 2× dans la journée (dernier : 12:19, AVANT l'acte 3).
 
 ## Open work
-- Branch: `main` — 2 fichiers de journal modifiés par ce wrap (à committer), le reste clean et poussé
+- Branch: `main` — 2 fichiers de wrap à committer (journal + pointeur), le reste clean et poussé
 - Open PRs: aucune
-- Drafts/plans: aucun
-- **Sprint 17 toujours In progress — 2/4** : restent **20.3** (actions de structure de tableau ± ligne/colonne, gated 20.2 ✅) et **20.4** (formatage sur sélection, gated 20.1 ✅). Le chantier navigation était du hors-sprint sur demande utilisateur, le sprint n'a pas été touché.
-- Ledger : 73 features, ouvertes = 17.2 (annulée par conception), 20.3, 20.4.
-- Dettes notées : matériau de menu flottant dupliqué (TitleBar + Sidebar, styles scopés — retoucher ensemble) ; re-diff `installer.nsi` à l'upgrade du CLI Tauri.
+- Drafts/plans: `docs/plans/notes-ia-et-reecritures-structurelles.md` (exécuté, committé — archivable)
+- **Test natif en attente** : « Sauver en note » (💾 sur une réponse) et « En liste à puces / En cases à cocher » (menu de sélection) — implémentés et vérifiés navigateur, PAS encore validés en natif par l'utilisateur
+- **Installateur PAS à jour** : le dernier build (12:19) précède les features de l'acte 3 → recompiler avant réinstallation
+- **Sprint 17 toujours In progress — 2/4** : restent **20.3** (actions de structure de tableau, gated 20.2 ✅) et **20.4** (formatage sur sélection, gated 20.1 ✅). Tout le travail du jour était hors-sprint sur demande utilisateur.
+- Features Open Notebook retenues mais non cadrées : **transformations personnalisées** (prompts nommés) et **contrôle/visibilité du contexte** → passer par `/sprint plan`
+- Dettes notées : matériau de menu flottant dupliqué (TitleBar + Sidebar) ; re-diff `installer.nsi` à l'upgrade CLI Tauri ; `npm run subset:icons` exige le réseau à la régénération
 
 ## Next concrete step
-Recueillir le retour d'usage sur la réinstallation (arbre sur vrai dossier profond, drag/tactile du breadcrumb sur l'écran de la Surface, menu ⋯). Ensuite, le plus probable : **reprendre le sprint 17** (20.3 puis 20.4 — l'éditeur WYSIWYG) ou continuer les améliorations d'explorateur si l'usage en fait remonter (clavier, accès rapides, gestion de fichiers — options déjà identifiées). Ne pas rouvrir : NPU (ADR-0016), modèle copilote, débat ProseMirror.
+Recueillir le test natif des deux features du jour (`npm run tauri dev` : sauver une note, cases à cocher sur sélection), recompiler l'installateur, puis `/sprint plan` pour cadrer transformations personnalisées + contrôle du contexte — ou reprendre le sprint 17 (20.3/20.4, l'éditeur). Ne pas rouvrir : NPU (ADR-0016), modèle copilote, ProseMirror.
