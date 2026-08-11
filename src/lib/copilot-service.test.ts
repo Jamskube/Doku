@@ -1,7 +1,9 @@
 import { describe, it, expect } from 'vitest'
 import {
+  applyVerbosity,
   buildChatMessages,
   buildCitedDocChatMessages,
+  buildCitedSummaryPrompt,
   buildDocContext,
   buildDocIndexChatMessages,
   buildFolderChatMessages,
@@ -246,6 +248,31 @@ describe('prompts de résumé (14.2)', () => {
     expect(a).not.toBe(b)
     expect(b).toMatch(/points cl[ée]s/i)
   })
+  it('consignes contrastées : résumé = prose sans puces, points clés = puces', () => {
+    const a = buildWholeSummaryPrompt('t', 'd', 'summary')
+    const b = buildWholeSummaryPrompt('t', 'd', 'keypoints')
+    expect(a).toMatch(/prose/i)
+    expect(a).toMatch(/pas de liste à puces/i)
+    expect(b).toMatch(/puces courtes/i)
+    // La réduction finale garde le même contraste (sinon le map-reduce re-nivelle tout).
+    expect(buildReduceSummaryPrompt('r', 'd', 'summary')).toMatch(/pas de liste à puces/i)
+    expect(buildReduceSummaryPrompt('r', 'd', 'keypoints')).toMatch(/POINTS CLÉS/)
+  })
+  it("mode « actions à faire » : liste d'actions, avec porte de sortie honnête", () => {
+    const p = buildWholeSummaryPrompt('t', 'd', 'todos')
+    expect(p).toMatch(/ACTIONS À FAIRE/)
+    expect(p).toMatch(/aucune action à faire, dis-le/i)
+    expect(buildReduceSummaryPrompt('r', 'd', 'todos')).toMatch(/ACTIONS À FAIRE/)
+  })
+  it('résumé cité : extraits numérotés + consigne de citation, tâche du mode conservée', () => {
+    const p = buildCitedSummaryPrompt(['AAA', 'BBB'], 'notes.md', 'keypoints')
+    expect(p).toContain('Extrait [1]')
+    expect(p).toContain('Extrait [2]')
+    expect(p).toContain('AAA')
+    expect(p).toContain('notes.md')
+    expect(p).toMatch(/cite le num[ée]ro/i)
+    expect(p).toMatch(/points cl[ée]s/i)
+  })
   it('prompt de segment indique la position (partie i/N)', () => {
     const p = buildSegmentSummaryPrompt('seg', 2, 5, 'd')
     expect(p).toContain('2/5')
@@ -262,6 +289,25 @@ describe('prompts de résumé (14.2)', () => {
     expect(cloud).not.toBe(local)
     expect(cloud).toMatch(/hiérarchise|implications/i)
     expect(cloud).toMatch(/n'invente aucun fait/i)
+  })
+})
+
+describe('applyVerbosity (style des réponses)', () => {
+  const msgs = () => buildChatMessages({ docName: 'd', docText: 't', kind: 'md' as const, history: [], question: 'q' })
+  it('équilibré = no-op strict (comportement historique intact)', () => {
+    const base = msgs()
+    expect(applyVerbosity(base, 'balanced')).toBe(base)
+  })
+  it('bref/détaillé : consigne ajoutée au system, question intacte', () => {
+    const brief = applyVerbosity(msgs(), 'brief')
+    expect(brief[0].role).toBe('system')
+    expect(brief[0].content).toMatch(/BREF/)
+    expect(brief[brief.length - 1].content).not.toMatch(/BREF/)
+    expect(applyVerbosity(msgs(), 'detailed')[0].content).toMatch(/DÉTAILLÉ/)
+  })
+  it("liste sans system en tête : renvoyée telle quelle (jamais d'invention de rôle)", () => {
+    const noSystem = [{ role: 'user' as const, content: 'q' }]
+    expect(applyVerbosity(noSystem, 'brief')).toBe(noSystem)
   })
 })
 

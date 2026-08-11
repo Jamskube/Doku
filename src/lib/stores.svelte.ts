@@ -10,6 +10,7 @@ import { makeSearchDoc, searchDocs, type SearchDoc, type SearchResult } from './
 import { snapshotKey, type SnapshotInfo } from './snapshot'
 import { buildSearchIndex, isTauri, listSnapshots, purgeAllSnapshots, readSnapshot, readTextFileAt, recordSnapshot, scanFiles, setAlwaysOnTop, writeTextFileAtomic } from './tauri'
 import { normalizeTarget, wikilinkCandidates, wikilinkFileName } from './wikilink'
+import type { CopilotVerbosity } from './copilot-service'
 
 export type DocKind = 'md' | 'html' | 'txt' | 'pdf'
 export type SidebarView = 'files' | 'plan' | 'history' | 'search'
@@ -84,6 +85,8 @@ export const app = $state({
   copilotProvider: 'ollama' as CopilotProvider,
   // Modèle MiniMax choisi (liste dynamique à la connexion) ; persisté. '' = défaut.
   minimaxModel: '',
+  // Style des réponses du copilote (bref / équilibré / détaillé) — persisté.
+  copilotVerbosity: 'balanced' as CopilotVerbosity,
   // Panneau copilote droit (14.0) : ouvert/fermé, persisté (settings) comme sidebarOpen.
   copilotOpen: false,
   // Le composant du panneau est chargé/monté paresseusement (App.svelte) : son code +
@@ -171,6 +174,8 @@ export function loadSettings() {
       if (s.copilotProvider === 'ollama' || s.copilotProvider === 'openai' || s.copilotProvider === 'minimax')
         app.copilotProvider = s.copilotProvider
       if (typeof s.minimaxModel === 'string') app.minimaxModel = s.minimaxModel
+      if (s.copilotVerbosity === 'brief' || s.copilotVerbosity === 'balanced' || s.copilotVerbosity === 'detailed')
+        app.copilotVerbosity = s.copilotVerbosity
       if (typeof s.copilotOpen === 'boolean') app.copilotOpen = s.copilotOpen
       // Réglage validé champ par champ : un settings corrompu ne doit pas faire
       // planter le tri (sortEntries recevrait une clé inconnue et ne trierait plus).
@@ -200,6 +205,7 @@ export function saveSettings() {
         embedModel: app.embedModel,
         copilotProvider: app.copilotProvider,
         minimaxModel: app.minimaxModel,
+        copilotVerbosity: app.copilotVerbosity,
         copilotOpen: app.copilotOpen,
         explorerSort: app.explorerSort,
         explorerExpanded: app.explorerExpanded,

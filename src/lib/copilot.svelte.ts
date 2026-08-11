@@ -43,15 +43,18 @@ import {
   type OpenAiMessage,
 } from './openai'
 import {
+  applyVerbosity,
   buildChatMessages,
   buildCitedDocChatMessages,
   buildDocIndexChatMessages,
   buildFolderChatMessages,
+  verbosityNote,
   REFUSAL_PHRASE,
   DOC_INDEX_REFUSAL_PHRASE,
   FOLDER_REFUSAL_PHRASE,
   MAX_DOC_CHARS,
   MAX_DOC_CHARS_CLOUD,
+  buildCitedSummaryPrompt,
   buildReduceSummaryPrompt,
   buildRephrasePrompt,
   buildSegmentSummaryPrompt,
@@ -684,7 +687,7 @@ export async function sendChat(
     // poussée ne le serait PAS (piège $state profond de Svelte 5).
     await streamChat(
       runtime,
-      messages,
+      applyVerbosity(messages, app.copilotVerbosity),
       (t) => {
         const m = copilot.messages[idx]
         m.status = undefined // 1er token : le prefill est fini, le texte prend le relais
@@ -952,7 +955,12 @@ export async function summarizeDoc(
   if (copilot.generating) return
   const provider = app.copilotProvider
   const localModel = app.activeModel
-  const userLabel = mode === 'keypoints' ? 'Quels sont les points clés de ce document ?' : 'Résume ce document.'
+  const userLabel =
+    mode === 'keypoints'
+      ? 'Quels sont les points clés de ce document ?'
+      : mode === 'todos'
+        ? 'Quelles sont les actions à faire selon ce document ?'
+        : 'Résume ce document.'
   const reply = (content: string, flags: { failed?: boolean; config?: ChatMsg['config'] } = {}) => {
     copilot.messages.push({ role: 'user', content: userLabel })
     copilot.messages.push({ role: 'assistant', content, ...flags })
@@ -973,6 +981,9 @@ export async function summarizeDoc(
   copilot.generating = true
   genController = new AbortController()
   const signal = genController.signal
+  // Extraits numérotés du résumé cité (single-fenêtre) — attachés au message en fin de
+  // run, comme les sources du chat.
+  let citedSources: CitedPassage[] | null = null
 
   copilot.messages.push({ role: 'user', content: userLabel })
   copilot.messages.push({ role: 'assistant', content: '', streaming: true, status: 'Lecture du document…' })
@@ -1021,9 +1032,21 @@ export async function summarizeDoc(
 
     const segments = segmentDoc(doc.text)
     const persona = personaFor(runtime)
+    // Style des réponses : appliqué aux prompts FINAUX seulement (une passe map/reduce
+    // « brève » perdrait de l'information avant la synthèse).
+    const vNote = verbosityNote(app.copilotVerbosity)
+    const styled = (p: string) => (vNote ? `${p}\n\n${vNote}` : p)
     if (segments.length <= 1) {
-      // Tient dans une fenêtre → résumé direct, streamé (le statut initial couvre le prefill).
-      await streamGenerate(runtime, buildWholeSummaryPrompt(doc.text, doc.name, mode, persona), stream, signal)
+      // Tient dans une fenêtre → résumé CITÉ : le doc part en extraits numérotés (même
+      // mécanique que le chat 21.x) pour que les actions rapides ancrent leurs [n].
+      // Repli sans citations si le découpage plafonne (truncated contredirait « EN ENTIER »).
+      const { chunks, truncated } = chunkText(doc.text)
+      if (chunks.length > 0 && !truncated) {
+        citedSources = chunks.map((text, i) => ({ n: i + 1, path: doc.path ?? null, name: null, text }))
+        await streamGenerate(runtime, styled(buildCitedSummaryPrompt(chunks, doc.name, mode, persona)), stream, signal)
+      } else {
+        await streamGenerate(runtime, styled(buildWholeSummaryPrompt(doc.text, doc.name, mode, persona)), stream, signal)
+      }
     } else {
       // map : un résumé par segment (non streamé, avec progression).
       const partials: string[] = []
@@ -1055,7 +1078,7 @@ export async function summarizeDoc(
       const finalGroups = segmentDoc(joined)
       for (let i = 0; i < finalGroups.length; i++) {
         if (i > 0) copilot.messages[idx].content += '\n\n'
-        await streamGenerate(runtime, buildReduceSummaryPrompt(finalGroups[i], doc.name, mode, persona), stream, signal)
+        await streamGenerate(runtime, styled(buildReduceSummaryPrompt(finalGroups[i], doc.name, mode, persona)), stream, signal)
         if (signal.aborted) return
       }
     }
@@ -1077,7 +1100,16 @@ export async function summarizeDoc(
       m.streaming = false
       m.status = undefined
       // Provenance du résumé (pour « Sauver en note ») — capturée ici, pas au clic.
-      if (m.content && !m.failed) m.sourceLabel = doc.name ?? undefined
+      if (m.content && !m.failed) {
+        m.sourceLabel = doc.name ?? undefined
+        // Résumé cité : mêmes règles que le chat document-complet — sources attachées,
+        // pied filtré sur les extraits réellement cités par la réponse.
+        if (citedSources) {
+          m.sources = citedSources
+          m.citedOnly = true
+          m.cited = citedNumbers(m.content, citedSources.length)
+        }
+      }
       // Annulé avant tout texte → tour fantôme (question + réponse vide) : on retire les deux.
       if (m.content === '' && !m.failed) copilot.messages.splice(idx - 1, 2)
     }

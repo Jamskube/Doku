@@ -263,10 +263,31 @@ export function buildDocIndexChatMessages(p: {
   ]
 }
 
+// --- Style des réponses (verbosité) -----------------------------------------
+// Réglage utilisateur : « équilibré » = comportement historique (aucune consigne
+// ajoutée). La consigne s'applique au system du chat et aux prompts FINAUX du résumé —
+// jamais aux passes map/reduce intermédiaires (compresser un partiel perdrait de l'info).
+export type CopilotVerbosity = 'brief' | 'balanced' | 'detailed'
+
+export function verbosityNote(v: CopilotVerbosity): string {
+  if (v === 'brief')
+    return "Style de réponse demandé : BREF — va droit à l'essentiel en quelques phrases ou puces, sans développement ni préambule."
+  if (v === 'detailed')
+    return 'Style de réponse demandé : DÉTAILLÉ — développe les points importants, structure ta réponse et appuie-toi explicitement sur le contenu fourni.'
+  return ''
+}
+
+// Applique la consigne de style au message system (1er de la liste) — no-op en équilibré.
+export function applyVerbosity(messages: OllamaMessage[], v: CopilotVerbosity): OllamaMessage[] {
+  const note = verbosityNote(v)
+  if (!note || messages.length === 0 || messages[0].role !== 'system') return messages
+  return [{ role: 'system', content: `${messages[0].content}\n\n${note}` }, ...messages.slice(1)]
+}
+
 // --- Résumé (14.2) : segmentation map-reduce des longs docs -----------------
 // Le PRD (FR-4) interdit la troncature silencieuse. Un doc trop long pour la fenêtre du modèle
 // est donc DÉCOUPÉ (map : un résumé par segment ; reduce : synthèse des résumés), jamais coupé.
-export type SummaryMode = 'summary' | 'keypoints'
+export type SummaryMode = 'summary' | 'keypoints' | 'todos'
 
 // Fenêtre de contexte IMPOSÉE au modèle pour le résumé. On la FIXE (au lieu du défaut Ollama,
 // souvent 2048/4096) car un prompt plus long que num_ctx est tronqué À GAUCHE côté serveur — la
@@ -328,6 +349,16 @@ function summarySystem(persona: PersonaProfile): string {
   return persona === 'cloud' ? CLOUD_SUMMARY_SYS : LOCAL_SUMMARY_SYS
 }
 
+// Deux tâches VOLONTAIREMENT contrastées : « ou puces » dans les deux consignes produisait
+// deux listes quasi identiques (vu en usage réel). Résumé = prose, points clés = puces.
+function summaryTask(mode: SummaryMode): string {
+  if (mode === 'keypoints')
+    return "Dégage les POINTS CLÉS du document : 5 à 10 puces courtes et factuelles (décisions, chiffres, idées structurantes), sans paragraphe d'introduction ni de conclusion."
+  if (mode === 'todos')
+    return "Dresse la liste des ACTIONS À FAIRE d'après le document : tâches, décisions à prendre, suivis à prévoir — une puce par action, formulée à l'infinitif. S'il n'y a aucune action à faire, dis-le simplement."
+  return 'Rédige un résumé fidèle du document en un ou deux courts paragraphes de prose fluide — pas de liste à puces.'
+}
+
 // Résumé direct quand le document tient dans une seule fenêtre.
 export function buildWholeSummaryPrompt(
   text: string,
@@ -336,11 +367,25 @@ export function buildWholeSummaryPrompt(
   persona: PersonaProfile = 'local',
 ): string {
   const title = name ?? 'sans titre'
-  const task =
-    mode === 'keypoints'
-      ? 'Dégage les POINTS CLÉS du document sous forme de puces courtes.'
-      : 'Rédige un résumé concis et fidèle du document (court paragraphe ou puces).'
-  return `${summarySystem(persona)}\n\n${task} Document « ${title} » :\n"""\n${text}\n"""`
+  return `${summarySystem(persona)}\n\n${summaryTask(mode)} Document « ${title} » :\n"""\n${text}\n"""`
+}
+
+// Résumé CITÉ (single-fenêtre) : mêmes consignes, mais le document part en extraits
+// numérotés (chunkText, déterministe) pour ancrer chaque affirmation avec [n] — même
+// mécanique que le chat 21.x, donc les actions rapides citent aussi. Le map-reduce n'a
+// pas d'équivalent : les numéros ne survivraient pas aux passes de réduction.
+export function buildCitedSummaryPrompt(
+  chunks: string[],
+  name: string | null,
+  mode: SummaryMode = 'summary',
+  persona: PersonaProfile = 'local',
+): string {
+  const title = name ?? 'sans titre'
+  const excerpts = chunks.map((c, i) => `Extrait [${i + 1}] :\n"""\n${c}\n"""`).join('\n\n')
+  return (
+    `${summarySystem(persona)}\n\n${summaryTask(mode)} Cite le numéro des extraits utilisés, ex. [1], ` +
+    `après chaque point ou affirmation.\n\nDocument « ${title} », fourni EN ENTIER, découpé en extraits numérotés :\n\n${excerpts}`
+  )
 }
 
 // Phase map : résume UN segment d'un document plus grand (pas d'intro ni de conclusion).
@@ -369,8 +414,10 @@ export function buildReduceSummaryPrompt(
   const title = name ?? 'sans titre'
   const task =
     mode === 'keypoints'
-      ? 'Fusionne-les en une liste unique des POINTS CLÉS (puces courtes), sans répétition.'
-      : 'Rédige à partir d\'eux un résumé global unique, cohérent et fidèle (court paragraphe ou puces), sans répétition.'
+      ? 'Fusionne-les en une liste unique de 5 à 10 POINTS CLÉS (puces courtes et factuelles), sans répétition.'
+      : mode === 'todos'
+        ? "Fusionne-les en une liste unique d'ACTIONS À FAIRE (une puce par action, à l'infinitif), sans répétition. S'il n'y a aucune action à faire, dis-le simplement."
+        : "Rédige à partir d'eux un résumé global unique, cohérent et fidèle, en un ou deux courts paragraphes de prose fluide (pas de liste à puces), sans répétition."
   return (
     `${summarySystem(persona)}\n\nVoici, dans l'ordre, des résumés partiels du document « ${title} ». ` +
     `${task} N'ajoute aucune information qui n'y figure pas :\n"""\n${partials}\n"""`

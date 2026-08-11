@@ -8,7 +8,7 @@
   import { DEFAULT_EMBED_MODEL, FALLBACK_EMBED_MODEL, noteTitle } from '../lib/rag'
   import { cancelRagIndexing, deleteRagIndex, ragState, refreshRagIndex } from '../lib/rag-index.svelte'
   import { baseName, parentPath } from '../lib/explorer'
-  import { MAX_DOC_CHARS, MAX_DOC_CHARS_CLOUD } from '../lib/copilot-service'
+  import { MAX_DOC_CHARS, MAX_DOC_CHARS_CLOUD, type SummaryMode } from '../lib/copilot-service'
   import { openOpenAiAuthPage, OPENAI_MODEL } from '../lib/openai'
   import { renderChatMarkdown } from '../lib/export/render-md'
   import { annotateCitations } from '../lib/citations'
@@ -191,11 +191,6 @@
   function pickManageLocal() {
     setCopilotProvider('ollama')
     closePicker(true)
-  }
-  // pointerdown en capture : un clic sur une zone de drag Tauri peut ne jamais livrer de
-  // `click` (drag intercepté au mousedown) — le dropdown doit se fermer quand même.
-  function onPickerWindowPointerDown(e: PointerEvent) {
-    if (!pickerRootEl?.contains(e.target as Node | null)) pickerOpen = false
   }
   function pickerOptions(): HTMLButtonElement[] {
     // Les entrées des sections fermées sont inert (non focusables) : on les exclut
@@ -418,15 +413,63 @@
     }
   }
 
-  // Actions rapides de la vue vide : « Résumer »/« Points clés » passent par le pipeline de
-  // résumé (14.2, segmentation map-reduce des longs docs) ; « Question » donne juste le focus.
-  function quickAction(kind: 'summary' | 'question' | 'keypoints') {
-    if (kind === 'question') {
-      promptEl?.focus()
-      return
+  // Style des réponses (verbosité) : puce compacte DANS la rangée de saisie — clic =
+  // petit menu vers le haut (même famille que le sélecteur de modèle des chats connus).
+  const VERBOSITY_CHOICES = [
+    { value: 'brief', label: 'Bref', hint: "Droit à l'essentiel", icon: 'short_text' },
+    { value: 'balanced', label: 'Équilibré', hint: 'Longueur naturelle', icon: 'subject' },
+    { value: 'detailed', label: 'Détaillé', hint: 'Développé et structuré', icon: 'notes' },
+  ] as const
+  const verbosityLabel = $derived(VERBOSITY_CHOICES.find((c) => c.value === app.copilotVerbosity)?.label ?? 'Équilibré')
+  let verbMenuOpen = $state(false)
+  let verbMenuRootEl = $state<HTMLElement | null>(null)
+  let verbMenuEl = $state<HTMLElement | null>(null)
+  let verbChipEl = $state<HTMLButtonElement | null>(null)
+  // Position du menu dans le repère du PANNEAU (contain: layout = bloc conteneur du
+  // fixed) : en absolu il serait clippé par les overflow du composer (vécu — seule la
+  // dernière entrée émergeait) ; en fixed, les clips intermédiaires ne s'appliquent pas.
+  let verbMenuPos = $state<{ left: number; bottom: number } | null>(null)
+  const VERB_MENU_W = 216
+
+  function toggleVerbMenu() {
+    verbMenuOpen = !verbMenuOpen
+    if (verbMenuOpen && verbChipEl && panelEl) {
+      const r = verbChipEl.getBoundingClientRect()
+      const a = panelEl.getBoundingClientRect()
+      // Ancré au bord gauche du chip, serré dans le panneau (contain: paint clippe à ses bords).
+      const left = Math.min(Math.max(Math.round(r.left - a.left), 8), Math.round(a.width - VERB_MENU_W - 8))
+      verbMenuPos = { left, bottom: Math.round(a.bottom - r.top) + 8 }
+      // Le curseur prend le focus : flèches immédiatement opérantes au clavier.
+      void tick().then(() => verbMenuEl?.querySelector<HTMLInputElement>('.cop-verb-slider')?.focus())
     }
+  }
+
+  // Les flèches restent au <input type="range"> (gauche/droite ET haut/bas natifs) —
+  // seuls Échap et Tab ferment.
+  function onVerbMenuKeydown(e: KeyboardEvent) {
+    if (e.key === 'Escape') {
+      e.preventDefault()
+      e.stopPropagation()
+      verbMenuOpen = false
+      verbChipEl?.focus()
+    } else if (e.key === 'Tab') {
+      verbMenuOpen = false
+    }
+  }
+  // Fermeture au clic extérieur : partagée avec le dropdown Modèle (un seul svelte:window).
+  function onGlobalPointerDown(e: PointerEvent) {
+    const t = e.target as Node | null
+    if (pickerOpen && !pickerRootEl?.contains(t)) pickerOpen = false
+    // Le menu vit hors du root du chip (racine du panneau) : les deux comptent comme « dedans ».
+    if (verbMenuOpen && !verbMenuRootEl?.contains(t) && !verbMenuEl?.contains(t)) verbMenuOpen = false
+  }
+
+  // Actions rapides de la vue vide — trois LIVRABLES distincts du même pipeline de résumé
+  // (14.2, citations single-fenêtre) : prose, points clés, actions à faire. Pas d'action
+  // « Poser une question » : le composer est juste en dessous, elle ne faisait que le focus.
+  function quickAction(mode: SummaryMode) {
     const t = activeTab()
-    void summarizeDoc({ name: t?.name ?? null, text: t?.content ?? '', kind: t?.kind ?? 'md', path: t?.path ?? null }, kind === 'keypoints' ? 'keypoints' : 'summary')
+    void summarizeDoc({ name: t?.name ?? null, text: t?.content ?? '', kind: t?.kind ?? 'md', path: t?.path ?? null }, mode)
   }
 
   async function copyMessage(text: string) {
@@ -513,6 +556,58 @@
   </section>
 {/snippet}
 
+{#snippet verbMenuCard()}
+  {#if verbMenuOpen && verbMenuPos}
+    {@const vIdx = Math.max(VERBOSITY_CHOICES.findIndex((c) => c.value === app.copilotVerbosity), 0)}
+    {@const vCur = VERBOSITY_CHOICES[vIdx]}
+    <!-- Rendu à la racine du panneau : dans le composer, le flip des faces (transform)
+         devient bloc conteneur et clippe/déplace le menu (vécu). Ici, repère = panneau. -->
+    <div
+      class="cop-verb-menu"
+      style="left:{verbMenuPos.left}px; bottom:{verbMenuPos.bottom}px"
+      role="menu"
+      aria-label="Style des réponses"
+      tabindex="-1"
+      bind:this={verbMenuEl}
+      onkeydown={onVerbMenuKeydown}
+    >
+      <div class="cop-verb-sliderwrap">
+        <!-- Ticks au-dessus de la piste, en ton inverse quand le remplissage les couvre :
+             les crans déjà parcourus restent visibles À TRAVERS la barre. -->
+        <div class="cop-verb-ticks" aria-hidden="true">
+          {#each VERBOSITY_CHOICES as c, i (c.value)}
+            <!-- Cran courant : masqué (le pouce est dessus) ; crans parcourus : ton
+                 inverse à travers le remplissage ; crans restants : discrets. -->
+            <span class:lit={i < vIdx} class:under-thumb={i === vIdx}></span>
+          {/each}
+        </div>
+        <input
+          class="cop-verb-slider"
+          type="range"
+          min="0"
+          max="2"
+          step="1"
+          value={vIdx}
+          style="--fill: calc(13px + (100% - 26px) * {vIdx / 2})"
+          aria-label="Style des réponses"
+          aria-valuetext={`${vCur.label} — ${vCur.hint}`}
+          oninput={(e) => {
+            const c = VERBOSITY_CHOICES[Number.parseInt((e.currentTarget as HTMLInputElement).value, 10)]
+            if (c) app.copilotVerbosity = c.value
+          }}
+        />
+      </div>
+      <div class="cop-verb-current">
+        <span class="cop-verb-item-ic"><span class="msr">{vCur.icon}</span></span>
+        <span class="cop-verb-item-copy">
+          <strong>{vCur.label}</strong>
+          <small>{vCur.hint}</small>
+        </span>
+      </div>
+    </div>
+  {/if}
+{/snippet}
+
 {#snippet citePreviewCard()}
   {#if citePreview}
     <div
@@ -531,9 +626,9 @@
   {/if}
 {/snippet}
 
-<!-- Échap est géré sur le trigger et le pop (focus toujours dans l'un des deux quand
-     ouvert) avec stopPropagation ; ici seul le clic extérieur. -->
-<svelte:window onpointerdowncapture={pickerOpen ? onPickerWindowPointerDown : undefined} />
+<!-- Échap est géré sur les triggers/pops eux-mêmes (focus toujours dedans quand ouvert)
+     avec stopPropagation ; ici seul le clic extérieur, partagé par les deux menus. -->
+<svelte:window onpointerdowncapture={pickerOpen || verbMenuOpen ? onGlobalPointerDown : undefined} />
 
 <aside
   class="cop-panel"
@@ -610,10 +705,10 @@
             <span class="msr">{app.copilotProvider === 'ollama' ? 'memory' : 'cloud'}</span>
             <span class="cop-picker-name">
               {#if app.copilotProvider === 'openai'}
-                <strong>{OPENAI_MODEL}</strong>
+                <strong class="sans">{OPENAI_MODEL}</strong>
                 <small class:warn={openAiState.kind === 'warn'}>OpenAI · {openAiState.label}</small>
               {:else if app.copilotProvider === 'minimax'}
-                <strong>{app.minimaxModel || MINIMAX_DEFAULT_MODEL}</strong>
+                <strong class="sans">{app.minimaxModel || MINIMAX_DEFAULT_MODEL}</strong>
                 <small class:warn={minimaxState.kind === 'warn'}>MiniMax · {minimaxState.label}</small>
               {:else if !app.activeModel}
                 <strong class="placeholder">Choisir un modèle</strong>
@@ -725,7 +820,7 @@
                     onclick={pickOpenAi}
                   >
                     <span class="cop-dot" class:on={app.copilotProvider === 'openai'}></span>
-                    <span class="cop-mono grow">{OPENAI_MODEL}</span>
+                    <span class="cop-cloud-model grow">{OPENAI_MODEL}</span>
                   </button>
                 </div>
               </div>
@@ -758,7 +853,7 @@
                     {@const selected = app.copilotProvider === 'minimax' && m === (app.minimaxModel || MINIMAX_DEFAULT_MODEL)}
                     <button class="cop-picker-opt" role="menuitemradio" aria-checked={selected} onclick={() => pickMinimax(m)}>
                       <span class="cop-dot" class:on={selected}></span>
-                      <span class="cop-mono grow">{m}</span>
+                      <span class="cop-cloud-model grow">{m}</span>
                     </button>
                   {/each}
                 </div>
@@ -1127,9 +1222,9 @@
               <span class="cop-action-copy"><strong>Résumer le document</strong><small>Obtenir l’essentiel en quelques points</small></span>
               <span class="msr cop-action-arrow">arrow_forward</span>
             </button>
-            <button class="cop-action" onclick={() => quickAction('question')}>
-              <span class="cop-action-icon"><span class="msr">chat_bubble</span></span>
-              <span class="cop-action-copy"><strong>Poser une question</strong><small>Interroger le contenu du document</small></span>
+            <button class="cop-action" onclick={() => quickAction('todos')}>
+              <span class="cop-action-icon"><span class="msr">checklist</span></span>
+              <span class="cop-action-copy"><strong>Lister les actions à faire</strong><small>Tâches, décisions ouvertes et suivis</small></span>
               <span class="msr cop-action-arrow">arrow_forward</span>
             </button>
             <button class="cop-action" onclick={() => quickAction('keypoints')}>
@@ -1357,6 +1452,28 @@
                     aria-label={copilot.scope === 'folder' ? 'Poser une question sur le dossier de notes' : 'Poser une question sur ce document'}
                     onkeydown={onPromptKey}
                   ></textarea>
+                  <!-- Style des réponses : puce compacte, menu vers le haut. -->
+                  <div class="cop-verb-root" bind:this={verbMenuRootEl}>
+                    <button
+                      class="cop-verb-chip"
+                      class:open={verbMenuOpen}
+                      bind:this={verbChipEl}
+                      title="Style des réponses"
+                      aria-haspopup="menu"
+                      aria-expanded={verbMenuOpen}
+                      aria-label={`Style des réponses : ${verbosityLabel}`}
+                      onclick={toggleVerbMenu}
+                      onkeydown={(e) => {
+                        if (e.key === 'Escape' && verbMenuOpen) {
+                          e.stopPropagation()
+                          verbMenuOpen = false
+                        }
+                      }}
+                    >
+                      <span>{verbosityLabel}</span>
+                      <span class="msr">expand_more</span>
+                    </button>
+                  </div>
                   {#if copilot.generating}
                     <button class="cop-input-send" title="Arrêter" aria-label="Arrêter la génération" onclick={stopChat}>
                       <span class="msr" style="font-size:17px;font-variation-settings:'FILL' 1">stop</span>
@@ -1433,9 +1550,10 @@
       </div>
     {/if}
   </div>
-  <!-- Hors de .cop-card (overflow hidden) : la carte d'aperçu se positionne dans le
-       repère du panneau (contain: layout) au-dessus de tout le contenu. -->
+  <!-- Hors de .cop-card (overflow hidden) : ces surfaces flottantes se positionnent dans
+       le repère du panneau (contain: layout) au-dessus de tout le contenu. -->
   {@render citePreviewCard()}
+  {@render verbMenuCard()}
 </aside>
 
 <style>
@@ -1574,6 +1692,9 @@
     overflow: hidden; font-family: var(--font-mono); font-size: 12.5px; font-weight: 500;
     white-space: nowrap; text-overflow: ellipsis;
   }
+  /* La mono est réservée aux TAGS techniques locaux (qwen2.5:1.5b-q4_0) : un nom de
+     modèle cloud est un nom de produit → sans. */
+  .cop-picker-name strong.sans { font-family: var(--font-sans); font-weight: 600; }
   .cop-picker-name strong.placeholder { font-family: var(--font-sans); color: var(--ink-4); }
   .cop-picker-name small { font-size: 10px; color: var(--ink-4); }
   .cop-picker-name small.warn { color: var(--warn-text); }
@@ -1628,6 +1749,7 @@
   .cop-picker-opt[aria-checked='true'] { background: var(--accent-soft); color: var(--ink); }
   .cop-picker-opt > .msr { flex: 0 0 auto; font-size: 16px; color: var(--ink-3); }
   .cop-picker-empty { padding: 5px 9px 9px 22px; font-size: 11px; color: var(--ink-4); }
+  .cop-cloud-model { font-size: 12px; font-weight: 500; color: var(--ink); }
   @media (prefers-reduced-motion: reduce) {
     .cop-picker-pop { animation: none; }
     .cop-picker-fold, .cop-picker-sec-chev, .cop-picker-chev { transition: none; }
@@ -1644,7 +1766,7 @@
   }
   .cop-cloud-icon .msr { font-size: 21px; }
   .cop-cloud-name { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
-  .cop-cloud-name strong { overflow: hidden; font-family: var(--font-mono); font-size: 13px; color: var(--ink); white-space: nowrap; text-overflow: ellipsis; }
+  .cop-cloud-name strong { overflow: hidden; font-size: 13px; font-weight: 600; color: var(--ink); white-space: nowrap; text-overflow: ellipsis; }
   .cop-cloud-name small { font-size: 10.5px; color: var(--ink-4); }
   .cop-cloud-status {
     height: 23px; flex: 0 0 auto; display: inline-flex; align-items: center; gap: 5px; padding: 0 9px;
@@ -1656,7 +1778,7 @@
   .cop-cloud-status .cop-dot { width: 6px; height: 6px; border: 0; background: var(--ok); }
   .cop-cloud-foot { margin-top: -16px; display: flex; align-items: stretch; padding: 14px; border-radius: 16px 16px 0 0; background: var(--accent-soft); }
   .cop-cloud-foot > span { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 3px; }
-  .cop-cloud-foot b { font-family: var(--font-mono); font-size: 13px; font-weight: 600; color: var(--ink); }
+  .cop-cloud-foot b { font-size: 13px; font-weight: 600; color: var(--ink); }
   .cop-cloud-foot small { font-size: 9.5px; color: var(--ink-4); letter-spacing: 0.04em; }
   .cop-cloud-foot i { width: 1px; background: var(--line-2); }
 
@@ -2041,11 +2163,69 @@
   /* Portée (15.3) : deux lignes sélectionnables — document courant / dossier entier. */
   .cop-scope {
     display: flex; align-items: center; gap: 8px; padding: 5px 8px; min-width: 0;
-    border: 1px solid transparent; border-radius: 11px; background: none; color: var(--ink);
+    border: 0; border-radius: 11px; background: none; color: var(--ink);
     text-align: left; cursor: pointer;
   }
   .cop-scope:hover { background: var(--surface-hover); }
-  .cop-scope.sel { border-color: var(--line-2); background: var(--accent-soft); }
+  .cop-scope.sel { background: var(--accent-soft); }
+
+  /* Style des réponses : puce compacte dans la rangée de saisie + menu vers le haut. */
+  .cop-verb-root { position: relative; flex: 0 0 auto; align-self: flex-end; margin-bottom: 3px; }
+  .cop-verb-chip {
+    display: inline-flex; align-items: center; gap: 3px; height: 26px; padding: 0 4px 0 9px;
+    border: 0; border-radius: 8px; background: var(--surface-2); color: var(--ink-3);
+    font-family: var(--font-sans); font-size: 11px; font-weight: 500; cursor: pointer;
+    transition: background 120ms ease, color 120ms ease;
+  }
+  .cop-verb-chip:hover, .cop-verb-chip.open { background: var(--accent-soft); color: var(--ink); }
+  .cop-verb-chip:focus-visible { outline: 2px solid var(--line-3); outline-offset: 1px; }
+  .cop-verb-chip .msr { font-size: 15px; color: var(--ink-4); }
+  .cop-verb-menu {
+    position: absolute; z-index: 40;
+    width: 236px; padding: 6px;
+    border-radius: 14px; background: var(--cream-tint);
+    box-shadow:
+      0 0 0 1px var(--elevation-ring-soft),
+      0 12px 30px rgba(var(--shadow-rgb), 0.16);
+    animation: cop-picker-in 140ms cubic-bezier(0.22, 1, 0.36, 1);
+  }
+  /* Curseur à 3 crans (essai façon « effort ») : piste pleine jusqu'au pouce, ticks.
+     Pas d'en-tête : le libellé courant sous le curseur dit déjà tout. */
+  .cop-verb-sliderwrap { position: relative; padding: 6px 4px 2px; }
+  .cop-verb-ticks {
+    position: absolute; inset: 6px 17px 2px; display: flex; align-items: center; justify-content: space-between;
+    pointer-events: none;
+  }
+  .cop-verb-ticks span { width: 4px; height: 4px; border-radius: 50%; background: rgba(var(--ink-rgb), 0.22); }
+  /* Sous le remplissage (fond = ink) : ton inverse translucide, lisible dans les 2 thèmes. */
+  .cop-verb-ticks span.lit { background: var(--cream-content); opacity: 0.7; }
+  .cop-verb-ticks span.under-thumb { opacity: 0; }
+  .cop-verb-slider {
+    -webkit-appearance: none; appearance: none; display: block; width: 100%; height: 26px;
+    margin: 0; background: transparent; cursor: pointer;
+  }
+  .cop-verb-slider:focus-visible { outline: 2px solid var(--line-3); outline-offset: 3px; border-radius: 999px; }
+  .cop-verb-slider::-webkit-slider-runnable-track {
+    height: 18px; border-radius: 999px;
+    background: linear-gradient(to right, var(--ink) 0 var(--fill), var(--surface-2) var(--fill) 100%);
+    /* Liseré intérieur : l'étendue TOTALE de la course reste lisible même à vide. */
+    box-shadow: inset 0 0 0 1px rgba(var(--ink-rgb), 0.14);
+  }
+  .cop-verb-slider::-webkit-slider-thumb {
+    -webkit-appearance: none; appearance: none;
+    width: 24px; height: 24px; margin-top: -3px; border: 0; border-radius: 50%;
+    background: #fff;
+    box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.08), 0 2px 6px rgba(0, 0, 0, 0.25);
+  }
+  .cop-verb-current { display: flex; align-items: center; gap: 10px; padding: 8px 6px 4px; }
+  .cop-verb-item-ic {
+    width: 28px; height: 28px; flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center;
+    border-radius: 8px; background: var(--surface-2); color: var(--ink-3);
+  }
+  .cop-verb-item-ic .msr { font-size: 16px; }
+  .cop-verb-item-copy { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+  .cop-verb-item-copy strong { font-size: 12px; font-weight: 600; color: var(--ink); }
+  .cop-verb-item-copy small { font-size: 10.5px; color: var(--ink-4); }
   .cop-context-icon {
     width: 36px; height: 36px; flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center;
     border-radius: 10px; background: var(--surface-2); color: var(--ink-3);
