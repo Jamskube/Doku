@@ -21,6 +21,64 @@
   const showLogo = $derived(!app.sidebarOpen && !railHover)
   const canExport = $derived(activeTab()?.kind !== 'pdf' && !!activeTab())
 
+  // --- Barre d'onglets : quand la place manque (chaque onglet < TAB_MIN), la rangée
+  // entière se REPLIE en un seul bouton « onglet actif · n » qui ouvre un menu flottant
+  // listant tous les onglets — des onglets écrasés à la seule croix ne se distinguent
+  // plus (vécu en fenêtre étroite avec sidebar + copilote ouverts).
+  const TAB_MIN = 96
+  const TAB_GAP = 3
+  const NEW_TAB_W = 32
+  let tabsBox = $state<HTMLElement | null>(null)
+  let tabsBoxWidth = $state(Infinity)
+  const tabsCollapsed = $derived(
+    app.tabs.length > 0 &&
+      tabsBoxWidth < app.tabs.length * (TAB_MIN + TAB_GAP) + NEW_TAB_W + 8,
+  )
+
+  let tabsMenuOpen = $state(false)
+  let tabsMenuRootEl: HTMLElement | undefined = $state()
+  let tabsMenuTriggerEl: HTMLButtonElement | undefined = $state()
+  let tabsMenuEl: HTMLElement | undefined = $state()
+
+  function toggleTabsMenu() {
+    tabsMenuOpen = !tabsMenuOpen
+  }
+  function closeTabsMenu(restoreFocus = false) {
+    tabsMenuOpen = false
+    if (restoreFocus) void tick().then(() => tabsMenuTriggerEl?.focus())
+  }
+  function pickTab(id: number) {
+    app.activeId = id
+    closeTabsMenu(true)
+  }
+  function tabsMenuItems(): HTMLButtonElement[] {
+    return Array.from(tabsMenuEl?.querySelectorAll<HTMLButtonElement>('.app-menu-item') ?? [])
+  }
+  function handleTabsMenuKeydown(event: KeyboardEvent) {
+    const items = tabsMenuItems()
+    const idx = items.indexOf(document.activeElement as HTMLButtonElement)
+    if (event.key === 'ArrowDown') {
+      event.preventDefault()
+      ;(items[idx + 1] ?? items[0])?.focus()
+    } else if (event.key === 'ArrowUp') {
+      event.preventDefault()
+      ;(items[idx - 1] ?? items[items.length - 1])?.focus()
+    } else if (event.key === 'Escape') {
+      event.preventDefault()
+      event.stopPropagation()
+      closeTabsMenu(true)
+    } else if (event.key === 'Tab') {
+      closeTabsMenu()
+    }
+  }
+  async function openTabsMenuFromKeyboard(event: KeyboardEvent) {
+    if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return
+    event.preventDefault()
+    tabsMenuOpen = true
+    await tick()
+    tabsMenuItems()[0]?.focus()
+  }
+
   type ExportTab = { kind: DocKind; name: string; content: string; path: string | null }
 
   function closeMenus(restoreFocus = false) {
@@ -169,16 +227,29 @@
   onMount(() => {
     const onPointerDown = (event: PointerEvent) => {
       if (!menuRootEl?.contains(event.target as Node | null)) closeMenus()
+      if (!tabsMenuRootEl?.contains(event.target as Node | null)) closeTabsMenu()
     }
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape' && menuOpen) closeMenus()
+      if (event.key !== 'Escape') return
+      if (menuOpen) closeMenus()
+      if (tabsMenuOpen) closeTabsMenu()
     }
-    const onWindowChange = () => closeMenus()
+    const onWindowChange = () => {
+      closeMenus()
+      closeTabsMenu()
+    }
+    // La bascule onglets ↔ dropdown suit la largeur RÉELLE de la zone (fenêtre,
+    // sidebar, copilote… tout ce qui la comprime), pas seulement la fenêtre.
+    const ro = new ResizeObserver((entries) => {
+      tabsBoxWidth = entries[0]?.contentRect.width ?? Infinity
+    })
+    if (tabsBox) ro.observe(tabsBox)
     window.addEventListener('blur', onWindowChange)
     window.addEventListener('resize', onWindowChange)
     document.addEventListener('pointerdown', onPointerDown)
     document.addEventListener('keydown', onKeyDown)
     return () => {
+      ro.disconnect()
       window.removeEventListener('blur', onWindowChange)
       window.removeEventListener('resize', onWindowChange)
       document.removeEventListener('pointerdown', onPointerDown)
@@ -210,33 +281,83 @@
     </button>
   </div>
 
-  <div class="tabs" data-tauri-drag-region>
-    {#each app.tabs as tab (tab.id)}
-      {@const parent = tabDiscriminator(tab, app.tabs)}
-      <button
-        class="tab"
-        class:active={tab.id === app.activeId}
-        role="tab"
-        aria-selected={tab.id === app.activeId}
-        title={(tab.path ?? tab.name) + (isDirty(tab) ? ' — non enregistré' : '')}
-        onclick={() => (app.activeId = tab.id)}
-        onauxclick={(e) => { if (e.button === 1) requestCloseTab(tab.id) }}
-      >
-        {#if isDirty(tab)}<span class="dot">●</span>{/if}
-        <span class="name">{tab.name}</span>
-        {#if parent}<span class="parent">{parent}</span>{/if}
-        <span
-          class="close"
-          title="Fermer l'onglet"
-          role="button"
-          tabindex="-1"
-          onclick={(e) => { e.stopPropagation(); requestCloseTab(tab.id) }}
-          onkeydown={(e) => { if (e.key === 'Enter') { e.stopPropagation(); requestCloseTab(tab.id) } }}
+  <div class="tabs" data-tauri-drag-region bind:this={tabsBox}>
+    {#if tabsCollapsed}
+      {@const active = activeTab()}
+      <div class="tabs-overflow-root" bind:this={tabsMenuRootEl}>
+        <button
+          class="tabs-overflow-trigger"
+          class:open={tabsMenuOpen}
+          bind:this={tabsMenuTriggerEl}
+          title={(active?.path ?? active?.name ?? '') + (active && isDirty(active) ? ' — non enregistré' : '')}
+          aria-haspopup="menu"
+          aria-expanded={tabsMenuOpen}
+          aria-label={`Onglets ouverts (${app.tabs.length}) — actif : ${active?.name ?? 'aucun'}`}
+          onclick={toggleTabsMenu}
+          onkeydown={openTabsMenuFromKeyboard}
         >
-          <span class="msr" style="font-size:16px">close</span>
-        </span>
-      </button>
-    {/each}
+          {#if active && isDirty(active)}<span class="dot">●</span>{/if}
+          <span class="name">{active?.name ?? ''}</span>
+          {#if app.tabs.length > 1}<span class="tabs-overflow-count">+{app.tabs.length - 1}</span>{/if}
+          <span class="msr tabs-overflow-chev">expand_more</span>
+        </button>
+        {#if tabsMenuOpen}
+          <div class="app-menu tabs-menu" role="menu" tabindex="-1" aria-label="Onglets ouverts" bind:this={tabsMenuEl} onkeydown={handleTabsMenuKeydown}>
+            {#each app.tabs as tab (tab.id)}
+              {@const parent = tabDiscriminator(tab, app.tabs)}
+              <div class="tabs-menu-row" role="none">
+                <button
+                  class="app-menu-item"
+                  role="menuitemradio"
+                  aria-checked={tab.id === app.activeId}
+                  title={(tab.path ?? tab.name) + (isDirty(tab) ? ' — non enregistré' : '')}
+                  onclick={() => pickTab(tab.id)}
+                >
+                  <span class="tabs-menu-dot" class:dirty={isDirty(tab)} class:current={tab.id === app.activeId}></span>
+                  <span class="menu-label">{tab.name}</span>
+                  {#if parent}<span class="tabs-menu-parent">{parent}</span>{/if}
+                </button>
+                <button
+                  class="tabs-menu-close"
+                  title="Fermer l'onglet"
+                  aria-label={'Fermer ' + tab.name}
+                  onclick={() => requestCloseTab(tab.id)}
+                >
+                  <span class="msr" style="font-size:15px">close</span>
+                </button>
+              </div>
+            {/each}
+          </div>
+        {/if}
+      </div>
+    {:else}
+      {#each app.tabs as tab (tab.id)}
+        {@const parent = tabDiscriminator(tab, app.tabs)}
+        <button
+          class="tab"
+          class:active={tab.id === app.activeId}
+          role="tab"
+          aria-selected={tab.id === app.activeId}
+          title={(tab.path ?? tab.name) + (isDirty(tab) ? ' — non enregistré' : '')}
+          onclick={() => (app.activeId = tab.id)}
+          onauxclick={(e) => { if (e.button === 1) requestCloseTab(tab.id) }}
+        >
+          {#if isDirty(tab)}<span class="dot">●</span>{/if}
+          <span class="name">{tab.name}</span>
+          {#if parent}<span class="parent">{parent}</span>{/if}
+          <span
+            class="close"
+            title="Fermer l'onglet"
+            role="button"
+            tabindex="-1"
+            onclick={(e) => { e.stopPropagation(); requestCloseTab(tab.id) }}
+            onkeydown={(e) => { if (e.key === 'Enter') { e.stopPropagation(); requestCloseTab(tab.id) } }}
+          >
+            <span class="msr" style="font-size:16px">close</span>
+          </span>
+        </button>
+      {/each}
+    {/if}
     <button class="new-tab" title="Nouvel onglet (Ctrl+O)" aria-label="Nouvel onglet" onclick={onOpen}>
       <span class="msr" style="font-size:20px">add</span>
     </button>
@@ -532,6 +653,89 @@
     min-width: 0;
   }
 
+  /* Mode replié : la rangée entière devient « onglet actif · n ▾ » + menu flottant
+     (matériau .app-menu partagé avec le menu document). */
+  .tabs-overflow-root { position: relative; display: flex; align-items: center; min-width: 0; }
+  .tabs-overflow-trigger {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    height: var(--titlebar-control-height);
+    min-width: 0;
+    max-width: 100%;
+    padding: 0 8px 0 13px;
+    border: 1px solid transparent;
+    border-bottom-width: 0;
+    border-radius: 10px 10px 0 0;
+    background: var(--cream-content);
+    box-shadow: 0 4px 0 var(--cream-content);
+    color: var(--ink);
+    font-size: 12.5px;
+    font-weight: 500;
+    cursor: pointer;
+  }
+  .tabs-overflow-trigger:focus-visible { outline: 1px solid var(--line-3); outline-offset: -2px; }
+  /* « +n » nu (n = autres onglets) : info secondaire, pas de pilule qui crie. */
+  .tabs-overflow-count {
+    flex: 0 0 auto;
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    font-weight: 500;
+    color: var(--ink-4);
+  }
+  .tabs-overflow-chev {
+    flex: 0 0 auto;
+    font-size: 16px;
+    color: var(--ink-4);
+    transition: transform 140ms ease;
+  }
+  .tabs-overflow-trigger.open .tabs-overflow-chev { transform: rotate(180deg); }
+  .tabs-menu {
+    left: 0;
+    transform-origin: top left;
+    width: 264px;
+    max-height: min(52vh, 420px);
+    overflow-y: auto;
+    overflow-x: hidden;
+  }
+  /* Nom long → « … », jamais de scrollbar horizontale (même règle que .name des onglets). */
+  .tabs-menu .menu-label { overflow: hidden; text-overflow: ellipsis; }
+  .tabs-menu-row { display: flex; align-items: center; gap: 2px; }
+  .tabs-menu-row .app-menu-item { flex: 1; min-width: 0; height: 36px; }
+  .tabs-menu-row .app-menu-item[aria-checked='true'] { background: var(--accent-soft); color: var(--ink); }
+  /* Colonne fixe : rond plein = non enregistré, anneau = onglet courant, vide sinon —
+     l'alignement des noms reste stable. */
+  .tabs-menu-dot { width: 8px; height: 8px; flex: 0 0 auto; border-radius: 50%; }
+  .tabs-menu-dot.current { border: 1.5px solid var(--line-3); }
+  .tabs-menu-dot.dirty { border: 0; background: var(--ink); }
+  .tabs-menu-parent {
+    flex-shrink: 3;
+    min-width: 0;
+    max-width: 90px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 10.5px;
+    color: var(--ink-4);
+  }
+  .tabs-menu-parent::before { content: '·'; margin-right: 4px; opacity: 0.55; }
+  .tabs-menu-close {
+    width: 26px;
+    height: 26px;
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: 0;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--ink-4);
+    cursor: pointer;
+  }
+  .tabs-menu-close:hover { background: var(--surface-hover); color: var(--err); }
+  .tabs-menu-close:focus-visible { outline: 1px solid var(--line-3); outline-offset: -2px; }
+
   .tab {
     position: relative;
     display: inline-flex;
@@ -539,7 +743,10 @@
     gap: 7px;
     padding: 0 8px 0 13px;
     height: var(--titlebar-control-height);
-    min-width: 0;
+    /* Un onglet ne s'écrase plus au point de ne laisser que la croix : en deçà,
+       le strip défile. */
+    min-width: 96px;
+    flex: 0 1 auto;
     border: 1px solid transparent;
     border-bottom-width: 0;
     border-radius: 10px 10px 0 0;
@@ -619,6 +826,7 @@
   .new-tab {
     position: relative;
     width: 32px;
+    flex: 0 0 auto;
     height: var(--titlebar-control-height);
     display: inline-flex;
     align-items: center;
