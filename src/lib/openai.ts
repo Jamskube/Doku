@@ -28,12 +28,14 @@ export interface OpenAiMessage {
 }
 
 interface OpenAiStreamEvent {
-  kind: 'delta' | 'done' | 'error'
+  // 'thinking' : premier delta de raisonnement — signal sans texte, une fois.
+  kind: 'delta' | 'thinking' | 'done' | 'error'
   text?: string
 }
 
 interface OpenAiStreamOptions {
   reasoningEffort?: 'none' | 'low' | 'medium' | 'high'
+  onThinking?: () => void
 }
 
 function nativeOnly(): Error {
@@ -100,6 +102,8 @@ async function streamOpenAi(
     if (event.kind === 'delta' && event.text) {
       output += event.text
       onToken(event.text)
+    } else if (event.kind === 'thinking') {
+      options.onThinking?.()
     } else if (event.kind === 'error') {
       streamError = event.text || 'La génération OpenAI a échoué.'
     }
@@ -132,14 +136,16 @@ export function openAiChat(
   messages: OpenAiMessage[],
   onToken: (token: string) => void,
   signal?: AbortSignal,
+  onThinking?: () => void,
 ): Promise<string> {
-  return streamOpenAi(messages, onToken, signal, { reasoningEffort: 'low' })
+  return streamOpenAi(messages, onToken, signal, { reasoningEffort: 'low', onThinking })
 }
 
 export function openAiGenerate(
   prompt: string,
   onToken: (token: string) => void,
   signal?: AbortSignal,
+  onThinking?: () => void,
 ): Promise<string> {
-  return streamOpenAi([{ role: 'user', content: prompt }], onToken, signal, { reasoningEffort: 'low' })
+  return streamOpenAi([{ role: 'user', content: prompt }], onToken, signal, { reasoningEffort: 'low', onThinking })
 }

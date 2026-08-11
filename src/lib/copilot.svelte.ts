@@ -61,6 +61,7 @@ import {
   buildWholeSummaryPrompt,
   COPILOT_NUM_CTX,
   COPILOT_TEMPERATURE,
+  SEGMENT_CHARS,
   segmentDoc,
   SUMMARY_MAP_MAX_TOKENS,
   type ChatTurn,
@@ -486,14 +487,18 @@ async function resolveRuntime(provider: CopilotProvider, localModel: string): Pr
   return port === null ? null : { provider: 'ollama', port, model: localModel }
 }
 
+// `onThinking` (cloud) : appelé au premier delta de raisonnement — les modèles cloud
+// pensent parfois des dizaines de secondes avant le premier token visible ; le statut
+// doit le dire (« jamais muet »). Jamais émis par Ollama (modèle local non pensant).
 function streamChat(
   runtime: ProviderRuntime,
   messages: OpenAiMessage[],
   onToken: (token: string) => void,
   signal: AbortSignal,
+  onThinking?: () => void,
 ): Promise<string> {
-  if (runtime.provider === 'openai') return openAiChat(messages, onToken, signal)
-  if (runtime.provider === 'minimax') return compatChat('minimax', runtime.model, messages, onToken, signal)
+  if (runtime.provider === 'openai') return openAiChat(messages, onToken, signal, onThinking)
+  if (runtime.provider === 'minimax') return compatChat('minimax', runtime.model, messages, onToken, signal, onThinking)
   return chat(runtime.port, runtime.model, messages, onToken, signal, {
     num_ctx: COPILOT_NUM_CTX,
     temperature: COPILOT_TEMPERATURE,
@@ -505,13 +510,13 @@ function streamGenerate(
   prompt: string,
   onToken: (token: string) => void,
   signal: AbortSignal,
-  options: { map?: boolean } = {},
+  options: { map?: boolean; onThinking?: () => void } = {},
 ): Promise<string> {
   if (runtime.provider === 'openai') {
-    return openAiGenerate(prompt, onToken, signal)
+    return openAiGenerate(prompt, onToken, signal, options.onThinking)
   }
   if (runtime.provider === 'minimax') {
-    return compatGenerate('minimax', runtime.model, prompt, onToken, signal)
+    return compatGenerate('minimax', runtime.model, prompt, onToken, signal, options.onThinking)
   }
   return generate(runtime.port, runtime.model, prompt, onToken, signal, {
     num_ctx: COPILOT_NUM_CTX,
@@ -694,6 +699,12 @@ export async function sendChat(
         m.content += t
       },
       signal,
+      () => {
+        // Réflexion cloud : efface « lit le document… » — les points chorégraphiés seuls
+        // portent l'attente (pas de texte redondant). Jamais après le 1er token.
+        const m = copilot.messages[idx]
+        if (m && m.streaming && !m.content) m.status = undefined
+      },
     )
     // Pied « Passages consultés » déterministe (15.3) — supprimé sur refus : des sources
     // cliquables sous « je ne trouve pas » seraient trompeuses. Sans `sources` posées,
@@ -1001,6 +1012,13 @@ export async function summarizeDoc(
     m.status = undefined
     m.content += t
   }
+  // Réflexion cloud (streamGenerate final/single-window) : efface le statut — les points
+  // chorégraphiés seuls portent l'attente. Pas branché sur la phase map — sa progression
+  // « partie i/n » est plus informative.
+  const onThinking = () => {
+    const m = copilot.messages[idx]
+    if (m && m.streaming && !m.content) m.status = undefined
+  }
 
   try {
     // PDF (18.2) : résoudre le texte AVANT le runtime — un PDF scanné/illisible poste sa
@@ -1030,7 +1048,12 @@ export async function summarizeDoc(
       return
     }
 
-    const segments = segmentDoc(doc.text)
+    // Fenêtre de segmentation au budget du FOURNISSEUR (même logique que le chat) : le
+    // cloud avale un document entier en une passe — segmenter à la taille locale (14k,
+    // calibrée num_ctx Ollama) déclenchait un map-reduce séquentiel (« partie 1/5 ») de
+    // plusieurs appels réseau pour un simple PDF de 5 pages.
+    const segMax = isCloudProvider(runtime.provider) ? MAX_DOC_CHARS_CLOUD : SEGMENT_CHARS
+    const segments = segmentDoc(doc.text, segMax)
     const persona = personaFor(runtime)
     // Style des réponses : appliqué aux prompts FINAUX seulement (une passe map/reduce
     // « brève » perdrait de l'information avant la synthèse).
@@ -1043,9 +1066,9 @@ export async function summarizeDoc(
       const { chunks, truncated } = chunkText(doc.text)
       if (chunks.length > 0 && !truncated) {
         citedSources = chunks.map((text, i) => ({ n: i + 1, path: doc.path ?? null, name: null, text }))
-        await streamGenerate(runtime, styled(buildCitedSummaryPrompt(chunks, doc.name, mode, persona)), stream, signal)
+        await streamGenerate(runtime, styled(buildCitedSummaryPrompt(chunks, doc.name, mode, persona)), stream, signal, { onThinking })
       } else {
-        await streamGenerate(runtime, styled(buildWholeSummaryPrompt(doc.text, doc.name, mode, persona)), stream, signal)
+        await streamGenerate(runtime, styled(buildWholeSummaryPrompt(doc.text, doc.name, mode, persona)), stream, signal, { onThinking })
       }
     } else {
       // map : un résumé par segment (non streamé, avec progression).
@@ -1059,9 +1082,9 @@ export async function summarizeDoc(
       // reduce hiérarchique borné : réduire tant que la concaténation déborde d'une fenêtre.
       let joined = partials.join('\n\n')
       let passes = 0
-      while (segmentDoc(joined).length > 1 && passes < MAX_REDUCE_PASSES) {
+      while (segmentDoc(joined, segMax).length > 1 && passes < MAX_REDUCE_PASSES) {
         setStatus('Synthèse en cours…')
-        const groups = segmentDoc(joined)
+        const groups = segmentDoc(joined, segMax)
         const reduced: string[] = []
         for (const g of groups) {
           const s = await streamGenerate(runtime, buildReduceSummaryPrompt(g, doc.name, mode, persona), () => {}, signal, { map: true })
@@ -1075,10 +1098,10 @@ export async function summarizeDoc(
       // streame chaque groupe à la suite (concaténation) plutôt que d'en écarter — jamais de perte.
       // Le statut reste affiché pendant le prefill de la synthèse ; `stream` l'efface au 1er token.
       setStatus('Synthèse en cours…')
-      const finalGroups = segmentDoc(joined)
+      const finalGroups = segmentDoc(joined, segMax)
       for (let i = 0; i < finalGroups.length; i++) {
         if (i > 0) copilot.messages[idx].content += '\n\n'
-        await streamGenerate(runtime, styled(buildReduceSummaryPrompt(finalGroups[i], doc.name, mode, persona)), stream, signal)
+        await streamGenerate(runtime, styled(buildReduceSummaryPrompt(finalGroups[i], doc.name, mode, persona)), stream, signal, { onThinking })
         if (signal.aborted) return
       }
     }

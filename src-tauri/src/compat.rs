@@ -437,6 +437,7 @@ pub async fn stream_compat(
         let mut stream = response.bytes_stream();
         let mut buffer = Vec::<u8>::new();
         let mut completed = false;
+        let mut thinking_sent = false;
         loop {
             tokio::select! {
                 _ = &mut cancel_rx => break,
@@ -475,7 +476,19 @@ pub async fn stream_compat(
                                 send_event(&on_event, "delta", Some(delta.to_string()))?;
                             }
                         }
-                        // `delta.reasoning_content` (reasoning_split) : ignoré volontairement.
+                        // `delta.reasoning_content` (reasoning_split) : le TEXTE reste ignoré,
+                        // mais le PREMIER delta signale la phase de réflexion au front — les
+                        // M-series pensent longuement avant d'écrire, un statut muet se lirait
+                        // comme un blocage (« jamais muet »).
+                        if !thinking_sent
+                            && json
+                                .pointer("/choices/0/delta/reasoning_content")
+                                .and_then(Value::as_str)
+                                .is_some_and(|s| !s.is_empty())
+                        {
+                            thinking_sent = true;
+                            send_event(&on_event, "thinking", None)?;
+                        }
                     }
                     if completed { break; }
                 }

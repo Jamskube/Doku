@@ -25,7 +25,8 @@ export interface CompatMessage {
 }
 
 interface CompatStreamEvent {
-  kind: 'delta' | 'done' | 'error'
+  // 'thinking' : premier delta de raisonnement (M-series) — signal sans texte, une fois.
+  kind: 'delta' | 'thinking' | 'done' | 'error'
   text?: string
 }
 
@@ -64,6 +65,7 @@ export async function compatChat(
   messages: CompatMessage[],
   onToken: (token: string) => void,
   signal?: AbortSignal,
+  onThinking?: () => void,
 ): Promise<string> {
   if (!isTauri) throw nativeOnly()
   const { Channel, invoke } = await import('@tauri-apps/api/core')
@@ -83,6 +85,8 @@ export async function compatChat(
         output += visible
         onToken(visible)
       }
+    } else if (event.kind === 'thinking') {
+      onThinking?.()
     } else if (event.kind === 'error') {
       streamError = event.text || 'La génération a échoué.'
     }
@@ -126,6 +130,7 @@ export function compatGenerate(
   prompt: string,
   onToken: (token: string) => void,
   signal?: AbortSignal,
+  onThinking?: () => void,
 ): Promise<string> {
-  return compatChat(provider, model, [{ role: 'user', content: prompt }], onToken, signal)
+  return compatChat(provider, model, [{ role: 'user', content: prompt }], onToken, signal, onThinking)
 }

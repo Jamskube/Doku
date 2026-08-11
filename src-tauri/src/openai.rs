@@ -548,6 +548,7 @@ pub async fn stream_openai(
         let mut stream = response.bytes_stream();
         let mut buffer = Vec::<u8>::new();
         let mut completed = false;
+        let mut thinking_sent = false;
         loop {
             tokio::select! {
                 _ = &mut cancel_rx => break,
@@ -564,6 +565,16 @@ pub async fn stream_openai(
                             Some("response.output_text.delta") => {
                                 if let Some(delta) = json.get("delta").and_then(Value::as_str) {
                                     send_event(&on_event, "delta", Some(delta.to_string()))?;
+                                }
+                            }
+                            // Raisonnement en cours (summary auto) : le texte du résumé de
+                            // pensée est ignoré, mais le premier delta prévient le front que
+                            // le modèle réfléchit (statut honnête pendant le silence).
+                            Some("response.reasoning_summary_text.delta")
+                            | Some("response.reasoning_text.delta") => {
+                                if !thinking_sent {
+                                    thinking_sent = true;
+                                    send_event(&on_event, "thinking", None)?;
                                 }
                             }
                             Some("response.completed") => {
