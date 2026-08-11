@@ -608,7 +608,9 @@
     -webkit-backdrop-filter: blur(24px) saturate(145%);
     backdrop-filter: blur(24px) saturate(145%);
     box-shadow: inset 0 1px 0 var(--chrome-material-filet);
-    transition: width 220ms cubic-bezier(0.22, 1, 0.36, 1);
+    /* Même tempo que le panneau copilote (.cop-panel) : les deux rideaux latéraux
+       doivent respirer à la même vitesse. */
+    transition: width 240ms cubic-bezier(0.4, 0, 1, 1);
   }
   .sidebar.open { width: 296px; }
   /* contain : le contenu (largeur figée) est isolé des invalidations externes — la
