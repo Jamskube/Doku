@@ -667,7 +667,13 @@
     {:else}
       {#if copilot.messages.length > 0}
         <button class="cop-ic" title="Nouvelle conversation" aria-label="Nouvelle conversation" onclick={newChat}>
-          <span class="msr" style="font-size:19px">add_comment</span>
+          <!-- Icône de trait (famille Lucide « square-pen ») : inline plutôt que dans le
+               subset Material Symbols — le geste « nouvelle conversation » mérite le dessin
+               au trait, plus léger que le glyphe plein. currentColor = suit l'état du bouton. -->
+          <svg class="cop-ic-line" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M12 3H7a4 4 0 0 0-4 4v10a4 4 0 0 0 4 4h10a4 4 0 0 0 4-4v-5" />
+            <path d="M18.375 2.625a1 1 0 0 1 3 3l-9.013 9.014a2 2 0 0 1-.853.505l-2.873.84a.5.5 0 0 1-.62-.62l.84-2.873a2 2 0 0 1 .506-.852z" />
+          </svg>
         </button>
       {/if}
       <button class="cop-ic" title="Gérer les modèles" aria-label="Gérer les modèles" onclick={() => (app.copilotView = 'models')}>
@@ -1284,9 +1290,20 @@
                 </div>
               </div>
             {:else}
+              <!-- Attente = AVANT le 1er token : les points chorégraphiés remplacent l'en-tête
+                   (le nom revient au-dessus du texte dès qu'il s'écrit). -->
+              {@const waiting = m.streaming && m.content === ''}
               <div class="cop-asst">
+                {#if waiting}
+                  <!-- role=status : la ligne (statut réel ou « réfléchit ») est annoncée au
+                       lecteur d'écran. Le shimmer est purement décoratif. -->
+                  <div class="cop-status" role="status">
+                    <span class="cop-think" aria-hidden="true"><i></i><i></i><i></i></span>
+                    <span class="cop-shimmer">{m.status ?? 'Doku-San réfléchit'}</span>
+                  </div>
+                {:else}
                 <div class="cop-asst-head">
-                  <span class="msr" class:breathe={m.streaming} style="font-size:16px;color:var(--ink-4)">spa</span>
+                  <span class="msr" style="font-size:16px;color:var(--ink-4)">spa</span>
                   <span class="cop-asst-name">Doku-San</span>
                   <div class="grow"></div>
                   {#if !m.streaming}
@@ -1309,20 +1326,10 @@
                     </button>
                   {/if}
                 </div>
-                {#if m.streaming && m.status}
-                  <!-- Progression (prefill/map) — role=status : annoncée au lecteur d'écran. -->
-                  <div class="cop-status" role="status">
-                    <span class="msr breathe" style="font-size:16px;color:var(--ink-4)">auto_stories</span>{m.status}
-                  </div>
-                {:else if m.streaming && m.content === ''}
-                  <div class="cop-skel-wrap">
-                    <div class="doku-skel" style="height:11px;width:92%"></div>
-                    <div class="doku-skel" style="height:11px;width:100%;animation-delay:0.15s"></div>
-                    <div class="doku-skel" style="height:11px;width:78%;animation-delay:0.3s"></div>
-                  </div>
-                {:else if m.streaming}
-                  <!-- Streaming : texte brut (aucun parse par token) — rendu Markdown à la fin. -->
-                  <div class="cop-md-plain">{m.content}</div>
+                {#if m.streaming}
+                  <!-- Streaming : texte brut (aucun parse par token) — rendu Markdown à la fin.
+                       ::after = curseur doux qui pulse au fil de l'écriture. -->
+                  <div class="cop-md-plain streaming">{m.content}</div>
                 {:else}
                   <!-- Réponse terminée : Markdown assaini (allowlist, 0 réseau) + puces [n].
                        svelte-ignore : clic et survol sont délégués aux <button> injectés
@@ -1337,6 +1344,7 @@
                     onfocusin={(e) => onAnswerCiteOver(e, m)}
                     onfocusout={onAnswerCiteOut}
                   >{@html renderAnswer(m)}</div>
+                {/if}
                 {/if}
                 {#if m.sources?.length && !m.streaming}
                   <!-- Citations DÉTERMINISTES (15.3, ancrées 21.x) : les passages réellement
@@ -1646,6 +1654,8 @@
     transition: color 140ms ease, background 140ms ease, transform 100ms ease;
   }
   .cop-ic { width: 28px; height: 28px; border-radius: 7px; color: var(--ink-4); }
+  /* Icône de trait inline : 18px pour peser comme les glyphes Material voisins (19px pleins). */
+  .cop-ic-line { width: 18px; height: 18px; display: block; }
   .cop-win { width: 38px; border-radius: 7px; }
   .cop-win.close { width: 40px; }
   .cop-ic:hover,
@@ -1985,12 +1995,135 @@
     border-radius: 8px; background: var(--surface-2);
   }
   .cop-asst-name { font-size: 11.5px; color: var(--ink-3); font-weight: 550; }
-  .msr.breathe { animation: doku-breathe 1.8s ease-in-out infinite; }
   .cop-copy { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border: 0; border-radius: 8px; background: transparent; color: var(--ink-4); cursor: pointer; opacity: 0.72; }
   .cop-copy:hover { background: var(--surface-hover); color: var(--ink); }
-  .cop-skel-wrap { display: flex; flex-direction: column; gap: 8px; padding-top: 2px; }
-  .cop-status { display: flex; align-items: center; gap: 7px; font-size: 12.5px; color: var(--ink-4); padding-top: 2px; }
+  .cop-status { display: flex; align-items: center; gap: 9px; font-size: 12.5px; color: var(--ink-4); padding-top: 2px; min-height: 20px; }
+  /* Texte d'attente : balayage de lumière en boucle. Le shimmer est un ENRICHISSEMENT posé
+     sous `no-preference` — jamais un override à défaire : le texte transparent (clip) ne
+     peut donc pas survivre à un cas où la règle de repli ne s'appliquerait pas. */
+  @media (prefers-reduced-motion: no-preference) {
+    .cop-shimmer {
+      background: linear-gradient(
+        100deg,
+        var(--ink-4) 0%,
+        var(--ink-4) 38%,
+        var(--ink) 50%,
+        var(--ink-4) 62%,
+        var(--ink-4) 100%
+      );
+      background-size: 220% 100%;
+      -webkit-background-clip: text;
+      background-clip: text;
+      -webkit-text-fill-color: transparent;
+      animation: cop-shimmer 2.4s linear infinite;
+    }
+  }
+  @keyframes cop-shimmer {
+    from { background-position: 140% 0; }
+    to { background-position: -40% 0; }
+  }
   .cop-md-plain { font-size: 13.5px; line-height: 1.65; color: var(--ink-2); white-space: pre-wrap; overflow-wrap: anywhere; }
+  /* Curseur de streaming : pulse doux au bout du texte qui s'écrit (retiré au rendu final). */
+  .cop-md-plain.streaming::after {
+    content: '';
+    display: inline-block;
+    width: 3px;
+    height: 13px;
+    margin-left: 3px;
+    border-radius: 2px;
+    background: var(--ink-3);
+    vertical-align: -2px;
+    animation: cop-caret 1s ease-in-out infinite;
+  }
+  @keyframes cop-caret {
+    0%, 100% { opacity: 0.85; }
+    50% { opacity: 0.15; }
+  }
+
+  /* Points chorégraphiés (attente/réflexion) : une boucle de 7,5 s enchaîne quatre figures —
+     vague (2 rebonds décalés) → regroupement au centre → ORBITE (le wrapper tourne 2 tours
+     pendant que les points tiennent un triangle) → retour en ligne → pulse en cascade.
+     Le wrapper finit à 720° ≡ 0° : la boucle reprend sans saut visible. Transform/opacity
+     uniquement (composité GPU). */
+  .cop-think {
+    position: relative;
+    width: 26px;
+    height: 14px;
+    flex: 0 0 auto;
+    animation: cop-think-spin 7.5s linear infinite;
+  }
+  .cop-think i {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: 4.5px;
+    height: 4.5px;
+    margin: -2.25px;
+    border-radius: 50%;
+    background: var(--ink-4);
+    animation: 7.5s ease-in-out infinite;
+  }
+  .cop-think i:nth-child(1) { animation-name: cop-think-a; }
+  .cop-think i:nth-child(2) { animation-name: cop-think-b; }
+  .cop-think i:nth-child(3) { animation-name: cop-think-c; }
+  @keyframes cop-think-spin {
+    0%, 36% { transform: rotate(0deg); }
+    64%, 100% { transform: rotate(720deg); }
+  }
+  /* Repères partagés : 0-24 vague · 28-34 regroupement · 36-62 triangle (l'orbite vient du
+     wrapper) · 66 regroupement · 72 retour en ligne · 76-92 pulse en cascade · 100 boucle. */
+  @keyframes cop-think-a {
+    0% { transform: translate(-8px, 0); }
+    4% { transform: translate(-8px, -4.5px); }
+    9% { transform: translate(-8px, 0); }
+    13% { transform: translate(-8px, -4.5px); }
+    18%, 28% { transform: translate(-8px, 0); }
+    34% { transform: translate(0, 0) scale(0.7); }
+    38%, 62% { transform: translate(0, -5px) scale(1); }
+    66% { transform: translate(0, 0) scale(0.7); }
+    72% { transform: translate(-8px, 0) scale(1); }
+    78% { transform: translate(-8px, 0) scale(1.4); }
+    84%, 100% { transform: translate(-8px, 0) scale(1); }
+  }
+  @keyframes cop-think-b {
+    0%, 3% { transform: translate(0, 0); }
+    7% { transform: translate(0, -4.5px); }
+    12% { transform: translate(0, 0); }
+    16% { transform: translate(0, -4.5px); }
+    21%, 28% { transform: translate(0, 0); }
+    34% { transform: translate(0, 0) scale(0.7); }
+    38%, 62% { transform: translate(-4.3px, 2.6px) scale(1); }
+    66% { transform: translate(0, 0) scale(0.7); }
+    72%, 81% { transform: translate(0, 0) scale(1); }
+    87% { transform: translate(0, 0) scale(1.4); }
+    93%, 100% { transform: translate(0, 0) scale(1); }
+  }
+  @keyframes cop-think-c {
+    0%, 6% { transform: translate(8px, 0); }
+    10% { transform: translate(8px, -4.5px); }
+    15% { transform: translate(8px, 0); }
+    19% { transform: translate(8px, -4.5px); }
+    24%, 28% { transform: translate(8px, 0); }
+    34% { transform: translate(0, 0) scale(0.7); }
+    38%, 62% { transform: translate(4.3px, 2.6px) scale(1); }
+    66% { transform: translate(0, 0) scale(0.7); }
+    72%, 84% { transform: translate(8px, 0) scale(1); }
+    90% { transform: translate(8px, 0) scale(1.4); }
+    96%, 100% { transform: translate(8px, 0) scale(1); }
+  }
+  /* Mouvement réduit : plus de trajectoires — fondu d'opacité décalé, points en ligne.
+     nth-child (même spécificité que les règles chorégraphiées, source postérieure). */
+  @media (prefers-reduced-motion: reduce) {
+    .cop-think { animation: none; }
+    .cop-think i:nth-child(1) { animation: cop-think-fade 1.6s ease-in-out infinite; transform: translate(-8px, 0); }
+    .cop-think i:nth-child(2) { animation: cop-think-fade 1.6s ease-in-out 0.25s infinite; transform: none; }
+    .cop-think i:nth-child(3) { animation: cop-think-fade 1.6s ease-in-out 0.5s infinite; transform: translate(8px, 0); }
+    .cop-md-plain.streaming::after { animation-duration: 1.6s; }
+  }
+  @keyframes cop-think-fade {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.25; }
+  }
 
   /* Rendu Markdown assaini (contenu injecté via {@html} → styles :global) */
   .cop-md { font-size: 13.5px; line-height: 1.65; color: var(--ink-2); overflow-wrap: anywhere; }
@@ -2259,7 +2392,10 @@
     display: inline-flex; align-items: center; justify-content: center;
     min-width: 16px; height: 15px; padding: 0 4px; border-radius: 5px;
     background: var(--accent-soft); color: var(--ink-3);
-    font-family: var(--font-mono); font-size: 9.5px; font-weight: 600; line-height: 1;
+    /* Inter (pas la mono) : un numéro de citation est un repère de lecture, pas un tag
+       technique. tabular-nums = colonnes stables entre [1] et [11]. */
+    font-family: var(--font-sans); font-size: 10px; font-weight: 600; line-height: 1;
+    font-variant-numeric: tabular-nums;
   }
 
   /* Puces de citation [n] inline (21.x) — injectées via {@html} après sanitize, d'où le
@@ -2269,7 +2405,8 @@
     display: inline-flex; align-items: center; justify-content: center;
     min-width: 16px; height: 15px; margin: 0 2px; padding: 0 4px; border: 0; border-radius: 5px;
     background: var(--accent-soft); color: var(--ink-3);
-    font-family: var(--font-mono); font-size: 9.5px; font-weight: 600; line-height: 1;
+    font-family: var(--font-sans); font-size: 10px; font-weight: 600; line-height: 1;
+    font-variant-numeric: tabular-nums;
     vertical-align: 2px; cursor: pointer;
     transition: background 120ms ease, color 120ms ease, transform 100ms ease;
   }
