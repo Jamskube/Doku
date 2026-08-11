@@ -765,7 +765,6 @@
     gap: 8px;
     border-radius: 8px;
     background: var(--surface);
-    border: 1px solid var(--line-2);
     color: var(--ink-3);
     font-size: 12.5px;
   }
@@ -775,8 +774,8 @@
     flex: none;
     padding: 4px 10px;
     border-radius: 6px;
-    border: 1px solid var(--line-2);
-    background: transparent;
+    border: 0;
+    background: var(--surface-2);
     color: var(--ink-2);
     font-size: 12px;
     cursor: pointer;
@@ -803,15 +802,15 @@
     align-items: center;
     gap: 8px;
     padding: 8px 14px;
-    border: 1px solid var(--line-2);
+    border: 0;
     border-radius: 9px;
-    background: var(--surface);
+    background: var(--surface-2);
     color: var(--ink-2);
     font-size: 13px;
     cursor: pointer;
-    transition: background 140ms ease, color 140ms ease, border-color 140ms ease;
+    transition: background 140ms ease, color 140ms ease;
   }
-  .empty-open:hover { background: var(--surface-hover); color: var(--ink); border-color: var(--line-3); }
+  .empty-open:hover { background: var(--accent-soft); color: var(--ink); }
   .empty-open .keys { display: inline-flex; gap: 3px; margin-left: 4px; }
   .empty kbd {
     font-family: var(--font-mono);
@@ -821,8 +820,9 @@
     border-radius: 4px;
     background: var(--surface-2);
     color: var(--ink-4);
-    border: 1px solid var(--line-2);
   }
+  /* Dans le bouton (lui-même surface-2), les touches passent un cran plus sombre. */
+  .empty-open kbd { background: var(--accent-soft); }
   .empty-shortcuts {
     margin: 8px 0 0;
     display: grid;
@@ -862,7 +862,6 @@
     z-index: 30;
     width: 264px;
     padding: 6px;
-    border: 1px solid var(--line-2);
     border-radius: 14px;
     background: var(--cream-tint);
     box-shadow:

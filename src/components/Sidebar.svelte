@@ -825,8 +825,8 @@
     min-width: 0;
     height: 22px;
     padding: 0 6px;
-    background: var(--surface);
-    border: 1px solid var(--accent, var(--line-3));
+    background: var(--cream-content);
+    border: 0;
     border-radius: 5px;
     color: var(--ink);
     font: inherit;
@@ -971,14 +971,14 @@
     height: 30px;
     margin-bottom: 8px;
     padding: 0 10px;
-    border: 1px solid var(--line-2);
+    border: 0;
     border-radius: 8px;
     background: var(--cream-content);
     color: var(--ink);
     font-size: 13px;
     outline: none;
   }
-  .search-input:focus { border-color: var(--line-3); }
+  .search-input:focus { outline: 2px solid var(--line-3); outline-offset: -2px; }
   .result { margin-bottom: 6px; }
   .result-file {
     width: 100%;

@@ -1504,7 +1504,7 @@
   .cop-identity { display: flex; align-items: center; gap: 7px; min-width: 0; }
   .cop-mark {
     width: 24px; height: 24px; display: inline-flex; align-items: center; justify-content: center;
-    border: 1px solid var(--line-1); border-radius: 8px; background: var(--cream-content); color: var(--ink-3);
+    border-radius: 8px; background: var(--cream-content); color: var(--ink-3);
   }
   .cop-title { font-size: 12.5px; font-weight: 600; color: var(--ink-2); white-space: nowrap; }
   .cop-local {
@@ -1563,7 +1563,7 @@
   .cop-picker { position: relative; margin: 14px 2px 16px; }
   .cop-picker-trigger {
     width: 100%; min-height: 48px; display: flex; align-items: center; gap: 10px; padding: 8px 12px;
-    border: 1px solid var(--line-2); border-radius: 13px; background: var(--surface-2); color: var(--ink);
+    border: 0; border-radius: 13px; background: var(--surface-2); color: var(--ink);
     font-family: var(--font-sans); text-align: left; cursor: pointer;
   }
   .cop-picker-trigger:hover { background: var(--surface-hover); }
@@ -1584,7 +1584,7 @@
   .cop-picker-pop {
     position: absolute; top: calc(100% + 5px); left: 0; right: 0; z-index: 30;
     max-height: 360px; overflow-y: auto; padding: 6px;
-    border: 1px solid var(--line-2); border-radius: 14px; background: var(--cream-tint);
+    border-radius: 14px; background: var(--cream-tint);
     box-shadow:
       0 0 0 1px var(--elevation-ring-soft),
       0 12px 30px rgba(var(--shadow-rgb), 0.16);
@@ -1634,11 +1634,13 @@
   }
 
   .cop-openai-view { padding: 0 2px 24px; display: flex; flex-direction: column; gap: 16px; }
-  .cop-cloud-hero { overflow: hidden; border: 1px solid var(--line-2); border-radius: 18px; }
-  .cop-cloud-head { display: flex; align-items: center; gap: 11px; padding: 14px 14px 28px; background: var(--cream-content); }
+  /* Deux tons pleins (tête surface-2, pied accent-soft par-dessus) : la carte se
+     découpe du fond sans aucun contour. */
+  .cop-cloud-hero { overflow: hidden; border-radius: 18px; background: var(--surface-2); }
+  .cop-cloud-head { display: flex; align-items: center; gap: 11px; padding: 14px 14px 28px; }
   .cop-cloud-icon {
     width: 42px; height: 42px; flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center;
-    border: 1px solid var(--line-2); border-radius: 12px; background: var(--surface-2); color: var(--ink-2);
+    border-radius: 12px; background: var(--accent-soft); color: var(--ink-2);
   }
   .cop-cloud-icon .msr { font-size: 21px; }
   .cop-cloud-name { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
@@ -1652,7 +1654,7 @@
   .cop-cloud-status.unavailable { background: rgba(180, 130, 60, 0.12); color: var(--warn-text); }
   .cop-cloud-status.checking { font-weight: 500; }
   .cop-cloud-status .cop-dot { width: 6px; height: 6px; border: 0; background: var(--ok); }
-  .cop-cloud-foot { margin-top: -16px; display: flex; align-items: stretch; padding: 14px; border-radius: 16px 16px 0 0; background: var(--surface-2); }
+  .cop-cloud-foot { margin-top: -16px; display: flex; align-items: stretch; padding: 14px; border-radius: 16px 16px 0 0; background: var(--accent-soft); }
   .cop-cloud-foot > span { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 3px; }
   .cop-cloud-foot b { font-family: var(--font-mono); font-size: 13px; font-weight: 600; color: var(--ink); }
   .cop-cloud-foot small { font-size: 9.5px; color: var(--ink-4); letter-spacing: 0.04em; }
@@ -1679,10 +1681,10 @@
   .cop-cloud-setup .cop-btn-fill:disabled { opacity: 0.55; cursor: default; }
   .cop-btn-quiet {
     width: 100%; min-height: 34px; display: inline-flex; align-items: center; justify-content: center; gap: 7px;
-    border: 1px solid var(--line-2); border-radius: 9px; background: transparent; color: var(--ink-3);
+    border: 0; border-radius: 9px; background: var(--surface-2); color: var(--ink-3);
     font-family: var(--font-sans); font-size: 11.5px; cursor: pointer;
   }
-  .cop-btn-quiet:hover { background: var(--surface-hover); color: var(--ink); }
+  .cop-btn-quiet:hover { background: var(--accent-soft); color: var(--ink); }
   .cop-btn-quiet:focus-visible, .cop-auth-code:focus-visible { outline: 2px solid var(--line-3); outline-offset: 2px; }
   .cop-btn-quiet .msr { font-size: 15px; }
   .cop-auth-wait { display: flex; flex-direction: column; align-items: center; text-align: center; }
@@ -1693,7 +1695,7 @@
   .cop-auth-mark .msr { font-size: 20px; }
   .cop-auth-code {
     width: 100%; min-height: 52px; margin: 1px 0 12px; padding: 0 14px; display: flex; align-items: center; justify-content: center; gap: 12px;
-    border: 1px solid var(--line-2); border-radius: 12px; background: var(--cream-content); color: var(--ink); cursor: pointer;
+    border: 0; border-radius: 12px; background: var(--surface-2); color: var(--ink); cursor: pointer;
   }
   .cop-auth-code > span:first-child { font-family: var(--font-mono); font-size: 20px; font-weight: 600; letter-spacing: 0.12em; }
   .cop-auth-code .msr { font-size: 16px; color: var(--ink-4); }
@@ -1717,9 +1719,9 @@
   .cop-onboard-title { font-size: 15.5px; font-weight: 600; color: var(--ink); margin-bottom: 7px; }
   .cop-onboard-sub { font-size: 12.5px; line-height: 1.6; color: var(--ink-4); }
   .cop-onboard-sub b { color: var(--ink-3); font-weight: 600; }
-  .cop-reco { width: 100%; border: 1px solid var(--line-2); border-radius: 13px; padding: 13px; text-align: left; }
+  .cop-reco { width: 100%; border-radius: 13px; padding: 13px; background: var(--surface-2); text-align: left; }
   .cop-reco-head { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
-  .cop-badge { font-size: 10px; color: var(--ink-4); border: 1px solid var(--line-2); border-radius: 5px; padding: 1px 6px; }
+  .cop-badge { font-size: 10px; color: var(--ink-4); background: var(--accent-soft); border-radius: 5px; padding: 2px 6px; }
   .cop-reco-sub { font-size: 11.5px; color: var(--ink-4); margin-bottom: 11px; }
   .cop-btn-fill {
     width: 100%; height: 34px; display: inline-flex; align-items: center; justify-content: center; gap: 7px;
@@ -1732,8 +1734,8 @@
   /* MiniMax : champ clé */
   .cop-mm-connect { display: flex; flex-direction: column; gap: 8px; }
   .cop-mm-connect input {
-    height: 34px; padding: 0 11px; border: 1px solid var(--line-2); border-radius: 9px;
-    background: var(--cream-content); color: var(--ink); font-family: var(--font-mono); font-size: 12px;
+    height: 34px; padding: 0 11px; border: 0; border-radius: 9px;
+    background: var(--surface-2); color: var(--ink); font-family: var(--font-mono); font-size: 12px;
   }
   .cop-mm-connect input:focus-visible { outline: 2px solid var(--line-3); outline-offset: -1px; }
 
@@ -1749,9 +1751,9 @@
 
   /* Bibliothèque */
   .cop-lib { display: flex; flex-direction: column; gap: 5px; }
-  .cop-row { display: flex; align-items: center; border-radius: 12px; border: 1px solid var(--line-1); }
-  .cop-row:hover { border-color: var(--line-2); background: var(--surface-hover); }
-  .cop-row.active { background: var(--accent-soft); border-color: var(--line-2); }
+  .cop-row { display: flex; align-items: center; border-radius: 12px; }
+  .cop-row:hover { background: var(--surface-hover); }
+  .cop-row.active { background: var(--accent-soft); }
   .cop-row-pick {
     flex: 1; display: flex; align-items: center; gap: 10px; min-width: 0;
     padding: 9px 4px 9px 11px; border: 0; background: none; color: var(--ink); text-align: left; cursor: pointer;
@@ -1762,22 +1764,22 @@
   .cop-del:hover { color: var(--err); }
 
   /* Téléchargement */
-  .cop-dl { padding: 11px 12px; border: 1px solid var(--line-1); border-radius: 12px; }
+  .cop-dl { padding: 11px 12px; border-radius: 12px; background: var(--surface-2); }
   .cop-dl-head { display: flex; align-items: center; gap: 9px; margin-bottom: 9px; }
-  .cop-track { height: 5px; background: var(--surface-2); border-radius: 3px; overflow: hidden; }
+  .cop-track { height: 5px; background: var(--accent-soft); border-radius: 3px; overflow: hidden; }
   .orbit { color: var(--ink-4); animation: doku-orbit 1.4s linear infinite; }
 
   /* Ajouter */
   .cop-add {
     display: flex; align-items: center; gap: 7px; height: 38px; padding: 0 6px 0 12px;
-    border: 1px solid var(--line-2); border-radius: 11px; background: var(--cream-content);
+    border-radius: 11px; background: var(--surface-2);
   }
   .cop-add-input {
     flex: 1; min-width: 0; border: 0; background: transparent; outline: none;
     font-family: var(--font-mono); font-size: 12.5px; color: var(--ink);
   }
   .cop-add-input::placeholder { color: var(--ink-4); }
-  .cop-add:focus-within { border-color: var(--line-3); }
+  .cop-add:focus-within { outline: 2px solid var(--line-3); outline-offset: -2px; }
   .cop-btn-sm {
     height: 28px; padding: 0 13px; background: var(--ink); color: var(--cream-content); border: 0; border-radius: 8px;
     font-family: var(--font-sans); font-size: 12px; font-weight: 500; cursor: pointer;
@@ -1787,18 +1789,21 @@
   .cop-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 9px; }
   .cop-chip {
     display: inline-flex; align-items: center; gap: 4px; height: 26px; padding: 0 10px;
-    border: 1px solid var(--line-2); border-radius: 999px; background: transparent;
+    border: 0; border-radius: 999px; background: var(--surface-2);
     color: var(--ink-3); font-family: var(--font-mono); font-size: 11.5px; cursor: pointer;
   }
-  .cop-chip:hover { background: var(--surface-hover); color: var(--ink); }
+  .cop-chip:hover { color: var(--ink); }
+  /* Dans une carte déjà surface-2 (index du dossier), les chips passent en clair. */
+  .cop-rag .cop-chip { background: var(--cream-content); }
+  .cop-rag .cop-chip.sel { background: var(--accent-soft); }
 
   /* Index du dossier (15.2) */
-  .cop-rag { padding: 11px 12px; border: 1px solid var(--line-1); border-radius: 12px; }
+  .cop-rag { padding: 11px 12px; border-radius: 12px; background: var(--surface-2); }
   .cop-rag-row { display: flex; align-items: center; gap: 9px; }
   .cop-rag-progress { display: flex; align-items: center; gap: 9px; margin-top: 9px; }
   .cop-rag-note { font-size: 11.5px; line-height: 1.55; color: var(--ink-4); margin-top: 8px; }
   .cop-rag-note.err { color: var(--err-text); display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-  .cop-chip.sel { border-color: var(--line-3); background: var(--accent-soft); color: var(--ink); }
+  .cop-chip.sel { background: var(--accent-soft); color: var(--ink); }
   .cop-chip-tag { margin-left: 5px; font-family: var(--font-sans); font-size: 10px; color: var(--ink-4); letter-spacing: 0.03em; }
   .cop-rag-del {
     border: 0; background: none; padding: 0; margin-left: 4px; cursor: pointer;
@@ -1821,7 +1826,7 @@
   .cop-empty-sub { max-width: 31ch; font-size: 12.5px; line-height: 1.55; color: var(--ink-4); margin-bottom: 23px; text-wrap: pretty; }
   .cop-actions {
     width: 100%; display: flex; flex-direction: column; overflow: hidden;
-    border: 1px solid var(--line-1); border-radius: 15px; background: var(--cream-content); text-align: left;
+    border-radius: 15px; background: var(--surface-2); text-align: left;
   }
   .cop-action {
     display: flex; align-items: center; gap: 11px; width: 100%; min-height: 60px; padding: 9px 12px;
@@ -1883,11 +1888,11 @@
   .cop-md :global(td) { padding: 5px 9px; color: var(--ink-2); border-bottom: 1px solid var(--line-1); }
 
   /* Carte d'erreur (génération échouée) */
-  .cop-err-card { display: flex; gap: 11px; padding: 13px; border: 1px solid var(--line-2); border-radius: 12px; background: var(--cream-content); }
+  .cop-err-card { display: flex; gap: 11px; padding: 13px; border-radius: 12px; background: var(--surface-2); }
   .cop-err-title { font-size: 13px; font-weight: 600; color: var(--ink); margin-bottom: 3px; }
   .cop-err-msg { font-size: 12px; line-height: 1.5; color: var(--ink-4); margin: 0 0 11px; }
   .cop-err-acts { display: flex; gap: 7px; }
-  .cop-err-btn { height: 30px; padding: 0 12px; background: transparent; color: var(--ink-3); border: 1px solid var(--line-2); border-radius: 8px; font-family: var(--font-sans); font-size: 12px; cursor: pointer; }
+  .cop-err-btn { height: 30px; padding: 0 12px; background: var(--cream-content); color: var(--ink-3); border: 0; border-radius: 8px; font-family: var(--font-sans); font-size: 12px; cursor: pointer; }
   .cop-err-btn:hover { background: var(--surface-hover); color: var(--ink); }
   .cop-err-btn.primary { background: var(--ink); color: var(--cream-content); border-color: var(--ink); }
   .cop-err-btn.primary:hover { background: var(--ink-2); }
@@ -2062,10 +2067,10 @@
   .cop-sources-lbl { font-size: 10.5px; color: var(--ink-4); letter-spacing: 0.02em; }
   .cop-source-chip {
     display: inline-flex; align-items: center; gap: 5px; height: 24px; padding: 0 9px 0 4px;
-    border: 1px solid var(--line-2); border-radius: 999px; background: transparent;
+    border: 0; border-radius: 999px; background: var(--surface-2);
     color: var(--ink-3); font-family: var(--font-sans); font-size: 11px; cursor: pointer;
   }
-  .cop-source-chip:hover { background: var(--surface-hover); color: var(--ink); }
+  .cop-source-chip:hover { background: var(--accent-soft); color: var(--ink); }
   /* Sans nom de note (extraits du document courant) : la puce est juste le numéro. */
   .cop-source-chip.bare { padding: 0 4px; }
   /* Tag arrondi-carré plutôt que cercle : le padding horizontal laisse respirer les

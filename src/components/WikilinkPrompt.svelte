@@ -60,7 +60,6 @@
   .card {
     width: min(440px, calc(100vw - 48px));
     background: var(--cream-content);
-    border: 1px solid var(--line-2);
     border-radius: 14px;
     box-shadow: 0 18px 48px rgba(var(--shadow-rgb), 0.28);
     padding: 22px 22px 18px;
@@ -86,14 +85,14 @@
     gap: 8px;
     width: 100%;
     padding: 8px 12px;
-    background: transparent;
-    border: 1px solid var(--line-2);
+    background: var(--surface-2);
+    border: 0;
     border-radius: 9px;
     cursor: pointer;
     text-align: left;
-    transition: background 140ms ease, border-color 140ms ease;
+    transition: background 140ms ease;
   }
-  .cand:hover { background: var(--surface-hover); border-color: var(--line-3); }
+  .cand:hover { background: var(--accent-soft); }
   .cand-name { font-size: 13px; color: var(--ink); font-weight: 500; }
   .cand-dir { font-size: 11.5px; color: var(--ink-4); }
   .actions { display: flex; justify-content: flex-end; gap: 8px; }
@@ -105,8 +104,8 @@
     cursor: pointer;
     transition: background 140ms ease, color 140ms ease, border-color 140ms ease;
   }
-  .btn.ghost { background: transparent; color: var(--ink-3); border-color: var(--line-2); }
-  .btn.ghost:hover { background: var(--surface-hover); color: var(--ink); }
+  .btn.ghost { background: var(--surface-2); color: var(--ink-3); }
+  .btn.ghost:hover { background: var(--accent-soft); color: var(--ink); }
   .btn.primary { background: var(--ink); color: var(--cream-content); }
   .btn.primary:hover { background: var(--ink-2); }
 </style>
