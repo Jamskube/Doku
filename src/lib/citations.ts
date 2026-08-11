@@ -24,8 +24,10 @@ const MARKER = /\[(\d{1,2}(?:\s*,\s*\d{1,2})*)\]/g
 // extrait de code n'est pas une citation).
 const CODE_SPLIT = /(<(?:code|pre)\b[^>]*>[\s\S]*?<\/(?:code|pre)>)/gi
 
+// Pas de title natif : l'aperçu flottant au survol le remplace (un tooltip navigateur
+// viendrait se superposer à la carte au bout d'une seconde).
 function chipHtml(n: number): string {
-  return `<button type="button" class="cop-cite" data-cite="${n}" title="Voir le passage ${n}" aria-label="Voir le passage ${n}">${n}</button>`
+  return `<button type="button" class="cop-cite" data-cite="${n}" aria-label="Voir le passage ${n}">${n}</button>`
 }
 
 // Remplace les marqueurs valides (1..count) par des puces ; retire les marqueurs

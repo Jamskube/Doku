@@ -113,6 +113,9 @@ export const copilot = $state({
   ready: false,
   loading: false,
   models: [] as OllamaModel[],
+  // true après une PREMIÈRE liste réussie : « aucun modèle » / « introuvable » ne
+  // s'affirment jamais sur une liste simplement jamais lue (moteur pas démarré).
+  modelsLoaded: false,
   pulling: null as { name: string; pct: number; done: number; total: number } | null,
   error: '',
   messages: [] as ChatMsg[],
@@ -195,7 +198,10 @@ export async function refreshModels(): Promise<void> {
   const token = ++refreshToken
   try {
     const models = await listModels(p)
-    if (token === refreshToken) copilot.models = models
+    if (token === refreshToken) {
+      copilot.models = models
+      copilot.modelsLoaded = true
+    }
   } catch (e) {
     console.error('[copilot] listModels', e)
     if (token === refreshToken) copilot.error = 'Liste des modèles indisponible.'
@@ -232,11 +238,7 @@ export async function pullModel(name: string): Promise<void> {
     // si le modèle EST dans la liste rafraîchie (un pull annulé sort silencieusement d'ici —
     // sans ce contrôle on activerait un modèle à moitié téléchargé).
     const installed = copilot.models.find((m) => m.name === model || m.name === `${model}:latest`)
-    // JAMAIS d'auto-activation d'un modèle d'embedding (index 15.2) : il ne sait pas
-    // générer — l'activer casserait chat/résumé (« does not support generate ») sans
-    // cause visible pour l'utilisateur dont le PREMIER pull est le modèle d'index.
-    const isEmbed = installed && (installed.name === app.embedModel || /embed|bge-m3/i.test(installed.name))
-    if (!app.activeModel && installed && !isEmbed) app.activeModel = installed.name
+    if (!app.activeModel && installed && !isEmbedModel(installed.name)) app.activeModel = installed.name
   } catch (e) {
     console.error('[copilot] pull', e)
     copilot.error = `Échec du téléchargement de ${model}.`
@@ -273,23 +275,40 @@ export function setActiveModel(name: string): void {
   app.copilotProvider = 'ollama'
 }
 
-export async function refreshOpenAiStatus(): Promise<void> {
+// Prédicat UNIQUE « modèle d'embedding » (auto-activation post-pull + dropdown Modèle
+// actif) : un embedding ne sait pas générer — l'activer casserait chat/résumé
+// (« does not support generate ») sans cause visible pour l'utilisateur.
+export function isEmbedModel(name: string): boolean {
+  return name === app.embedModel || /embed|bge-m3/i.test(name)
+}
+
+// Coalescence des checks concurrents (picker + $effect de vue) : la promesse en vol est
+// PARTAGÉE, jamais abandonnée — un drop-guard renverrait un état périmé aux appelants
+// qui await (resolveRuntime, beginOpenAiAuth post-approbation).
+let openAiStatusInFlight: Promise<void> | null = null
+
+export function refreshOpenAiStatus(): Promise<void> {
+  if (openAiStatusInFlight) return openAiStatusInFlight
   copilot.openAiChecking = true
-  try {
-    const status = await getOpenAiStatus()
-    copilot.openAiAuthenticated = status.authenticated
-    copilot.openAiPreferredAvailable = status.preferredModelAvailable
-    copilot.openAiModels = status.models
-    copilot.openAiStatusError = status.error ?? ''
-  } catch (error) {
-    console.error('[copilot] openai status', error)
-    copilot.openAiAuthenticated = false
-    copilot.openAiPreferredAvailable = null
-    copilot.openAiModels = []
-    copilot.openAiStatusError = 'État de la connexion OpenAI indisponible.'
-  } finally {
-    copilot.openAiChecking = false
-  }
+  openAiStatusInFlight = (async () => {
+    try {
+      const status = await getOpenAiStatus()
+      copilot.openAiAuthenticated = status.authenticated
+      copilot.openAiPreferredAvailable = status.preferredModelAvailable
+      copilot.openAiModels = status.models
+      copilot.openAiStatusError = status.error ?? ''
+    } catch (error) {
+      console.error('[copilot] openai status', error)
+      copilot.openAiAuthenticated = false
+      copilot.openAiPreferredAvailable = null
+      copilot.openAiModels = []
+      copilot.openAiStatusError = 'État de la connexion OpenAI indisponible.'
+    } finally {
+      copilot.openAiChecking = false
+      openAiStatusInFlight = null
+    }
+  })()
+  return openAiStatusInFlight
 }
 
 function delay(ms: number): Promise<void> {
@@ -375,8 +394,17 @@ function normalizeMinimaxModel(status: CompatStatus): void {
   }
 }
 
-export async function refreshMinimaxStatus(): Promise<CompatStatus | null> {
+// Même coalescence que refreshOpenAiStatus : resolveRuntime await ce résultat.
+let minimaxStatusInFlight: Promise<CompatStatus | null> | null = null
+
+export function refreshMinimaxStatus(): Promise<CompatStatus | null> {
+  if (minimaxStatusInFlight) return minimaxStatusInFlight
   copilot.minimaxChecking = true
+  minimaxStatusInFlight = doRefreshMinimaxStatus()
+  return minimaxStatusInFlight
+}
+
+async function doRefreshMinimaxStatus(): Promise<CompatStatus | null> {
   try {
     const status = await getCompatStatus('minimax')
     copilot.minimaxStatus = status
@@ -389,6 +417,7 @@ export async function refreshMinimaxStatus(): Promise<CompatStatus | null> {
     return copilot.minimaxStatus
   } finally {
     copilot.minimaxChecking = false
+    minimaxStatusInFlight = null
   }
 }
 

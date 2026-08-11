@@ -1,9 +1,9 @@
 <script lang="ts">
-  import { untrack } from 'svelte'
-  import { activeTab, app, isCloudProvider, openPath } from '../lib/stores.svelte'
+  import { tick, untrack } from 'svelte'
+  import { activeTab, app, isCloudProvider, openPath, type CopilotProvider } from '../lib/stores.svelte'
   import { closeWindow, isTauri, minimizeWindow, toggleMaximizeWindow } from '../lib/tauri'
   import { formatBytes } from '../lib/ollama'
-  import { beginOpenAiAuth, cancelOpenAiConnection, cancelPull, connectMinimax, copilot, disconnectMinimaxKey, disconnectOpenAiAccount, ensureCopilotReady, jumpToCitation, newChat, pullModel, refreshMinimaxStatus, refreshModels, refreshOpenAiStatus, removeModel, retryGeneration, saveMessageAsNote, sendChat, setActiveModel, setCopilotProvider, stopChat, summarizeDoc, type ChatMsg } from '../lib/copilot.svelte'
+  import { beginOpenAiAuth, cancelOpenAiConnection, cancelPull, connectMinimax, copilot, disconnectMinimaxKey, disconnectOpenAiAccount, ensureCopilotReady, isEmbedModel, jumpToCitation, newChat, pullModel, refreshMinimaxStatus, refreshModels, refreshOpenAiStatus, removeModel, retryGeneration, saveMessageAsNote, sendChat, setActiveModel, setCopilotProvider, stopChat, summarizeDoc, type ChatMsg } from '../lib/copilot.svelte'
   import { MINIMAX_DEFAULT_MODEL } from '../lib/compat'
   import { DEFAULT_EMBED_MODEL, FALLBACK_EMBED_MODEL, noteTitle } from '../lib/rag'
   import { cancelRagIndexing, deleteRagIndex, ragState, refreshRagIndex } from '../lib/rag-index.svelte'
@@ -24,9 +24,52 @@
   function onAnswerClick(e: MouseEvent, m: ChatMsg) {
     const chip = (e.target as HTMLElement).closest?.('.cop-cite')
     if (!chip) return
+    dismissCitePreview()
     const n = Number.parseInt(chip.getAttribute('data-cite') ?? '', 10)
     const passage = m.sources?.find((s) => s.n === n)
     if (passage) void jumpToCitation(passage)
+  }
+
+  // --- Aperçu flottant d'un passage cité (survol ou focus d'une puce [n]) : les lignes
+  // de l'extrait réellement fourni au modèle, sans avoir à cliquer. Contenu rendu en
+  // TEXTE (jamais {@html}) — c'est du contenu de document, pas du markup de confiance.
+  let panelEl = $state<HTMLElement | null>(null)
+  let citePreview = $state<{ n: number; name: string | null; text: string; x: number; y: number; below: boolean } | null>(null)
+  let citePreviewTimer: ReturnType<typeof setTimeout> | undefined
+
+  function showCitePreview(chip: HTMLElement, m: ChatMsg) {
+    const n = Number.parseInt(chip.getAttribute('data-cite') ?? '', 10)
+    const passage = m.sources?.find((s) => s.n === n)
+    if (!passage || !panelEl || !chip.isConnected) return
+    const r = chip.getBoundingClientRect()
+    const a = panelEl.getBoundingClientRect()
+    // contain: layout paint sur .cop-panel = bloc conteneur ET boîte de clip : la carte
+    // se positionne en absolu RELATIF au panneau, x serré pour rester dedans.
+    const half = 150
+    const x = Math.min(Math.max(r.left + r.width / 2 - a.left, half + 8), a.width - half - 8)
+    const below = r.top - a.top < 240
+    citePreview = {
+      n,
+      name: passage.name,
+      text: passage.text,
+      x,
+      y: below ? r.bottom - a.top + 7 : r.top - a.top - 7,
+      below,
+    }
+  }
+  function onAnswerCiteOver(e: Event, m: ChatMsg) {
+    const chip = (e.target as HTMLElement).closest?.('.cop-cite') as HTMLElement | null
+    if (!chip) return
+    clearTimeout(citePreviewTimer)
+    citePreviewTimer = setTimeout(() => showCitePreview(chip, m), 160)
+  }
+  function onAnswerCiteOut(e: Event) {
+    if (!(e.target as HTMLElement).closest?.('.cop-cite')) return
+    dismissCitePreview()
+  }
+  function dismissCitePreview() {
+    clearTimeout(citePreviewTimer)
+    if (citePreview) citePreview = null
   }
 
   // Modèle conseillé (carte d'onboarding) + suggestions. Toujours des tags -q4_0 explicites
@@ -62,14 +105,151 @@
     if (ok) minimaxKeyInput = ''
   }
 
-  const activeInstalled = $derived(copilot.models.find((m) => m.name === app.activeModel) ?? null)
   const libraryTotal = $derived(copilot.models.reduce((sum, m) => sum + m.size, 0))
 
-  // Paramètres dérivés du nom (ex. « qwen2.5:3b » → « 3B ») quand le tag les encode ;
-  // null sinon (ex. « phi3:mini ») — on n'affiche jamais un chiffre inventé.
-  function deriveParams(name: string): string | null {
-    const m = name.match(/(\d+(?:\.\d+)?)b(?![a-z])/i)
-    return m ? m[1].toUpperCase() + 'B' : null
+  // --- Sélecteur unifié « Modèle actif » : un dropdown groupé par fournisseur remplace
+  // les onglets. Matériau flottant volontairement LOCAL : sémantique listbox (choix d'une
+  // valeur) ≠ menus TitleBar/Sidebar (commandes) — l'extraction d'un matériau partagé
+  // reste une dette notée, pas aggravée à l'aveugle ici.
+  let pickerOpen = $state(false)
+  let pickerRootEl = $state<HTMLElement | null>(null)
+  let pickerTriggerEl = $state<HTMLButtonElement | null>(null)
+  let pickerListEl = $state<HTMLElement | null>(null)
+
+  // Les modèles d'embedding restent gérables dans BIBLIOTHÈQUE mais ne sont jamais
+  // proposés comme modèle de chat (même prédicat que l'auto-activation post-pull).
+  const chatModels = $derived(copilot.models.filter((m) => !isEmbedModel(m.name)))
+
+  // « jamais de fonctionnalité qui ment » : le trigger et les en-têtes de groupe reprennent
+  // la MÊME machine d'états que les cartes fournisseur (checking / connecté / Luna
+  // indisponible / clé refusée / à connecter), jamais un binaire connecté-ou-pas.
+  type PickerState = { label: string; kind: 'ok' | 'warn' | 'off' | 'busy' }
+  const openAiState = $derived.by((): PickerState => {
+    if (copilot.openAiChecking) return { label: 'vérification…', kind: 'busy' }
+    if (copilot.openAiAuthenticated && copilot.openAiPreferredAvailable === false)
+      return { label: 'Luna indisponible', kind: 'warn' }
+    if (copilot.openAiAuthenticated) return { label: 'connecté', kind: 'ok' }
+    return { label: 'à connecter', kind: 'off' }
+  })
+  const minimaxState = $derived.by((): PickerState => {
+    if (copilot.minimaxChecking || copilot.minimaxConnecting) return { label: 'vérification…', kind: 'busy' }
+    if (copilot.minimaxStatus?.keyRejected) return { label: 'clé refusée', kind: 'warn' }
+    if (copilot.minimaxStatus?.connected) return { label: 'connecté', kind: 'ok' }
+    return { label: 'à connecter', kind: 'off' }
+  })
+  // Un modèle actif supprimé hors app (CLI ollama) laisserait le trigger afficher un
+  // fantôme — signalé seulement quand la liste a réellement été lue (modelsLoaded),
+  // jamais sur une liste vide parce que le moteur n'a pas démarré.
+  const localModelMissing = $derived(
+    !!app.activeModel && copilot.modelsLoaded && !copilot.models.some((m) => m.name === app.activeModel),
+  )
+  // Repli identique à resolveRuntime : un statut connecté avec catalogue vide (erreur
+  // partielle) propose quand même la valeur qui répondrait réellement aux questions.
+  const minimaxChoices = $derived(
+    copilot.minimaxStatus?.connected && !copilot.minimaxStatus.keyRejected && copilot.minimaxStatus.models.length > 0
+      ? copilot.minimaxStatus.models
+      : [app.minimaxModel || MINIMAX_DEFAULT_MODEL],
+  )
+
+  // Sections repliables dans le pop (même mécanique que les tiroirs du popover de
+  // sélection) : une seule ouverte à la fois, celle du fournisseur courant par défaut —
+  // sinon le catalogue MiniMax à lui seul rend le menu énorme.
+  let pickerSection = $state<CopilotProvider | null>(null)
+
+  function togglePicker() {
+    pickerOpen = !pickerOpen
+    if (!pickerOpen) return
+    pickerSection = app.copilotProvider
+    // Refresh paresseux des états INCONNUS seulement (handler d'événement : rien à
+    // untracker) — les en-têtes de section affichent ces statuts, sections fermées
+    // comprises, donc on lève l'inconnu dès l'ouverture du menu. Lister les modèles
+    // locaux spawne le sidecar — intention assumée (on ouvre pour choisir).
+    if (copilot.models.length === 0 && !copilot.loading) void refreshModels()
+    if (copilot.openAiAuthenticated === null) void refreshOpenAiStatus()
+    if (copilot.minimaxStatus === null) void refreshMinimaxStatus()
+  }
+  function toggleSection(p: CopilotProvider) {
+    pickerSection = pickerSection === p ? null : p
+  }
+  function closePicker(restoreFocus = false) {
+    pickerOpen = false
+    if (restoreFocus) pickerTriggerEl?.focus()
+  }
+  function pickLocal(name: string) {
+    setActiveModel(name)
+    closePicker(true)
+  }
+  function pickOpenAi() {
+    setCopilotProvider('openai')
+    closePicker(true)
+  }
+  function pickMinimax(model: string) {
+    app.minimaxModel = model
+    setCopilotProvider('minimax')
+    closePicker(true)
+  }
+  function pickManageLocal() {
+    setCopilotProvider('ollama')
+    closePicker(true)
+  }
+  // pointerdown en capture : un clic sur une zone de drag Tauri peut ne jamais livrer de
+  // `click` (drag intercepté au mousedown) — le dropdown doit se fermer quand même.
+  function onPickerWindowPointerDown(e: PointerEvent) {
+    if (!pickerRootEl?.contains(e.target as Node | null)) pickerOpen = false
+  }
+  function pickerOptions(): HTMLButtonElement[] {
+    // Les entrées des sections fermées sont inert (non focusables) : on les exclut
+    // aussi de la navigation aux flèches.
+    return Array.from(
+      pickerListEl?.querySelectorAll<HTMLButtonElement>('button[role="menuitem"], button[role="menuitemradio"]') ?? [],
+    ).filter((b) => !b.closest('[inert]'))
+  }
+  function onTriggerKeydown(e: KeyboardEvent) {
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      const fromEnd = e.key === 'ArrowUp'
+      e.preventDefault()
+      if (!pickerOpen) togglePicker()
+      void tick().then(() => {
+        const opts = pickerOptions()
+        ;(fromEnd ? opts[opts.length - 1] : opts[0])?.focus()
+      })
+    } else if (e.key === 'Escape' && pickerOpen) {
+      // stopPropagation : le listener global d'App traite aussi Échap (mode focus,
+      // panneau étendu) — un Échap qui ferme le dropdown ne doit fermer QUE lui.
+      e.stopPropagation()
+      closePicker()
+    }
+  }
+  function onPickerKeydown(e: KeyboardEvent) {
+    if (e.key === 'Escape') {
+      e.preventDefault()
+      e.stopPropagation()
+      closePicker(true)
+      return
+    }
+    if (e.key === 'Tab') {
+      // Sans preventDefault, Tab focuserait une option du pop en cours de démontage
+      // et le focus finirait sur <body> — rendu au trigger, le flux Tab reprend là.
+      e.preventDefault()
+      closePicker(true)
+      return
+    }
+    const opts = pickerOptions()
+    if (opts.length === 0) return
+    const idx = opts.indexOf(document.activeElement as HTMLButtonElement)
+    if (e.key === 'ArrowDown') {
+      e.preventDefault()
+      ;(opts[idx + 1] ?? opts[0]).focus()
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault()
+      ;(opts[idx - 1] ?? opts[opts.length - 1]).focus()
+    } else if (e.key === 'Home') {
+      e.preventDefault()
+      opts[0].focus()
+    } else if (e.key === 'End') {
+      e.preventDefault()
+      opts[opts.length - 1].focus()
+    }
   }
 
   function startPull(name?: string) {
@@ -280,6 +460,10 @@
 
   function onScroll() {
     if (scroller) atBottom = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 40
+    // Un aperçu de citation OUVERT devient mensonger au scroll (position figée) → fermé.
+    // Le timer d'ouverture en attente survit : il lira la position FRAÎCHE de la puce au
+    // moment d'afficher (sinon l'inertie d'un trackpad avale l'aperçu à chaque fois).
+    if (citePreview) citePreview = null
   }
 
   // Suit le bas pendant le streaming, mais seulement si l'utilisateur y était déjà.
@@ -329,12 +513,35 @@
   </section>
 {/snippet}
 
+{#snippet citePreviewCard()}
+  {#if citePreview}
+    <div
+      class="cop-cite-preview"
+      class:below={citePreview.below}
+      style="left:{citePreview.x}px; top:{citePreview.y}px"
+      role="tooltip"
+    >
+      <div class="cop-cite-preview-head">
+        <span class="cop-source-num">{citePreview.n}</span>
+        <span class="cop-cite-preview-name">{citePreview.name ?? 'Passage cité'}</span>
+      </div>
+      <p class="cop-cite-preview-text">{citePreview.text}</p>
+      <div class="cop-cite-preview-hint">Cliquer sur la puce ouvre le passage dans le document</div>
+    </div>
+  {/if}
+{/snippet}
+
+<!-- Échap est géré sur le trigger et le pop (focus toujours dans l'un des deux quand
+     ouvert) avec stopPropagation ; ici seul le clic extérieur. -->
+<svelte:window onpointerdowncapture={pickerOpen ? onPickerWindowPointerDown : undefined} />
+
 <aside
   class="cop-panel"
   class:open={app.copilotOpen}
   class:expanded={app.copilotExpanded}
   aria-hidden={!app.copilotOpen}
   inert={!app.copilotOpen}
+  bind:this={panelEl}
 >
   <!-- En-tête : contrôles panneau + contrôles fenêtre (draggable, motif TitleBar) -->
   <header class="cop-head" data-tauri-drag-region>
@@ -388,34 +595,169 @@
   <div class="cop-card">
     <div class="cop-scroll" bind:this={scroller} onscroll={onScroll}>
       {#if app.copilotView === 'models'}
-        <div class="cop-provider-switch" role="tablist" aria-label="Fournisseur de Doku-San">
+        <div class="cop-picker" bind:this={pickerRootEl}>
+          <div class="cop-label" id="cop-picker-label">MODÈLE ACTIF</div>
           <button
-            class:active={app.copilotProvider === 'ollama'}
-            role="tab"
-            aria-selected={app.copilotProvider === 'ollama'}
-            onclick={() => setCopilotProvider('ollama')}
+            class="cop-picker-trigger"
+            id="cop-picker-trigger"
+            bind:this={pickerTriggerEl}
+            aria-haspopup="listbox"
+            aria-expanded={pickerOpen}
+            aria-labelledby="cop-picker-label cop-picker-trigger"
+            onclick={togglePicker}
+            onkeydown={onTriggerKeydown}
           >
-            <span class="msr">memory</span>
-            <span><strong>Sur cet appareil</strong><small>Ollama · privé</small></span>
+            <span class="msr">{app.copilotProvider === 'ollama' ? 'memory' : 'cloud'}</span>
+            <span class="cop-picker-name">
+              {#if app.copilotProvider === 'openai'}
+                <strong>{OPENAI_MODEL}</strong>
+                <small class:warn={openAiState.kind === 'warn'}>OpenAI · {openAiState.label}</small>
+              {:else if app.copilotProvider === 'minimax'}
+                <strong>{app.minimaxModel || MINIMAX_DEFAULT_MODEL}</strong>
+                <small class:warn={minimaxState.kind === 'warn'}>MiniMax · {minimaxState.label}</small>
+              {:else if !app.activeModel}
+                <strong class="placeholder">Choisir un modèle</strong>
+                <small>Sur cet appareil · privé</small>
+              {:else}
+                <strong>{app.activeModel}</strong>
+                <small class:warn={localModelMissing}>
+                  {localModelMissing ? 'introuvable sur le disque — choisissez un modèle' : 'Sur cet appareil · privé'}
+                </small>
+              {/if}
+            </span>
+            <span class="msr cop-picker-chev" class:open={pickerOpen}>expand_more</span>
           </button>
-          <button
-            class:active={app.copilotProvider === 'openai'}
-            role="tab"
-            aria-selected={app.copilotProvider === 'openai'}
-            onclick={() => setCopilotProvider('openai')}
-          >
-            <span class="msr">cloud</span>
-            <span><strong>OpenAI</strong><small>Compte ChatGPT · cloud</small></span>
-          </button>
-          <button
-            class:active={app.copilotProvider === 'minimax'}
-            role="tab"
-            aria-selected={app.copilotProvider === 'minimax'}
-            onclick={() => setCopilotProvider('minimax')}
-          >
-            <span class="msr">cloud</span>
-            <span><strong>MiniMax</strong><small>Clé API · cloud</small></span>
-          </button>
+          {#if pickerOpen}
+            <div
+              class="cop-picker-pop"
+              role="menu"
+              aria-labelledby="cop-picker-label"
+              tabindex="-1"
+              bind:this={pickerListEl}
+              onkeydown={onPickerKeydown}
+            >
+              <button
+                class="cop-picker-sec"
+                class:open={pickerSection === 'ollama'}
+                role="menuitem"
+                aria-haspopup="true"
+                aria-expanded={pickerSection === 'ollama'}
+                onclick={() => toggleSection('ollama')}
+              >
+                <span class="msr">memory</span>
+                <span class="cop-picker-sec-name">Sur cet appareil</span>
+                <span class="cop-picker-sec-state">privé</span>
+                <span class="msr cop-picker-sec-chev">chevron_right</span>
+              </button>
+              <div
+                class="cop-picker-fold"
+                class:open={pickerSection === 'ollama'}
+                role="group"
+                aria-label="Modèles locaux"
+                aria-hidden={pickerSection !== 'ollama'}
+                inert={pickerSection !== 'ollama'}
+              >
+                <div class="cop-picker-fold-inner">
+                  {#if copilot.loading}
+                    <div class="cop-picker-empty">Démarrage du moteur IA…</div>
+                  {:else if chatModels.length > 0}
+                    {#each chatModels as m (m.name)}
+                      {@const selected = app.copilotProvider === 'ollama' && m.name === app.activeModel}
+                      <button class="cop-picker-opt" role="menuitemradio" aria-checked={selected} onclick={() => pickLocal(m.name)}>
+                        <span class="cop-dot" class:on={selected}></span>
+                        <span class="cop-mono grow">{m.name}</span>
+                        <span class="cop-size">{formatBytes(m.size)}</span>
+                      </button>
+                    {/each}
+                  {:else if !copilot.modelsLoaded}
+                    <!-- Liste jamais lue (moteur pas démarré / indisponible) : ne JAMAIS
+                         affirmer « aucun modèle installé » sans avoir regardé. -->
+                    <button class="cop-picker-opt" role="menuitem" onclick={pickManageLocal}>
+                      <span class="msr">warning</span>
+                      <span class="grow">Moteur IA indisponible — voir ci-dessous</span>
+                    </button>
+                  {:else}
+                    <!-- Entrée-action (pas un choix de valeur) : bascule sur la section
+                         locale où vivent onboarding et téléchargement. -->
+                    <button class="cop-picker-opt" role="menuitem" onclick={pickManageLocal}>
+                      <span class="msr">download</span>
+                      <span class="grow">Aucun modèle installé — gérer ci-dessous</span>
+                    </button>
+                  {/if}
+                </div>
+              </div>
+              <div class="cop-picker-sep"></div>
+              <button
+                class="cop-picker-sec"
+                class:open={pickerSection === 'openai'}
+                role="menuitem"
+                aria-haspopup="true"
+                aria-expanded={pickerSection === 'openai'}
+                onclick={() => toggleSection('openai')}
+              >
+                <span class="msr">cloud</span>
+                <span class="cop-picker-sec-name">OpenAI</span>
+                <span class="cop-picker-sec-state" class:ok={openAiState.kind === 'ok'} class:warn={openAiState.kind === 'warn'}>
+                  {openAiState.label}
+                </span>
+                <span class="msr cop-picker-sec-chev">chevron_right</span>
+              </button>
+              <div
+                class="cop-picker-fold"
+                class:open={pickerSection === 'openai'}
+                role="group"
+                aria-label="Modèle OpenAI"
+                aria-hidden={pickerSection !== 'openai'}
+                inert={pickerSection !== 'openai'}
+              >
+                <div class="cop-picker-fold-inner">
+                  <button
+                    class="cop-picker-opt"
+                    role="menuitemradio"
+                    aria-checked={app.copilotProvider === 'openai'}
+                    onclick={pickOpenAi}
+                  >
+                    <span class="cop-dot" class:on={app.copilotProvider === 'openai'}></span>
+                    <span class="cop-mono grow">{OPENAI_MODEL}</span>
+                  </button>
+                </div>
+              </div>
+              <div class="cop-picker-sep"></div>
+              <button
+                class="cop-picker-sec"
+                class:open={pickerSection === 'minimax'}
+                role="menuitem"
+                aria-haspopup="true"
+                aria-expanded={pickerSection === 'minimax'}
+                onclick={() => toggleSection('minimax')}
+              >
+                <span class="msr">cloud</span>
+                <span class="cop-picker-sec-name">MiniMax</span>
+                <span class="cop-picker-sec-state" class:ok={minimaxState.kind === 'ok'} class:warn={minimaxState.kind === 'warn'}>
+                  {minimaxState.label}
+                </span>
+                <span class="msr cop-picker-sec-chev">chevron_right</span>
+              </button>
+              <div
+                class="cop-picker-fold"
+                class:open={pickerSection === 'minimax'}
+                role="group"
+                aria-label="Modèles MiniMax"
+                aria-hidden={pickerSection !== 'minimax'}
+                inert={pickerSection !== 'minimax'}
+              >
+                <div class="cop-picker-fold-inner">
+                  {#each minimaxChoices as m (m)}
+                    {@const selected = app.copilotProvider === 'minimax' && m === (app.minimaxModel || MINIMAX_DEFAULT_MODEL)}
+                    <button class="cop-picker-opt" role="menuitemradio" aria-checked={selected} onclick={() => pickMinimax(m)}>
+                      <span class="cop-dot" class:on={selected}></span>
+                      <span class="cop-mono grow">{m}</span>
+                    </button>
+                  {/each}
+                </div>
+              </div>
+            </div>
+          {/if}
         </div>
 
         {#if app.copilotProvider === 'openai'}
@@ -540,17 +882,6 @@
               {#if copilot.minimaxStatus.error}
                 <p class="cop-auth-error" role="status">{copilot.minimaxStatus.error}</p>
               {/if}
-              <label class="cop-mm-model">
-                <span>Modèle</span>
-                <select
-                  value={app.minimaxModel || MINIMAX_DEFAULT_MODEL}
-                  onchange={(e) => (app.minimaxModel = (e.currentTarget as HTMLSelectElement).value)}
-                >
-                  {#each copilot.minimaxStatus.models as model (model)}
-                    <option value={model}>{model}</option>
-                  {/each}
-                </select>
-              </label>
               <button class="cop-btn-quiet" onclick={() => void disconnectMinimaxKey()}>
                 <span class="msr">logout</span>Déconnecter la clé
               </button>
@@ -633,38 +964,9 @@
           </div>
         {:else}
           <div class="cop-sections">
-            <!-- Modèle actif : carte héro « imbriquée » -->
-            {#if activeInstalled}
-              {@const params = deriveParams(activeInstalled.name)}
-              <section>
-                <div class="cop-label">MODÈLE ACTIF</div>
-                <div class="cop-hero">
-                  <div class="cop-hero-head">
-                    <div class="cop-hero-icon"><span class="msr" style="font-size:23px">layers</span></div>
-                    <!-- Pas de tag « Modèle actif » sous le nom : le label de section + la
-                         pastille le disent déjà (« actif » 3× dans une carte = bruit). -->
-                    <div class="cop-hero-name">
-                      <div class="cop-mono lg">{activeInstalled.name}</div>
-                    </div>
-                    <span class="cop-pill"><span class="cop-dot breathe"></span>Actif</span>
-                  </div>
-                  <div class="cop-hero-stats">
-                    {#if params}
-                      <div class="cop-stat">
-                        <div class="cop-mono">{params}</div>
-                        <div class="cop-stat-lbl">PARAMÈTRES</div>
-                      </div>
-                      <div class="cop-stat-sep"></div>
-                    {/if}
-                    <div class="cop-stat">
-                      <div class="cop-mono">{formatBytes(activeInstalled.size)}</div>
-                      <div class="cop-stat-lbl">DISQUE</div>
-                    </div>
-                  </div>
-                </div>
-              </section>
-            {/if}
-
+            <!-- Le modèle actif vit désormais dans le dropdown « MODÈLE ACTIF » en tête de
+                 vue (l'ancienne carte héro faisait doublon) ; la bibliothèque garde la
+                 gestion disque (activer/supprimer/tailles). -->
             <!-- Bibliothèque -->
             <section>
               <div class="cop-label row">
@@ -687,9 +989,22 @@
                       </div>
                     </div>
                   {:else}
+                    {@const embed = isEmbedModel(m.name)}
                     <div class="cop-row" class:active={isActive}>
-                      <button class="cop-row-pick" title="Choisir comme modèle actif" aria-pressed={isActive} onclick={() => setActiveModel(m.name)}>
-                        <span class="cop-dot" class:on={isActive}></span>
+                      <!-- Un modèle d'embedding ne sait pas générer : pick désactivé (même
+                           prédicat que le dropdown), icône database au lieu de la pastille. -->
+                      <button
+                        class="cop-row-pick"
+                        title={embed ? "Modèle d'embedding — réservé à l'index du dossier" : 'Choisir comme modèle actif'}
+                        aria-pressed={isActive}
+                        disabled={embed}
+                        onclick={() => setActiveModel(m.name)}
+                      >
+                        {#if embed}
+                          <span class="msr" style="font-size:15px;color:var(--ink-4)">database</span>
+                        {:else}
+                          <span class="cop-dot" class:on={isActive}></span>
+                        {/if}
                         <span class="cop-mono grow">{m.name}</span>
                         <span class="cop-size">{formatBytes(m.size)}</span>
                       </button>
@@ -908,10 +1223,18 @@
                   <div class="cop-md-plain">{m.content}</div>
                 {:else}
                   <!-- Réponse terminée : Markdown assaini (allowlist, 0 réseau) + puces [n].
-                       svelte-ignore : le clic est délégué aux <button> injectés (focusables),
+                       svelte-ignore : clic et survol sont délégués aux <button> injectés
+                       (focusables — focusin/focusout portent l'équivalent clavier du survol),
                        le wrapper n'est pas lui-même interactif. -->
-                  <!-- svelte-ignore a11y_no_static_element_interactions, a11y_click_events_have_key_events -->
-                  <div class="cop-md" onclick={(e) => onAnswerClick(e, m)}>{@html renderAnswer(m)}</div>
+                  <!-- svelte-ignore a11y_no_static_element_interactions, a11y_click_events_have_key_events, a11y_mouse_events_have_key_events -->
+                  <div
+                    class="cop-md"
+                    onclick={(e) => onAnswerClick(e, m)}
+                    onmouseover={(e) => onAnswerCiteOver(e, m)}
+                    onmouseout={onAnswerCiteOut}
+                    onfocusin={(e) => onAnswerCiteOver(e, m)}
+                    onfocusout={onAnswerCiteOut}
+                  >{@html renderAnswer(m)}</div>
                 {/if}
                 {#if m.sources?.length && !m.streaming}
                   <!-- Citations DÉTERMINISTES (15.3, ancrées 21.x) : les passages réellement
@@ -1103,6 +1426,9 @@
       </div>
     {/if}
   </div>
+  <!-- Hors de .cop-card (overflow hidden) : la carte d'aperçu se positionne dans le
+       repère du panneau (contain: layout) au-dessus de tout le contenu. -->
+  {@render citePreviewCard()}
 </aside>
 
 <style>
@@ -1226,23 +1552,79 @@
   .cop-msg { margin: 14px 4px; font-size: 12.5px; color: var(--ink-4); }
   .cop-msg.err { color: var(--err-text); }
 
-  /* Fournisseur : un choix binaire familier, distinct de la bibliothèque de modèles. */
-  .cop-provider-switch {
-    display: grid; grid-template-columns: 1fr 1fr; gap: 4px; margin: 12px 2px 16px; padding: 4px;
-    border-radius: 13px; background: var(--surface-2);
-  }
-  .cop-provider-switch button {
-    min-width: 0; min-height: 48px; display: flex; align-items: center; gap: 9px; padding: 7px 10px;
-    border: 1px solid transparent; border-radius: 10px; background: transparent; color: var(--ink-4);
+  /* Sélecteur unifié « Modèle actif » : trigger + listbox flottant groupé par fournisseur. */
+  .cop-picker { position: relative; margin: 14px 2px 16px; }
+  .cop-picker-trigger {
+    width: 100%; min-height: 48px; display: flex; align-items: center; gap: 10px; padding: 8px 12px;
+    border: 1px solid var(--line-2); border-radius: 13px; background: var(--surface-2); color: var(--ink);
     font-family: var(--font-sans); text-align: left; cursor: pointer;
   }
-  .cop-provider-switch button:hover { color: var(--ink); background: var(--surface-hover); }
-  .cop-provider-switch button.active { border-color: var(--line-1); background: var(--cream-content); color: var(--ink); }
-  .cop-provider-switch button:focus-visible { outline: 2px solid var(--line-3); outline-offset: 1px; }
-  .cop-provider-switch .msr { flex: 0 0 auto; font-size: 18px; }
-  .cop-provider-switch button > span:last-child { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
-  .cop-provider-switch strong { overflow: hidden; font-size: 11.5px; font-weight: 600; white-space: nowrap; text-overflow: ellipsis; }
-  .cop-provider-switch small { font-size: 9.5px; color: var(--ink-4); white-space: nowrap; }
+  .cop-picker-trigger:hover { background: var(--surface-hover); }
+  .cop-picker-trigger:focus-visible { outline: 2px solid var(--line-3); outline-offset: 1px; }
+  .cop-picker-trigger > .msr { flex: 0 0 auto; font-size: 18px; color: var(--ink-3); }
+  .cop-picker-name { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+  .cop-picker-name strong {
+    overflow: hidden; font-family: var(--font-mono); font-size: 12.5px; font-weight: 500;
+    white-space: nowrap; text-overflow: ellipsis;
+  }
+  .cop-picker-name strong.placeholder { font-family: var(--font-sans); color: var(--ink-4); }
+  .cop-picker-name small { font-size: 10px; color: var(--ink-4); }
+  .cop-picker-name small.warn { color: var(--warn-text); }
+  .cop-picker-chev { transition: transform 140ms ease; }
+  .cop-picker-chev.open { transform: rotate(180deg); }
+  /* Pop : même matériau que le menu flottant de sélection (DocumentView), sections
+     repliables façon tiroirs « Titres & blocs ». */
+  .cop-picker-pop {
+    position: absolute; top: calc(100% + 5px); left: 0; right: 0; z-index: 30;
+    max-height: 360px; overflow-y: auto; padding: 6px;
+    border: 1px solid var(--line-2); border-radius: 14px; background: var(--cream-tint);
+    box-shadow:
+      0 0 0 1px var(--elevation-ring-soft),
+      0 12px 30px rgba(var(--shadow-rgb), 0.16);
+    animation: cop-picker-in 160ms cubic-bezier(0.22, 1, 0.36, 1);
+  }
+  @keyframes cop-picker-in {
+    from { opacity: 0; transform: translateY(4px) scale(0.98); }
+    to { opacity: 1; transform: translateY(0) scale(1); }
+  }
+  .cop-picker-sec {
+    width: 100%; height: 40px; display: flex; align-items: center; gap: 9px; padding: 0 9px;
+    border: 0; border-radius: 9px; background: transparent; color: var(--ink-2);
+    font-family: var(--font-sans); font-size: 12.5px; text-align: left; cursor: pointer;
+    transition: background 140ms ease, color 140ms ease;
+  }
+  .cop-picker-sec > .msr { width: 19px; flex: 0 0 auto; font-size: 17px; color: var(--ink-4); }
+  .cop-picker-sec:hover { background: var(--surface-hover); color: var(--ink); }
+  .cop-picker-sec:hover > .msr { color: var(--ink-2); }
+  .cop-picker-sec:focus-visible { outline: 2px solid var(--line-3); outline-offset: -2px; }
+  .cop-picker-sec-name { flex: 1; min-width: 0; white-space: nowrap; font-weight: 500; }
+  .cop-picker-sec-state { flex: 0 1 auto; overflow: hidden; font-size: 10.5px; color: var(--ink-4); white-space: nowrap; text-overflow: ellipsis; }
+  .cop-picker-sec-state.ok { color: var(--ok-text); }
+  .cop-picker-sec-state.warn { color: var(--warn-text); }
+  .cop-picker-sec-chev { width: 16px !important; font-size: 16px !important; transition: transform 180ms cubic-bezier(0.2, 0, 0, 1); }
+  .cop-picker-sec.open .cop-picker-sec-chev { transform: rotate(90deg); }
+  .cop-picker-fold {
+    display: grid; grid-template-rows: 0fr; opacity: 0;
+    transition: grid-template-rows 190ms cubic-bezier(0.2, 0, 0, 1), opacity 130ms ease-in;
+  }
+  .cop-picker-fold.open { grid-template-rows: 1fr; opacity: 1; }
+  .cop-picker-fold-inner { min-height: 0; overflow: hidden; }
+  .cop-picker-sep { height: 1px; margin: 4px 6px; background: var(--line-1); }
+  .cop-picker-opt {
+    width: 100%; min-height: 34px; display: flex; align-items: center; gap: 9px; padding: 5px 9px 5px 22px;
+    border: 0; border-radius: 8px; background: transparent; color: var(--ink-2);
+    font-family: var(--font-sans); font-size: 11.5px; text-align: left; cursor: pointer;
+    transition: background 140ms ease, color 140ms ease;
+  }
+  .cop-picker-opt:hover, .cop-picker-opt:focus-visible { background: var(--surface-hover); color: var(--ink); }
+  .cop-picker-opt:focus-visible { outline: 2px solid var(--line-3); outline-offset: -2px; }
+  .cop-picker-opt[aria-checked='true'] { background: var(--accent-soft); color: var(--ink); }
+  .cop-picker-opt > .msr { flex: 0 0 auto; font-size: 16px; color: var(--ink-3); }
+  .cop-picker-empty { padding: 5px 9px 9px 22px; font-size: 11px; color: var(--ink-4); }
+  @media (prefers-reduced-motion: reduce) {
+    .cop-picker-pop { animation: none; }
+    .cop-picker-fold, .cop-picker-sec-chev, .cop-picker-chev { transition: none; }
+  }
 
   .cop-openai-view { padding: 0 2px 24px; display: flex; flex-direction: column; gap: 16px; }
   .cop-cloud-hero { overflow: hidden; border: 1px solid var(--line-2); border-radius: 18px; }
@@ -1317,7 +1699,6 @@
   .cop-cloud-privacy strong { color: var(--ink-3); font-weight: 600; }
 
   .cop-mono { font-family: var(--font-mono); font-size: 12.5px; color: var(--ink); font-weight: 500; }
-  .cop-mono.lg { font-size: 15px; line-height: 1.2; }
   .grow { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
   /* Onboarding */
@@ -1341,19 +1722,13 @@
   .cop-btn-fill:hover { background: var(--ink-2); }
   .cop-btn-fill:disabled { opacity: 0.55; cursor: default; }
 
-  /* MiniMax : champ clé + sélecteur de modèle */
+  /* MiniMax : champ clé */
   .cop-mm-connect { display: flex; flex-direction: column; gap: 8px; }
   .cop-mm-connect input {
     height: 34px; padding: 0 11px; border: 1px solid var(--line-2); border-radius: 9px;
     background: var(--cream-content); color: var(--ink); font-family: var(--font-mono); font-size: 12px;
   }
   .cop-mm-connect input:focus-visible { outline: 2px solid var(--line-3); outline-offset: -1px; }
-  .cop-mm-model { display: flex; flex-direction: column; gap: 6px; padding: 0 2px; }
-  .cop-mm-model > span { font-size: 10.5px; color: var(--ink-4); font-weight: 600; letter-spacing: 0.06em; }
-  .cop-mm-model select {
-    height: 34px; padding: 0 9px; border: 1px solid var(--line-2); border-radius: 9px;
-    background: var(--cream-content); color: var(--ink); font-family: var(--font-sans); font-size: 12.5px;
-  }
 
   /* Sections modèles */
   .cop-sections { padding: 8px 2px; display: flex; flex-direction: column; gap: 20px; }
@@ -1361,25 +1736,7 @@
   .cop-label.row { display: flex; align-items: baseline; justify-content: space-between; }
   .cop-count { font-size: 11px; color: var(--ink-4); white-space: nowrap; letter-spacing: 0; }
 
-  /* Carte héro */
-  .cop-hero { border-radius: 18px; overflow: hidden; border: 1px solid var(--line-2); }
-  .cop-hero-head { background: var(--cream-content); padding: 14px 15px 26px; display: flex; align-items: center; gap: 12px; }
-  .cop-hero-icon {
-    width: 42px; height: 42px; flex: 0 0 auto; border-radius: 12px;
-    background: var(--surface-2); border: 1px solid var(--line-2); display: flex; align-items: center; justify-content: center; color: var(--ink);
-  }
-  .cop-hero-name { min-width: 0; flex: 1; }
-  .cop-hero-stats { margin-top: -16px; background: var(--surface-2); border-radius: 16px 16px 0 0; padding: 15px 16px; display: flex; }
-  .cop-stat { flex: 1; text-align: center; }
-  .cop-stat .cop-mono { font-size: 15px; }
-  .cop-stat-lbl { font-size: 10px; color: var(--ink-4); letter-spacing: 0.04em; margin-top: 3px; }
-  .cop-stat-sep { width: 1px; background: var(--line-2); }
-  .cop-pill {
-    display: inline-flex; align-items: center; gap: 5px; height: 23px; padding: 0 9px 0 8px; border-radius: 999px;
-    background: rgba(107, 164, 123, 0.16); color: var(--ok-text); font-size: 11px; font-weight: 600;
-  }
   .cop-dot { width: 8px; height: 8px; flex: 0 0 auto; border-radius: 50%; border: 1.5px solid var(--line-3); }
-  .cop-pill .cop-dot { width: 6px; height: 6px; background: var(--ok); border: 0; }
   .cop-dot.breathe { animation: doku-breathe 2s ease-in-out infinite; }
   .cop-dot.on { background: var(--ok); border: 0; box-shadow: 0 0 0 3px rgba(107, 164, 123, 0.18); }
 
@@ -1392,6 +1749,7 @@
     flex: 1; display: flex; align-items: center; gap: 10px; min-width: 0;
     padding: 9px 4px 9px 11px; border: 0; background: none; color: var(--ink); text-align: left; cursor: pointer;
   }
+  .cop-row-pick:disabled { cursor: default; }
   .cop-size { font-size: 11px; color: var(--ink-4); white-space: nowrap; flex-shrink: 0; }
   .cop-del { display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 38px; border: 0; background: none; color: var(--ink-4); cursor: pointer; }
   .cop-del:hover { color: var(--err); }
@@ -1703,11 +2061,13 @@
   .cop-source-chip:hover { background: var(--surface-hover); color: var(--ink); }
   /* Sans nom de note (extraits du document courant) : la puce est juste le numéro. */
   .cop-source-chip.bare { padding: 0 4px; }
+  /* Tag arrondi-carré plutôt que cercle : le padding horizontal laisse respirer les
+     numéros à 2 chiffres qu'un cercle de 16px écrasait. */
   .cop-source-num {
     display: inline-flex; align-items: center; justify-content: center;
-    width: 16px; height: 16px; border-radius: 50%;
+    min-width: 16px; height: 15px; padding: 0 4px; border-radius: 5px;
     background: var(--accent-soft); color: var(--ink-3);
-    font-size: 10px; font-weight: 600; font-variant-numeric: tabular-nums;
+    font-family: var(--font-mono); font-size: 9.5px; font-weight: 600; line-height: 1;
   }
 
   /* Puces de citation [n] inline (21.x) — injectées via {@html} après sanitize, d'où le
@@ -1715,15 +2075,62 @@
      désignent le même passage. */
   .cop-md :global(.cop-cite) {
     display: inline-flex; align-items: center; justify-content: center;
-    width: 16px; height: 16px; margin: 0 1px; padding: 0; border: 0; border-radius: 50%;
+    min-width: 16px; height: 15px; margin: 0 2px; padding: 0 4px; border: 0; border-radius: 5px;
     background: var(--accent-soft); color: var(--ink-3);
-    font-family: var(--font-sans); font-size: 10px; font-weight: 600;
-    font-variant-numeric: tabular-nums; line-height: 1;
+    font-family: var(--font-mono); font-size: 9.5px; font-weight: 600; line-height: 1;
     vertical-align: 2px; cursor: pointer;
     transition: background 120ms ease, color 120ms ease, transform 100ms ease;
   }
   .cop-md :global(.cop-cite:hover) { background: var(--ink); color: var(--cream-content); }
   .cop-md :global(.cop-cite:active) { transform: scale(0.9); }
+
+  /* Aperçu flottant du passage cité — même matériau que les menus flottants.
+     pointer-events: none : la carte ne vole jamais la souris (elle disparaît en
+     quittant la puce, aucun piège de survol possible). */
+  .cop-cite-preview {
+    position: absolute;
+    z-index: 50;
+    width: 300px;
+    padding: 11px 12px 9px;
+    border-radius: 12px;
+    background: var(--cream-tint);
+    box-shadow:
+      0 0 0 1px var(--elevation-ring-soft),
+      0 12px 30px rgba(var(--shadow-rgb), 0.18);
+    transform: translate(-50%, -100%);
+    pointer-events: none;
+    animation: cop-cite-preview-in 130ms cubic-bezier(0.22, 1, 0.36, 1);
+  }
+  .cop-cite-preview.below { transform: translate(-50%, 0); }
+  @keyframes cop-cite-preview-in {
+    from { opacity: 0; translate: 0 3px; }
+    to { opacity: 1; translate: 0 0; }
+  }
+  .cop-cite-preview-head { display: flex; align-items: center; gap: 7px; margin-bottom: 7px; }
+  .cop-cite-preview-name {
+    overflow: hidden; font-size: 11px; font-weight: 600; color: var(--ink-2);
+    white-space: nowrap; text-overflow: ellipsis;
+  }
+  .cop-cite-preview-text {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 7;
+    line-clamp: 7;
+    overflow: hidden;
+    margin: 0;
+    font-size: 11.5px;
+    line-height: 1.55;
+    color: var(--ink-2);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+  .cop-cite-preview-hint {
+    margin-top: 8px; padding-top: 7px; border-top: 1px solid var(--line-1);
+    font-size: 10px; color: var(--ink-4);
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .cop-cite-preview { animation: none; }
+  }
 
   :global([data-theme='dark']) .cop-composer-back {
     box-shadow: 0 4px 14px rgba(0, 0, 0, 0.12);
