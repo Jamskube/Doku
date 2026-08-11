@@ -669,6 +669,13 @@
                         <span class="cop-size">{formatBytes(m.size)}</span>
                       </button>
                     {/each}
+                    <!-- Accès à la carte locale (bibliothèque, index du dossier, ajouter)
+                         SANS changer le modèle actif — l'ancien onglet « Sur cet appareil »
+                         offrait ce chemin, le dropdown doit le garder. -->
+                    <button class="cop-picker-opt" role="menuitem" onclick={pickManageLocal}>
+                      <span class="msr">tune</span>
+                      <span class="grow">Gérer modèles et index…</span>
+                    </button>
                   {:else if !copilot.modelsLoaded}
                     <!-- Liste jamais lue (moteur pas démarré / indisponible) : ne JAMAIS
                          affirmer « aucun modèle installé » sans avoir regardé. -->
