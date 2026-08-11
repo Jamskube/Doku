@@ -1,9 +1,8 @@
-// Poids 300 retiré (aucun font-weight < 400 dans les sources). Source Serif et
-// Material Symbols sont déclarés dans app.css : latin seul pour l'un, sous-ensemble
-// généré (scripts/subset-icons.mjs) pour l'autre.
-import '@fontsource/geist-sans/400.css'
-import '@fontsource/geist-sans/500.css'
-import '@fontsource/geist-sans/600.css'
+// UI en Inter Variable (un seul woff2 variable couvre 400-700 — Geist Sans jugée trop
+// massive à petite taille). Geist Mono reste pour le code. Source Serif et Material
+// Symbols sont déclarés dans app.css : latin seul pour l'un, sous-ensemble généré
+// (scripts/subset-icons.mjs) pour l'autre.
+import '@fontsource-variable/inter'
 import '@fontsource/geist-mono/400.css'
 import '@fontsource/geist-mono/500.css'
 import './app.css'

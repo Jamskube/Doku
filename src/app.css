@@ -65,9 +65,10 @@
   --warn-text: #8A5F26;
   --err-text: #A9412F;
   --danger-action-text: #B51D2A;
-  /* 'Geist Sans' = nom exact des @font-face de @fontsource/geist-sans. L'ancien 'Geist'
-     ne matchait rien : toute l'UI tombait silencieusement sur la police système. */
-  --font-sans: 'Geist Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+  /* 'Inter Variable' = nom exact du @font-face de @fontsource-variable/inter — un nom
+     approximatif ne matche RIEN et toute l'UI tombe silencieusement sur la police
+     système (vécu avec 'Geist' vs 'Geist Sans'). */
+  --font-sans: 'Inter Variable', -apple-system, BlinkMacSystemFont, sans-serif;
   --font-mono: 'Geist Mono', ui-monospace, monospace;
   --font-serif: 'Source Serif 4 Variable', 'Iowan Old Style', Georgia, serif;
 }

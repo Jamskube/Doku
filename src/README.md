@@ -23,4 +23,4 @@ Frontend Svelte 5 de Doku (lecteur/éditeur de documents — shell W1 + éditeur
 
 ## Dependencies
 - Internal: `docs/design/w1/` (maquette de référence), tokens AIR
-- External: CodeMirror 6, fonts @fontsource (Geist, Geist Mono, Source Serif 4), material-symbols, @tauri-apps/*
+- External: CodeMirror 6, fonts @fontsource (Inter Variable, Geist Mono, Source Serif 4), material-symbols, @tauri-apps/*
