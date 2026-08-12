@@ -1,9 +1,9 @@
 <script lang="ts">
   import { tick, untrack } from 'svelte'
-  import { activeTab, app, isCloudProvider, openPath, type CopilotProvider } from '../lib/stores.svelte'
-  import { closeWindow, isTauri, minimizeWindow, toggleMaximizeWindow } from '../lib/tauri'
+  import { activeTab, app, editorSel, isCloudProvider, openPath, type CopilotProvider } from '../lib/stores.svelte'
+  import { closeWindow, fileSizeAt, isTauri, minimizeWindow, openContextFilesDialog, openFolderDialog, readFileBytes, readTextFileAt, toggleMaximizeWindow } from '../lib/tauri'
   import { formatBytes } from '../lib/ollama'
-  import { beginOpenAiAuth, cancelOpenAiConnection, cancelPull, connectMinimax, copilot, disconnectMinimaxKey, disconnectOpenAiAccount, ensureCopilotReady, isEmbedModel, jumpToCitation, newChat as clearChat, pullModel, refreshMinimaxStatus, refreshModels, refreshOpenAiStatus, removeModel, retryGeneration, saveMessageAsNote, sendChat, setActiveModel, setCopilotProvider, stopChat, summarizeDoc, type ChatMsg } from '../lib/copilot.svelte'
+  import { addCopilotContext, beginOpenAiAuth, cancelOpenAiConnection, cancelPull, connectMinimax, copilot, disconnectMinimaxKey, disconnectOpenAiAccount, ensureCopilotReady, isEmbedModel, jumpToCitation, newChat as clearChat, pullModel, refreshMinimaxStatus, refreshModels, refreshOpenAiStatus, removeCopilotContext, removeModel, retryGeneration, saveMessageAsNote, sendChat, setActiveModel, setCopilotContextFolder, setCopilotMemoryFolder, setCopilotProvider, stopChat, summarizeDoc, type ChatMsg } from '../lib/copilot.svelte'
   import { MINIMAX_DEFAULT_MODEL } from '../lib/compat'
   import { DEFAULT_EMBED_MODEL, FALLBACK_EMBED_MODEL, noteTitle } from '../lib/rag'
   import { cancelRagIndexing, deleteRagIndex, ragState, refreshRagIndex } from '../lib/rag-index.svelte'
@@ -12,6 +12,9 @@
   import { openOpenAiAuthPage, OPENAI_MODEL } from '../lib/openai'
   import { renderChatMarkdown } from '../lib/export/render-md'
   import { annotateCitations } from '../lib/citations'
+  import { cleanContextLabel, contextItemId, MAX_CONTEXT_ITEMS, MAX_CONTEXT_LOAD_CONCURRENCY, MAX_CONTEXT_PDF_BYTES, MAX_CONTEXT_TEXT_BYTES, pathBelongsToFolder, truncateContextItem, type CopilotContextItem } from '../lib/copilot-context'
+  import { cloudMemory, deleteCloudMemoryRecord, loadCloudMemory, memoryWorkspace, undoCloudMemory, updateCloudMemoryRecord, type MemoryWorkspace } from '../lib/copilot-memory.svelte'
+  import type { CloudMemoryProvider, MemoryRecord, MemoryType } from '../lib/copilot-memory'
 
   // Rendu d'une réponse : Markdown assaini PUIS puces de citation (l'annotation opère
   // après DOMPurify — seul notre markup de puce est injecté). Sans sources (petit doc,
@@ -275,7 +278,7 @@
   // --- Index sémantique du dossier (15.2, ADR-0015) ---
   // Le service RAG n'importe ni stores ni copilot : la vue fournit dossier, modèle et port.
   const EMBED_CHOICES = [DEFAULT_EMBED_MODEL, FALLBACK_EMBED_MODEL]
-  const ragDir = $derived(app.explorerDir ?? parentPath(activeTab()?.path ?? null))
+  const ragDir = $derived(copilot.contextFolder?.path ?? app.explorerDir ?? parentPath(activeTab()?.path ?? null))
   // '' = réglage effacé (modèle supprimé du disque) : on repropose le défaut.
   const embedModelName = $derived(app.embedModel || DEFAULT_EMBED_MODEL)
   const embedInstalled = $derived(copilot.models.some((m) => m.name === embedModelName || m.name === `${embedModelName}:latest`))
@@ -373,6 +376,140 @@
       state: docTruncated ? (docIndexAvailable ? 'Document entier (index)' : 'Lecture partielle') : 'Document entier',
     }
   })
+  const contextCount = $derived((copilot.scope === 'folder' ? (ragDir ? 1 : 0) : contextDetails.count) + copilot.contextItems.length)
+  const contextSummary = $derived(
+    copilot.scope === 'folder'
+      ? `${ragDir ? '1 dossier' : 'Aucun dossier'}${copilot.contextItems.length ? ` + ${copilot.contextItems.length}` : ''}`
+      : `${contextCount} source${contextCount === 1 ? '' : 's'}`,
+  )
+  const cloudDestination = $derived(
+    app.copilotProvider === 'openai' ? 'OpenAI' : app.copilotProvider === 'minimax' ? 'MiniMax' : null,
+  )
+  const memoryDocument = $derived.by(() => {
+    const tab = activeTab()
+    return tab?.path ? { path: tab.path, label: tab.name, kind: 'document' as const } : null
+  })
+  const effectiveMemoryFolder = $derived(
+    copilot.memoryFolder && pathBelongsToFolder(memoryDocument?.path, copilot.memoryFolder.path)
+      ? copilot.memoryFolder
+      : null,
+  )
+  const memoryTarget = $derived(
+    effectiveMemoryFolder
+      ? { ...effectiveMemoryFolder, kind: 'folder' as const }
+      : memoryDocument,
+  )
+  const memoryFolderCandidate = $derived.by(() => {
+    if (copilot.contextFolder) return copilot.contextFolder
+    const path = parentPath(activeTab()?.path ?? null)
+    return path ? { path, label: baseName(path) } : null
+  })
+  let shownMemoryWorkspace = $state<MemoryWorkspace | null>(null)
+  let memoryLoadNonce = 0
+  let editingMemory = $state<string | null>(null)
+  let memoryDraft = $state({ name: '', description: '', type: 'fact' as MemoryType, content: '' })
+  let confirmMemoryDelete = $state<string | null>(null)
+
+  async function refreshMemoryView(target = memoryTarget) {
+    if (!target) {
+      shownMemoryWorkspace = null
+      return
+    }
+    const nonce = ++memoryLoadNonce
+    const workspace = await memoryWorkspace(target.path, target.label, target.kind)
+    if (nonce !== memoryLoadNonce) return
+    shownMemoryWorkspace = workspace
+    await loadCloudMemory(workspace, true)
+  }
+
+  $effect(() => {
+    const target = memoryTarget
+    if (app.copilotView === 'memory') untrack(() => void refreshMemoryView(target))
+  })
+
+  function openMemoryView() {
+    app.copilotView = 'memory'
+    void refreshMemoryView()
+  }
+
+  function useDocumentMemory() {
+    setCopilotMemoryFolder(null)
+  }
+
+  function useFolderMemory() {
+    if (!memoryFolderCandidate) return
+    setCopilotMemoryFolder(memoryFolderCandidate)
+  }
+
+  function memoryActionButton(id: string, action: 'edit' | 'delete'): HTMLButtonElement | null {
+    return panelEl?.querySelector<HTMLButtonElement>(`[data-memory-id="${id}"][data-memory-action="${action}"]`) ?? null
+  }
+
+  async function editMemory(record: MemoryRecord) {
+    editingMemory = record.id
+    memoryDraft = { name: record.name, description: record.description, type: record.type, content: record.content }
+    confirmMemoryDelete = null
+    await tick()
+    panelEl?.querySelector<HTMLInputElement>('.cop-memory-form input')?.focus()
+  }
+
+  async function cancelMemoryEdit(id: string) {
+    editingMemory = null
+    await tick()
+    memoryActionButton(id, 'edit')?.focus()
+  }
+
+  async function askMemoryDelete(id: string) {
+    confirmMemoryDelete = id
+    editingMemory = null
+    await tick()
+    panelEl?.querySelector<HTMLButtonElement>('.cop-memory-confirm button')?.focus()
+  }
+
+  async function cancelMemoryDelete(id: string) {
+    confirmMemoryDelete = null
+    await tick()
+    memoryActionButton(id, 'delete')?.focus()
+  }
+
+  async function saveMemoryEdit(record: MemoryRecord) {
+    if (!shownMemoryWorkspace || !isCloudProvider(app.copilotProvider) || !memoryDraft.name.trim() || !memoryDraft.description.trim() || !memoryDraft.content.trim()) return
+    await updateCloudMemoryRecord({
+      workspace: shownMemoryWorkspace,
+      id: record.id,
+      name: memoryDraft.name.trim(),
+      description: memoryDraft.description.trim(),
+      type: memoryDraft.type,
+      content: memoryDraft.content.trim(),
+      provider: app.copilotProvider as CloudMemoryProvider,
+    })
+    editingMemory = null
+    await tick()
+    memoryActionButton(record.id, 'edit')?.focus()
+  }
+
+  async function removeMemory(id: string) {
+    if (!shownMemoryWorkspace || !isCloudProvider(app.copilotProvider)) return
+    await deleteCloudMemoryRecord(shownMemoryWorkspace, id, app.copilotProvider as CloudMemoryProvider)
+    confirmMemoryDelete = null
+    if (editingMemory === id) editingMemory = null
+    await tick()
+    panelEl?.querySelector<HTMLElement>('#cop-memory-title')?.focus()
+  }
+
+  function memoryTypeLabel(type: MemoryType): string {
+    return type === 'preference' ? 'Préférence' : type === 'decision' ? 'Décision' : type === 'reference' ? 'Référence' : type === 'open_question' ? 'Question ouverte' : 'Information'
+  }
+
+  function memoryBatchLabel(): string {
+    const batch = cloudMemory.lastBatch
+    if (!batch) return ''
+    const parts = []
+    if (batch.created) parts.push(`${batch.created} ajoutée${batch.created > 1 ? 's' : ''}`)
+    if (batch.updated) parts.push(`${batch.updated} actualisée${batch.updated > 1 ? 's' : ''}`)
+    if (batch.deleted) parts.push(`${batch.deleted} oubliée${batch.deleted > 1 ? 's' : ''}`)
+    return parts.join(' · ')
+  }
 
   function showComposerFace(face: 'question' | 'context', focus = false) {
     composerFace = face
@@ -419,6 +556,194 @@
     draft = ''
     const t = activeTab()
     void sendChat(q, { name: t?.name ?? null, text: t?.content ?? '', kind: t?.kind ?? 'md', path: t?.path ?? null }, copilot.scope)
+  }
+
+  // --- Ajouter du contexte -------------------------------------------------------------
+  // Le pop vit à la racine de .cop-panel (contain: layout paint), comme les autres surfaces
+  // flottantes. Les lectures sont bornées AVANT chargement et limitées à deux en parallèle.
+  let addMenuOpen = $state(false)
+  let addMenuEl = $state<HTMLElement | null>(null)
+  let addButtonEl = $state<HTMLButtonElement | null>(null)
+  let browserFilesEl = $state<HTMLInputElement | null>(null)
+  let browserFolderEl = $state<HTMLInputElement | null>(null)
+  let contextLoading = $state(false)
+  let addMenuPos = $state<{ left: number; bottom: number } | null>(null)
+  const ADD_MENU_W = 276
+  const selectionAvailable = $derived(!!editorSel.text.trim() && activeTab()?.kind !== 'pdf')
+
+  function closeAddMenu(restoreFocus = false) {
+    addMenuOpen = false
+    if (restoreFocus) addButtonEl?.focus()
+  }
+
+  function toggleAddMenu() {
+    addMenuOpen = !addMenuOpen
+    copilot.contextError = ''
+    if (!addMenuOpen || !addButtonEl || !panelEl) return
+    const r = addButtonEl.getBoundingClientRect()
+    const a = panelEl.getBoundingClientRect()
+    const left = Math.min(Math.max(Math.round(r.left - a.left), 8), Math.round(a.width - ADD_MENU_W - 8))
+    addMenuPos = { left, bottom: Math.round(a.bottom - r.top) + 8 }
+    void tick().then(() => addMenuEl?.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus())
+  }
+
+  function onAddMenuKeydown(e: KeyboardEvent) {
+    if (e.key === 'Escape') {
+      e.preventDefault()
+      e.stopPropagation()
+      closeAddMenu(true)
+      return
+    }
+    if (e.key === 'Tab') {
+      closeAddMenu()
+      return
+    }
+    const options = Array.from(addMenuEl?.querySelectorAll<HTMLButtonElement>('.cop-add-context-action:not(:disabled)') ?? [])
+    if (!options.length) return
+    const index = options.indexOf(document.activeElement as HTMLButtonElement)
+    if (e.key === 'ArrowDown') {
+      e.preventDefault()
+      ;(options[index + 1] ?? options[0]).focus()
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault()
+      ;(options[index - 1] ?? options.at(-1))?.focus()
+    } else if (e.key === 'Home' || e.key === 'End') {
+      e.preventDefault()
+      ;(e.key === 'Home' ? options[0] : options.at(-1))?.focus()
+    }
+  }
+
+  function contextItem(kind: CopilotContextItem['kind'], label: string, text: string, path?: string | null, signature?: string): CopilotContextItem | null {
+    if (!text.trim()) return null
+    const bounded = truncateContextItem(text)
+    const owner = activeTab()?.path ?? activeTab()?.id
+    const id = contextItemId({ kind, path, owner: owner == null ? null : String(owner), from: editorSel.from, to: editorSel.to, text: bounded.text })
+    return {
+      id,
+      kind,
+      label: cleanContextLabel(label),
+      text: bounded.text,
+      path,
+      signature,
+      charCount: text.length,
+      truncatedAtLoad: bounded.truncated,
+    }
+  }
+
+  function addSelection() {
+    const tab = activeTab()
+    const item = contextItem('selection', `Sélection · ${tab?.name ?? 'document'}`, editorSel.text)
+    if (item) addCopilotContext([item])
+    closeAddMenu(true)
+  }
+
+  async function readNativeContextFile(path: string): Promise<CopilotContextItem | null> {
+    const pdf = /\.pdf$/i.test(path)
+    const size = await fileSizeAt(path)
+    const limit = pdf ? MAX_CONTEXT_PDF_BYTES : MAX_CONTEXT_TEXT_BYTES
+    if (size === null || size > limit) {
+      throw new Error(`${cleanContextLabel(path)} dépasse la limite de ${formatBytes(limit)}.`)
+    }
+    let text: string | null
+    if (pdf) {
+      const bytes = await readFileBytes(path)
+      if (!bytes) throw new Error(`${cleanContextLabel(path)} est illisible.`)
+      const { extractPdfText } = await import('../lib/pdf')
+      const extraction = await extractPdfText(bytes)
+      if (extraction.scanned) throw new Error(`${cleanContextLabel(path)} est un PDF scanné sans couche texte.`)
+      text = extraction.text
+    } else {
+      text = await readTextFileAt(path)
+    }
+    return text === null ? null : contextItem('file', path, text, path, String(size))
+  }
+
+  async function readBrowserContextFile(file: File): Promise<CopilotContextItem | null> {
+    const pdf = /\.pdf$/i.test(file.name)
+    const limit = pdf ? MAX_CONTEXT_PDF_BYTES : MAX_CONTEXT_TEXT_BYTES
+    if (file.size > limit) throw new Error(`${file.name} dépasse la limite de ${formatBytes(limit)}.`)
+    let text: string
+    if (pdf) {
+      const { extractPdfText } = await import('../lib/pdf')
+      const extraction = await extractPdfText(new Uint8Array(await file.arrayBuffer()))
+      if (extraction.scanned) throw new Error(`${file.name} est un PDF scanné sans couche texte.`)
+      text = extraction.text
+    } else text = await file.text()
+    const relative = (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name
+    return contextItem('file', relative, text, relative, `${file.size}:${file.lastModified}`)
+  }
+
+  async function loadContextBatch<T>(values: readonly T[], reader: (value: T) => Promise<CopilotContextItem | null>) {
+    contextLoading = true
+    copilot.contextError = ''
+    const loaded: CopilotContextItem[] = []
+    const errors: string[] = []
+    let freeSlots = Math.max(0, MAX_CONTEXT_ITEMS - copilot.contextItems.length)
+    const existing = new Set(copilot.contextItems.map((item) => item.id))
+    let skipped = 0
+    const accepted: T[] = []
+    for (const value of values) {
+      const rawPath = typeof value === 'string'
+        ? value
+        : value instanceof File
+          ? ((value as File & { webkitRelativePath?: string }).webkitRelativePath || value.name)
+          : null
+      const id = rawPath ? contextItemId({ kind: 'file', path: rawPath, text: '' }) : null
+      if (id && existing.has(id)) accepted.push(value)
+      else if (freeSlots > 0) {
+        accepted.push(value)
+        freeSlots--
+      } else skipped++
+    }
+    try {
+      for (let i = 0; i < accepted.length; i += MAX_CONTEXT_LOAD_CONCURRENCY) {
+        const batch = await Promise.allSettled(accepted.slice(i, i + MAX_CONTEXT_LOAD_CONCURRENCY).map(reader))
+        for (const result of batch) {
+          if (result.status === 'fulfilled' && result.value) loaded.push(result.value)
+          else if (result.status === 'rejected') errors.push(result.reason instanceof Error ? result.reason.message : String(result.reason))
+        }
+      }
+      if (loaded.length) addCopilotContext(loaded)
+      if (skipped) errors.push(`Limite de ${MAX_CONTEXT_ITEMS} sources atteinte : ${skipped} fichier${skipped > 1 ? 's' : ''} non lu${skipped > 1 ? 's' : ''}.`)
+      if (errors.length) copilot.contextError = errors.slice(0, 2).join(' ')
+    } finally {
+      contextLoading = false
+    }
+  }
+
+  async function addFiles() {
+    closeAddMenu()
+    if (isTauri) await loadContextBatch(await openContextFilesDialog(), readNativeContextFile)
+    else browserFilesEl?.click()
+  }
+
+  async function addFolder() {
+    closeAddMenu()
+    if (!isTauri) {
+      browserFolderEl?.click()
+      return
+    }
+    const path = await openFolderDialog(copilot.contextFolder?.path ?? ragDir)
+    if (path) setCopilotContextFolder({ path, label: baseName(path) })
+  }
+
+  async function addClipboard() {
+    closeAddMenu()
+    try {
+      const text = await navigator.clipboard.readText()
+      const item = contextItem('clipboard', 'Texte collé', text)
+      if (!item) throw new Error('Le presse-papiers ne contient aucun texte.')
+      addCopilotContext([item])
+    } catch (error) {
+      copilot.contextError = error instanceof Error ? error.message : 'Lecture du presse-papiers refusée.'
+    }
+  }
+
+  function onBrowserFiles(e: Event) {
+    const input = e.currentTarget as HTMLInputElement
+    const files = Array.from(input.files ?? [])
+    input.value = ''
+    void loadContextBatch(files, readBrowserContextFile)
   }
 
   function onPromptKey(e: KeyboardEvent) {
@@ -477,6 +802,7 @@
     if (pickerOpen && !pickerRootEl?.contains(t)) pickerOpen = false
     // Le menu vit hors du root du chip (racine du panneau) : les deux comptent comme « dedans ».
     if (verbMenuOpen && !verbMenuRootEl?.contains(t) && !verbMenuEl?.contains(t)) verbMenuOpen = false
+    if (addMenuOpen && !addButtonEl?.contains(t) && !addMenuEl?.contains(t)) addMenuOpen = false
   }
 
   // Actions rapides de la vue vide — trois LIVRABLES distincts du même pipeline de résumé
@@ -581,8 +907,8 @@
       class="cop-verb-menu"
       style="left:{verbMenuPos.left}px; bottom:{verbMenuPos.bottom}px"
       role="menu"
-      aria-label="Style des réponses"
       tabindex="-1"
+      aria-label="Style des réponses"
       bind:this={verbMenuEl}
       onkeydown={onVerbMenuKeydown}
     >
@@ -623,6 +949,37 @@
   {/if}
 {/snippet}
 
+{#snippet addContextMenu()}
+  {#if addMenuOpen && addMenuPos}
+    <div
+      class="cop-add-context-menu"
+      style="left:{addMenuPos.left}px; bottom:{addMenuPos.bottom}px"
+      role="menu"
+      tabindex="-1"
+      aria-label="Ajouter du contexte"
+      bind:this={addMenuEl}
+      onkeydown={onAddMenuKeydown}
+    >
+      <div class="cop-add-context-head">
+        <strong>Ajouter du contexte</strong>
+        {#if cloudDestination}<small>Sera envoyé à {cloudDestination}</small>{:else}<small>Reste sur cet appareil</small>{/if}
+      </div>
+      <button class="cop-add-context-action" role="menuitem" disabled={!selectionAvailable || contextLoading} onclick={addSelection}>
+        <span class="msr">notes</span><span><strong>Sélection actuelle</strong><small>Capturer le texte sélectionné</small></span>
+      </button>
+      <button class="cop-add-context-action" role="menuitem" disabled={contextLoading} onclick={() => void addFiles()}>
+        <span class="msr">description</span><span><strong>Fichiers…</strong><small>Markdown, texte, HTML ou PDF</small></span>
+      </button>
+      <button class="cop-add-context-action" role="menuitem" disabled={contextLoading} onclick={() => void addFolder()}>
+        <span class="msr">folder</span><span><strong>Dossier de notes…</strong><small>Utiliser son index sémantique</small></span>
+      </button>
+      <button class="cop-add-context-action" role="menuitem" disabled={contextLoading} onclick={() => void addClipboard()}>
+        <span class="msr">content_paste</span><span><strong>Texte du presse-papiers</strong><small>Créer un instantané temporaire</small></span>
+      </button>
+    </div>
+  {/if}
+{/snippet}
+
 {#snippet citePreviewCard()}
   {#if citePreview}
     <div
@@ -643,7 +1000,7 @@
 
 <!-- Échap est géré sur les triggers/pops eux-mêmes (focus toujours dedans quand ouvert)
      avec stopPropagation ; ici seul le clic extérieur, partagé par les deux menus. -->
-<svelte:window onpointerdowncapture={pickerOpen || verbMenuOpen ? onGlobalPointerDown : undefined} />
+<svelte:window onpointerdowncapture={pickerOpen || verbMenuOpen || addMenuOpen ? onGlobalPointerDown : undefined} />
 
 <aside
   class="cop-panel"
@@ -675,7 +1032,7 @@
     >
       <span class="msr" style="font-size:17px">{app.copilotExpanded ? 'close_fullscreen' : 'open_in_full'}</span>
     </button>
-    {#if app.copilotView === 'models'}
+    {#if app.copilotView === 'models' || app.copilotView === 'memory'}
       <button class="cop-ic" title="Retour au chat" aria-label="Retour au chat" onclick={() => (app.copilotView = 'chat')}>
         <span class="msr" style="font-size:19px">arrow_back</span>
       </button>
@@ -689,6 +1046,11 @@
             <path d="M12 3H7a4 4 0 0 0-4 4v10a4 4 0 0 0 4 4h10a4 4 0 0 0 4-4v-5" />
             <path d="M18.375 2.625a1 1 0 0 1 3 3l-9.013 9.014a2 2 0 0 1-.853.505l-2.873.84a.5.5 0 0 1-.62-.62l.84-2.873a2 2 0 0 1 .506-.852z" />
           </svg>
+        </button>
+      {/if}
+      {#if isCloudProvider(app.copilotProvider)}
+        <button class="cop-ic" title="Mémoire du travail" aria-label="Mémoire du travail" onclick={openMemoryView}>
+          <span class="msr" style="font-size:18px">database</span>
         </button>
       {/if}
       <button class="cop-ic" title="Gérer les modèles" aria-label="Gérer les modèles" onclick={() => (app.copilotView = 'models')}>
@@ -710,6 +1072,24 @@
   <!-- Corps : carte arrondie qui démarre sous l'en-tête -->
   <div class="cop-card">
     <div class="cop-scroll" bind:this={scroller} onscroll={onScroll}>
+      {#if app.copilotView === 'chat' && cloudMemory.lastBatch}
+        <div class="cop-memory-toast" role="status">
+          <span class="msr" aria-hidden="true">database</span>
+          <span><strong>Mémoire mise à jour</strong><small>{memoryBatchLabel()}</small></span>
+          {#if shownMemoryWorkspace ?? cloudMemory.workspace}
+            <button onclick={() => void undoCloudMemory((shownMemoryWorkspace ?? cloudMemory.workspace)!)}>Annuler</button>
+          {/if}
+          <button class="icon" title="Masquer" aria-label="Masquer la notification" onclick={() => (cloudMemory.lastBatch = null)}><span class="msr">close</span></button>
+        </div>
+      {/if}
+      {#if app.copilotView === 'chat' && cloudMemory.error}
+        <div class="cop-memory-toast error" role="alert">
+          <span class="msr" aria-hidden="true">warning</span>
+          <span><strong>Mémoire indisponible</strong><small>{cloudMemory.error}</small></span>
+          <button onclick={openMemoryView}>Vérifier</button>
+          <button class="icon" title="Masquer" aria-label="Masquer l’erreur mémoire" onclick={() => (cloudMemory.error = '')}><span class="msr">close</span></button>
+        </div>
+      {/if}
       {#if app.copilotView === 'models'}
         <div class="cop-picker" bind:this={pickerRootEl}>
           <div class="cop-label" id="cop-picker-label">Modèle actif</div>
@@ -1252,6 +1632,141 @@
           </details>
         {/if}
         {/if}
+      {:else if app.copilotView === 'memory'}
+        <section class="cop-memory-view" aria-labelledby="cop-memory-title">
+          <div class="cop-memory-heading">
+            <span class="cop-memory-mark" aria-hidden="true"><span class="msr">database</span></span>
+            <span>
+              <h2 id="cop-memory-title" tabindex="-1">Mémoire du travail</h2>
+              <p>{memoryTarget ? (memoryTarget.kind === 'document' ? `Cette note · ${memoryTarget.label}` : `Dossier partagé · ${memoryTarget.label}`) : 'Aucune portée durable'}</p>
+            </span>
+            {#if cloudMemory.extracting}<span class="cop-memory-sync"><span></span>Analyse en cours</span>{/if}
+          </div>
+
+          <div class="cop-memory-control">
+            <span>
+              <strong>Mémoire automatique</strong>
+              <small>Doku-San retient les décisions et préférences utiles après chaque échange cloud.</small>
+            </span>
+            <button
+              class="cop-switch"
+              class:on={app.cloudMemoryEnabled}
+              role="switch"
+              aria-checked={app.cloudMemoryEnabled}
+              aria-label="Activer la mémoire automatique"
+              onclick={() => (app.cloudMemoryEnabled = !app.cloudMemoryEnabled)}
+            ><span></span></button>
+          </div>
+
+          <div class="cop-memory-scope" aria-labelledby="cop-memory-scope-label">
+            <span class="cop-memory-scope-copy">
+              <strong id="cop-memory-scope-label">Portée de la mémoire</strong>
+              <small>
+                {memoryTarget?.kind === 'folder'
+                  ? `Partagée avec toutes les notes du dossier « ${memoryTarget.label} ».`
+                  : memoryTarget
+                    ? `Attachée uniquement à « ${memoryTarget.label} ». Votre dossier n’est jamais choisi automatiquement.`
+                    : 'Enregistrez la note pour lui attacher une mémoire durable.'}
+              </small>
+            </span>
+            <div class="cop-memory-scope-options">
+              <button
+                class:active={!effectiveMemoryFolder}
+                disabled={!memoryDocument}
+                aria-pressed={!effectiveMemoryFolder}
+                onclick={useDocumentMemory}
+              ><span class="msr">description</span>Cette note</button>
+              <button
+                class:active={!!effectiveMemoryFolder}
+                disabled={!memoryFolderCandidate}
+                aria-pressed={!!effectiveMemoryFolder}
+                title={memoryFolderCandidate ? `Partager la mémoire avec le dossier ${memoryFolderCandidate.label}` : 'Aucun dossier disponible'}
+                onclick={useFolderMemory}
+              ><span class="msr">folder</span>{memoryFolderCandidate ? memoryFolderCandidate.label : 'Dossier'}</button>
+            </div>
+          </div>
+
+          {#if !isCloudProvider(app.copilotProvider)}
+            <div class="cop-memory-empty">
+              <span class="msr">cloud_off</span>
+              <strong>La mémoire est réservée aux modèles cloud</strong>
+              <p>Choisissez OpenAI ou MiniMax pour la rappeler et la faire évoluer automatiquement.</p>
+              <button class="cop-btn-quiet" onclick={() => (app.copilotView = 'models')}>Choisir un fournisseur</button>
+            </div>
+          {:else if !memoryTarget}
+            <div class="cop-memory-empty">
+              <span class="msr">description</span>
+              <strong>Aucun travail à mémoriser</strong>
+              <p>Enregistrez cette note pour lui donner sa propre mémoire, ou choisissez explicitement un dossier à partager.</p>
+            </div>
+          {:else if cloudMemory.loading}
+            <div class="cop-memory-loading" role="status"><span class="doku-skel"></span><span class="doku-skel"></span><span class="doku-skel"></span></div>
+          {:else}
+            {#if cloudMemory.error}
+              <div class="cop-memory-error" role="alert">
+                <span class="msr">warning</span><span>{cloudMemory.error}</span>
+                <button title="Masquer" aria-label="Masquer l'erreur" onclick={() => (cloudMemory.error = '')}><span class="msr">close</span></button>
+              </div>
+            {/if}
+            <div class="cop-memory-list-head">
+              <span>{cloudMemory.records.length} souvenir{cloudMemory.records.length === 1 ? '' : 's'}</span>
+              {#if cloudMemory.undoAvailable && shownMemoryWorkspace}
+                <button onclick={() => void undoCloudMemory(shownMemoryWorkspace!)}><span class="msr">history</span>Annuler la dernière modification</button>
+              {/if}
+            </div>
+            {#if cloudMemory.records.length === 0}
+              <div class="cop-memory-empty quiet">
+                <span class="msr">auto_stories</span>
+                <strong>La mémoire est prête</strong>
+                <p>Continuez votre travail normalement. Après un échange utile, Doku-San enregistrera ici ce qui mérite de survivre à la conversation.</p>
+              </div>
+            {:else}
+              <div class="cop-memory-list">
+                {#each cloudMemory.records as record (record.id)}
+                  <article class="cop-memory-item">
+                    {#if editingMemory === record.id}
+                      <form class="cop-memory-form" onsubmit={(e) => { e.preventDefault(); void saveMemoryEdit(record) }}>
+                        <label>Titre<input bind:value={memoryDraft.name} maxlength="80" /></label>
+                        <label>Résumé<input bind:value={memoryDraft.description} maxlength="240" /></label>
+                        <label>Type
+                          <select bind:value={memoryDraft.type}>
+                            <option value="preference">Préférence</option>
+                            <option value="decision">Décision</option>
+                            <option value="fact">Information</option>
+                            <option value="reference">Référence</option>
+                            <option value="open_question">Question ouverte</option>
+                          </select>
+                        </label>
+                        <label>Contenu<textarea bind:value={memoryDraft.content} rows="5" maxlength="2400"></textarea></label>
+                        <div class="cop-memory-form-actions">
+                          <button type="button" onclick={() => void cancelMemoryEdit(record.id)}>Annuler</button>
+                          <button class="primary" type="submit" disabled={!memoryDraft.name.trim() || !memoryDraft.description.trim() || !memoryDraft.content.trim()}>Enregistrer</button>
+                        </div>
+                      </form>
+                    {:else if confirmMemoryDelete === record.id}
+                      <div class="cop-memory-confirm">
+                        <strong>Oublier « {record.name} » ?</strong>
+                        <p>Doku-San ne l'utilisera plus. Cette action peut encore être annulée.</p>
+                        <div><button onclick={() => void cancelMemoryDelete(record.id)}>Garder</button><button class="danger" onclick={() => void removeMemory(record.id)}>Oublier</button></div>
+                      </div>
+                    {:else}
+                      <div class="cop-memory-item-head">
+                        <span class="cop-memory-type">{memoryTypeLabel(record.type)}</span>
+                        <span class="cop-memory-date">{new Date(record.updatedAt).toLocaleDateString('fr-FR')}</span>
+                        <button data-memory-id={record.id} data-memory-action="edit" title="Modifier" aria-label={`Modifier ${record.name}`} onclick={() => void editMemory(record)}><span class="msr">edit_note</span></button>
+                        <button data-memory-id={record.id} data-memory-action="delete" title="Oublier" aria-label={`Oublier ${record.name}`} onclick={() => void askMemoryDelete(record.id)}><span class="msr">delete</span></button>
+                      </div>
+                      <h3>{record.name}</h3>
+                      <p class="cop-memory-description">{record.description}</p>
+                      <div class="cop-memory-content">{@html renderChatMarkdown(record.content)}</div>
+                    {/if}
+                  </article>
+                {/each}
+              </div>
+            {/if}
+            <p class="cop-memory-privacy"><span class="msr">lock</span> {memoryTarget?.kind === 'folder' ? 'Mémoire partagée avec ce dossier' : 'Mémoire propre à cette note'}, stockée localement dans AppData. Seuls les souvenirs retenus rejoignent ensuite la question cloud.</p>
+          {/if}
+        </section>
       {:else if copilot.messages.length === 0}
         <!-- Conversation vide : accueil + actions rapides sur le document courant -->
         <div class="cop-chat-empty">
@@ -1399,6 +1914,27 @@
                     </div>
                   {/if}
                 {/if}
+                {#if m.contextSources?.length && !m.streaming}
+                  <div class="cop-sources cop-context-sources">
+                    <span class="cop-sources-lbl">Contexte transmis</span>
+                    {#each m.contextSources as source (source.id)}
+                      <span class="cop-source-chip static" title={source.truncatedAtLoad || source.truncatedForRequest ? 'Source transmise partiellement' : 'Source transmise en entier'}>
+                        <span class="msr">{source.kind === 'clipboard' ? 'content_paste' : source.kind === 'selection' ? 'notes' : 'description'}</span>
+                        {source.label}{#if source.truncatedAtLoad || source.truncatedForRequest}<em>partiel</em>{/if}
+                      </span>
+                    {/each}
+                  </div>
+                {/if}
+                {#if m.memorySources?.length && !m.streaming}
+                  <div class="cop-sources cop-memory-sources">
+                    <span class="cop-sources-lbl">Mémoire utilisée</span>
+                    {#each m.memorySources as memory (memory.id)}
+                      <button class="cop-source-chip" title={memory.content} onclick={openMemoryView}>
+                        <span class="msr">database</span>{memory.name}
+                      </button>
+                    {/each}
+                  </div>
+                {/if}
               </div>
             {/if}
           {/each}
@@ -1424,7 +1960,7 @@
             >
               <span class="cop-composer-back-icon"><span class="msr">layers</span></span>
               <span class="cop-composer-back-label">Contexte</span>
-              <span class="cop-composer-note">{copilot.scope === 'folder' ? 'Dossier entier' : `${contextDetails.count} document${contextDetails.count === 1 ? '' : 's'}`}</span>
+              <span class="cop-composer-note">{contextSummary}</span>
               <span class="msr cop-composer-switch">swap_vert</span>
             </button>
           {:else}
@@ -1476,7 +2012,7 @@
                 >
                   <span class="msr">layers</span>
                   <span>Contexte</span>
-                  <span class="cop-composer-note">{copilot.scope === 'folder' ? 'Dossier entier' : `${contextDetails.count} document${contextDetails.count === 1 ? '' : 's'}`}</span>
+                  <span class="cop-composer-note">{contextSummary}</span>
                 </button>
               {/if}
 
@@ -1492,9 +2028,14 @@
                 >
                   <button
                     class="cop-input-attach"
-                    disabled
-                    title="Pièces jointes bientôt disponibles"
-                    aria-label="Joindre — bientôt disponible"
+                    class:open={addMenuOpen}
+                    bind:this={addButtonEl}
+                    disabled={contextLoading}
+                    title="Ajouter du contexte"
+                    aria-label="Ajouter du contexte"
+                    aria-haspopup="menu"
+                    aria-expanded={addMenuOpen}
+                    onclick={toggleAddMenu}
                   ><span class="msr" style="font-size:20px">add</span></button>
                   <textarea
                     class="cop-input-ta"
@@ -1587,6 +2128,44 @@
                     </span>
                     <span class="cop-context-state">{copilot.scope === 'folder' ? 'Actif' : 'Choisir'}</span>
                   </button>
+                  {#if copilot.contextFolder}
+                    <div class="cop-context-extra folder">
+                      <span class="msr" aria-hidden="true">folder</span>
+                      <span class="cop-context-extra-copy">
+                        <strong>{copilot.contextFolder.label}</strong>
+                        <small>Dossier choisi pour les questions et l’index</small>
+                      </span>
+                      <button title="Retirer ce dossier" aria-label={`Retirer le dossier ${copilot.contextFolder.label}`} onclick={() => setCopilotContextFolder(null)}>
+                        <span class="msr">close</span>
+                      </button>
+                    </div>
+                  {/if}
+                  {#each copilot.contextItems as item (item.id)}
+                    <div class="cop-context-extra">
+                      <span class="msr" aria-hidden="true">{item.kind === 'clipboard' ? 'content_paste' : item.kind === 'selection' ? 'notes' : 'description'}</span>
+                      <span class="cop-context-extra-copy">
+                        <strong>{item.label}</strong>
+                        <small>{numberFormatter.format(item.charCount)} caractères{item.truncatedAtLoad ? ' · partiel à l’ajout' : ''}</small>
+                      </span>
+                      <button title="Retirer cette source" aria-label={`Retirer ${item.label}`} onclick={() => removeCopilotContext(item.id)}>
+                        <span class="msr">close</span>
+                      </button>
+                    </div>
+                  {/each}
+                  {#if cloudDestination}
+                    <button class="cop-context-memory" onclick={openMemoryView}>
+                      <span class="msr" aria-hidden="true">database</span>
+                      <span><strong>Mémoire du travail</strong><small>{app.cloudMemoryEnabled ? (effectiveMemoryFolder ? `Automatique · dossier ${effectiveMemoryFolder.label}` : 'Automatique · cette note seulement') : 'Désactivée'}</small></span>
+                      <span class="msr">chevron_right</span>
+                    </button>
+                  {/if}
+                  {#if cloudDestination && (copilot.contextItems.length || copilot.contextFolder)}
+                    <p class="cop-context-destination"><span class="msr">cloud</span> Sera envoyé à {cloudDestination} avec votre question.</p>
+                  {/if}
+                  {#if copilot.contextError}<p class="cop-context-error" role="alert">{copilot.contextError}</p>{/if}
+                  {#if copilot.messages.length && (copilot.contextItems.length || copilot.contextFolder)}
+                    <p class="cop-context-history">Retirer une source agit sur les prochains envois. Nouvelle conversation purge aussi l’historique.</p>
+                  {/if}
                 </div>
               </div>
             </section>
@@ -1603,10 +2182,27 @@
       </div>
     {/if}
   </div>
+  <input
+    class="cop-hidden-file"
+    bind:this={browserFilesEl}
+    type="file"
+    multiple
+    accept=".md,.markdown,.txt,.html,.htm,.pdf"
+    onchange={onBrowserFiles}
+  />
+  <input
+    class="cop-hidden-file"
+    bind:this={browserFolderEl}
+    type="file"
+    multiple
+    webkitdirectory
+    onchange={onBrowserFiles}
+  />
   <!-- Hors de .cop-card (overflow hidden) : ces surfaces flottantes se positionnent dans
        le repère du panneau (contain: layout) au-dessus de tout le contenu. -->
   {@render citePreviewCard()}
   {@render verbMenuCard()}
+  {@render addContextMenu()}
 </aside>
 
 <style>
@@ -1834,6 +2430,104 @@
   }
 
   .cop-openai-view { padding: 0 2px 24px; display: flex; flex-direction: column; gap: 16px; }
+
+  /* Mémoire durable : une surface de gestion calme, structurée par lignes plutôt que par
+     cartes imbriquées. La seule élévation est la notification transitoire dans le chat. */
+  .cop-memory-toast {
+    position: sticky; top: 8px; z-index: 6; margin: 8px 12px 0; min-height: 48px; padding: 7px 7px 7px 11px;
+    display: flex; align-items: center; gap: 9px; border-radius: 14px;
+    background: var(--cream-tint); color: var(--ink-2);
+    box-shadow: 0 0 0 1px var(--elevation-ring-soft), 0 12px 30px rgba(var(--shadow-rgb), 0.14);
+  }
+  .cop-memory-toast > .msr { font-size: 17px; color: var(--ink-3); }
+  .cop-memory-toast > span:nth-child(2) { min-width: 0; flex: 1; display: flex; flex-direction: column; }
+  .cop-memory-toast strong { font-size: 11.5px; font-weight: 600; }
+  .cop-memory-toast small { font-size: 10.5px; color: var(--ink-4); }
+  .cop-memory-toast button { height: 28px; padding: 0 9px; border: 0; border-radius: 999px; background: var(--surface-2); color: var(--ink-3); font: 500 11px var(--font-sans); cursor: pointer; }
+  .cop-memory-toast button:hover { background: var(--surface-hover); color: var(--ink); }
+  .cop-memory-toast button:focus-visible { outline: 2px solid var(--line-3); outline-offset: 1px; }
+  .cop-memory-toast button.icon { width: 28px; padding: 0; display: inline-flex; align-items: center; justify-content: center; background: transparent; }
+  .cop-memory-toast button.icon .msr { font-size: 15px; }
+
+  .cop-memory-view { padding: 8px 16px 28px; color: var(--ink-2); }
+  .cop-panel.expanded .cop-memory-view { width: min(760px, 100%); margin-inline: auto; padding-top: 24px; }
+  .cop-memory-heading { min-height: 56px; display: flex; align-items: center; gap: 11px; margin-bottom: 14px; }
+  .cop-memory-mark { width: 38px; height: 38px; flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; border-radius: 12px; background: var(--surface-2); color: var(--ink-3); }
+  .cop-memory-mark .msr { font-size: 19px; }
+  .cop-memory-heading > span:nth-child(2) { min-width: 0; flex: 1; }
+  .cop-memory-heading h2 { margin: 0; color: var(--ink); font: 650 16px/1.3 var(--font-sans); }
+  .cop-memory-heading p { margin: 2px 0 0; overflow: hidden; color: var(--ink-4); font: 400 11.5px/1.4 var(--font-sans); text-overflow: ellipsis; white-space: nowrap; }
+  .cop-memory-sync { display: inline-flex; align-items: center; gap: 6px; color: var(--ink-4); font-size: 10.5px; white-space: nowrap; }
+  .cop-memory-sync span { width: 6px; height: 6px; border-radius: 50%; background: var(--ok); animation: breathe 1.6s ease-in-out infinite; }
+  .cop-memory-control { min-height: 64px; padding: 10px 12px; display: flex; align-items: center; gap: 12px; border-radius: 14px; background: var(--surface-2); }
+  .cop-memory-control > span { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 2px; }
+  .cop-memory-control strong { color: var(--ink); font-size: 12px; font-weight: 600; }
+  .cop-memory-control small { color: var(--ink-4); font-size: 10.5px; line-height: 1.4; }
+  .cop-memory-scope { padding: 12px 2px 11px; display: flex; flex-direction: column; gap: 9px; border-bottom: 1px solid var(--line); }
+  .cop-memory-scope-copy { display: flex; flex-direction: column; gap: 2px; }
+  .cop-memory-scope-copy strong { color: var(--ink); font-size: 11.5px; font-weight: 600; }
+  .cop-memory-scope-copy small { color: var(--ink-4); font-size: 10.5px; line-height: 1.45; }
+  .cop-memory-scope-options { display: flex; gap: 6px; min-width: 0; }
+  .cop-memory-scope-options button { min-width: 0; height: 30px; padding: 0 10px; display: inline-flex; align-items: center; gap: 6px; border: 0; border-radius: 999px; background: transparent; color: var(--ink-3); font: 550 10.5px var(--font-sans); cursor: pointer; }
+  .cop-memory-scope-options button:hover:not(:disabled) { background: var(--surface-hover); color: var(--ink); }
+  .cop-memory-scope-options button.active { background: var(--surface-3); color: var(--ink); }
+  .cop-memory-scope-options button:focus-visible { outline: 2px solid var(--line-3); outline-offset: 1px; }
+  .cop-memory-scope-options button:disabled { opacity: .42; cursor: default; }
+  .cop-memory-scope-options .msr { flex: 0 0 auto; font-size: 15px; }
+  .cop-switch { width: 38px; height: 22px; flex: 0 0 auto; padding: 2px; border: 0; border-radius: 999px; background: var(--line-3); cursor: pointer; transition: background 160ms ease; }
+  .cop-switch span { display: block; width: 18px; height: 18px; border-radius: 50%; background: var(--cream-content); box-shadow: 0 1px 4px rgba(var(--shadow-rgb), 0.16); transition: transform 180ms cubic-bezier(0.22, 1, 0.36, 1); }
+  .cop-switch.on { background: var(--ink); }
+  .cop-switch.on span { transform: translateX(16px); }
+  .cop-switch:focus-visible { outline: 2px solid var(--line-3); outline-offset: 2px; }
+  .cop-memory-empty { min-height: 210px; padding: 34px 22px; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; }
+  .cop-memory-empty > .msr { margin-bottom: 10px; color: var(--ink-4); font-size: 25px; }
+  .cop-memory-empty strong { color: var(--ink); font-size: 13px; font-weight: 600; }
+  .cop-memory-empty p { max-width: 38ch; margin: 6px 0 13px; color: var(--ink-4); font-size: 11.5px; line-height: 1.55; }
+  .cop-memory-empty.quiet { min-height: 180px; }
+  .cop-memory-loading { padding: 20px 0; display: flex; flex-direction: column; gap: 9px; }
+  .cop-memory-loading span { display: block; height: 66px; border-radius: 12px; }
+  .cop-memory-error { margin-top: 10px; padding: 9px 10px; display: flex; align-items: flex-start; gap: 8px; border-radius: 11px; background: color-mix(in srgb, var(--err) 10%, transparent); color: var(--err-text); font-size: 11px; line-height: 1.45; }
+  .cop-memory-error > .msr { font-size: 16px; }
+  .cop-memory-error > span:nth-child(2) { flex: 1; }
+  .cop-memory-error button { width: 26px; height: 26px; border: 0; border-radius: 7px; background: transparent; color: inherit; cursor: pointer; }
+  .cop-memory-error button:hover { background: rgba(var(--ink-rgb), 0.08); }
+  .cop-memory-error button .msr { font-size: 15px; }
+  .cop-memory-list-head { min-height: 44px; margin-top: 8px; display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--ink-4); font-size: 10.5px; }
+  .cop-memory-list-head button { height: 28px; display: inline-flex; align-items: center; gap: 5px; padding: 0 9px; border: 0; border-radius: 999px; background: transparent; color: var(--ink-3); font: 500 10.5px var(--font-sans); cursor: pointer; }
+  .cop-memory-list-head button:hover { background: var(--surface-hover); color: var(--ink); }
+  .cop-memory-list-head button:focus-visible { outline: 2px solid var(--line-3); outline-offset: 1px; }
+  .cop-memory-list-head button .msr { font-size: 14px; }
+  .cop-memory-list { border-top: 1px solid var(--line-1); }
+  .cop-memory-item { padding: 13px 2px 14px; border-bottom: 1px solid var(--line-1); }
+  .cop-memory-item-head { min-height: 26px; display: flex; align-items: center; gap: 5px; }
+  .cop-memory-type { padding: 3px 7px; border-radius: 999px; background: var(--surface-2); color: var(--ink-3); font-size: 9.5px; font-weight: 550; }
+  .cop-memory-date { margin-left: auto; color: var(--ink-4); font-size: 9.5px; }
+  .cop-memory-item-head button { width: 28px; height: 28px; display: inline-flex; align-items: center; justify-content: center; border: 0; border-radius: 8px; background: transparent; color: var(--ink-4); cursor: pointer; }
+  .cop-memory-item-head button:hover { background: var(--surface-hover); color: var(--ink); }
+  .cop-memory-item-head button:focus-visible { outline: 2px solid var(--line-3); outline-offset: -2px; }
+  .cop-memory-item-head button .msr { font-size: 15px; }
+  .cop-memory-item h3 { margin: 6px 0 2px; color: var(--ink); font: 600 12.5px/1.4 var(--font-sans); }
+  .cop-memory-description { margin: 0; color: var(--ink-4); font-size: 10.5px; line-height: 1.45; }
+  .cop-memory-content { margin: 8px 0 0; color: var(--ink-2); font-size: 11.5px; line-height: 1.55; overflow-wrap: anywhere; }
+  .cop-memory-content :global(p) { margin: 0 0 7px; }
+  .cop-memory-content :global(p:last-child) { margin-bottom: 0; }
+  .cop-memory-form { display: flex; flex-direction: column; gap: 9px; }
+  .cop-memory-form label { display: flex; flex-direction: column; gap: 4px; color: var(--ink-4); font-size: 10px; }
+  .cop-memory-form input, .cop-memory-form select, .cop-memory-form textarea { width: 100%; border: 0; border-radius: 8px; background: var(--cream-content); color: var(--ink); font: 400 11.5px/1.45 var(--font-sans); box-shadow: inset 0 0 0 1px var(--line-1); }
+  .cop-memory-form input, .cop-memory-form select { height: 32px; padding: 0 9px; }
+  .cop-memory-form textarea { min-height: 92px; padding: 8px 9px; resize: vertical; }
+  .cop-memory-form input:focus, .cop-memory-form select:focus, .cop-memory-form textarea:focus { outline: 2px solid var(--line-3); outline-offset: 1px; }
+  .cop-memory-form-actions { display: flex; justify-content: flex-end; gap: 6px; }
+  .cop-memory-form-actions button, .cop-memory-confirm button { height: 30px; padding: 0 12px; border: 0; border-radius: 999px; background: var(--surface-2); color: var(--ink-3); font: 500 11px var(--font-sans); cursor: pointer; }
+  .cop-memory-form-actions button.primary { background: var(--ink); color: var(--cream-content); }
+  .cop-memory-form-actions button:disabled { opacity: 0.4; cursor: default; }
+  .cop-memory-confirm { padding: 6px 4px; }
+  .cop-memory-confirm strong { color: var(--ink); font-size: 12px; }
+  .cop-memory-confirm p { margin: 4px 0 10px; color: var(--ink-4); font-size: 10.5px; }
+  .cop-memory-confirm > div { display: flex; justify-content: flex-end; gap: 6px; }
+  .cop-memory-confirm button.danger { background: var(--err); color: #fff; }
+  .cop-memory-privacy { margin: 14px 0 0; display: flex; align-items: flex-start; gap: 6px; color: var(--ink-4); font-size: 10px; line-height: 1.45; }
+  .cop-memory-privacy .msr { font-size: 14px; }
   /* Deux tons pleins (tête surface-2, pied accent-soft par-dessus) : la carte se
      découpe du fond sans aucun contour. */
   .cop-cloud-hero { overflow: hidden; border-radius: 18px; background: var(--surface-2); }
@@ -2395,8 +3089,13 @@
   .cop-input-attach {
     grid-column: 1; grid-row: 2;
     width: 36px; height: 36px; display: inline-flex; align-items: center; justify-content: center;
-    background: transparent; border: 0; border-radius: 10px; color: var(--ink-5); cursor: default;
+    background: transparent; border: 0; border-radius: 10px; color: var(--ink-4); cursor: pointer;
+    transition: background 120ms ease, color 120ms ease, transform 140ms cubic-bezier(0.22, 1, 0.36, 1);
   }
+  .cop-input-attach:hover, .cop-input-attach.open { background: var(--surface-hover); color: var(--ink); }
+  .cop-input-attach.open { transform: rotate(45deg); }
+  .cop-input-attach:focus-visible { outline: 2px solid var(--line-3); outline-offset: -2px; }
+  .cop-input-attach:disabled { opacity: 0.45; cursor: wait; }
   .cop-input-ta {
     grid-column: 1 / -1; grid-row: 1; align-self: start;
     width: 100%; min-width: 0; border: 0; background: transparent; outline: none; resize: none;
@@ -2500,7 +3199,60 @@
   }
   .cop-context-state.warn { background: rgba(180, 130, 60, 0.12); color: var(--warn-text); }
   .cop-context-state .msr { font-size: 13px; }
+  .cop-context-extra {
+    display: flex; align-items: center; gap: 9px; min-width: 0; padding: 6px 8px;
+    border-radius: 11px; background: var(--surface-2); color: var(--ink-3);
+  }
+  .cop-context-extra > .msr { flex: 0 0 auto; font-size: 17px; color: var(--ink-4); }
+  .cop-context-extra-copy { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 1px; }
+  .cop-context-extra-copy strong { overflow: hidden; font-size: 11.5px; font-weight: 550; color: var(--ink-2); text-overflow: ellipsis; white-space: nowrap; }
+  .cop-context-extra-copy small { font-size: 10px; color: var(--ink-4); }
+  .cop-context-extra > button {
+    width: 28px; height: 28px; flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center;
+    border: 0; border-radius: 999px; background: transparent; color: var(--ink-4); cursor: pointer;
+  }
+  .cop-context-extra > button:hover { background: var(--surface-hover); color: var(--ink); }
+  .cop-context-extra > button:focus-visible { outline: 2px solid var(--line-3); outline-offset: -2px; }
+  .cop-context-extra > button .msr { font-size: 16px; }
+  .cop-context-memory { min-height: 46px; padding: 6px 8px; display: flex; align-items: center; gap: 8px; border: 0; border-radius: 11px; background: transparent; color: var(--ink-2); text-align: left; cursor: pointer; }
+  .cop-context-memory:hover { background: var(--surface-hover); }
+  .cop-context-memory:focus-visible { outline: 2px solid var(--line-3); outline-offset: -2px; }
+  .cop-context-memory > .msr:first-child { font-size: 17px; color: var(--ink-4); }
+  .cop-context-memory > span:nth-child(2) { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 1px; }
+  .cop-context-memory strong { font-size: 11.5px; font-weight: 550; }
+  .cop-context-memory small { font-size: 10px; color: var(--ink-4); }
+  .cop-context-memory > .msr:last-child { font-size: 15px; color: var(--ink-4); }
+  .cop-context-destination, .cop-context-history, .cop-context-error {
+    margin: 2px 8px; font-size: 10px; line-height: 1.35; color: var(--ink-4);
+  }
+  .cop-context-destination { display: flex; align-items: center; gap: 5px; }
+  .cop-context-destination .msr { font-size: 14px; }
+  .cop-context-error { color: var(--danger-text); }
   .cop-disclaimer { text-align: center; font-size: 10.5px; line-height: 1.35; color: var(--ink-4); margin-top: 8px; }
+
+  .cop-add-context-menu {
+    position: absolute; z-index: 45; width: 276px; padding: 6px;
+    border-radius: 14px; background: var(--cream-tint);
+    box-shadow: 0 0 0 1px var(--elevation-ring-soft), 0 14px 34px rgba(var(--shadow-rgb), 0.18);
+    animation: cop-picker-in 140ms cubic-bezier(0.22, 1, 0.36, 1);
+  }
+  .cop-add-context-head { display: flex; flex-direction: column; gap: 2px; padding: 8px 10px 7px; }
+  .cop-add-context-head strong { font-size: 12px; font-weight: 650; color: var(--ink); }
+  .cop-add-context-head small { font-size: 10px; color: var(--ink-4); }
+  .cop-add-context-action {
+    width: 100%; min-height: 48px; display: flex; align-items: center; gap: 10px; padding: 7px 9px;
+    border: 0; border-radius: 10px; background: transparent; color: var(--ink); text-align: left; cursor: pointer;
+  }
+  .cop-add-context-action:hover, .cop-add-context-action:focus-visible { background: var(--surface-hover); outline: none; }
+  .cop-add-context-action:disabled { opacity: 0.38; cursor: default; background: transparent; }
+  .cop-add-context-action > .msr {
+    width: 30px; height: 30px; flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center;
+    border-radius: 9px; background: var(--surface-2); color: var(--ink-3); font-size: 17px;
+  }
+  .cop-add-context-action > span:last-child { min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+  .cop-add-context-action strong { font-size: 11.5px; font-weight: 600; }
+  .cop-add-context-action small { font-size: 10px; color: var(--ink-4); }
+  .cop-hidden-file { display: none; }
 
   /* Passages consultés (15.3) */
   .cop-sources { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 10px; }
@@ -2516,6 +3268,10 @@
   .cop-source-chip:focus-visible { outline: 2px solid var(--line-3); outline-offset: 1px; }
   /* Sans nom de note (extraits du document courant) : la puce est juste le numéro. */
   .cop-source-chip.bare { padding: 0 4px; }
+  .cop-source-chip.static { cursor: default; padding-left: 7px; }
+  .cop-source-chip.static:hover { background: var(--surface-2); color: var(--ink-3); }
+  .cop-source-chip.static > .msr { font-size: 13px; }
+  .cop-source-chip.static em { font-size: 9px; font-style: normal; color: var(--warn-text); }
   /* Tag arrondi-carré plutôt que cercle : le padding horizontal laisse respirer les
      numéros à 2 chiffres qu'un cercle de 16px écrasait. */
   .cop-source-num {

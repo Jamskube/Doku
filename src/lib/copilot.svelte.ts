@@ -23,7 +23,7 @@ import {
 } from './compat'
 import { citedNumbers, locateOffset, locatePassage, type CitedPassage } from './citations'
 import { setRephrasePreview } from './editor/rephrase-preview'
-import { joinPath, parentPath } from './explorer'
+import { baseName, joinPath, parentPath } from './explorer'
 import { noteContent, noteFileName } from './notes'
 import { createFileWithContent, isTauri } from './tauri'
 import { chunkText, DEFAULT_EMBED_MODEL, noteTitle, RAG_TOP_K } from './rag'
@@ -70,6 +70,21 @@ import {
   type RephraseMode,
   type SummaryMode,
 } from './copilot-service'
+import {
+  buildContextBundle,
+  pathBelongsToFolder,
+  upsertContextItems,
+  type ContextBundle,
+  type CopilotContextItem,
+  type SentContextSource,
+} from './copilot-context'
+import {
+  memoryWorkspace,
+  queueMemoryExtraction,
+  recallCloudMemories,
+  type MemoryWorkspace,
+} from './copilot-memory.svelte'
+import type { CloudMemoryProvider, MemoryPromptSource } from './copilot-memory'
 
 // Un tour de conversation (14.1). `streaming` = réponse en cours (bulle en texte brut,
 // rendu Markdown à la fin) ; `failed` = carte d'erreur ; `status` = ligne de progression
@@ -107,9 +122,15 @@ export interface ChatMsg {
   // « les notes du dossier ») : la provenance d'une note sauvée ne dépend jamais de
   // l'onglet actif au moment du clic — il a pu changer, elle mentirait.
   sourceLabel?: string
+  // Sources additionnelles réellement transmises pour CETTE réponse. Elles sont séparées
+  // des citations ancrables : un fichier ponctuel n'est pas nécessairement ouvert dans Doku.
+  contextSources?: SentContextSource[]
+  // Souvenirs effectivement rappelés avant CETTE réponse. L'UI affiche les entrées
+  // injectées par Doku, sans dépendre d'une citation produite par le modèle.
+  memorySources?: MemoryPromptSource[]
   // Posé sur une carte `failed` : ce qu'il faut rejouer pour « Réessayer » (la question ou le
   // mode de résumé). Le document est re-capturé au moment du retry (le dossier aussi, 15.3).
-  retry?: { kind: 'chat'; question: string; scope: ChatScope } | { kind: 'summary'; mode: SummaryMode }
+  retry?: { kind: 'chat'; question: string; scope: ChatScope; contextRevision: number } | { kind: 'summary'; mode: SummaryMode }
 }
 
 export const copilot = $state({
@@ -128,6 +149,14 @@ export const copilot = $state({
   savingNote: false,
   // Portée courante des questions (15.3) — éphémère, choisie dans la face « Contexte ».
   scope: 'doc' as ChatScope,
+  contextItems: [] as CopilotContextItem[],
+  contextFolder: null as { path: string; label: string } | null,
+  // Mémoire partagée volontairement avec un dossier. null = portée document, qui est
+  // toujours le défaut. Séparée de l'explorateur ET du contexte : parcourir ou ajouter
+  // Desktop n'en fait jamais implicitement un « travail » mémorisé.
+  memoryFolder: null as { path: string; label: string } | null,
+  contextRevision: 0,
+  contextError: '',
   // Dernière extraction PDF résolue (18.2) : alimente le badge de contexte HONNÊTEMENT
   // (le texte d'un PDF n'est pas dans tab.content → le badge ne peut le connaître qu'après
   // une première lecture). null tant qu'aucun PDF n'a été lu ce cycle.
@@ -146,6 +175,42 @@ export const copilot = $state({
   minimaxConnecting: false,
   minimaxConnectError: '',
 })
+
+export function addCopilotContext(items: readonly CopilotContextItem[]): void {
+  const next = upsertContextItems(copilot.contextItems, items)
+  const changed = next.items.length !== copilot.contextItems.length || next.items.some((item, index) => {
+    const before = copilot.contextItems[index]
+    return !before || before.id !== item.id || before.text !== item.text || before.label !== item.label ||
+      before.path !== item.path || before.signature !== item.signature || before.charCount !== item.charCount ||
+      before.truncatedAtLoad !== item.truncatedAtLoad
+  })
+  copilot.contextItems = next.items
+  if (changed) copilot.contextRevision++
+  copilot.contextError = next.rejected > 0
+    ? `Limite atteinte : ${next.rejected} source${next.rejected > 1 ? 's' : ''} non ajoutée${next.rejected > 1 ? 's' : ''}.`
+    : ''
+}
+
+export function removeCopilotContext(id: string): void {
+  const next = copilot.contextItems.filter((item) => item.id !== id)
+  if (next.length === copilot.contextItems.length) return
+  copilot.contextItems = next
+  copilot.contextRevision++
+  copilot.contextError = ''
+}
+
+export function setCopilotContextFolder(folder: { path: string; label: string } | null): void {
+  if (copilot.contextFolder?.path === folder?.path) return
+  copilot.contextFolder = folder
+  copilot.scope = folder ? 'folder' : 'doc'
+  copilot.contextRevision++
+  copilot.contextError = ''
+}
+
+export function setCopilotMemoryFolder(folder: { path: string; label: string } | null): void {
+  if (copilot.memoryFolder?.path === folder?.path) return
+  copilot.memoryFolder = folder ? { ...folder } : null
+}
 
 let readyPromise: Promise<number | null> | null = null
 let pullController: AbortController | null = null
@@ -525,6 +590,11 @@ function streamGenerate(
   })
 }
 
+function memoryGenerate(runtime: ProviderRuntime) {
+  return (prompt: string, signal?: AbortSignal) =>
+    streamGenerate(runtime, prompt, () => {}, signal ?? new AbortController().signal, { map: true })
+}
+
 // Carte de config posée quand le fournisseur cloud n'est pas prêt (chip `config`).
 function cloudConfigKind(provider: CopilotProvider): 'openai' | 'minimax' {
   return provider === 'minimax' ? 'minimax' : 'openai'
@@ -605,6 +675,12 @@ export async function sendChat(
   if (!q || copilot.generating) return
   const provider = app.copilotProvider
   const localModel = app.activeModel
+  // Snapshot synchrone avant tout await : ni retrait ni changement de dossier pendant le
+  // streaming ne peut modifier le corpus de cette requête en vol.
+  const contextItems = copilot.contextItems.map((item) => ({ ...item }))
+  const contextFolder = copilot.contextFolder ? { ...copilot.contextFolder } : null
+  const memoryFolder = copilot.memoryFolder ? { ...copilot.memoryFolder } : null
+  const contextRevision = copilot.contextRevision
 
   // Garde modèle : carte de CONFIG sans démarrer le sidecar (préserve le boot-safety 14.0).
   if (provider === 'ollama' && !localModel) {
@@ -652,11 +728,16 @@ export async function sendChat(
       const res = await resolvePdfText(doc.path, signal, setStatus)
       if (signal.aborted) return // Stop pendant l'extraction → annulation propre (finally splice)
       if (!res.ok) {
-        copilot.messages[idx].content = res.message
-        copilot.messages[idx].notice = true // état permanent (scanné/vide) : ni erreur ni retry
-        return
-      }
-      doc = { ...doc, text: res.text }
+        if (contextItems.length === 0) {
+          copilot.messages[idx].content = res.message
+          copilot.messages[idx].notice = true // état permanent (scanné/vide) : ni erreur ni retry
+          return
+        }
+        // Le document principal reste honnêtement signalé comme non extractible par le
+        // ContextBuilder, mais une source additionnelle valide peut tout de même répondre.
+        doc = { ...doc, text: '' }
+        copilot.messages[idx].status = 'Doku-San lit le contexte ajouté…'
+      } else doc = { ...doc, text: res.text }
     }
     const runtime = await resolveRuntime(provider, localModel)
     if (runtime === null) {
@@ -667,24 +748,50 @@ export async function sendChat(
       } else {
         message.content = copilot.error || 'Le moteur IA est indisponible.'
         message.failed = true
-        message.retry = { kind: 'chat', question: q, scope }
+        message.retry = { kind: 'chat', question: q, scope, contextRevision }
       }
       return
     }
     const persona = personaFor(runtime)
+    let turnMemoryWorkspace: MemoryWorkspace | null = null
+    let recalledMemories: MemoryPromptSource[] = []
+    if (isCloudProvider(runtime.provider) && app.cloudMemoryEnabled && isTauri) {
+      if (memoryFolder && pathBelongsToFolder(doc.path, memoryFolder.path)) {
+        turnMemoryWorkspace = await memoryWorkspace(memoryFolder.path, memoryFolder.label, 'folder')
+      } else if (doc.path) {
+        turnMemoryWorkspace = await memoryWorkspace(doc.path, doc.name ?? baseName(doc.path), 'document')
+      }
+      if (turnMemoryWorkspace) {
+        const message = copilot.messages[idx]
+        if (message && !message.content) message.status = 'Doku-San retrouve le fil du travail…'
+        recalledMemories = await recallCloudMemories(q, turnMemoryWorkspace, memoryGenerate(runtime), signal)
+        if (signal.aborted) return
+        if (message && !message.content) {
+          message.status = scope === 'folder' ? 'Doku-San cherche dans vos notes…' : 'Doku-San lit le document…'
+        }
+      }
+    }
     let messages: OllamaMessage[]
     let sources: CitedPassage[] | null = null
     let wholeDoc = false
+    let bundle: ContextBundle | null = null
     if (scope === 'folder') {
-      const prep = await prepareFolderMessages(q, history, persona, runtime, signal, idx)
+      const prep = await prepareFolderMessages(
+        q, history, persona, runtime, signal, idx, contextItems,
+        contextFolder?.path ?? app.explorerDir ?? parentPath(doc.path ?? null),
+        contextRevision,
+        recalledMemories,
+      )
       if (!prep) return // question soldée (carte config / message d'info posé sur idx)
       messages = prep.messages
       sources = prep.sources
+      bundle = prep.bundle
     } else {
-      const prep = await prepareDocMessages(q, doc, history, persona, runtime, signal, idx)
+      const prep = await prepareDocMessages(q, doc, history, persona, runtime, signal, idx, contextItems, recalledMemories)
       messages = prep.messages
       sources = prep.sources
       wholeDoc = prep.wholeDoc ?? false
+      bundle = prep.bundle
     }
     // num_ctx fixé (14.3) : le doc + la consigne d'ancrage doivent rester en contexte sur plusieurs
     // tours ; au défaut Ollama (4096) l'historique les évincerait par troncature gauche silencieuse.
@@ -713,7 +820,13 @@ export async function sendChat(
     // Provenance capturée MAINTENANT (pas au clic « Sauver en note » : l'onglet actif
     // aura pu changer). Nom du doc même sans sources (petit doc, réponse libre).
     if (done?.content && !done.failed) {
-      done.sourceLabel = scope === 'folder' ? 'les notes du dossier' : (doc.name ?? undefined)
+      const labels = bundle?.sentSources.filter((source) => !source.primary).map((source) => source.label) ?? []
+      const principal = bundle?.primary.length
+        ? (scope === 'folder' ? 'les notes du dossier' : (doc.name ?? undefined))
+        : undefined
+      done.sourceLabel = [principal, ...labels].filter(Boolean).join(' + ') || undefined
+      done.contextSources = bundle?.sentSources.filter((source) => !source.primary)
+      done.memorySources = recalledMemories
     }
     if (
       sources &&
@@ -730,6 +843,19 @@ export async function sendChat(
         done.cited = citedNumbers(done.content, sources.length)
       }
     }
+    if (
+      done?.content && !done.failed && !done.notice && turnMemoryWorkspace &&
+      isCloudProvider(runtime.provider) && app.cloudMemoryEnabled
+    ) {
+      queueMemoryExtraction({
+        question: q,
+        answer: done.content,
+        documentName: doc.name,
+        workspace: turnMemoryWorkspace,
+        provider: runtime.provider as CloudMemoryProvider,
+        generate: memoryGenerate(runtime),
+      })
+    }
   } catch (e) {
     // Stop pendant la récupération (embed de la requête / du doc) : annulation propre —
     // le finally retire le tour fantôme, pas de carte d'erreur (chat() avale déjà ses aborts).
@@ -744,7 +870,7 @@ export async function sendChat(
     }
     copilot.messages[idx].content = copilot.messages[idx].content || generationFailure(e, provider, 'La génération a échoué. Vérifiez que le moteur est prêt, puis réessayez.')
     copilot.messages[idx].failed = true
-    copilot.messages[idx].retry = { kind: 'chat', question: q, scope }
+    copilot.messages[idx].retry = { kind: 'chat', question: q, scope, contextRevision }
   } finally {
     const m = copilot.messages[idx]
     if (m) {
@@ -812,7 +938,11 @@ async function prepareFolderMessages(
   runtime: ProviderRuntime,
   signal: AbortSignal,
   idx: number,
-): Promise<{ messages: OllamaMessage[]; sources: CitedPassage[] } | null> {
+  additions: readonly CopilotContextItem[],
+  dir: string | null,
+  contextRevision: number,
+  memories: readonly MemoryPromptSource[],
+): Promise<{ messages: OllamaMessage[]; sources: CitedPassage[]; bundle: ContextBundle } | null> {
   const answer = (content: string, config?: ChatMsg['config']): null => {
     const m = copilot.messages[idx]
     m.content = content
@@ -824,21 +954,40 @@ async function prepareFolderMessages(
     const m = copilot.messages[idx]
     m.content = content
     m.failed = true
-    m.retry = { kind: 'chat', question: q, scope: 'folder' }
+    m.retry = { kind: 'chat', question: q, scope: 'folder', contextRevision }
     return null
   }
-  const dir = app.explorerDir ?? parentPath(activeTab()?.path ?? null)
-  if (!dir) return answer("Ouvrez un document enregistré ou fixez un dossier dans l'explorateur pour interroger vos notes.")
+  const additionsOnly = (): { messages: OllamaMessage[]; sources: CitedPassage[]; bundle: ContextBundle } | null => {
+    if (additions.length === 0) return null
+    const maxChars = isCloudProvider(runtime.provider) ? MAX_DOC_CHARS_CLOUD : MAX_DOC_CHARS
+    const bundle = buildContextBundle({ primary: [], additions, maxChars })
+    return {
+      messages: buildChatMessages({
+        docName: null,
+        docText: '',
+        kind: 'txt',
+        history,
+        question: q,
+        persona,
+        maxChars: 0,
+        additions: bundle.additions,
+        memories,
+      }),
+      sources: [],
+      bundle,
+    }
+  }
+  if (!dir) return additionsOnly() ?? answer("Ouvrez un document enregistré ou fixez un dossier dans l'explorateur pour interroger vos notes.")
   // Les embeddings sont TOUJOURS locaux (0 réseau), même quand le chat est OpenAI.
   const port = runtime.provider === 'ollama' ? runtime.port : await ensureReady()
-  if (port === null) return fail(copilot.error || 'Le moteur IA est indisponible.')
+  if (port === null) return additionsOnly() ?? fail(copilot.error || 'Le moteur IA est indisponible.')
   // Liste des modèles pas encore chargée (vue Modèles jamais ouverte) : la rafraîchir AVANT
   // de conclure « modèle absent ». MÊME prédicat que le badge du panneau (repli sur le
   // défaut quand le réglage est effacé) — badge et comportement ne divergent jamais.
   if (copilot.models.length === 0) await refreshModels()
   const em = app.embedModel || DEFAULT_EMBED_MODEL
   const installed = copilot.models.some((m) => m.name === em || m.name === `${em}:latest`)
-  if (!installed) return answer("Le mode dossier a besoin d'un modèle d'embedding local.", 'embed')
+  if (!installed) return additionsOnly() ?? answer("Le mode dossier a besoin d'un modèle d'embedding local.", 'embed')
   folderSearching = true
   let hits: RagHit[] | null
   try {
@@ -847,25 +996,44 @@ async function prepareFolderMessages(
     folderSearching = false
   }
   if (hits === null) {
-    return answer('Ce dossier n’est pas encore indexé. Lancez l’indexation dans Modèles → « Index du dossier », puis reposez votre question.')
+    return additionsOnly() ?? answer('Ce dossier n’est pas encore indexé. Lancez l’indexation dans Modèles → « Index du dossier », puis reposez votre question.')
   }
   if (hits.length === 0) {
     // [] recouvre trois réalités distinctes — les distinguer via ragState (un refresh
     // échoué NE rejette PAS) : modèle manquant / indexation échouée / index réellement vide.
-    if (ragState.needsModel) return answer(`Modèle « ${ragState.needsModel} » non installé.`, 'embed')
-    if (ragState.error) return fail(ragState.error)
-    return answer("L'index de ce dossier est vide — aucune note indexable n'y a été trouvée.")
+    if (ragState.needsModel) return additionsOnly() ?? answer(`Modèle « ${ragState.needsModel} » non installé.`, 'embed')
+    if (ragState.error) return additionsOnly() ?? fail(ragState.error)
+    return additionsOnly() ?? answer("L'index de ce dossier est vide — aucune note indexable n'y a été trouvée.")
   }
+  const maxChars = isCloudProvider(runtime.provider) ? MAX_DOC_CHARS_CLOUD : MAX_DOC_CHARS
+  const bundle = buildContextBundle({
+    primary: hits.map((h, index) => ({
+      id: `rag:${index}`,
+      kind: 'rag',
+      label: noteTitle(h.name),
+      text: h.text,
+      path: h.path,
+    })),
+    additions,
+    maxChars,
+  })
+  const packedHits = bundle.primary.map((source) => ({
+    source,
+    hit: hits[Number.parseInt(source.id.slice(4), 10)],
+  })).filter((entry) => entry.hit)
   return {
     messages: buildFolderChatMessages({
-      passages: hits.map((h) => ({ name: noteTitle(h.name), text: h.text })),
+      passages: packedHits.map(({ source }) => ({ name: source.label, text: source.text })),
       history,
       question: q,
       persona,
+      additions: bundle.additions,
+      memories,
     }),
     // Numérotation = ordre des extraits DANS le prompt (buildFolderChatMessages les
     // numérote dans ce même ordre) : la puce [n] retombe sur le bon chunk.
-    sources: hits.map((h, i) => ({ n: i + 1, path: h.path, name: noteTitle(h.name), text: h.text })),
+    sources: packedHits.map(({ source, hit }, i) => ({ n: i + 1, path: hit.path, name: source.label, text: source.text })),
+    bundle,
   }
 }
 
@@ -882,7 +1050,10 @@ async function prepareDocMessages(
   runtime: ProviderRuntime,
   signal: AbortSignal,
   idx: number,
-): Promise<{ messages: OllamaMessage[]; sources: CitedPassage[] | null; wholeDoc?: boolean }> {
+  additions: readonly CopilotContextItem[],
+  memories: readonly MemoryPromptSource[],
+): Promise<{ messages: OllamaMessage[]; sources: CitedPassage[] | null; wholeDoc?: boolean; bundle: ContextBundle }> {
+  const docBudget = isCloudProvider(runtime.provider) ? MAX_DOC_CHARS_CLOUD : MAX_DOC_CHARS
   // Le texte d'un PDF est désormais résolu en amont (18.2) → un gros PDF passe AUSSI par
   // l'index éphémère (plus de garde `kind !== 'pdf'`).
   if (runtime.provider === 'ollama' && doc.text.length > MAX_DOC_CHARS) {
@@ -906,18 +1077,36 @@ async function prepareDocMessages(
         signal,
       )
       if (hits.length > 0) {
+        const bundle = buildContextBundle({
+          primary: hits.map((hit, index) => ({
+            id: `doc-rag:${index}`,
+            kind: 'rag',
+            label: doc.name ?? 'document',
+            text: hit.text,
+            path: doc.path,
+          })),
+          additions,
+          maxChars: docBudget,
+        })
+        const packedHits = bundle.primary.map((source) => ({
+          source,
+          hit: hits[Number.parseInt(source.id.slice('doc-rag:'.length), 10)],
+        })).filter((entry) => entry.hit)
         return {
           messages: buildDocIndexChatMessages({
             docName: doc.name,
-            passages: hits,
+            passages: packedHits.map(({ source }) => ({ text: source.text })),
             history,
             question: q,
             persona,
             indexTruncated: truncated,
+            additions: bundle.additions,
+            memories,
           }),
           // `name` null : les puces du même document n'affichent que leur numéro. Le saut
           // vers un PDF s'arrête à l'onglet (pas de surlignage dans le viewer) — assumé.
-          sources: hits.map((h, i) => ({ n: i + 1, path: doc.path ?? null, name: null, text: h.text })),
+          sources: packedHits.map(({ source }, i) => ({ n: i + 1, path: doc.path ?? null, name: null, text: source.text })),
+          bundle,
         }
       }
     }
@@ -928,24 +1117,42 @@ async function prepareDocMessages(
   // déjà pris la main ci-dessus) ; budget cloud = 240k (fenêtre 128k tokens d'OpenAI —
   // le plafond local y tronquait un PDF de 5 pages, vu en usage réel ; MiniMax M2.x =
   // 204k tokens, M3 = 1M : le même plafond tient largement).
-  const docBudget = isCloudProvider(runtime.provider) ? MAX_DOC_CHARS_CLOUD : MAX_DOC_CHARS
-  if (doc.text.trim() && doc.text.length <= docBudget) {
-    const { chunks, truncated } = chunkText(doc.text)
+  const bundle = buildContextBundle({
+    primary: [{ id: 'document', kind: 'document', label: doc.name ?? 'sans titre', text: doc.text, path: doc.path }],
+    additions,
+    maxChars: docBudget,
+  })
+  const packedDoc = bundle.primary[0]?.text ?? ''
+  const principalComplete = packedDoc.length === doc.text.length
+  if (packedDoc.trim() && principalComplete) {
+    const { chunks, truncated } = chunkText(packedDoc)
     // `truncated` (plafond de chunks) contredirait le « EN ENTIER » du prompt : dans ce
     // cas improbable (≤ 240k mais > 300 chunks), on retombe sur la troncature signalée.
     if (chunks.length > 0 && !truncated) {
       return {
-        messages: buildCitedDocChatMessages({ docName: doc.name, chunks, history, question: q, persona }),
+        messages: buildCitedDocChatMessages({ docName: doc.name, chunks, history, question: q, persona, additions: bundle.additions, memories }),
         sources: chunks.map((text, i) => ({ n: i + 1, path: doc.path ?? null, name: null, text })),
         wholeDoc: true,
+        bundle,
       }
     }
   }
   // Restants : document vide / PDF sans texte (messages dédiés du ContextBuilder), et
   // document au-delà du budget cloud (troncature SIGNALÉE 14.3, au budget du fournisseur).
   return {
-    messages: buildChatMessages({ docName: doc.name, docText: doc.text, kind: doc.kind, history, question: q, persona, maxChars: docBudget }),
+    messages: buildChatMessages({
+      docName: doc.name,
+      docText: doc.text,
+      kind: doc.kind,
+      history,
+      question: q,
+      persona,
+      maxChars: packedDoc.length,
+      additions: bundle.additions,
+      memories,
+    }),
     sources: null,
+    bundle,
   }
 }
 
@@ -1306,6 +1513,13 @@ export function retryGeneration(idx: number): void {
   const m = copilot.messages[idx]
   if (!m?.retry || copilot.generating) return
   const r = m.retry
+  if (r.kind === 'chat' && r.contextRevision !== copilot.contextRevision) {
+    m.content = 'Le contexte a changé — renvoyez la question pour utiliser les sources actuellement affichées.'
+    m.failed = false
+    m.notice = true
+    m.retry = undefined
+    return
+  }
   copilot.messages.splice(idx - 1, 2)
   const t = activeTab()
   const doc = { name: t?.name ?? null, text: t?.content ?? '', kind: t?.kind ?? ('md' as DocKind), path: t?.path ?? null }
@@ -1362,10 +1576,19 @@ export async function saveMessageAsNote(msg: ChatMsg): Promise<string | null> {
 export function newChat(): void {
   genController?.abort()
   copilot.messages = []
+  copilot.contextItems = []
+  copilot.contextFolder = null
+  copilot.contextError = ''
+  copilot.contextRevision = 0
+  copilot.scope = 'doc'
 }
 
 // Crochet DEV uniquement (vérifications navigateur/Playwright : injecter un message,
 // déclencher un saut de citation). import.meta.env.DEV = false en prod → code mort éliminé.
 if (import.meta.env.DEV) {
   ;(globalThis as Record<string, unknown>).__dokuCopilot = { copilot, jumpToCitation }
+  if (new URLSearchParams(globalThis.location?.search ?? '').has('memory-demo')) {
+    app.copilotProvider = 'openai'
+    app.copilotView = 'memory'
+  }
 }

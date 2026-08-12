@@ -12,8 +12,10 @@ Frontend Svelte 5 de Doku (lecteur/éditeur de documents — shell W1 + éditeur
 | `components/TitleBar.svelte` | Barre 40px : onglets Chrome-style, menu ⋯ du document, pin/thème/contrôles fenêtre |
 | `components/Sidebar.svelte` | Ruban d'icônes 46px + panneau (Fichiers / Plan / Historique), repliée = 0px |
 | `components/DocumentView.svelte` | Hôte CM6 plein espace, cache d'états par onglet, menu contextuel de sélection |
-| `components/CopilotPanel.svelte` | Chat Doku-San, choix Ollama/OpenAI et composeur superposé Question / Contexte |
+| `components/CopilotPanel.svelte` | Chat Doku-San, choix des fournisseurs, composeur Question / Contexte et gestion de la mémoire cloud |
 | `lib/openai.ts` | Client IPC OpenAI : connexion du compte Codex, statut, streaming et annulation sans exposer les jetons |
+| `lib/copilot-memory.ts` | Schéma Markdown, validation, déduplication et prompts purs de la mémoire de travail |
+| `lib/copilot-memory.svelte.ts` | Chargement, rappel, extraction, mutations atomiques et annulation de la mémoire cloud |
 | `lib/stores.svelte.ts` | État global (runes) : onglets, thème, sidebar, TOC, dirty tracking |
 | `lib/editor/editor.ts` | Extensions CM6 : thème typographique du design, coloration, Compartment preview/source |
 | `lib/editor/live-preview.ts` | Décorations live preview (ADR-0002) : masquage syntaxe, checkboxes, wikilinks |

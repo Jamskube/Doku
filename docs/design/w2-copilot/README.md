@@ -1,5 +1,25 @@
 # Handoff : Copilote « Doku‑San » — panneau latéral droit
 
+## Ajouter du contexte depuis le composer
+
+Le bouton `+` ouvre un menu compact au-dessus du contenu. Il propose quatre instantanés
+éphémères : sélection actuelle, fichiers Markdown/texte/HTML/PDF, dossier de notes et texte du
+presse-papiers. Les ajouts restent visibles et retirables dans la face **Contexte** jusqu’à
+**Nouvelle conversation**.
+
+- Un dossier ajouté devient le dossier effectif des questions et de l’index sémantique ; aucune
+  indexation longue ne démarre silencieusement derrière une question.
+- Les fichiers sont bornés avant lecture (2 Mio texte, 25 Mio PDF), puis chaque texte à 240 000
+  caractères. Huit ajouts maximum et deux lectures simultanées.
+- Chaque question partage un budget corpus unique entre source principale et ajouts. Toute source
+  partielle est signalée dans la face Contexte et sous la réponse.
+- En cloud, le menu annonce **Sera envoyé à OpenAI/MiniMax**. Seuls basenames, libellés et contenus
+  bornés partent au modèle, jamais les chemins locaux.
+- Retirer une source empêche sa réinjection future. Pour supprimer aussi son influence possible
+  dans les réponses antérieures, démarrer une nouvelle conversation.
+- Clavier : flèches/Home/End parcourent le menu, Échap le ferme et rend le focus au `+`, Tab le
+  ferme et poursuit l’ordre de tabulation. Le contenu reste disponible sans animation.
+
 ## Vue d'ensemble
 Ajout d'un **assistant IA local (« Doku‑San »)** à l'application Doku (éditeur Markdown/PDF).
 L'assistant s'ouvre/se ferme via un **bouton collapse dans le coin haut‑droit du document** et
@@ -244,6 +264,13 @@ contrôles fenêtre de retour dans le header principal.
 - **Question ↔ Contexte** : permutation de profondeur symétrique en 240ms ; le draft reste monté,
   les flèches changent de plan et `Échap` rend immédiatement le focus au champ Question.
 - Survols : boutons-icônes fantômes → fond `--surface-hover`, texte `--ink` ; bouton fermer → `--err`/blanc ; actions destructives → `--err`.
+
+### Mémoire du travail — cloud uniquement
+- L’icône `database` du header n’apparaît que pour OpenAI ou MiniMax et ouvre la mémoire de la note active. Un sélecteur explicite permet de la partager avec le dossier ; l’explorateur ne choisit jamais cette portée automatiquement.
+- La mémoire est automatique par défaut : rappel avant la réponse, extraction après une réponse cloud réussie, sans prolonger visuellement le streaming principal.
+- La liste reste sobre et verticale. Chaque souvenir affiche type, date, titre, résumé et contenu, avec édition inline et oubli confirmé.
+- Chaque lot automatique ou manuel expose une action **Annuler** ; les erreurs restent visibles sans bloquer la réponse principale.
+- Confidentialité : les fichiers Markdown restent dans AppData. Un index résumé sert à la sélection cloud ; seuls les contenus retenus sont injectés dans la question.
 
 ## État / logique (à mapper sur les stores Svelte de Doku)
 - `chatOpen: boolean` — panneau ouvert/fermé.

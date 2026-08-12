@@ -17,7 +17,7 @@ export type SidebarView = 'files' | 'plan' | 'history' | 'search'
 // Vue interne du panneau copilote droit (14.0). Transitoire : boot toujours en
 // 'chat' (coquille statique, ne démarre PAS le moteur) ; 'models' déclenche
 // ensureReady à l'ouverture (intention explicite) — évite un spawn Ollama au boot.
-export type CopilotView = 'chat' | 'models'
+export type CopilotView = 'chat' | 'models' | 'memory'
 export type CopilotProvider = 'ollama' | 'openai' | 'minimax'
 
 // LE prédicat cloud — badge, budget de contexte, refresh, personas et libellés d'erreur
@@ -87,6 +87,9 @@ export const app = $state({
   minimaxModel: '',
   // Style des réponses du copilote (bref / équilibré / détaillé) — persisté.
   copilotVerbosity: 'balanced' as CopilotVerbosity,
+  // Mémoire de travail automatisée : uniquement utilisée par les fournisseurs cloud.
+  // Le réglage est global, mais les souvenirs restent compartimentés par dossier.
+  cloudMemoryEnabled: true,
   // Panneau copilote droit (14.0) : ouvert/fermé, persisté (settings) comme sidebarOpen.
   copilotOpen: false,
   // Le composant du panneau est chargé/monté paresseusement (App.svelte) : son code +
@@ -176,6 +179,7 @@ export function loadSettings() {
       if (typeof s.minimaxModel === 'string') app.minimaxModel = s.minimaxModel
       if (s.copilotVerbosity === 'brief' || s.copilotVerbosity === 'balanced' || s.copilotVerbosity === 'detailed')
         app.copilotVerbosity = s.copilotVerbosity
+      if (typeof s.cloudMemoryEnabled === 'boolean') app.cloudMemoryEnabled = s.cloudMemoryEnabled
       if (typeof s.copilotOpen === 'boolean') app.copilotOpen = s.copilotOpen
       // Réglage validé champ par champ : un settings corrompu ne doit pas faire
       // planter le tri (sortEntries recevrait une clé inconnue et ne trierait plus).
@@ -206,6 +210,7 @@ export function saveSettings() {
         copilotProvider: app.copilotProvider,
         minimaxModel: app.minimaxModel,
         copilotVerbosity: app.copilotVerbosity,
+        cloudMemoryEnabled: app.cloudMemoryEnabled,
         copilotOpen: app.copilotOpen,
         explorerSort: app.explorerSort,
         explorerExpanded: app.explorerExpanded,

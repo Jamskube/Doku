@@ -275,12 +275,34 @@ export async function openFileDialog(): Promise<{ path: string; name: string; co
   return { path, name, content }
 }
 
+export async function openContextFilesDialog(): Promise<string[]> {
+  if (!isTauri) return []
+  const { open } = await import('@tauri-apps/plugin-dialog')
+  const paths = await open({
+    multiple: true,
+    filters: [{ name: 'Documents', extensions: ['md', 'markdown', 'txt', 'html', 'htm', 'pdf'] }],
+  })
+  if (!paths) return []
+  return Array.isArray(paths) ? paths : [paths]
+}
+
+export async function fileSizeAt(path: string): Promise<number | null> {
+  if (!isTauri) return null
+  try {
+    const { stat } = await import('@tauri-apps/plugin-fs')
+    return (await stat(path)).size
+  } catch {
+    return null
+  }
+}
+
 export async function openFolderDialog(defaultPath?: string | null): Promise<string | null> {
   if (!isTauri) return null
   const { open } = await import('@tauri-apps/plugin-dialog')
   const path = await open({
     directory: true,
     multiple: false,
+    recursive: true,
     defaultPath: defaultPath ?? undefined,
   })
   return typeof path === 'string' ? path : null
@@ -363,6 +385,89 @@ export async function writeFileAtomic(path: string, bytes: Uint8Array) {
   const tmp = `${path}.${Date.now()}-${tmpSeq++}.doku-tmp`
   await writeFile(tmp, bytes)
   await rename(tmp, path)
+}
+
+// --- Mémoire durable du copilote cloud -----------------------------------------------
+// %APPDATA%\<app>\memory\<sha1-dossier>\ : un fichier Markdown par souvenir,
+// MEMORY.md comme index lisible, undo.json comme unique point de retour. Les clés et noms
+// sont validés ici : aucun texte produit par un modèle ne devient un segment de chemin libre.
+
+function validMemoryKey(key: string): boolean {
+  return /^[a-f0-9]{40}$/.test(key)
+}
+
+function validMemoryFile(name: string): boolean {
+  return /^(?:MEMORY|[a-z0-9][a-z0-9-]{0,79})\.md$/.test(name)
+}
+
+async function memoryWorkspaceDir(key: string): Promise<string> {
+  if (!validMemoryKey(key)) throw new Error('Identifiant de mémoire invalide.')
+  const { appDataDir, join } = await import('@tauri-apps/api/path')
+  return join(await appDataDir(), 'memory', key)
+}
+
+export async function readMemoryMarkdownFiles(key: string): Promise<{ name: string; content: string }[]> {
+  if (!isTauri || !validMemoryKey(key)) return []
+  try {
+    const { readDir, readTextFile } = await import('@tauri-apps/plugin-fs')
+    const { join } = await import('@tauri-apps/api/path')
+    const dir = await memoryWorkspaceDir(key)
+    const memoriesDir = await join(dir, 'memories')
+    const out: { name: string; content: string }[] = []
+    for (const entry of await readDir(memoriesDir)) {
+      if (entry.isDirectory || !validMemoryFile(entry.name) || entry.name === 'MEMORY.md') continue
+      try {
+        out.push({ name: entry.name, content: await readTextFile(await join(memoriesDir, entry.name)) })
+      } catch {
+        // Un souvenir illisible n'empêche pas les autres de se charger.
+      }
+    }
+    return out
+  } catch {
+    return []
+  }
+}
+
+export async function writeMemoryMarkdownFile(key: string, name: string, content: string): Promise<void> {
+  if (!isTauri) return
+  if (!validMemoryKey(key) || !validMemoryFile(name)) throw new Error('Chemin de mémoire invalide.')
+  const { mkdir } = await import('@tauri-apps/plugin-fs')
+  const { join } = await import('@tauri-apps/api/path')
+  const root = await memoryWorkspaceDir(key)
+  const dir = name === 'MEMORY.md' ? root : await join(root, 'memories')
+  await mkdir(dir, { recursive: true })
+  await writeTextFileAtomic(await join(dir, name), content)
+}
+
+export async function removeMemoryMarkdownFile(key: string, name: string): Promise<void> {
+  if (!isTauri || !validMemoryKey(key) || !validMemoryFile(name) || name === 'MEMORY.md') return
+  try {
+    const { remove } = await import('@tauri-apps/plugin-fs')
+    const { join } = await import('@tauri-apps/api/path')
+    await remove(await join(await memoryWorkspaceDir(key), 'memories', name))
+  } catch {
+    // Absent : l'état désiré est déjà atteint.
+  }
+}
+
+export async function readMemoryUndo(key: string): Promise<string | null> {
+  if (!isTauri || !validMemoryKey(key)) return null
+  try {
+    const { readTextFile } = await import('@tauri-apps/plugin-fs')
+    const { join } = await import('@tauri-apps/api/path')
+    return await readTextFile(await join(await memoryWorkspaceDir(key), 'undo.json'))
+  } catch {
+    return null
+  }
+}
+
+export async function writeMemoryUndo(key: string, content: string): Promise<void> {
+  if (!isTauri || !validMemoryKey(key)) return
+  const { mkdir } = await import('@tauri-apps/plugin-fs')
+  const { join } = await import('@tauri-apps/api/path')
+  const dir = await memoryWorkspaceDir(key)
+  await mkdir(dir, { recursive: true })
+  await writeTextFileAtomic(await join(dir, 'undo.json'), content)
 }
 
 // --- Index d'embeddings RAG (15.2, ADR-0015) ---

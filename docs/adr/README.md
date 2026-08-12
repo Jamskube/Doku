@@ -21,3 +21,5 @@ Registre des décisions d'architecture. Une décision par fichier ; on ne suppri
 | [0015](./0015-stack-rag-embeddings-locaux.md) | Stack RAG : granite-embedding:278m + cosinus brute-force en mémoire | accepted | 2026-07-20 | rag, copilote, embeddings, perf, arm64 |
 | [0016](./0016-backend-inference-npu-foundry-local.md) | Backend d'inférence NPU (Foundry Local / QNN) — NO-GO mesuré (spike 17.1) | rejected | 2026-07-24 | ia, llm, npu, qnn, foundry-local, arm64, perf, copilote |
 | [0017](./0017-revelation-syntaxe-a-la-demande.md) | Révélation de la syntaxe Markdown à la demande (et non au curseur) | accepted | 2026-07-30 | éditeur, wysiwyg, ux, tableaux, fr-3 |
+| [0018](./0018-fournisseur-cloud-compatible-openai.md) | Fournisseurs cloud compatibles OpenAI par clé API (MiniMax) | accepted | 2026-08-10 | ia, cloud, minimax, compatible-openai, secret |
+| [0019](./0019-memoire-travail-cloud-automatisee.md) | Mémoire de travail cloud automatisée et locale | accepted | 2026-08-12 | ia, mémoire, cloud, markdown, confidentialité, ux |
