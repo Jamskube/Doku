@@ -20,9 +20,9 @@ jobs:
     timeout-minutes: 60
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
@@ -36,7 +36,7 @@ jobs:
           workspaces: src-tauri
 
       - name: Restaurer l'archive Ollama épinglée
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: src-tauri/binaries/.cache/ollama-v0.32.0/ollama-windows-amd64.zip
           key: ollama-windows-amd64-v0.32.0-56561a8f
@@ -73,8 +73,8 @@ jobs:
           Assert-X64 "src-tauri/binaries/ollama-x86_64-pc-windows-msvc.exe"
           Assert-X64 "src-tauri/binaries/lib/ollama/llama-server.exe"
 
-          $installDir = "$env:RUNNER_TEMP/Doku-x64-smoke"
-          $install = Start-Process $installer.FullName -ArgumentList "/S", "/D=$installDir" -Wait -PassThru
+          $installDir = "$env:LOCALAPPDATA/Doku"
+          $install = Start-Process $installer.FullName -ArgumentList "/S" -Wait -PassThru
           if ($install.ExitCode -ne 0) { throw "Installation silencieuse échouée ($($install.ExitCode))" }
 
           $doku = "$installDir/doku.exe"
@@ -114,7 +114,7 @@ jobs:
           "$hash  $($installer.Name)" | Set-Content "$root/bundle/nsis/SHA256SUMS.txt" -Encoding ascii
 
       - name: Publier l'installateur x64
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: Doku-${{ github.ref_name }}-windows-x64
           path: |
