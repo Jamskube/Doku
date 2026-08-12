@@ -1,6 +1,6 @@
 # Doku
 
-Application de bureau pour **ouvrir, lire et éditer des documents** — Markdown en premier, PDF en lecture, export HTML/DOCX — avec un copilote IA **100 % local** (Ollama, RAG sur dossier). Native Windows ARM64.
+Application de bureau pour **ouvrir, lire et éditer des documents** — Markdown en premier, PDF en lecture, export HTML/DOCX — avec un copilote IA **100 % local** (Ollama, RAG sur dossier). Native Windows ARM64 et x64.
 
 ## État du projet
 📦 **v2.2.0** — feature-complete (Epics 1-16, 18, 19 livrés ; ledger 69 features / 68 PASS). Phase actuelle : usage réel quotidien, le prochain chantier émergera de l'usage.
@@ -15,8 +15,12 @@ npm run dev          # UI navigateur (APIs Tauri neutralisées) — http://local
 npm run tauri dev    # app native (première compile Rust longue)
 npm run check        # svelte-check
 npm test             # vitest
-npm run tauri build  # installateur NSIS ARM64 (habillé D.A. Doku)
+npm run build:installer:arm64  # installateur NSIS ARM64
+npm run build:installer:x64    # installateur NSIS Intel/AMD x64
 ```
+
+Le build x64 automatisé est aussi disponible dans GitHub Actions via le workflow
+`Build Windows x64`. Il publie un artefact contenant l'installateur et son SHA-256.
 
 ## Structure
 | Dossier | Rôle |

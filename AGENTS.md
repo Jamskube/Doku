@@ -8,7 +8,7 @@ Doku — petite application pour **ouvrir, lire et éditer des fichiers Markdown
 ## Stack
 - Language: TypeScript (frontend) + Rust minimal (hôte Tauri, zéro logique métier — ADR-0004)
 - Framework: Tauri 2 + Svelte 5 + Vite — décidé, ADR-0001 accepted (`docs/adr/`)
-- Contrainte machine : **Windows ARM64** — Surface Pro 11, Snapdragon X Elite, NPU (IA locale envisagée en v2) → la stack doit tourner nativement en ARM64
+- Machine de développement principale : **Windows ARM64** — Surface Pro 11, Snapdragon X Elite. Distribution prise en charge : installateurs Windows ARM64 et x64, chacun avec son sidecar Ollama CPU natif
 - Référence : `G:\KUDE` (mode lecture/édition Markdown + design system AIR) ; maquettes officielles dans `docs/design/w1/`
 - Éditeur : CodeMirror 6 « live preview » (ADR-0002) — `src/lib/editor/`
 - Database / ORM: aucune (fichiers locaux)
@@ -19,7 +19,7 @@ Doku — petite application pour **ouvrir, lire et éditer des fichiers Markdown
 - Install : `npm install`
 - Dev (UI navigateur, APIs Tauri neutralisées) : `npm run dev` → http://localhost:1420
 - Dev (app native) : `npm run tauri dev` (première compile Rust longue)
-- Build : `npm run build` · installateur : `npm run tauri build`
+- Build : `npm run build` · installateurs : `npm run build:installer:arm64` / `npm run build:installer:x64`
 - Typecheck : `npm run check`
 - Tests : `npm test` (vitest)
 - Icônes : `npm run subset:icons` (réseau requis) — à relancer quand `icons.test.ts` échoue (icône ajoutée hors subset), puis committer `src/assets/material-symbols-*`

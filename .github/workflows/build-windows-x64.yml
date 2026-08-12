@@ -1,0 +1,124 @@
+name: Build Windows x64
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-x64-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  nsis-x64:
+    name: NSIS x64
+    runs-on: windows-latest
+    timeout-minutes: 60
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Restaurer l'archive Ollama épinglée
+        uses: actions/cache@v4
+        with:
+          path: src-tauri/binaries/.cache/ollama-v0.32.0/ollama-windows-amd64.zip
+          key: ollama-windows-amd64-v0.32.0-56561a8f
+
+      - name: Installer les dépendances
+        run: npm ci
+
+      - name: Préparer le sidecar Ollama CPU x64
+        run: npm run prepare:ollama:x64
+
+      - name: Vérifier le projet
+        run: |
+          npm run check
+          npm test
+
+      - name: Construire l'installateur NSIS x64
+        run: npm run tauri build -- --target x86_64-pc-windows-msvc --bundles nsis
+
+      - name: Smoke-tester l'installateur et produire le SHA-256
+        shell: pwsh
+        run: |
+          $root = "src-tauri/target/x86_64-pc-windows-msvc/release"
+          $installer = Get-ChildItem "$root/bundle/nsis/*-setup.exe" | Select-Object -First 1
+          if (-not $installer) { throw "Installateur NSIS x64 introuvable" }
+
+          function Assert-X64([string]$path) {
+            $bytes = [IO.File]::ReadAllBytes($path)
+            $pe = [BitConverter]::ToInt32($bytes, 0x3c)
+            $machine = [BitConverter]::ToUInt16($bytes, $pe + 4)
+            if ($machine -ne 0x8664) { throw "$path n'est pas un binaire PE x64 (machine=0x$($machine.ToString('x4')))" }
+          }
+
+          Assert-X64 "$root/doku.exe"
+          Assert-X64 "src-tauri/binaries/ollama-x86_64-pc-windows-msvc.exe"
+          Assert-X64 "src-tauri/binaries/lib/ollama/llama-server.exe"
+
+          $installDir = "$env:RUNNER_TEMP/Doku-x64-smoke"
+          $install = Start-Process $installer.FullName -ArgumentList "/S", "/D=$installDir" -Wait -PassThru
+          if ($install.ExitCode -ne 0) { throw "Installation silencieuse échouée ($($install.ExitCode))" }
+
+          $doku = "$installDir/doku.exe"
+          $ollama = "$installDir/ollama.exe"
+          $llamaServer = "$installDir/lib/ollama/llama-server.exe"
+          $license = "$installDir/licenses/Ollama-LICENSE.txt"
+          foreach ($required in @($doku, $ollama, $llamaServer, $license)) {
+            if (-not (Test-Path $required)) { throw "Fichier installé manquant : $required" }
+          }
+          Assert-X64 $doku
+          Assert-X64 $ollama
+          Assert-X64 $llamaServer
+
+          & $ollama --version
+          if ($LASTEXITCODE -ne 0) { throw "Le sidecar Ollama x64 ne démarre pas" }
+
+          $env:OLLAMA_HOST = "127.0.0.1:11589"
+          $env:OLLAMA_MODELS = "$env:RUNNER_TEMP/Doku-models-smoke"
+          $env:OLLAMA_NO_CLOUD = "1"
+          $env:OLLAMA_REMOTES = "127.0.0.1"
+          $server = Start-Process $ollama -ArgumentList "serve" -WindowStyle Hidden -PassThru
+          try {
+            $ready = $false
+            for ($attempt = 0; $attempt -lt 40; $attempt++) {
+              try {
+                $version = Invoke-RestMethod "http://127.0.0.1:11589/api/version" -TimeoutSec 2
+                if ($version.version -eq "0.32.0") { $ready = $true; break }
+              } catch {}
+              Start-Sleep -Milliseconds 250
+            }
+            if (-not $ready) { throw "Le serveur Ollama installé n'est pas devenu prêt" }
+          } finally {
+            Stop-Process -Id $server.Id -Force -ErrorAction SilentlyContinue
+          }
+
+          $hash = (Get-FileHash $installer.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  $($installer.Name)" | Set-Content "$root/bundle/nsis/SHA256SUMS.txt" -Encoding ascii
+
+      - name: Publier l'installateur x64
+        uses: actions/upload-artifact@v4
+        with:
+          name: Doku-${{ github.ref_name }}-windows-x64
+          path: |
+            src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*-setup.exe
+            src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 14

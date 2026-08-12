@@ -1,47 +1,35 @@
-# Binaires externes (sidecar)
+# Binaires externes
 
-Ce dossier reçoit les **binaires externes** embarqués par Tauri (`bundle.externalBin`).
-Ils ne sont **pas commités** (voir `.gitignore` : `src-tauri/binaries/*.exe`) car volumineux.
+Ce dossier reçoit les sidecars Ollama embarqués par Tauri. Les exécutables, DLL et archives
+sont ignorés par Git ; seuls les scripts de préparation et leurs empreintes sont commités.
 
-## Ollama (spike 13.1 / cap v2)
+## Architectures Windows
 
-Doku lance `ollama.exe` en sidecar (ADR-0006 / ADR-0012). Le fichier doit être nommé
-avec le **suffixe de triplet cible**, sinon `tauri dev` / `tauri build` ne le trouvent pas :
+| Cible | Triplet Tauri | Archive officielle Ollama 0.32.0 |
+|---|---|---|
+| ARM64 | `aarch64-pc-windows-msvc` | `ollama-windows-arm64.zip` |
+| x64 Intel/AMD | `x86_64-pc-windows-msvc` | `ollama-windows-amd64.zip` |
 
-```
-src-tauri/binaries/ollama-aarch64-pc-windows-msvc.exe
-```
+Tauri sélectionne automatiquement `ollama-<triplet>.exe` pour la cible demandée. Les DLL
+vivent toutes sous `lib/ollama/` et ne peuvent pas mélanger deux architectures : le script
+`scripts/prepare-ollama-sidecar.mjs` remplace donc ce dossier avant chaque build.
 
-(Le triplet exact = `rustc -Vv` → ligne `host:`. Sur Surface Pro 11 = `aarch64-pc-windows-msvc`.)
+## Commandes
 
-### Où récupérer un build ARM64 Windows
-Asset **`ollama-windows-arm64.zip`** des releases GitHub (léger, ~16 Mo, CPU-only) :
-https://github.com/ollama/ollama/releases (testé : v0.32.0).
-
-### ⚠️ Ce n'est PAS un exe isolé
-Le zip contient `ollama.exe` **ET** un dossier `lib/ollama/` de DLLs d'inférence CPU
-(`ggml-cpu.dll`, `libllama.dll`, `llama-server.exe`…). `ollama.exe` charge ces DLLs
-**relativement à son propre dossier** — donc `lib/` doit rester **à côté** de l'exe.
-
-Procédure : dézippe **tout** le contenu ici (`src-tauri/binaries/`), puis renomme
-`ollama.exe` → `ollama-aarch64-pc-windows-msvc.exe`. Le renommage est sans risque
-(Ollama trouve `lib/` par le dossier de l'exe, pas par son nom). Résultat attendu :
-
-```
-src-tauri/binaries/
-  ollama-aarch64-pc-windows-msvc.exe
-  lib/ollama/  (DLLs)
+```powershell
+npm run prepare:ollama:arm64
+npm run prepare:ollama:x64
+npm run build:installer:arm64
+npm run build:installer:x64
 ```
 
-Sanity-check : `./ollama-aarch64-pc-windows-msvc.exe --version` doit afficher la version.
+Les téléchargements officiels sont épinglés à Ollama 0.32.0 et vérifiés par SHA-256 avant
+extraction. Pour x64, le script extrait uniquement le payload CPU officiel : les bibliothèques
+CUDA/ROCm/MLX de l'archive de 1,5 Go ne sont pas embarquées dans Doku. L'installateur reste
+ainsi compact et fonctionne sur les PC Intel/AMD sans GPU compatible.
 
-> Sans ce fichier, `npm run tauri dev` échoue au bundling (externalBin introuvable).
-> Le code du sidecar (spawn/port/kill) + le client TS sont là ; seule la **validation
-> native** du spike 13.1 exige ces binaires.
->
-> **`lib/ollama` au runtime (13.2 réglé).** Ollama lance `llama-server.exe` (+ DLLs ggml)
-> sous `<OLLAMA_LIBRARY_PATH>/lib/ollama`. `sidecar.rs` fixe `OLLAMA_LIBRARY_PATH` selon le
-> profil : **dev** → `src-tauri/binaries` (via `CARGO_MANIFEST_DIR`, la lib y est extraite,
-> donc **plus besoin de hand-copier dans `target/debug`**) ; **release** → `resource_dir()`,
-> où `bundle.resources` (`"binaries/lib/ollama/": "lib/ollama/"`) copie la lib à côté de l'exe
-> empaqueté. À valider au prochain `tauri build` (packaging release non exercé en dev).
+La CI `.github/workflows/build-windows-x64.yml` construit l'installateur x64 sur un runner
+Windows x64, vérifie les architectures PE, effectue une installation silencieuse isolée,
+démarre le sidecar installé et publie l'installateur avec son SHA-256.
+
+La licence MIT d'Ollama est distribuée sous `resources/licenses/Ollama-LICENSE.txt`.

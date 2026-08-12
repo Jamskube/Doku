@@ -10,6 +10,10 @@
     "check": "svelte-check --tsconfig ./tsconfig.json",
     "test": "vitest run",
     "subset:icons": "node scripts/subset-icons.mjs",
+    "prepare:ollama:arm64": "node scripts/prepare-ollama-sidecar.mjs arm64",
+    "prepare:ollama:x64": "node scripts/prepare-ollama-sidecar.mjs x64",
+    "build:installer:arm64": "npm run prepare:ollama:arm64 && tauri build --target aarch64-pc-windows-msvc --bundles nsis",
+    "build:installer:x64": "npm run prepare:ollama:x64 && tauri build --target x86_64-pc-windows-msvc --bundles nsis",
     "tauri": "tauri"
   },
   "dependencies": {
