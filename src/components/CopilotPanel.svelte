@@ -3,7 +3,7 @@
   import { activeTab, app, isCloudProvider, openPath, type CopilotProvider } from '../lib/stores.svelte'
   import { closeWindow, isTauri, minimizeWindow, toggleMaximizeWindow } from '../lib/tauri'
   import { formatBytes } from '../lib/ollama'
-  import { beginOpenAiAuth, cancelOpenAiConnection, cancelPull, connectMinimax, copilot, disconnectMinimaxKey, disconnectOpenAiAccount, ensureCopilotReady, isEmbedModel, jumpToCitation, newChat, pullModel, refreshMinimaxStatus, refreshModels, refreshOpenAiStatus, removeModel, retryGeneration, saveMessageAsNote, sendChat, setActiveModel, setCopilotProvider, stopChat, summarizeDoc, type ChatMsg } from '../lib/copilot.svelte'
+  import { beginOpenAiAuth, cancelOpenAiConnection, cancelPull, connectMinimax, copilot, disconnectMinimaxKey, disconnectOpenAiAccount, ensureCopilotReady, isEmbedModel, jumpToCitation, newChat as clearChat, pullModel, refreshMinimaxStatus, refreshModels, refreshOpenAiStatus, removeModel, retryGeneration, saveMessageAsNote, sendChat, setActiveModel, setCopilotProvider, stopChat, summarizeDoc, type ChatMsg } from '../lib/copilot.svelte'
   import { MINIMAX_DEFAULT_MODEL } from '../lib/compat'
   import { DEFAULT_EMBED_MODEL, FALLBACK_EMBED_MODEL, noteTitle } from '../lib/rag'
   import { cancelRagIndexing, deleteRagIndex, ragState, refreshRagIndex } from '../lib/rag-index.svelte'
@@ -383,6 +383,14 @@
     })
   }
 
+  function startNewChat() {
+    clearChat()
+    draft = ''
+    composerFace = 'question'
+    verbMenuOpen = false
+    requestAnimationFrame(() => promptEl?.focus())
+  }
+
   function onComposerTabKey(e: KeyboardEvent, face: 'question' | 'context') {
     const switchKey = e.key === 'ArrowUp' || e.key === 'ArrowDown' || e.key === 'ArrowLeft' || e.key === 'ArrowRight'
     if (switchKey) {
@@ -394,6 +402,13 @@
       e.preventDefault()
       showComposerFace('question', true)
     }
+  }
+
+  function onAdvancedSummaryKey(e: KeyboardEvent) {
+    if (e.key !== 'Enter' && e.key !== ' ') return
+    e.preventDefault()
+    const details = (e.currentTarget as HTMLElement).parentElement as HTMLDetailsElement | null
+    if (details) details.open = !details.open
   }
 
   // Envoie le brouillon ; capture un SNAPSHOT du doc courant (le contexte ne change pas si
@@ -531,7 +546,7 @@
      (l'utilisateur ne doit jamais être captif de la seule recommandation). -->
 {#snippet addSection(chips: string[])}
   <section>
-    <div class="cop-label">AJOUTER</div>
+    <div class="cop-label">Ajouter</div>
     <div class="cop-add">
       <span class="msr" style="font-size:18px;color:var(--ink-4)">search</span>
       <input
@@ -666,7 +681,7 @@
       </button>
     {:else}
       {#if copilot.messages.length > 0}
-        <button class="cop-ic" title="Nouvelle conversation" aria-label="Nouvelle conversation" onclick={newChat}>
+        <button class="cop-ic" title="Nouvelle conversation" aria-label="Nouvelle conversation" onclick={startNewChat}>
           <!-- Icône de trait (famille Lucide « square-pen ») : inline plutôt que dans le
                subset Material Symbols — le geste « nouvelle conversation » mérite le dessin
                au trait, plus léger que le glyphe plein. currentColor = suit l'état du bouton. -->
@@ -697,46 +712,47 @@
     <div class="cop-scroll" bind:this={scroller} onscroll={onScroll}>
       {#if app.copilotView === 'models'}
         <div class="cop-picker" bind:this={pickerRootEl}>
-          <div class="cop-label" id="cop-picker-label">MODÈLE ACTIF</div>
-          <button
-            class="cop-picker-trigger"
-            id="cop-picker-trigger"
-            bind:this={pickerTriggerEl}
-            aria-haspopup="listbox"
-            aria-expanded={pickerOpen}
-            aria-labelledby="cop-picker-label cop-picker-trigger"
-            onclick={togglePicker}
-            onkeydown={onTriggerKeydown}
-          >
-            <span class="msr">{app.copilotProvider === 'ollama' ? 'memory' : 'cloud'}</span>
-            <span class="cop-picker-name">
-              {#if app.copilotProvider === 'openai'}
-                <strong class="sans">{OPENAI_MODEL}</strong>
-                <small class:warn={openAiState.kind === 'warn'}>OpenAI · {openAiState.label}</small>
-              {:else if app.copilotProvider === 'minimax'}
-                <strong class="sans">{app.minimaxModel || MINIMAX_DEFAULT_MODEL}</strong>
-                <small class:warn={minimaxState.kind === 'warn'}>MiniMax · {minimaxState.label}</small>
-              {:else if !app.activeModel}
-                <strong class="placeholder">Choisir un modèle</strong>
-                <small>Sur cet appareil · privé</small>
-              {:else}
-                <strong>{app.activeModel}</strong>
-                <small class:warn={localModelMissing}>
-                  {localModelMissing ? 'introuvable sur le disque — choisissez un modèle' : 'Sur cet appareil · privé'}
-                </small>
-              {/if}
-            </span>
-            <span class="msr cop-picker-chev" class:open={pickerOpen}>expand_more</span>
-          </button>
-          {#if pickerOpen}
-            <div
-              class="cop-picker-pop"
-              role="menu"
-              aria-labelledby="cop-picker-label"
-              tabindex="-1"
-              bind:this={pickerListEl}
-              onkeydown={onPickerKeydown}
+          <div class="cop-label" id="cop-picker-label">Modèle actif</div>
+          <div class="cop-picker-shell" class:open={pickerOpen}>
+            <button
+              class="cop-picker-trigger"
+              id="cop-picker-trigger"
+              bind:this={pickerTriggerEl}
+              aria-haspopup="listbox"
+              aria-expanded={pickerOpen}
+              aria-labelledby="cop-picker-label cop-picker-trigger"
+              onclick={togglePicker}
+              onkeydown={onTriggerKeydown}
             >
+              <span class="msr">{app.copilotProvider === 'ollama' ? 'memory' : 'cloud'}</span>
+              <span class="cop-picker-name">
+                {#if app.copilotProvider === 'openai'}
+                  <strong class="sans">{OPENAI_MODEL}</strong>
+                  <small class:warn={openAiState.kind === 'warn'}>OpenAI · {openAiState.label}</small>
+                {:else if app.copilotProvider === 'minimax'}
+                  <strong class="sans">{app.minimaxModel || MINIMAX_DEFAULT_MODEL}</strong>
+                  <small class:warn={minimaxState.kind === 'warn'}>MiniMax · {minimaxState.label}</small>
+                {:else if !app.activeModel}
+                  <strong class="placeholder">Choisir un modèle</strong>
+                  <small>Sur cet appareil · privé</small>
+                {:else}
+                  <strong>{app.activeModel}</strong>
+                  <small class:warn={localModelMissing}>
+                    {localModelMissing ? 'introuvable sur le disque — choisissez un modèle' : 'Sur cet appareil · privé'}
+                  </small>
+                {/if}
+              </span>
+              <span class="msr cop-picker-chev" class:open={pickerOpen}>expand_more</span>
+            </button>
+            {#if pickerOpen}
+              <div
+                class="cop-picker-pop"
+                role="menu"
+                aria-labelledby="cop-picker-label"
+                tabindex="-1"
+                bind:this={pickerListEl}
+                onkeydown={onPickerKeydown}
+              >
               <button
                 class="cop-picker-sec"
                 class:open={pickerSection === 'ollama'}
@@ -864,8 +880,9 @@
                   {/each}
                 </div>
               </div>
-            </div>
-          {/if}
+              </div>
+            {/if}
+          </div>
         </div>
 
         {#if app.copilotProvider === 'openai'}
@@ -1065,20 +1082,60 @@
               </button>
             </div>
           </div>
-          <!-- Jordan (onboarding) ne doit pas être captif de la seule reco : la section Ajouter
-               est disponible dès le premier écran (chips sans le conseillé, déjà en carte). -->
-          <div class="cop-sections">
-            {@render addSection(ALT_SUGGESTIONS)}
-          </div>
+          <!-- L'alternative reste disponible sans concurrencer le modèle conseillé :
+               progressive disclosure, pas de voie unique cachée. -->
+          <details class="cop-advanced cop-onboard-more">
+            <summary onkeydown={onAdvancedSummaryKey}>
+              <span class="cop-advanced-icon"><span class="msr">tune</span></span>
+              <span class="cop-advanced-copy">
+                <strong>Voir d’autres modèles</strong>
+                <small>Autres tailles ou modèle personnalisé</small>
+              </span>
+              <span class="msr cop-advanced-chev">expand_more</span>
+            </summary>
+            <div class="cop-sections cop-advanced-body">
+              {@render addSection(ALT_SUGGESTIONS)}
+            </div>
+          </details>
         {:else}
-          <div class="cop-sections">
+          <!-- Une progression est un état système, jamais un réglage avancé : elle reste
+               visible même lorsque la gestion locale est repliée. -->
+          {#if copilot.pulling}
+            <section class="cop-download-now">
+              <div class="cop-label">Téléchargement</div>
+              <div class="cop-dl">
+                <div class="cop-dl-head">
+                  <span class="msr orbit" style="font-size:18px">progress_activity</span>
+                  <span class="cop-mono grow" title={copilot.pulling.name}>{copilot.pulling.name}</span>
+                  <span class="cop-size">
+                    {copilot.pulling.total > 0 ? `${formatBytes(copilot.pulling.done)} / ${formatBytes(copilot.pulling.total)}` : '…'}
+                  </span>
+                  <button class="cop-del" title="Annuler" aria-label="Annuler le téléchargement" onclick={cancelPull}>
+                    <span class="msr" style="font-size:16px">close</span>
+                  </button>
+                </div>
+                <div class="cop-track"><div class="doku-skel" style="width:{copilot.pulling.pct}%;height:100%;border-radius:3px"></div></div>
+              </div>
+            </section>
+          {/if}
+
+          <details class="cop-advanced">
+            <summary onkeydown={onAdvancedSummaryKey}>
+              <span class="cop-advanced-icon"><span class="msr">tune</span></span>
+              <span class="cop-advanced-copy">
+                <strong>Gérer les modèles locaux</strong>
+                <small>{copilot.models.length} installé{copilot.models.length > 1 ? 's' : ''} · {formatBytes(libraryTotal)} · index du dossier</small>
+              </span>
+              <span class="msr cop-advanced-chev">expand_more</span>
+            </summary>
+            <div class="cop-sections cop-advanced-body">
             <!-- Le modèle actif vit désormais dans le dropdown « MODÈLE ACTIF » en tête de
                  vue (l'ancienne carte héro faisait doublon) ; la bibliothèque garde la
                  gestion disque (activer/supprimer/tailles). -->
             <!-- Bibliothèque -->
             <section>
               <div class="cop-label row">
-                <span>BIBLIOTHÈQUE</span>
+                <span>Bibliothèque</span>
                 <span class="cop-count">{copilot.models.length} installé{copilot.models.length > 1 ? 's' : ''} · {formatBytes(libraryTotal)}</span>
               </div>
               <div class="cop-lib">
@@ -1129,7 +1186,7 @@
                  via le sidecar — prépare le mode « dossier » du copilote (15.3). -->
             <section>
               <div class="cop-label row">
-                <span>INDEX DU DOSSIER</span>
+                <span>Index du dossier</span>
                 {#if ragReadyHere && ragState.files > 0}
                   <span class="cop-count">{ragState.files} note{ragState.files > 1 ? 's' : ''} · {ragState.chunks} passage{ragState.chunks > 1 ? 's' : ''}</span>
                 {/if}
@@ -1189,31 +1246,10 @@
               </div>
             </section>
 
-            <!-- Téléchargement en cours -->
-            {#if copilot.pulling}
-              <section>
-                <div class="cop-label">TÉLÉCHARGEMENT</div>
-                <div class="cop-dl">
-                  <div class="cop-dl-head">
-                    <span class="msr orbit" style="font-size:18px">progress_activity</span>
-                    <span class="cop-mono grow" title={copilot.pulling.name}>{copilot.pulling.name}</span>
-                    <!-- Octets + % : sur un pull multi-Go, « 395 Mo / 935 Mo » distingue une
-                         progression réelle d'un blocage. -->
-                    <span class="cop-size">
-                      {copilot.pulling.total > 0 ? `${formatBytes(copilot.pulling.done)} / ${formatBytes(copilot.pulling.total)}` : '…'}
-                    </span>
-                    <button class="cop-del" title="Annuler" aria-label="Annuler le téléchargement" onclick={cancelPull}>
-                      <span class="msr" style="font-size:16px">close</span>
-                    </button>
-                  </div>
-                  <div class="cop-track"><div class="doku-skel" style="width:{copilot.pulling.pct}%;height:100%;border-radius:3px"></div></div>
-                </div>
-              </section>
-            {/if}
-
             <!-- Ajouter -->
             {@render addSection(installableSuggestions)}
-          </div>
+            </div>
+          </details>
         {/if}
         {/if}
       {:else if copilot.messages.length === 0}
@@ -1413,15 +1449,19 @@
           {#key composerFace}
             <section class="cop-composer-front">
               {#if composerFace === 'question'}
-                <span
+                <button
                   id="cop-question-tab"
                   class="cop-composer-active-label"
+                  type="button"
                   role="tab"
                   aria-selected="true"
                   aria-controls="cop-question-panel"
+                  tabindex="0"
+                  onclick={() => promptEl?.focus()}
+                  onkeydown={(e) => onComposerTabKey(e, 'question')}
                 >
                   Question
-                </span>
+                </button>
               {:else}
                 <button
                   id="cop-context-tab"
@@ -1450,7 +1490,12 @@
                   aria-hidden={composerFace !== 'question'}
                   inert={composerFace !== 'question'}
                 >
-                  <button class="cop-input-attach" disabled aria-label="Joindre"><span class="msr" style="font-size:20px">add</span></button>
+                  <button
+                    class="cop-input-attach"
+                    disabled
+                    title="Pièces jointes bientôt disponibles"
+                    aria-label="Joindre — bientôt disponible"
+                  ><span class="msr" style="font-size:20px">add</span></button>
                   <textarea
                     class="cop-input-ta"
                     bind:this={promptEl}
@@ -1687,15 +1732,36 @@
   .cop-msg { margin: 14px 4px; font-size: 12.5px; color: var(--ink-4); }
   .cop-msg.err { color: var(--err-text); }
 
-  /* Sélecteur unifié « Modèle actif » : trigger + listbox flottant groupé par fournisseur. */
-  .cop-picker { position: relative; margin: 14px 2px 16px; }
+  /* Sélecteur unifié « Modèle actif » : le menu flotte au-dessus de la page, mais sa
+     silhouette reste soudée au trigger — même largeur, même matière, aucun interstice. */
+  .cop-picker {
+    margin: 14px 2px 16px;
+  }
+  .cop-picker-shell {
+    position: relative;
+    border-radius: 14px;
+    transition: background 140ms ease, filter 140ms ease;
+  }
+  .cop-picker-shell.open {
+    z-index: 30;
+    border-radius: 14px 14px 0 0;
+    background: var(--surface-2);
+    filter: drop-shadow(0 12px 22px rgba(var(--shadow-rgb), 0.14));
+  }
   .cop-picker-trigger {
     width: 100%; min-height: 48px; display: flex; align-items: center; gap: 10px; padding: 8px 12px;
     border: 0; border-radius: 13px; background: var(--surface-2); color: var(--ink);
     font-family: var(--font-sans); text-align: left; cursor: pointer;
+    transition: background 140ms ease;
   }
   .cop-picker-trigger:hover { background: var(--surface-hover); }
+  .cop-picker-trigger:active { background: var(--accent-soft); }
   .cop-picker-trigger:focus-visible { outline: 2px solid var(--line-3); outline-offset: 1px; }
+  .cop-picker-shell.open .cop-picker-trigger {
+    border-radius: 14px 14px 0 0;
+    background: transparent;
+  }
+  .cop-picker-shell.open .cop-picker-trigger:hover { background: var(--surface-hover); }
   .cop-picker-trigger > .msr { flex: 0 0 auto; font-size: 18px; color: var(--ink-3); }
   .cop-picker-name { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
   .cop-picker-name strong {
@@ -1710,16 +1776,18 @@
   .cop-picker-name small.warn { color: var(--warn-text); }
   .cop-picker-chev { transition: transform 140ms ease; }
   .cop-picker-chev.open { transform: rotate(180deg); }
-  /* Pop : même matériau que le menu flottant de sélection (DocumentView), sections
-     repliables façon tiroirs « Titres & blocs ». */
+  /* Déploiement attaché en overlay : top: 100% conserve une jonction à 0 px tandis que
+     la position absolue empêche le menu d'allonger la page ou de pousser son contenu. */
   .cop-picker-pop {
-    position: absolute; top: calc(100% + 5px); left: 0; right: 0; z-index: 30;
-    max-height: 360px; overflow-y: auto; padding: 6px;
-    border-radius: 14px; background: var(--cream-tint);
-    box-shadow:
-      0 0 0 1px var(--elevation-ring-soft),
-      0 12px 30px rgba(var(--shadow-rgb), 0.16);
-    animation: cop-picker-in 160ms cubic-bezier(0.22, 1, 0.36, 1);
+    position: absolute; top: 100%; left: 0; right: 0;
+    max-height: 360px; overflow-x: hidden; overflow-y: auto; padding: 6px;
+    border-radius: 0 0 14px 14px; background: var(--surface-2);
+    box-shadow: inset 0 1px 0 var(--line-1);
+    animation: cop-picker-expand 180ms cubic-bezier(0.22, 1, 0.36, 1);
+  }
+  @keyframes cop-picker-expand {
+    from { opacity: 0.72; clip-path: inset(0 0 100% 0); }
+    to { opacity: 1; clip-path: inset(0); }
   }
   @keyframes cop-picker-in {
     from { opacity: 0; transform: translateY(4px) scale(0.98); }
@@ -1762,7 +1830,7 @@
   .cop-cloud-model { font-size: 12px; font-weight: 500; color: var(--ink); }
   @media (prefers-reduced-motion: reduce) {
     .cop-picker-pop { animation: none; }
-    .cop-picker-fold, .cop-picker-sec-chev, .cop-picker-chev { transition: none; }
+    .cop-picker-shell, .cop-picker-trigger, .cop-picker-fold, .cop-picker-sec-chev, .cop-picker-chev { transition: none; }
   }
 
   .cop-openai-view { padding: 0 2px 24px; display: flex; flex-direction: column; gap: 16px; }
@@ -1815,8 +1883,10 @@
     width: 100%; min-height: 34px; display: inline-flex; align-items: center; justify-content: center; gap: 7px;
     border: 0; border-radius: 9px; background: var(--surface-2); color: var(--ink-3);
     font-family: var(--font-sans); font-size: 11.5px; cursor: pointer;
+    transition: background 140ms ease, color 140ms ease, transform 100ms ease;
   }
   .cop-btn-quiet:hover { background: var(--accent-soft); color: var(--ink); }
+  .cop-btn-quiet:active { transform: scale(0.98); }
   .cop-btn-quiet:focus-visible, .cop-auth-code:focus-visible { outline: 2px solid var(--line-3); outline-offset: 2px; }
   .cop-btn-quiet .msr { font-size: 15px; }
   .cop-auth-wait { display: flex; flex-direction: column; align-items: center; text-align: center; }
@@ -1859,8 +1929,11 @@
     width: 100%; height: 34px; display: inline-flex; align-items: center; justify-content: center; gap: 7px;
     background: var(--ink); color: var(--cream-content); border: 0; border-radius: 9px;
     font-family: var(--font-sans); font-size: 12.5px; font-weight: 500; cursor: pointer;
+    transition: background 140ms ease, transform 100ms ease;
   }
   .cop-btn-fill:hover { background: var(--ink-2); }
+  .cop-btn-fill:not(:disabled):active { transform: scale(0.98); }
+  .cop-btn-fill:focus-visible { outline: 2px solid var(--line-3); outline-offset: 2px; }
   .cop-btn-fill:disabled { opacity: 0.55; cursor: default; }
 
   /* MiniMax : champ clé */
@@ -1870,6 +1943,32 @@
     background: var(--surface-2); color: var(--ink); font-family: var(--font-mono); font-size: 12px;
   }
   .cop-mm-connect input:focus-visible { outline: 2px solid var(--line-3); outline-offset: -1px; }
+
+  /* Gestion locale : une seule entrée au repos, toutes les fonctions conservées derrière
+     un <details> natif. Le sélecteur « Modèle actif » reste le chemin quotidien. */
+  .cop-advanced { margin: 10px 2px 24px; }
+  .cop-onboard-more { width: 100%; margin-top: -4px; }
+  .cop-advanced > summary {
+    min-height: 48px; display: flex; align-items: center; gap: 10px; padding: 6px 10px;
+    list-style: none; border-radius: 12px; color: var(--ink-2); cursor: pointer;
+    transition: background 140ms ease, color 140ms ease;
+  }
+  .cop-advanced > summary::-webkit-details-marker { display: none; }
+  .cop-advanced > summary:hover { background: var(--surface-hover); color: var(--ink); }
+  .cop-advanced > summary:active { background: var(--accent-soft); }
+  .cop-advanced > summary:focus-visible { outline: 2px solid var(--line-3); outline-offset: 1px; }
+  .cop-advanced-icon {
+    width: 32px; height: 32px; flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center;
+    border-radius: 10px; background: var(--surface-2); color: var(--ink-3);
+  }
+  .cop-advanced-icon .msr { font-size: 17px; }
+  .cop-advanced-copy { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 2px; text-align: left; }
+  .cop-advanced-copy strong { font-size: 12.5px; font-weight: 600; color: var(--ink-2); }
+  .cop-advanced-copy small { overflow: hidden; font-size: 10.5px; color: var(--ink-4); white-space: nowrap; text-overflow: ellipsis; }
+  .cop-advanced-chev { flex: 0 0 auto; font-size: 17px; color: var(--ink-4); transition: transform 180ms cubic-bezier(0.22, 1, 0.36, 1); }
+  .cop-advanced[open] .cop-advanced-chev { transform: rotate(180deg); }
+  .cop-advanced-body { padding: 14px 0 0; }
+  .cop-download-now { margin: 12px 2px; }
 
   /* Sections modèles */
   .cop-sections { padding: 8px 2px; display: flex; flex-direction: column; gap: 20px; }
@@ -1890,10 +1989,13 @@
     flex: 1; display: flex; align-items: center; gap: 10px; min-width: 0;
     padding: 9px 4px 9px 11px; border: 0; background: none; color: var(--ink); text-align: left; cursor: pointer;
   }
+  .cop-row-pick:focus-visible { outline: 2px solid var(--line-3); outline-offset: -2px; border-radius: 10px; }
   .cop-row-pick:disabled { cursor: default; }
   .cop-size { font-size: 11px; color: var(--ink-4); white-space: nowrap; flex-shrink: 0; }
-  .cop-del { display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 38px; border: 0; background: none; color: var(--ink-4); cursor: pointer; }
+  .cop-del { display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 38px; border: 0; border-radius: 8px; background: none; color: var(--ink-4); cursor: pointer; transition: background 120ms ease, color 120ms ease, transform 100ms ease; }
   .cop-del:hover { color: var(--err); }
+  .cop-del:active { background: var(--surface-hover); transform: scale(0.94); }
+  .cop-del:focus-visible { outline: 2px solid var(--line-3); outline-offset: -2px; color: var(--err-text); }
 
   /* Téléchargement */
   .cop-dl { padding: 11px 12px; border-radius: 12px; background: var(--surface-2); }
@@ -1915,9 +2017,12 @@
   .cop-btn-sm {
     height: 28px; padding: 0 13px; background: var(--ink); color: var(--cream-content); border: 0; border-radius: 8px;
     font-family: var(--font-sans); font-size: 12px; font-weight: 500; cursor: pointer;
+    transition: background 140ms ease, transform 100ms ease;
   }
   .cop-btn-sm:disabled { opacity: 0.45; cursor: default; }
   .cop-btn-sm:not(:disabled):hover { background: var(--ink-2); }
+  .cop-btn-sm:not(:disabled):active { transform: scale(0.97); }
+  .cop-btn-sm:focus-visible { outline: 2px solid var(--line-3); outline-offset: 2px; }
   .cop-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 9px; }
   .cop-chip {
     display: inline-flex; align-items: center; gap: 4px; height: 26px; padding: 0 10px;
@@ -1967,6 +2072,8 @@
   }
   .cop-action + .cop-action { border-top: 1px solid var(--line-1); }
   .cop-action:hover { background: var(--surface-hover); color: var(--ink); }
+  .cop-action:active { background: var(--accent-soft); }
+  .cop-action:focus-visible { outline: 2px solid var(--line-3); outline-offset: -3px; }
   .cop-action-icon {
     width: 32px; height: 32px; flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center;
     border-radius: 10px; background: var(--surface-2); color: var(--ink-3);
@@ -1995,8 +2102,11 @@
     border-radius: 8px; background: var(--surface-2);
   }
   .cop-asst-name { font-size: 11.5px; color: var(--ink-3); font-weight: 550; }
-  .cop-copy { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border: 0; border-radius: 8px; background: transparent; color: var(--ink-4); cursor: pointer; opacity: 0.72; }
+  .cop-copy { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border: 0; border-radius: 8px; background: transparent; color: var(--ink-4); cursor: pointer; opacity: 0.72; transition: background 120ms ease, color 120ms ease, opacity 120ms ease, transform 100ms ease; }
   .cop-copy:hover { background: var(--surface-hover); color: var(--ink); }
+  .cop-copy:hover, .cop-copy:focus-visible { opacity: 1; }
+  .cop-copy:active { transform: scale(0.92); }
+  .cop-copy:focus-visible { outline: 2px solid var(--line-3); outline-offset: 1px; }
   .cop-status { display: flex; align-items: center; gap: 9px; font-size: 12.5px; color: var(--ink-4); padding-top: 2px; min-height: 20px; }
   /* Texte d'attente : balayage de lumière en boucle. Le shimmer est un ENRICHISSEMENT posé
      sous `no-preference` — jamais un override à défaire : le texte transparent (clip) ne
@@ -2149,8 +2259,10 @@
   .cop-err-title { font-size: 13px; font-weight: 600; color: var(--ink); margin-bottom: 3px; }
   .cop-err-msg { font-size: 12px; line-height: 1.5; color: var(--ink-4); margin: 0 0 11px; }
   .cop-err-acts { display: flex; gap: 7px; }
-  .cop-err-btn { height: 30px; padding: 0 12px; background: var(--cream-content); color: var(--ink-3); border: 0; border-radius: 8px; font-family: var(--font-sans); font-size: 12px; cursor: pointer; }
+  .cop-err-btn { height: 30px; padding: 0 12px; background: var(--cream-content); color: var(--ink-3); border: 0; border-radius: 8px; font-family: var(--font-sans); font-size: 12px; cursor: pointer; transition: background 120ms ease, color 120ms ease, filter 120ms ease, transform 100ms ease; }
   .cop-err-btn:hover { background: var(--surface-hover); color: var(--ink); }
+  .cop-err-btn:active { transform: scale(0.97); }
+  .cop-err-btn:focus-visible { outline: 2px solid var(--line-3); outline-offset: 2px; }
   .cop-err-btn.primary { background: var(--ink); color: var(--cream-content); border-color: var(--ink); }
   .cop-err-btn.primary:hover { background: var(--ink-2); }
   .cop-err-btn.danger { background: var(--err); color: #fff; border-color: var(--err); }
@@ -2164,8 +2276,10 @@
   /* Bannière d'erreur (vue modèles) avec dismiss */
   .cop-msg.row { display: flex; align-items: flex-start; gap: 8px; }
   .grow-wrap { flex: 1; min-width: 0; overflow-wrap: anywhere; }
-  .cop-dismiss { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; flex: 0 0 auto; border: 0; border-radius: 7px; background: transparent; color: var(--ink-4); cursor: pointer; }
+  .cop-dismiss { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; flex: 0 0 auto; border: 0; border-radius: 7px; background: transparent; color: var(--ink-4); cursor: pointer; transition: background 120ms ease, color 120ms ease, transform 100ms ease; }
   .cop-dismiss:hover { background: var(--surface-hover); color: var(--ink); }
+  .cop-dismiss:active { transform: scale(0.92); }
+  .cop-dismiss:focus-visible { outline: 2px solid var(--line-3); outline-offset: -2px; }
 
   /* Composeur à deux plans : Question et Contexte permutent leur profondeur. */
   .cop-input-wrap {
@@ -2247,9 +2361,16 @@
     position: absolute;
     width: 1px;
     height: 1px;
+    padding: 0;
+    border: 0;
+    background: transparent;
     overflow: hidden;
     clip-path: inset(50%);
     white-space: nowrap;
+  }
+  .cop-composer-front:has(.cop-composer-active-label:focus-visible) {
+    outline: 2px solid var(--line-3);
+    outline-offset: -3px;
   }
   .cop-composer-panels { display: grid; min-width: 0; }
   .cop-composer-panel {
@@ -2283,8 +2404,9 @@
     field-sizing: content; /* auto-grow : les lignes Shift+Entrée restent visibles (WebView2 OK) */
   }
   .cop-input-ta::placeholder { color: var(--ink-4); }
-  .cop-input-send { grid-column: 3; grid-row: 2; width: 36px; height: 36px; display: inline-flex; align-items: center; justify-content: center; background: var(--ink); border: 0; border-radius: 50%; color: var(--cream-content); cursor: pointer; }
+  .cop-input-send { grid-column: 3; grid-row: 2; width: 36px; height: 36px; display: inline-flex; align-items: center; justify-content: center; background: var(--ink); border: 0; border-radius: 50%; color: var(--cream-content); cursor: pointer; transition: background 140ms ease, opacity 140ms ease, transform 100ms ease; }
   .cop-input-send:hover { background: var(--ink-2); }
+  .cop-input-send:not(:disabled):active { transform: scale(0.94); }
   .cop-input-send:focus-visible { outline: 2px solid var(--line-3); outline-offset: 2px; }
   .cop-input-send:disabled { opacity: 0.4; cursor: default; }
   .cop-context-drawer {
@@ -2299,20 +2421,23 @@
   .cop-scope {
     display: flex; align-items: center; gap: 8px; padding: 5px 8px; min-width: 0;
     border: 0; border-radius: 11px; background: none; color: var(--ink);
-    text-align: left; cursor: pointer;
+    text-align: left; cursor: pointer; transition: background 120ms ease;
   }
   .cop-scope:hover { background: var(--surface-hover); }
+  .cop-scope:active { background: var(--accent-soft); }
+  .cop-scope:focus-visible { outline: 2px solid var(--line-3); outline-offset: -2px; }
   .cop-scope.sel { background: var(--accent-soft); }
 
   /* Style des réponses : puce compacte dans la rangée de saisie + menu vers le haut. */
   .cop-verb-root { position: relative; flex: 0 0 auto; align-self: flex-end; margin-bottom: 3px; }
   .cop-verb-chip {
     display: inline-flex; align-items: center; gap: 3px; height: 26px; padding: 0 4px 0 9px;
-    border: 0; border-radius: 8px; background: var(--surface-2); color: var(--ink-3);
+    border: 0; border-radius: 999px; background: var(--surface-2); color: var(--ink-3);
     font-family: var(--font-sans); font-size: 11px; font-weight: 500; cursor: pointer;
-    transition: background 120ms ease, color 120ms ease;
+    transition: background 120ms ease, color 120ms ease, transform 100ms ease;
   }
   .cop-verb-chip:hover, .cop-verb-chip.open { background: var(--accent-soft); color: var(--ink); }
+  .cop-verb-chip:active { transform: scale(0.97); }
   .cop-verb-chip:focus-visible { outline: 2px solid var(--line-3); outline-offset: 1px; }
   .cop-verb-chip .msr { font-size: 15px; color: var(--ink-4); }
   .cop-verb-menu {
@@ -2384,8 +2509,11 @@
     display: inline-flex; align-items: center; gap: 5px; height: 24px; padding: 0 9px 0 4px;
     border: 0; border-radius: 999px; background: var(--surface-2);
     color: var(--ink-3); font-family: var(--font-sans); font-size: 11px; cursor: pointer;
+    transition: background 120ms ease, color 120ms ease, transform 100ms ease;
   }
   .cop-source-chip:hover { background: var(--accent-soft); color: var(--ink); }
+  .cop-source-chip:active { transform: scale(0.96); }
+  .cop-source-chip:focus-visible { outline: 2px solid var(--line-3); outline-offset: 1px; }
   /* Sans nom de note (extraits du document courant) : la puce est juste le numéro. */
   .cop-source-chip.bare { padding: 0 4px; }
   /* Tag arrondi-carré plutôt que cercle : le padding horizontal laisse respirer les
@@ -2414,6 +2542,7 @@
   }
   .cop-md :global(.cop-cite:hover) { background: var(--ink); color: var(--cream-content); }
   .cop-md :global(.cop-cite:active) { transform: scale(0.9); }
+  .cop-md :global(.cop-cite:focus-visible) { outline: 2px solid var(--line-3); outline-offset: 2px; }
 
   /* Aperçu flottant du passage cité — même matériau que les menus flottants.
      pointer-events: none : la carte ne vole jamais la souris (elle disparaît en
@@ -2476,6 +2605,17 @@
     .cop-context-state { max-width: 86px; overflow: hidden; text-overflow: ellipsis; }
   }
 
+  @media (pointer: coarse) {
+    .cop-copy { width: 40px; height: 40px; }
+    .cop-question-drawer {
+      grid-template-columns: 40px minmax(0, 1fr) 40px;
+      grid-template-rows: minmax(34px, auto) 40px;
+    }
+    .cop-input-attach,
+    .cop-input-send { width: 40px; height: 40px; }
+    .cop-verb-chip { min-height: 40px; padding-inline: 11px 7px; }
+  }
+
   @keyframes cop-composer-drawer-in {
     from { opacity: 0.82; transform: translateY(8px) scale(0.992); }
     to { opacity: 1; transform: translateY(0) scale(1); }
@@ -2485,6 +2625,18 @@
     .cop-composer-front { animation: none; }
     .cop-panel,
     .cop-composer-panel,
-    .cop-composer-switch { transition-duration: 0.01ms; }
+    .cop-composer-switch,
+    .cop-advanced-chev,
+    .cop-picker-trigger,
+    .cop-btn-quiet,
+    .cop-btn-fill,
+    .cop-btn-sm,
+    .cop-del,
+    .cop-copy,
+    .cop-err-btn,
+    .cop-dismiss,
+    .cop-input-send,
+    .cop-verb-chip,
+    .cop-source-chip { transition-duration: 0.01ms; }
   }
 </style>

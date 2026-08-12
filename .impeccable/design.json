@@ -1,0 +1,229 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-08-11T12:52:05.0674656+02:00",
+  "title": "Design System: Doku",
+  "extensions": {
+    "colorMeta": {
+      "primary-ink": {
+        "role": "primary",
+        "displayName": "Encre brune",
+        "canonical": "#1C1A16",
+        "tonalRamp": ["#15130F", "#2B2821", "#49443A", "#6A6356", "#918879", "#B8B0A4", "#DDD8D0", "#F7F5F1"]
+      },
+      "neutral-content": {
+        "role": "neutral",
+        "displayName": "Feuille claire",
+        "canonical": "#FDFBF5",
+        "tonalRamp": ["#292824", "#4A4841", "#6E6B61", "#969186", "#BBB5AA", "#D8D2C8", "#EEE9E1", "#FDFBF5"]
+      },
+      "neutral-base": {
+        "role": "neutral",
+        "displayName": "Papier de base",
+        "canonical": "#F4F1E9",
+        "tonalRamp": ["#272621", "#47453E", "#69665D", "#8E8A80", "#B1ACA2", "#D0CBC1", "#E5E1D8", "#F4F1E9"]
+      },
+      "neutral-soft": {
+        "role": "neutral",
+        "displayName": "Voile doux",
+        "canonical": "#F9F5EC",
+        "tonalRamp": ["#282722", "#49463F", "#6B675E", "#918B80", "#B5AEA3", "#D4CEC4", "#EAE5DC", "#F9F5EC"]
+      },
+      "neutral-tint": {
+        "role": "neutral",
+        "displayName": "Papier teinté",
+        "canonical": "#EFEAE0",
+        "tonalRamp": ["#26251F", "#45423B", "#656158", "#89837A", "#ABA59B", "#C9C3BA", "#DED9D0", "#EFEAE0"]
+      },
+      "dark-chrome": {
+        "role": "neutral",
+        "displayName": "Graphite nocturne",
+        "canonical": "#16171A",
+        "tonalRamp": ["#111216", "#25262B", "#3B3D44", "#595B64", "#7C7E88", "#A5A7AF", "#D1D2D7", "#F0F1F3"]
+      },
+      "dark-base": {
+        "role": "neutral",
+        "displayName": "Graphite de base",
+        "canonical": "#25252A",
+        "tonalRamp": ["#141418", "#29292F", "#414148", "#606068", "#82828A", "#AAAAAF", "#D3D3D7", "#F1F1F3"]
+      },
+      "dark-content": {
+        "role": "neutral",
+        "displayName": "Graphite de contenu",
+        "canonical": "#2E2E34",
+        "tonalRamp": ["#16161A", "#2D2D33", "#46464D", "#65656D", "#87878F", "#ADADB3", "#D5D5D9", "#F2F2F4"]
+      },
+      "dark-ink": {
+        "role": "neutral",
+        "displayName": "Encre nocturne",
+        "canonical": "#EBEDF1",
+        "tonalRamp": ["#202226", "#3A3C42", "#575A61", "#777A83", "#9A9DA5", "#BDC0C7", "#DADCE1", "#F2F3F5"]
+      },
+      "chrome-reflection": {
+        "role": "secondary",
+        "displayName": "Reflet lavande",
+        "canonical": "rgb(58 52 74 / 0.25)",
+        "tonalRamp": ["#15121C40", "#27223340", "#3A344A40", "#554D6940", "#746A8B40", "#978DAD40", "#BEB7CC40", "#E7E2EC40"]
+      },
+      "state-success": {
+        "role": "tertiary",
+        "displayName": "Vert de confiance",
+        "canonical": "#6BA47B",
+        "tonalRamp": ["#17331F", "#285137", "#3B704C", "#559064", "#77AD83", "#9BC9A5", "#C2E3C8", "#E8F7EB"]
+      },
+      "state-warning": {
+        "role": "tertiary",
+        "displayName": "Ambre d’attention",
+        "canonical": "#D4A23E",
+        "tonalRamp": ["#38280B", "#5A4215", "#7E5D20", "#A47B2D", "#C79A3A", "#DDBA70", "#EDD9AB", "#FAF1DF"]
+      },
+      "state-error": {
+        "role": "tertiary",
+        "displayName": "Rouge d’erreur",
+        "canonical": "#C45F4F",
+        "tonalRamp": ["#351411", "#57241D", "#7B362C", "#A04A3D", "#C45F4F", "#DB8B7E", "#EBBAB2", "#F9E7E3"]
+      },
+      "danger-action": {
+        "role": "tertiary",
+        "displayName": "Rouge d’action",
+        "canonical": "#B51D2A",
+        "tonalRamp": ["#34070B", "#570D14", "#7B131D", "#A01926", "#C52B37", "#DF6670", "#EFA4AA", "#F9DEE1"]
+      }
+    },
+    "typographyMeta": {
+      "display": { "displayName": "Titre de document", "purpose": "H1 éditorial du document uniquement." },
+      "headline": { "displayName": "Intertitre de document", "purpose": "H2 et structure de lecture longue." },
+      "title": { "displayName": "Titre d’interface", "purpose": "Panneaux, dialogues et états vides." },
+      "body": { "displayName": "Corps de lecture", "purpose": "Markdown rendu dans une colonne de 65–75 caractères." },
+      "ui-body": { "displayName": "Corps d’interface", "purpose": "Conversation, saisie et explications courtes." },
+      "label": { "displayName": "Libellé", "purpose": "Boutons, onglets, menus et contrôles." },
+      "mono": { "displayName": "Identifiant technique", "purpose": "Source, raccourcis, code et tags locaux." }
+    },
+    "shadows": [
+      { "name": "elevation-ring", "value": "0 0 0 1px var(--elevation-ring)", "purpose": "Filet optique des surfaces élevées, sans bordure dure." },
+      { "name": "control-active", "value": "0 1px 4px rgba(var(--shadow-rgb), 0.12)", "purpose": "Segment sélectionné et petit contrôle actif." },
+      { "name": "floating-surface", "value": "0 0 0 1px var(--elevation-ring), 0 12px 30px rgba(var(--shadow-rgb), 0.18)", "purpose": "Menus, sélecteurs et notifications." },
+      { "name": "composer", "value": "0 8px 26px rgba(var(--shadow-rgb), 0.07)", "purpose": "Face avant du composeur imbriqué." },
+      { "name": "modal", "value": "0 0 0 1px var(--elevation-ring), 0 28px 76px rgba(var(--shadow-rgb), 0.34), 0 6px 20px rgba(var(--shadow-rgb), 0.16)", "purpose": "Vraies fenêtres modales centrées." }
+    ],
+    "motion": [
+      { "name": "press", "value": "100ms ease", "purpose": "Réduction tactile des boutons à l’activation." },
+      { "name": "state", "value": "140ms ease", "purpose": "Hover, focus, couleur et opacité des contrôles." },
+      { "name": "floating-enter", "value": "150–190ms cubic-bezier(0.22, 1, 0.36, 1)", "purpose": "Apparition courte des menus, notifications et dialogues." },
+      { "name": "panel", "value": "240ms cubic-bezier(0.22, 1, 0.36, 1)", "purpose": "Changement de profondeur ou ouverture d’un panneau." },
+      { "name": "reduced", "value": "0.01ms ou none", "purpose": "Alternative obligatoire sous prefers-reduced-motion." }
+    ],
+    "breakpoints": [
+      { "name": "compact", "value": "520px" },
+      { "name": "tabs-collapse", "value": "600px" },
+      { "name": "dialog-stack", "value": "680px" }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "Action principale compacte, pleine et calme.",
+      "html": "<button class=\"ds-btn-primary\">Enregistrer</button>",
+      "css": ".ds-btn-primary { min-height: 34px; padding: 0 14px; border: 0; border-radius: 999px; background: var(--ink, #1C1A16); color: var(--cream-content, #FDFBF5); font: 600 12.5px var(--font-sans, Inter, sans-serif); cursor: pointer; transition: opacity 140ms ease, transform 100ms ease; } .ds-btn-primary:hover { opacity: .88; } .ds-btn-primary:active { transform: scale(.97); } .ds-btn-primary:focus-visible { outline: 2px solid var(--line-3, rgba(28,26,22,.28)); outline-offset: 2px; }"
+    },
+    {
+      "name": "Secondary Button",
+      "kind": "button",
+      "refersTo": "button-secondary",
+      "description": "Action secondaire en pilule tonale, sans concurrence avec le contenu.",
+      "html": "<button class=\"ds-btn-secondary\">Annuler</button>",
+      "css": ".ds-btn-secondary { min-height: 32px; padding: 0 13px; border: 0; border-radius: 999px; background: var(--surface, #FBF7ED); color: var(--ink-2, rgba(28,26,22,.9)); box-shadow: inset 0 0 0 1px var(--line-2, rgba(28,26,22,.18)); font: 550 11.5px var(--font-sans, Inter, sans-serif); cursor: pointer; transition: background 140ms ease, color 140ms ease, transform 100ms ease; } .ds-btn-secondary:hover { background: var(--surface-hover, rgba(28,26,22,.03)); color: var(--ink, #1C1A16); } .ds-btn-secondary:active { transform: scale(.96); } .ds-btn-secondary:focus-visible { outline: 2px solid var(--line-3, rgba(28,26,22,.28)); outline-offset: 2px; }"
+    },
+    {
+      "name": "Danger Button",
+      "kind": "button",
+      "refersTo": "button-danger",
+      "description": "Confirmation destructive explicite, rouge saturé et forme pilule.",
+      "html": "<button class=\"ds-btn-danger\">Ne pas enregistrer</button>",
+      "css": ".ds-btn-danger { min-height: 38px; padding: 0 16px; border: 0; border-radius: 999px; background: var(--danger-action-text, #B51D2A); color: var(--cream-content, #FDFBF5); font: 600 12px var(--font-sans, Inter, sans-serif); cursor: pointer; transition: filter 140ms ease, transform 100ms ease; } .ds-btn-danger:hover { filter: brightness(1.07); } .ds-btn-danger:active { transform: scale(.96); } .ds-btn-danger:focus-visible { outline: 2px solid var(--line-3, rgba(28,26,22,.28)); outline-offset: 2px; }"
+    },
+    {
+      "name": "Search Field",
+      "kind": "input",
+      "refersTo": "field",
+      "description": "Champ compact sans contour permanent, lisible sur le panneau latéral.",
+      "html": "<input class=\"ds-field\" value=\"architecture\" aria-label=\"Rechercher\">",
+      "css": ".ds-field { width: 100%; height: 30px; padding: 0 10px; border: 0; border-radius: 8px; background: var(--cream-content, #FDFBF5); color: var(--ink, #1C1A16); font: 400 13px var(--font-sans, Inter, sans-serif); outline: none; } .ds-field::placeholder { color: var(--ink-4, rgba(28,26,22,.62)); } .ds-field:focus { outline: 2px solid var(--line-3, rgba(28,26,22,.28)); outline-offset: -2px; }"
+    },
+    {
+      "name": "Status Chip",
+      "kind": "chip",
+      "refersTo": "chip",
+      "description": "État secondaire compact, réservé à une information réellement utile.",
+      "html": "<span class=\"ds-chip\">Connecté</span>",
+      "css": ".ds-chip { display: inline-flex; align-items: center; min-height: 24px; padding: 3px 8px; border-radius: 999px; background: var(--accent-soft, rgba(28,26,22,.08)); color: var(--ink-3, rgba(28,26,22,.75)); font: 600 10.5px var(--font-sans, Inter, sans-serif); }"
+    },
+    {
+      "name": "Floating Menu",
+      "kind": "nav",
+      "refersTo": "floating-menu",
+      "description": "Menu de commandes élevé, compact et sans glassmorphism décoratif.",
+      "html": "<div class=\"ds-menu\"><button class=\"ds-menu-item\">Mode source <kbd>Ctrl+/</kbd></button><button class=\"ds-menu-item\">Mode focus <kbd>F9</kbd></button></div>",
+      "css": ".ds-menu { width: 244px; padding: 6px; border-radius: 13px; background: var(--cream-tint, #EFEAE0); box-shadow: 0 0 0 1px var(--elevation-ring, rgba(28,26,22,.08)), 0 12px 30px rgba(var(--shadow-rgb, 28,26,22), .18); } .ds-menu-item { width: 100%; height: 40px; display: flex; align-items: center; gap: 9px; padding: 0 9px; border: 0; border-radius: 7px; background: transparent; color: var(--ink-2, rgba(28,26,22,.9)); font: 400 12.5px var(--font-sans, Inter, sans-serif); cursor: pointer; } .ds-menu-item:hover { background: var(--surface-hover, rgba(28,26,22,.03)); color: var(--ink, #1C1A16); } .ds-menu-item:focus-visible { outline: 2px solid var(--line-3, rgba(28,26,22,.28)); outline-offset: -2px; } .ds-menu-item kbd { margin-left: auto; color: var(--ink-5, rgba(28,26,22,.48)); font: 400 10px var(--font-sans, Inter, sans-serif); }"
+    },
+    {
+      "name": "Active Document Tab",
+      "kind": "nav",
+      "refersTo": "active-tab",
+      "description": "Onglet actif visuellement raccordé à la feuille.",
+      "html": "<button class=\"ds-tab\"><span class=\"ds-tab-dot\"></span>notes.md</button>",
+      "css": ".ds-tab { height: 32px; display: inline-flex; align-items: center; gap: 7px; padding: 0 8px 0 13px; border: 0; border-radius: 10px 10px 0 0; background: var(--cream-content, #FDFBF5); color: var(--ink, #1C1A16); box-shadow: 0 4px 0 var(--cream-content, #FDFBF5); font: 500 12.5px var(--font-sans, Inter, sans-serif); cursor: pointer; } .ds-tab-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ink, #1C1A16); } .ds-tab:focus-visible { outline: 2px solid var(--line-3, rgba(28,26,22,.28)); outline-offset: -2px; }"
+    },
+    {
+      "name": "Doku-San Composer",
+      "kind": "custom",
+      "description": "Composeur signature à deux plans, Question devant et Contexte derrière.",
+      "html": "<div class=\"ds-composer\"><div class=\"ds-composer-back\">Contexte <span>1 document</span></div><div class=\"ds-composer-front\"><textarea placeholder=\"Demandez à Doku-San…\"></textarea><div class=\"ds-composer-actions\"><button aria-label=\"Ajouter\">+</button><button class=\"ds-send\" aria-label=\"Envoyer\">↑</button></div></div></div>",
+      "css": ".ds-composer { width: 360px; font-family: var(--font-sans, Inter, sans-serif); } .ds-composer-back { width: calc(100% - 28px); height: 58px; margin: 0 14px; display: flex; align-items: flex-start; justify-content: space-between; padding: 9px 12px 16px; border-radius: 16px; background: color-mix(in srgb, var(--cream-tint, #EFEAE0) 78%, var(--cream-content, #FDFBF5)); color: var(--ink-3, rgba(28,26,22,.75)); font-size: 12px; font-weight: 600; } .ds-composer-back span { color: var(--ink-4, rgba(28,26,22,.62)); font-size: 10.5px; font-weight: 400; } .ds-composer-front { position: relative; margin-top: -16px; min-height: 108px; padding: 12px 8px 8px; border-radius: 16px; background: var(--composer-bg, #fff); box-shadow: 0 8px 26px rgba(var(--shadow-rgb, 28,26,22), .07); } .ds-composer textarea { width: 100%; min-height: 54px; padding: 2px 4px; border: 0; resize: none; background: transparent; color: var(--ink, #1C1A16); font: 400 13.5px/1.45 var(--font-sans, Inter, sans-serif); outline: none; } .ds-composer textarea::placeholder { color: var(--ink-4, rgba(28,26,22,.62)); } .ds-composer-actions { display: flex; align-items: center; justify-content: space-between; } .ds-composer-actions button { width: 36px; height: 36px; border: 0; border-radius: 10px; background: transparent; color: var(--ink-5, rgba(28,26,22,.48)); font-size: 20px; cursor: pointer; } .ds-composer-actions .ds-send { border-radius: 50%; background: var(--ink, #1C1A16); color: var(--cream-content, #FDFBF5); } .ds-composer-actions button:focus-visible { outline: 2px solid var(--line-3, rgba(28,26,22,.28)); outline-offset: 2px; }"
+    }
+  ],
+  "narrative": {
+    "northStar": "La Feuille Silencieuse",
+    "overview": "Doku ressemble moins à un logiciel qu’à un objet de lecture bien fait. Le document est la surface dominante ; le chrome se retire, les commandes apparaissent à l’approche et chaque couche supplémentaire doit justifier sa présence. Le système est éditorial, tactile et précis. La couleur reste retenue, tandis que la profondeur est stratifiée et ambiante : les surfaces sont plates au repos, les ombres sont réservées à ce qui flotte réellement.",
+    "keyCharacteristics": [
+      "Document dominant, chrome discret et actions révélées au moment utile.",
+      "Palette restreinte de papier, d’encre et de graphite, avec états sémantiques sobres.",
+      "Source Serif 4 pour lire, Inter pour agir, Geist Mono pour les identifiants techniques.",
+      "Surfaces sans contour par défaut ; séparation par tons, espace et élévation justifiée.",
+      "Cibles compactes mais familières, angles doux et boutons d’action en pilule.",
+      "Mouvement court, fonctionnel et toujours compatible avec prefers-reduced-motion."
+    ],
+    "rules": [
+      { "name": "The Document Contrast Rule", "body": "La feuille doit toujours se distinguer du chrome, même quand les deux sont clairs ou sombres ; la différence vient d’abord du ton, jamais d’un contour épais.", "section": "colors" },
+      { "name": "The Quiet Accent Rule", "body": "Le reflet lavande n’est jamais utilisé pour un bouton, une sélection ou un état. Les actions restent en encre ; les statuts restent sémantiques.", "section": "colors" },
+      { "name": "The Semantic Text Rule", "body": "Une couleur de statut calibrée pour un point ou un fond n’est jamais réutilisée telle quelle pour du petit texte. Employer la variante textuelle adaptée au thème.", "section": "colors" },
+      { "name": "The Three-Voice Rule", "body": "Source Serif lit, Inter agit, Geist Mono identifie. Toute utilisation qui ne correspond pas à l’un de ces verbes est interdite.", "section": "typography" },
+      { "name": "The Reading Measure Rule", "body": "Le texte de document reste entre 65 et 75 caractères par ligne en mode normal. La pleine largeur est un choix explicite de l’utilisateur, jamais le défaut.", "section": "typography" },
+      { "name": "The Flat-Until-Floating Rule", "body": "Une surface dans le flux reste plate. Si une ombre est nécessaire pour comprendre sa position, elle doit réellement flotter, se superposer ou recevoir le focus.", "section": "elevation" },
+      { "name": "The No-Glow Rule", "body": "Toute ombre lumineuse en thème sombre est un bug. Les halos emploient toujours le token d’ombre noir indépendant du token de texte.", "section": "elevation" }
+    ],
+    "dos": [
+      "Do laisser la feuille dominer la surface et borner la lecture courante à 680px.",
+      "Do employer les tons de papier et graphite avant d’ajouter un contour.",
+      "Do utiliser Inter pour les gestes, Source Serif 4 pour lire et Geist Mono uniquement pour les contenus techniques.",
+      "Do réserver les ombres aux surfaces réellement flottantes et toujours les calculer depuis --shadow-rgb.",
+      "Do garder les transitions d’état entre 100 et 240 ms, avec une alternative explicite sous prefers-reduced-motion.",
+      "Do fournir les états default, hover, focus, active, disabled, loading et error de chaque contrôle interactif.",
+      "Do tester en natif tout comportement lié à Tauri, WebView2, la CSP, la fermeture de fenêtre ou le système de fichiers.",
+      "Do préserver le fichier source byte-identique quand l’utilisateur n’a rien modifié ; la fidélité fait partie de la qualité perçue."
+    ],
+    "donts": [
+      "Don't reproduire les éditeurs Electron lourds : aucun chrome envahissant, aucune barre d’outils dense, aucun démarrage visuellement chargé.",
+      "Don't ressembler à un IDE ou un dashboard technique : pas de noir-néon, pas de cockpit, pas d’accumulation de cartes et de badges.",
+      "Don't imiter les outils Markdown qui réécrivent la source : aucun choix visuel ne justifie une normalisation ou une sérialisation destructive.",
+      "Don't utiliser le reflet lavande comme accent de bouton, de sélection ou de statut.",
+      "Don't transformer les ombres en glow clair dans le thème sombre ; --ink-rgb est interdit pour l’élévation.",
+      "Don't ajouter une bordure latérale colorée de plus de 1px à une carte ou une alerte.",
+      "Don't rendre du texte transparent pour lui appliquer un dégradé ; le texte doit rester lisible dans son état de base.",
+      "Don't généraliser le verre, le flou ou la transparence : le matériau Mica appartient au chrome, pas aux cartes de contenu.",
+      "Don't imbriquer des cartes sans fonction ni inventer une modale quand une révélation progressive suffit.",
+      "Don't animer une propriété custom héritée sur :root, ni ajouter une animation décorative qui ne décrit aucun état."
+    ]
+  }
+}
