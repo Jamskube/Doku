@@ -2061,7 +2061,9 @@
     margin: -2.25px;
     border-radius: 50%;
     background: var(--ink-4);
-    animation: 7.5s ease-in-out infinite;
+    animation-duration: 7.5s;
+    animation-timing-function: ease-in-out;
+    animation-iteration-count: infinite;
   }
   .cop-think i:nth-child(1) { animation-name: cop-think-a; }
   .cop-think i:nth-child(2) { animation-name: cop-think-b; }
