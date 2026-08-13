@@ -76,9 +76,9 @@
   .workspace-pane.primary { flex: 0 1 var(--workspace-ratio); }
   .workspace-pane.secondary { flex: 1 1 calc(100% - var(--workspace-ratio)); }
   .workspace:not(.split) .workspace-pane.primary { flex-basis: 100%; }
-  .workspace.vertical { flex-direction: column; }
-  .workspace.vertical .workspace-pane.primary { flex-basis: var(--workspace-ratio); }
-  .workspace.vertical .workspace-pane.secondary { flex-basis: calc(100% - var(--workspace-ratio)); }
+  .workspace.split.vertical { flex-direction: column; }
+  .workspace.split.vertical .workspace-pane.primary { flex-basis: var(--workspace-ratio); }
+  .workspace.split.vertical .workspace-pane.secondary { flex-basis: calc(100% - var(--workspace-ratio)); }
   @media (prefers-reduced-motion: reduce) {
     .workspace-pane { transition-duration: 0.01ms; }
   }

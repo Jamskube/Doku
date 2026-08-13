@@ -63,3 +63,9 @@ Limite explicite : cette mesure valide l’interaction lourde du bureau scindé 
 ## Notes de périmètre
 
 Le plugin `src/live-preview.ts` (candidat B) a été écrit pour ce spike (~170 lignes) : titres, gras/italique/barré, code inline + fences, liens, citations, checkbox-widgets, wikilinks — sélection-aware, limité au viewport. **Hors périmètre spike** et compté comme effort restant dans l'ADR : tableaux (le point dur documenté), images inline, `atomicRanges` (saut de curseur), copier-coller/IME polish.
+
+## Spike — sélection PDF non destructive (2026-08-13)
+
+`/spike/pdf-text-selection.html` superpose la `TextLayer` PDF.js au canvas HiDPI et transforme une sélection DOM en texte + rectangles normalisés. Il charge par défaut `spike/fixtures/pdf-annotation-test.pdf` et accepte un PDF local via le sélecteur de fichier.
+
+Le kill-test automatique exige, pour chaque page du corpus synthétique, une sélection textuelle non vide, au moins un rectangle et des coordonnées entièrement contenues dans la page. Les gestes réels, le DPR Windows et la rotation restent à vérifier visuellement avant intégration dans `PdfView.svelte`.

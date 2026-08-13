@@ -3,6 +3,7 @@
   import { app } from '../lib/stores.svelte'
   import { readFileBytes } from '../lib/tauri'
   import type { PdfDoc } from '../lib/pdf'
+  import { fitPdfPage } from '../lib/pdf-layout'
 
   let { path }: { path: string } = $props()
 
@@ -73,6 +74,112 @@
     let cancelled = false
     let destroyPdf: (() => Promise<void>) | null = null
     let observer: IntersectionObserver | null = null
+    let resizeObserver: ResizeObserver | null = null
+    let fitFrame = 0
+    let rerenderTimer: ReturnType<typeof setTimeout> | undefined
+
+    interface PageView {
+      baseWidth: number
+      baseHeight: number
+      wrap: HTMLDivElement
+      canvas: HTMLCanvasElement
+      targetScale: number
+    }
+
+    const pages = new Map<number, PageView>()
+    const visiblePages = new Set<number>()
+    const renderedScales = new Map<number, number>()
+    const renderJobs = new Map<number, Promise<void>>()
+
+    async function ensureRendered(pageNumber: number) {
+      const page = pages.get(pageNumber)
+      const doc = pdf
+      if (!page || !doc || cancelled || page.targetScale <= 0) return
+
+      const running = renderJobs.get(pageNumber)
+      if (running) {
+        await running.catch(() => {})
+        if (!cancelled && visiblePages.has(pageNumber)) void ensureRendered(pageNumber)
+        return
+      }
+
+      const targetScale = page.targetScale
+      const renderedScale = renderedScales.get(pageNumber)
+      if (renderedScale !== undefined && Math.abs(renderedScale - targetScale) < 0.001) return
+
+      const job = import('../lib/pdf')
+        .then(({ renderPage }) => renderPage(doc, pageNumber, page.canvas, targetScale))
+      renderJobs.set(pageNumber, job)
+      try {
+        await job
+        if (!cancelled) renderedScales.set(pageNumber, targetScale)
+      } catch {
+        // Un redimensionnement peut rendre une échelle obsolète pendant un rendu. La
+        // demande la plus récente est rejouée juste après, sans erreur visible.
+      } finally {
+        if (renderJobs.get(pageNumber) === job) renderJobs.delete(pageNumber)
+      }
+
+      if (!cancelled && visiblePages.has(pageNumber) && Math.abs(page.targetScale - targetScale) >= 0.001) {
+        void ensureRendered(pageNumber)
+      }
+    }
+
+    function applyFit() {
+      const host = container
+      if (!host || cancelled || pages.size === 0 || host.clientWidth <= 0) return
+
+      let anchor: { page: PageView; progress: number } | null = null
+      if (host.scrollTop > 0) {
+        const scrollTop = host.scrollTop
+        let current = pages.values().next().value as PageView | undefined
+        for (const page of pages.values()) {
+          if (page.wrap.offsetTop > scrollTop + 1) break
+          current = page
+        }
+        if (current) {
+          const height = Math.max(current.wrap.offsetHeight, 1)
+          anchor = {
+            page: current,
+            progress: Math.min(Math.max((scrollTop - current.wrap.offsetTop) / height, 0), 1),
+          }
+        }
+      }
+
+      for (const page of pages.values()) {
+        const fitted = fitPdfPage(
+          host.clientWidth,
+          24,
+          page.baseWidth,
+          page.baseHeight,
+          window.devicePixelRatio || 1,
+        )
+        page.targetScale = fitted.renderScale
+        const cssWidth = `${fitted.cssWidth}px`
+        const cssHeight = `${fitted.cssHeight}px`
+        page.wrap.style.width = cssWidth
+        page.wrap.style.height = cssHeight
+        page.canvas.style.width = cssWidth
+        page.canvas.style.height = cssHeight
+      }
+
+      if (anchor) {
+        host.scrollTop = anchor.page.wrap.offsetTop + anchor.progress * anchor.page.wrap.offsetHeight
+      }
+
+      clearTimeout(rerenderTimer)
+      rerenderTimer = setTimeout(() => {
+        for (const pageNumber of visiblePages) void ensureRendered(pageNumber)
+      }, 140)
+    }
+
+    function scheduleFit() {
+      if (fitFrame) cancelAnimationFrame(fitFrame)
+      fitFrame = requestAnimationFrame(() => {
+        fitFrame = 0
+        applyFit()
+      })
+    }
 
     ;(async () => {
       const bytes = await readFileBytes(path)
@@ -83,7 +190,7 @@
         return
       }
       try {
-        const { loadPdf, pageSize, renderPage } = await import('../lib/pdf')
+        const { loadPdf, pageSize } = await import('../lib/pdf')
         const loaded = await loadPdf(bytes)
         if (cancelled) {
           void loaded.destroy()
@@ -93,25 +200,18 @@
         destroyPdf = loaded.destroy
         status = 'ready'
 
-        // Échelle « ajustée à la largeur » calée sur la 1re page (× devicePixelRatio pour la netteté).
         const host = container!
-        const first = await pageSize(pdf, 1, 1)
-        const dpr = Math.min(window.devicePixelRatio || 1, 3)
-        const scale = ((host.clientWidth - 24) / first.width) * dpr
-
-        // Rendu paresseux (IntersectionObserver) : seules les pages visibles sont rendues
-        // → 1re page rapide, pas de rendu de tout le document d'un coup.
-        const rendered = new Set<number>()
         observer = new IntersectionObserver(
           (entries) => {
             for (const e of entries) {
-              if (!e.isIntersecting) continue
               const canvas = e.target as HTMLCanvasElement
               const n = Number(canvas.dataset.page)
-              observer!.unobserve(canvas)
-              if (rendered.has(n) || cancelled || !pdf) continue
-              rendered.add(n)
-              void renderPage(pdf, n, canvas, scale).catch(() => {})
+              if (e.isIntersecting) {
+                visiblePages.add(n)
+                void ensureRendered(n)
+              } else {
+                visiblePages.delete(n)
+              }
             }
           },
           { root: host, rootMargin: '300px' },
@@ -119,20 +219,31 @@
 
         for (let n = 1; n <= pdf.numPages; n++) {
           if (cancelled) break
-          const dims = await pageSize(pdf, n, scale)
+          const dims = await pageSize(pdf, n, 1)
           // Wrapper positionné : reçoit les surlignages de citation en overlay (%).
           const wrap = document.createElement('div')
           wrap.className = 'pdf-page-wrap'
           const canvas = document.createElement('canvas')
           canvas.className = 'pdf-page'
           canvas.dataset.page = String(n)
-          canvas.width = dims.width
-          canvas.height = dims.height
-          canvas.style.width = `${dims.width / dpr}px`
+          canvas.width = Math.max(1, Math.round(dims.width))
+          canvas.height = Math.max(1, Math.round(dims.height))
           wrap.appendChild(canvas)
           host.appendChild(wrap)
+          pages.set(n, {
+            baseWidth: dims.width,
+            baseHeight: dims.height,
+            wrap,
+            canvas,
+            targetScale: 0,
+          })
           observer.observe(canvas)
         }
+
+        applyFit()
+        resizeObserver = new ResizeObserver(scheduleFit)
+        resizeObserver.observe(host)
+        window.addEventListener('resize', scheduleFit)
       } catch (err) {
         if (!cancelled) {
           status = 'error'
@@ -144,6 +255,10 @@
     return () => {
       cancelled = true
       observer?.disconnect()
+      resizeObserver?.disconnect()
+      window.removeEventListener('resize', scheduleFit)
+      if (fitFrame) cancelAnimationFrame(fitFrame)
+      clearTimeout(rerenderTimer)
       pdf = null
       void destroyPdf?.()
     }
@@ -175,10 +290,9 @@
     padding: 20px 12px 60px;
     background: var(--cream-base);
   }
-  /* fit-content : le conteneur flex centre le wrapper comme il centrait le canvas. */
   .pdf-view :global(.pdf-page-wrap) {
     position: relative;
-    width: fit-content;
+    flex: 0 0 auto;
     max-width: 100%;
   }
   .pdf-view :global(canvas.pdf-page) {

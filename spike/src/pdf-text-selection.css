@@ -1,0 +1,61 @@
+:root {
+  color: #ececf0;
+  background: #181818;
+  font-family: Inter, system-ui, sans-serif;
+}
+* { box-sizing: border-box; }
+body { margin: 0; min-height: 100vh; overflow: hidden; }
+button, .pdf-file-button {
+  min-height: 32px;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 12px;
+  border: 1px solid #3b3b40;
+  border-radius: 999px;
+  background: #222226;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+button:hover, .pdf-file-button:hover { background: #2b2b30; }
+.pdf-file-button input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+.pdf-spike-bar {
+  height: 48px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 14px;
+  border-bottom: 1px solid #303036;
+  background: #1d1d20;
+  font-size: 13px;
+}
+.pdf-spike-bar strong { margin-right: auto; }
+.pdf-spike-bar a { color: #c9c9cf; }
+#verdict.pass { color: #71d39a; }
+#verdict.fail { color: #ff766d; }
+.pdf-spike-main { height: calc(100vh - 48px); display: grid; grid-template-columns: minmax(0, 1fr) 320px; }
+.pdf-spike-viewer {
+  min-width: 0;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 18px;
+  padding: 24px;
+  background: #29292d;
+}
+.pdf-spike-page { position: relative; flex: 0 0 auto; background: white; box-shadow: 0 5px 20px rgb(0 0 0 / 0.3); }
+.pdf-spike-page canvas { position: absolute; inset: 0; display: block; }
+.pdf-spike-page .textLayer { position: absolute; inset: 0; }
+.pdf-spike-page .textLayer ::selection { background: rgb(64 128 255 / 0.34); }
+.pdf-spike-inspector { overflow: auto; padding: 20px; background: #181818; }
+.pdf-spike-inspector h1 { margin: 0 0 18px; font-size: 16px; }
+.pdf-spike-inspector dl { margin: 0; }
+.pdf-spike-inspector dt { margin-top: 14px; color: #909098; font-size: 11px; }
+.pdf-spike-inspector dd { margin: 4px 0 0; max-height: 180px; overflow: auto; white-space: pre-wrap; font: 12px/1.45 ui-monospace, monospace; }
+.pdf-spike-inspector pre { margin-top: 24px; padding-top: 16px; border-top: 1px solid #303036; white-space: pre-wrap; color: #b8b8c0; font-size: 11px; }
+@media (max-width: 760px) {
+  .pdf-spike-main { grid-template-columns: 1fr; }
+  .pdf-spike-inspector { display: none; }
+  .pdf-spike-bar strong { display: none; }
+}

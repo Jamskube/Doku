@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Spike — sélection PDF</title>
+</head>
+<body>
+  <header class="pdf-spike-bar">
+    <strong>PDF TextLayer — sélection et coordonnées</strong>
+    <label class="pdf-file-button">Choisir un PDF<input id="pdf-file" type="file" accept="application/pdf,.pdf" /></label>
+    <button id="btn-run">Lancer le kill-test</button>
+    <span id="verdict" role="status">chargement…</span>
+    <a href="/index.html">← hub</a>
+  </header>
+  <main class="pdf-spike-main">
+    <section id="viewer" class="pdf-spike-viewer" aria-label="PDF sélectionnable"></section>
+    <aside class="pdf-spike-inspector">
+      <h1>Sélection capturée</h1>
+      <dl>
+        <dt>Page</dt><dd id="selection-page">—</dd>
+        <dt>Texte</dt><dd id="selection-text">—</dd>
+        <dt>Rectangles</dt><dd id="selection-rects">—</dd>
+      </dl>
+      <pre id="log">prêt.</pre>
+    </aside>
+  </main>
+  <script type="module" src="/src/pdf-text-selection.ts"></script>
+</body>
+</html>
