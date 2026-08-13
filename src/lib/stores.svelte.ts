@@ -1,5 +1,5 @@
-import type { EditorView } from '@codemirror/view'
 import { DEMO_DIR, DEMO_TABS } from './demo'
+import { dropEditorRuntime, editorForPane, selectionForPane } from './editor-registry.svelte'
 import { detectLineEnding } from './editor/editor'
 import { baseName, DEFAULT_SORT, isSupportedFile, joinPath, parentPath, validateExpandedPaths, type ExplorerSort, type SortKey } from './explorer'
 import { detectUnsupported } from './encoding'
@@ -8,9 +8,12 @@ import { ragFileChanged } from './rag-index.svelte'
 import { classifyExternalChange } from './reload'
 import { makeSearchDoc, searchDocs, type SearchDoc, type SearchResult } from './search'
 import { snapshotKey, type SnapshotInfo } from './snapshot'
-import { buildSearchIndex, isTauri, listSnapshots, purgeAllSnapshots, readSnapshot, readTextFileAt, recordSnapshot, scanFiles, setAlwaysOnTop, syncSystemBackdrop, writeTextFileAtomic } from './tauri'
+import { canonicalPathKey, runSaveAs, type TextSaveSnapshot } from './save-as'
+import { buildSession, parseSession, restoreWorkspace } from './session'
+import { buildSearchIndex, confirmReplacePath, isTauri, listSnapshots, pathExistsAt, purgeAllSnapshots, readSnapshot, readTextFileAt, recordSnapshot, saveTextDialog, scanFiles, setAlwaysOnTop, syncSystemBackdrop, writeTextFileAtomic } from './tauri'
 import { normalizeTarget, wikilinkCandidates, wikilinkFileName } from './wikilink'
 import type { CopilotVerbosity } from './copilot-service'
+import { activateWorkspacePane, assignWorkspaceTab, closeWorkspaceTab, createWorkspaceState, openWorkspaceSplit, otherPane, reuniteWorkspace, selectWorkspaceTab, setWorkspaceRatio, swapWorkspacePanes, type PaneId, type WorkspaceState } from './workspace'
 
 export type DocKind = 'md' | 'html' | 'txt' | 'pdf'
 export type SidebarView = 'files' | 'plan' | 'history' | 'search'
@@ -147,13 +150,73 @@ export const app = $state({
   pendingPdfReveal: null as { path: string; page: number; text?: string } | null,
 })
 
-// Accès non réactif à la vue CM6 courante (scroll TOC, sauvegarde…)
-export const editorRef: { view: EditorView | null } = { view: null }
+export const workspace: WorkspaceState = $state(createWorkspaceState())
+export const workspaceLayout = $state({ stacked: false })
 
-// Sélection courante de l'éditeur (16.1) — publiée par DocumentView à chaque changement de
-// sélection. Le copilote s'en sert pour proposer « Reformuler » : la barre d'action n'apparaît
-// que quand `text` est non vide. Réactif ($state, même motif que `app`).
-export const editorSel = $state({ from: 0, to: 0, text: '' })
+function applyWorkspaceState(next: WorkspaceState) {
+  workspace.split = next.split
+  workspace.activePaneId = next.activePaneId
+  workspace.primary.tabId = next.primary.tabId
+  workspace.primary.sourceMode = next.primary.sourceMode
+  workspace.secondary.tabId = next.secondary.tabId
+  workspace.secondary.sourceMode = next.secondary.sourceMode
+  workspace.ratio = next.ratio
+  app.activeId = workspace[workspace.activePaneId].tabId ?? 0
+  app.sourceMode = workspace[workspace.activePaneId].sourceMode
+}
+
+export function selectTab(id: number) {
+  if (!app.tabs.some((tab) => tab.id === id)) return
+  applyWorkspaceState(selectWorkspaceTab(workspace, id))
+}
+
+export function activatePane(paneId: PaneId) {
+  applyWorkspaceState(activateWorkspacePane(workspace, paneId))
+}
+
+export function assignTabToPane(paneId: PaneId, tabId: number | null): boolean {
+  const result = assignWorkspaceTab(workspace, paneId, tabId)
+  if (!result.ok) return false
+  applyWorkspaceState(result.state)
+  return true
+}
+
+export function toggleWorkspaceSplit() {
+  applyWorkspaceState(workspace.split ? reuniteWorkspace(workspace) : openWorkspaceSplit(workspace))
+}
+
+export function swapPanes() {
+  applyWorkspaceState(swapWorkspacePanes(workspace))
+}
+
+export function resizeWorkspace(ratio: number) {
+  applyWorkspaceState(setWorkspaceRatio(workspace, ratio))
+}
+
+export function toggleActiveSourceMode() {
+  const pane = workspace[workspace.activePaneId]
+  pane.sourceMode = !pane.sourceMode
+  app.sourceMode = pane.sourceMode
+}
+
+export function activeEditorView() {
+  return editorForPane(workspace.activePaneId)
+}
+
+export function activeEditorSelection() {
+  return selectionForPane(workspace.activePaneId)
+}
+
+/** Documents réellement visibles dans le bureau, dans l'ordre gauche/haut puis droite/bas. */
+export function visibleTabs(): DocTab[] {
+  const ids = workspace.split
+    ? [workspace.primary.tabId, workspace.secondary.tabId]
+    : [workspace[workspace.activePaneId].tabId]
+  return ids.flatMap((id) => {
+    const tab = id == null ? undefined : app.tabs.find((item) => item.id === id)
+    return tab ? [tab] : []
+  })
+}
 
 const SETTINGS_KEY = 'doku-settings'
 
@@ -234,8 +297,12 @@ let sessionReady = false
 export function saveSession() {
   if (!sessionReady) return
   try {
-    const tabs = app.tabs.filter((t) => t.path).map((t) => t.path)
-    localStorage.setItem(SESSION_KEY, JSON.stringify({ tabs, activePath: activeTab()?.path ?? null }))
+    const session = buildSession(
+      app.tabs.map((tab) => tab.path),
+      workspace,
+      (tabId) => app.tabs.find((tab) => tab.id === tabId)?.path ?? null,
+    )
+    localStorage.setItem(SESSION_KEY, JSON.stringify(session))
   } catch {
     // stockage indisponible : on ignore
   }
@@ -244,10 +311,10 @@ export function saveSession() {
 // Restaure la session au démarrage (natif) : relit chaque fichier ; un fichier
 // disparu est retiré et signalé via la bannière (FR-4).
 export async function restoreSession() {
-  let session: { tabs?: string[]; activePath?: string | null } | null = null
+  let session = null as ReturnType<typeof parseSession>
   try {
     const raw = localStorage.getItem(SESSION_KEY)
-    if (raw) session = JSON.parse(raw)
+    session = parseSession(raw)
   } catch {
     session = null
   }
@@ -275,13 +342,23 @@ export async function restoreSession() {
     if (detectUnsupported(content)) continue // binaire/non-UTF-8 : ne pas restaurer
     openTab(baseName(p), p, content)
   }
-  const active = session?.activePath ? app.tabs.find((t) => t.path === session!.activePath) : undefined
-  if (active) app.activeId = active.id
-  if (missing.length) {
+  const restored = restoreWorkspace(session, (path) => {
+    const key = canonicalPathKey(path)
+    return app.tabs.find((tab) => tab.path && canonicalPathKey(tab.path) === key)?.id ?? null
+  })
+  if (restored.primary.tabId == null && app.tabs.length) {
+    restored.primary.tabId = app.tabs.find((tab) => tab.path === session?.activePath)?.id ?? app.tabs[0].id
+  }
+  applyWorkspaceState(restored)
+  const unsavedNotRestored = Boolean(session?.workspace.primaryUnsaved || session?.workspace.secondaryUnsaved)
+  if (missing.length || unsavedNotRestored) {
     app.banner = {
       tone: 'warning',
       title: 'Session ajustée',
-      message: `${missing.length} fichier(s) introuvable(s), retiré(s) de la session : ${missing.map(baseName).join(', ')}`,
+      message: [
+        missing.length ? `${missing.length} fichier(s) introuvable(s), retiré(s) de la session : ${missing.map(baseName).join(', ')}` : '',
+        unsavedNotRestored ? 'Une note non enregistrée n’a pas été restaurée.' : '',
+      ].filter(Boolean).join(' '),
     }
   }
   sessionReady = true
@@ -296,7 +373,8 @@ export function initApp() {
   // Mode navigateur (design/dev) : contenu de démonstration.
   if (app.tabs.length === 0) {
     for (const d of DEMO_TABS) openTab(d.name, d.path, d.content, d.kind)
-    app.activeId = app.tabs[0]?.id ?? 0
+    const first = app.tabs[0]
+    if (first) selectTab(first.id)
   }
   sessionReady = true
 }
@@ -358,7 +436,8 @@ export function openCopilot(view: CopilotView | null = null) {
 }
 
 export function activeTab(): DocTab | undefined {
-  return app.tabs.find((t) => t.id === app.activeId)
+  const id = workspace[workspace.activePaneId].tabId
+  return app.tabs.find((t) => t.id === id)
 }
 
 // Mémo par onglet : isDirty est appelé sur plusieurs chemins de rendu chauds (onglets,
@@ -382,10 +461,17 @@ export function kindFromName(name: string): DocKind {
   return 'txt'
 }
 
-export function openTab(name: string, path: string | null, content: string, kind?: DocKind): DocTab {
-  const existing = path ? app.tabs.find((t) => t.path === path) : undefined
+export function openTab(
+  name: string,
+  path: string | null,
+  content: string,
+  kind?: DocKind,
+  targetPane: PaneId = workspace.activePaneId,
+): DocTab {
+  const pathKey = path ? canonicalPathKey(path) : null
+  const existing = pathKey ? app.tabs.find((t) => t.path && canonicalPathKey(t.path) === pathKey) : undefined
   if (existing) {
-    app.activeId = existing.id
+    selectTab(existing.id)
     return existing
   }
   const tab: DocTab = {
@@ -400,10 +486,27 @@ export function openTab(name: string, path: string | null, content: string, kind
     heavy: content.length > HEAVY_THRESHOLD,
   }
   app.tabs.push(tab)
-  app.activeId = tab.id
+  if (!assignTabToPane(targetPane, tab.id)) selectTab(tab.id)
   // Ouvrir un fichier resynchronise l'explorateur sur son dossier.
   app.explorerDir = null
   return tab
+}
+
+export function createWorkspaceNote(targetPane: PaneId): DocTab {
+  if (targetPane === 'secondary' && !workspace.split) {
+    applyWorkspaceState(openWorkspaceSplit(workspace))
+  }
+
+  const sourceTabId = workspace[otherPane(targetPane)].tabId ?? workspace[targetPane].tabId
+  const source = app.tabs.find((tab) => tab.id === sourceTabId)
+  const sourceBase = source?.name.replace(/\.[^.]+$/, '') || 'document'
+  const root = `Notes — ${sourceBase}`
+  let name = root
+  let suffix = 2
+  while (app.tabs.some((tab) => tab.path == null && tab.name === name)) {
+    name = `${root} (${suffix++})`
+  }
+  return openTab(name, null, '', 'md', targetPane)
 }
 
 // Résout et ouvre un wikilink `[[note]]` (FR-7, FR-10) : d'abord un onglet déjà
@@ -413,7 +516,7 @@ export async function openWikilink(target: string) {
   const t = normalizeTarget(target)
   const open = app.tabs.find((tab) => normalizeTarget(tab.name) === t)
   if (open) {
-    app.activeId = open.id
+    selectTab(open.id)
     return
   }
   const base = parentPath(activeTab()?.path ?? null)
@@ -572,9 +675,10 @@ function invalidateSearchDoc(path: string, name: string, content: string) {
 
 // Ouvre un fichier par chemin (clic dans l'explorateur). No-op en navigateur.
 export async function openPath(path: string) {
-  const existing = app.tabs.find((t) => t.path === path)
+  const key = canonicalPathKey(path)
+  const existing = app.tabs.find((t) => t.path && canonicalPathKey(t.path) === key)
   if (existing) {
-    app.activeId = existing.id
+    selectTab(existing.id)
     return
   }
   // PDF (11.1) : document binaire lecture seule. Ne PAS lire en texte (detectUnsupported
@@ -623,10 +727,15 @@ export async function openDropped(path: string) {
 export function closeTab(id: number) {
   const idx = app.tabs.findIndex((t) => t.id === id)
   if (idx === -1) return
+  const nextWorkspace = closeWorkspaceTab(workspace, id)
+  dropEditorRuntime(id)
   app.tabs.splice(idx, 1)
-  if (app.activeId === id) {
+  if (nextWorkspace[nextWorkspace.activePaneId].tabId == null) {
     const next = app.tabs[Math.min(idx, app.tabs.length - 1)]
-    app.activeId = next?.id ?? 0
+    const assigned = assignWorkspaceTab(nextWorkspace, nextWorkspace.activePaneId, next?.id ?? null)
+    applyWorkspaceState(assigned.ok ? assigned.state : nextWorkspace)
+  } else {
+    applyWorkspaceState(nextWorkspace)
   }
 }
 
@@ -634,7 +743,7 @@ export function cycleTab(dir: 1 | -1) {
   if (app.tabs.length < 2) return
   const idx = app.tabs.findIndex((t) => t.id === app.activeId)
   const next = app.tabs[(idx + dir + app.tabs.length) % app.tabs.length]
-  app.activeId = next.id
+  selectTab(next.id)
 }
 
 export function toggleSidebarView(view: SidebarView) {
@@ -717,7 +826,7 @@ export function docHeadings(content: string): Heading[] {
 }
 
 export function scrollToLine(line: number) {
-  const view = editorRef.view
+  const view = activeEditorView()
   if (!view) return
   const docLine = view.state.doc.line(Math.min(line, view.state.doc.lines))
   view.dispatch({
@@ -740,44 +849,122 @@ export function forcePreview(id: number) {
 
 // --- Sauvegarde ---
 
-// Écrit un onglet sur disque (atomique). savedContent n'est marqué qu'après
-// succès (mode navigateur : no-op d'écriture). Renvoie false si rien n'a été écrit.
-export async function saveTab(tab: DocTab): Promise<boolean> {
+function snapshotTextTab(tab: DocTab): TextSaveSnapshot | null {
+  if (tab.kind === 'pdf') return null
+  return {
+    tabId: tab.id,
+    name: tab.name,
+    kind: tab.kind,
+    content: tab.content,
+    savedContent: tab.savedContent,
+  }
+}
+
+function reportSaveFailure(name: string, error?: unknown) {
+  if (error) console.error('Sauvegarde échouée', error)
+  app.banner = {
+    tone: 'error',
+    title: 'Enregistrement impossible',
+    message: `« ${name} » n’a pas pu être enregistré. Le document reste ouvert avec ses modifications.`,
+  }
+}
+
+function runPostSaveEffects(snapshot: TextSaveSnapshot, path: string, now: number, firstSave: boolean) {
+  invalidateSearchDoc(path, baseName(path), snapshot.content)
+  ragFileChanged(path)
+  saveSession()
+  if (snapshot.content === snapshot.savedContent && !firstSave) return
+  void snapshotKey(path)
+    .then((key) => recordSnapshot(key, snapshot.content, path, now))
+    .then(() => {
+      if (app.activeId === snapshot.tabId && app.sidebarView === 'history' && app.sidebarOpen) {
+        return loadSnapshotsForActive()
+      }
+    })
+    .catch((err) => console.error('Snapshot échoué', err))
+}
+
+// Primitive unique de sauvegarde texte : Ctrl+S, fermeture d'onglet et fermeture
+// d'application passent ici. Le snapshot est pris avant le premier await ; aucune
+// mutation de DocTab n'arrive avant que l'écriture atomique ait réussi.
+export async function saveTabOrSaveAs(tab: DocTab): Promise<boolean> {
   // PDF : lecture seule, aucun contenu texte. Sans cette garde, Ctrl+S écrirait content=''
   // dans le .pdf et DÉTRUIRAIT le fichier (le save n'est PAS gaté sur `changed`).
-  if (tab.kind === 'pdf') return false
+  const snapshot = snapshotTextTab(tab)
+  if (!snapshot) return false
   // Capturés AVANT tout await : on écrit et on archive exactement cette valeur,
   // même si l'utilisateur tape pendant l'écriture asynchrone. `now` capturé ici (et
   // non dans la chaîne async) pour que l'horodatage suive l'ordre d'émission des saves.
-  const changed = tab.content !== tab.savedContent
-  const saved = tab.content
   const now = Date.now()
-  if (isTauri) {
-    if (!tab.path) return false // « Enregistrer sous » : story ultérieure
+  if (!isTauri) {
+    const current = app.tabs.find((item) => item.id === snapshot.tabId)
+    if (!current) return false
+    current.savedContent = snapshot.content
+    return true
+  }
+
+  if (tab.path) {
+    const path = tab.path
     try {
-      await writeTextFileAtomic(tab.path, saved)
+      await writeTextFileAtomic(path, snapshot.content)
     } catch (err) {
-      console.error('Sauvegarde échouée', err)
+      reportSaveFailure(snapshot.name, err)
       return false
     }
-    tab.savedContent = saved
-    invalidateSearchDoc(tab.path, tab.name, saved) // garder l'index de recherche à jour
-    ragFileChanged(tab.path) // index d'embeddings : marqué périmé, ré-embed au prochain refresh
-    // Snapshot du contenu sauvé (FR-12), seulement s'il a réellement changé.
-    // Fire-and-forget : un échec d'historique ne doit JAMAIS casser le save.
-    if (changed) {
-      const path = tab.path
-      void snapshotKey(path)
-        .then((key) => recordSnapshot(key, saved, path, now))
-        .then(() => {
-          if (app.sidebarView === 'history' && app.sidebarOpen) return loadSnapshotsForActive()
-        })
-        .catch((err) => console.error('Snapshot échoué', err))
+    const current = app.tabs.find((item) => item.id === snapshot.tabId)
+    if (!current) return true
+    current.savedContent = snapshot.content
+    runPostSaveEffects(snapshot, path, now, false)
+    return true
+  }
+
+  const result = await runSaveAs(snapshot, {
+    choosePath: saveTextDialog,
+    pathExists: pathExistsAt,
+    confirmReplace: confirmReplacePath,
+    isPathOwnedByOtherTab: (path, tabId) => {
+      const key = canonicalPathKey(path)
+      return app.tabs.some((item) => item.id !== tabId && item.path && canonicalPathKey(item.path) === key)
+    },
+    isTabOpen: (tabId) => app.tabs.some((item) => item.id === tabId),
+    write: writeTextFileAtomic,
+    commit: (captured, path, name) => {
+      const current = app.tabs.find((item) => item.id === captured.tabId)
+      if (!current) return false
+      current.path = path
+      current.name = name
+      current.savedContent = captured.content
+      return true
+    },
+    afterCommit: (captured, path) => runPostSaveEffects(captured, path, now, true),
+  })
+
+  if (result.status === 'saved') {
+    if (!result.attached) {
+      app.banner = {
+        tone: 'warning',
+        title: 'Fichier enregistré',
+        message: 'Le document a été fermé pendant l’écriture ; le fichier choisi a tout de même été créé.',
+      }
     }
     return true
   }
-  tab.savedContent = saved
-  return true
+  if (result.status === 'duplicate') {
+    app.banner = {
+      tone: 'warning',
+      title: 'Fichier déjà ouvert',
+      message: 'Ce chemin appartient déjà à un autre onglet. Choisissez un autre nom pour éviter deux versions concurrentes.',
+    }
+  } else if (result.status === 'error') {
+    reportSaveFailure(snapshot.name, result.error)
+  }
+  return false
+}
+
+// Compatibilité transitoire des appels historiques ; les nouveaux chemins doivent
+// nommer explicitement la primitive qui inclut Save As.
+export async function saveTab(tab: DocTab): Promise<boolean> {
+  return saveTabOrSaveAs(tab)
 }
 
 // --- Historique / versions (FR-12) ---
@@ -941,7 +1128,7 @@ export async function requestCloseTab(id: number) {
       `Voulez-vous enregistrer les modifications apportées à « ${tab.name} » avant de fermer ?`,
     )
     if (choice === 'cancel') return
-    if (choice === 'save' && !(await saveTab(tab))) return
+    if (choice === 'save' && !(await saveTabOrSaveAs(tab))) return
   }
   closeTab(id)
 }

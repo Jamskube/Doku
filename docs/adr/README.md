@@ -23,3 +23,5 @@ Registre des décisions d'architecture. Une décision par fichier ; on ne suppri
 | [0017](./0017-revelation-syntaxe-a-la-demande.md) | Révélation de la syntaxe Markdown à la demande (et non au curseur) | accepted | 2026-07-30 | éditeur, wysiwyg, ux, tableaux, fr-3 |
 | [0018](./0018-fournisseur-cloud-compatible-openai.md) | Fournisseurs cloud compatibles OpenAI par clé API (MiniMax) | accepted | 2026-08-10 | ia, cloud, minimax, compatible-openai, secret |
 | [0019](./0019-memoire-travail-cloud-automatisee.md) | Mémoire de travail cloud automatisée et locale | accepted | 2026-08-12 | ia, mémoire, cloud, markdown, confidentialité, ux |
+| [0020](./0020-volets-affichage-sans-duplication-buffer.md) | Volets d'affichage sans duplication des buffers | accepted | 2026-08-13 | workspace, split-view, éditeur, fiabilité |
+| [0021](./0021-citations-markdown-portables.md) | Citations Markdown portables avec ancrage Doku facultatif | accepted | 2026-08-13 | notes, citations, markdown, sécurité, portabilité |

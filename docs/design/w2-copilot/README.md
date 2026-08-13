@@ -7,6 +7,12 @@ Le bouton `+` ouvre un menu compact au-dessus du contenu. Il propose quatre inst
 presse-papiers. Les ajouts restent visibles et retirables dans la face **Contexte** jusqu’à
 **Nouvelle conversation**.
 
+- Quand le bureau est scindé, les deux documents visibles rejoignent automatiquement le contexte :
+  le volet actif reste la source principale et l’autre apparaît comme **Automatique · volet visible**.
+  Réunir les volets ou remplacer le second document actualise immédiatement cette source implicite.
+- Les documents visibles sont recapturés à chaque envoi et dédupliqués d’un éventuel ajout manuel
+  du même fichier. Un PDF secondaire est extrait à la demande ; un PDF illisible ou scanné est
+  signalé avant génération plutôt que silencieusement omis.
 - Un dossier ajouté devient le dossier effectif des questions et de l’index sémantique ; aucune
   indexation longue ne démarre silencieusement derrière une question.
 - Les fichiers sont bornés avant lecture (2 Mio texte, 25 Mio PDF), puis chaque texte à 240 000

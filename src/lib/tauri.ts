@@ -309,6 +309,40 @@ export async function openFileDialog(): Promise<{ path: string; name: string; co
   return { path, name, content }
 }
 
+export async function saveTextDialog(defaultName: string, kind: 'md' | 'txt' | 'html'): Promise<string | null> {
+  if (!isTauri) return null
+  const { save } = await import('@tauri-apps/plugin-dialog')
+  const filters =
+    kind === 'md'
+      ? [{ name: 'Markdown', extensions: ['md', 'markdown'] }]
+      : kind === 'txt'
+        ? [{ name: 'Texte', extensions: ['txt'] }]
+        : [{ name: 'HTML', extensions: ['html', 'htm'] }]
+  return save({
+    title: 'Enregistrer le document',
+    defaultPath: defaultName,
+    filters,
+  })
+}
+
+export async function pathExistsAt(path: string): Promise<boolean> {
+  if (!isTauri) return false
+  const { exists } = await import('@tauri-apps/plugin-fs')
+  return exists(path)
+}
+
+export async function confirmReplacePath(path: string): Promise<boolean> {
+  if (!isTauri) return false
+  const { confirm } = await import('@tauri-apps/plugin-dialog')
+  const name = path.split(/[\\/]/).pop() ?? path
+  return confirm(`« ${name} » existe déjà. Voulez-vous le remplacer ?`, {
+    title: 'Remplacer le fichier ?',
+    kind: 'warning',
+    okLabel: 'Remplacer',
+    cancelLabel: 'Annuler',
+  })
+}
+
 export async function openContextFilesDialog(): Promise<string[]> {
   if (!isTauri) return []
   const { open } = await import('@tauri-apps/plugin-dialog')

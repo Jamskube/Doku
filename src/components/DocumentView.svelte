@@ -2,7 +2,8 @@
   import { onMount } from 'svelte'
   import { EditorView } from '@codemirror/view'
   import { EditorState, type Extension } from '@codemirror/state'
-  import { app, activeTab, COLUMN_PX, docHeadings, editorRef, editorSel, forcePreview, isDirty, openCopilot } from '../lib/stores.svelte'
+  import { app, COLUMN_PX, docHeadings, forcePreview, isDirty, openCopilot, workspace } from '../lib/stores.svelte'
+  import { cacheEditorRuntime, editorRuntimeForTab, publishEditorSelection, registerEditor, registeredTabForPane, selectionForPane, unregisterEditor, updateEditorRegistration } from '../lib/editor-registry.svelte'
   import { baseExtensions, htmlSourceExtensions, livePreviewComp, previewExtensions, serializeDoc, sourceExtensions, txtExtensions } from '../lib/editor/editor'
   import { docDirFacet } from '../lib/editor/live-preview'
   import { revealMatch, searchFlashField } from '../lib/editor/search-flash'
@@ -28,6 +29,7 @@
   import { diffWords, type RephraseMode } from '../lib/copilot-service'
   import DokuMark from '../lib/DokuMark.svelte'
   import PdfView from './PdfView.svelte'
+  import type { PaneId } from '../lib/workspace'
 
   const MAX_PASTE_IMAGE = 25 * 1024 * 1024 // 25 Mo : garde-fou mémoire (tablette ARM)
 
@@ -114,7 +116,7 @@
     // L'éditeur est partagé entre onglets : si l'utilisateur a changé d'onglet pendant
     // l'écriture, NE PAS insérer le lien dans le mauvais document (le fichier est bien
     // écrit → aucune perte).
-    if (app.activeId !== tabId) {
+    if (workspace[paneId].tabId !== tabId || registeredTabForPane(paneId) !== tabId) {
       app.banner = {
         tone: 'warning',
         title: 'Onglet changé',
@@ -125,20 +127,23 @@
     view.dispatch(view.state.replaceSelection(imageMarkdown(name)))
   }
 
+  let { onOpen, paneId, tabId }: { onOpen: () => void; paneId: PaneId; tabId: number | null } = $props()
+  const tab = $derived(app.tabs.find((item) => item.id === tabId))
+  const paneSelection = $derived(selectionForPane(paneId))
+  const sourceMode = $derived(workspace[paneId].sourceMode)
+  const splitLargeSourceMode = $derived(Boolean(workspace.split && tab && tab.content.length >= 450_000))
+  const effectiveSourceMode = $derived(sourceMode || (tab?.heavy ?? false) || splitLargeSourceMode)
   // Onglet HTML en mode rendu : aperçu sandboxé (iframe), pas l'éditeur (FR-8).
-  const htmlRender = $derived(activeTab()?.kind === 'html' && !app.sourceMode)
+  const htmlRender = $derived(tab?.kind === 'html' && !sourceMode)
   // Onglet PDF : viewer lecture seule (11.1), pas l'éditeur.
-  const pdfRender = $derived(activeTab()?.kind === 'pdf')
-
-  let { onOpen }: { onOpen: () => void } = $props()
+  const pdfRender = $derived(tab?.kind === 'pdf')
 
   let host: HTMLElement | undefined = $state()
   let view: EditorView | null = null
-  const states = new Map<number, EditorState>()
   // rev auquel l'état caché de chaque onglet a été construit (invalidation au reload externe).
-  const revs = new Map<number, number>()
   let renderedId = -1
   let renderedRev = -1
+  let registeredId: number | null = null
   let selectionMenu = $state<{ left: number; top: number } | null>(null)
   let selectionMenuExpanded = $state(false)
   let selectionMenuInsertOpen = $state(false)
@@ -149,7 +154,7 @@
   // Longueur « utile » de la sélection (compteur du menu), sans la copie qu'un .trim()
   // ferait à chaque rendu sur une sélection potentiellement multi-Mo.
   const selCount = $derived.by(() => {
-    const t = editorSel.text
+    const t = paneSelection.text
     let a = 0
     let b = t.length
     while (a < b && t.charCodeAt(a) <= 32) a++
@@ -185,7 +190,7 @@
 
   function positionSelectionMenu(currentView: EditorView) {
     const sel = currentView.state.selection.main
-    if (sel.empty || copilot.generating || rephrase.current || activeTab()?.kind === 'pdf') {
+    if (sel.empty || copilot.generating || rephrase.current || tab?.kind === 'pdf') {
       selectionMenu = null
       return
     }
@@ -228,15 +233,14 @@
     selectionMenuTimer = undefined
   }
 
-  function publishSelection(currentView: EditorView) {
+  function publishSelection(currentView: EditorView, publishedTabId = renderedId) {
     const sel = currentView.state.selection.main
-    editorSel.from = sel.from
-    editorSel.to = sel.to
-    editorSel.text = sel.empty ? '' : currentView.state.sliceDoc(sel.from, sel.to)
+    const text = sel.empty ? '' : currentView.state.sliceDoc(sel.from, sel.to)
+    publishEditorSelection(paneId, publishedTabId, currentView, { from: sel.from, to: sel.to, text })
     clearTimeout(selectionMenuTimer)
     // Un aperçu de reformulation en cours a priorité : pas de menu par-dessus le widget.
     // /\S/.test évite la copie intégrale qu'un .trim() ferait sur une grande sélection.
-    if (sel.empty || !/\S/.test(editorSel.text) || rephrase.current) {
+    if (sel.empty || !/\S/.test(text) || rephrase.current) {
       selectionMenu = null
       selectionMenuExpanded = false
       selectionMenuConfig = false
@@ -292,7 +296,7 @@
   }
 
   async function copySelection() {
-    const text = editorSel.text
+    const text = paneSelection.text
     if (!text) return
     try {
       await navigator.clipboard.writeText(text)
@@ -374,10 +378,12 @@
           // pendant un update en cours.
           if (rephrase.current && !isRephrasePreviewUpdate(u)) cancelRephrase()
         }
+        const runtimeTab = app.tabs.find((item) => item.id === tabId)
+        if (runtimeTab) cacheEditorRuntime(tabId, u.state, runtimeTab.rev, u.view.scrollDOM.scrollTop)
         // Publie la sélection courante (16.1) : le copilote propose « Reformuler » quand
         // `text` est non vide. Sur édition, les bornes bougent → on republie aussi.
         if (u.selectionSet || u.docChanged) {
-          publishSelection(u.view)
+          publishSelection(u.view, tabId)
         }
       }),
     ]
@@ -390,14 +396,14 @@
           ? htmlSourceExtensions(extra)
           : tab?.kind === 'txt'
             ? txtExtensions(extra)
-            : baseExtensions(app.sourceMode || (tab?.heavy ?? false), extra),
+            : baseExtensions(effectiveSourceMode, extra),
     })
   }
 
   // Scroll-spy : titre courant = dernier titre au-dessus du haut du viewport (4.6).
   // Titres seulement pour le Markdown (un .txt/.html n'a pas de structure de titres).
   function updateActiveHeading(v: EditorView) {
-    const tab = activeTab()
+    if (workspace.activePaneId !== paneId) return
     // Gros fichier : pas de scroll-spy (docHeadings est O(doc), gèlerait le scroll).
     const headings = tab?.kind === 'md' && !tab.heavy ? docHeadings(tab.content) : []
     if (!headings.length) {
@@ -416,12 +422,17 @@
 
   onMount(() => {
     view = new EditorView({ parent: host! })
-    editorRef.view = view
+    if (tabId != null) {
+      registerEditor(paneId, tabId, view)
+      registeredId = tabId
+    }
     // Throttle rAF : le scroll molette émet 60-100 events/s ; un seul updateActiveHeading
     // par frame suffit (le scroll-spy vise la frame affichée, pas chaque event).
     let scrollScheduled = false
     const onScroll = () => {
       selectionMenu = null
+      const current = app.tabs.find((item) => item.id === renderedId)
+      if (current && view) cacheEditorRuntime(current.id, view.state, current.rev, view.scrollDOM.scrollTop)
       if (scrollScheduled) return
       scrollScheduled = true
       requestAnimationFrame(() => {
@@ -466,15 +477,23 @@
       window.removeEventListener('resize', hideSelectionMenu)
       document.removeEventListener('pointerdown', onPointerDown)
       document.removeEventListener('keydown', onKeyDown)
+      const current = app.tabs.find((item) => item.id === renderedId)
+      if (current && view) cacheEditorRuntime(current.id, view.state, current.rev, view.scrollDOM.scrollTop)
+      if (view && registeredId != null) unregisterEditor(paneId, registeredId, view)
       view?.destroy()
-      editorRef.view = null
     }
   })
 
   $effect(() => {
-    const tab = activeTab()
-    const sourceMode = app.sourceMode
     if (!view) return
+    if (tab) {
+      if (registeredId == null) registerEditor(paneId, tab.id, view)
+      else updateEditorRegistration(paneId, tab.id, view)
+      registeredId = tab.id
+    } else if (registeredId != null) {
+      unregisterEditor(paneId, registeredId, view)
+      registeredId = null
+    }
     if (tab && tab.id !== renderedId) {
       if (renderedId !== -1) {
         // Ne jamais mettre en cache un état portant encore l'aperçu de reformulation : au
@@ -483,30 +502,34 @@
         if ((view.state.field(rephrasePreviewField, false)?.size ?? 0) > 0) {
           view.dispatch({ effects: setRephrasePreview.of(null) })
         }
-        states.set(renderedId, view.state)
+        const previous = app.tabs.find((item) => item.id === renderedId)
+        if (previous) cacheEditorRuntime(previous.id, view.state, previous.rev, view.scrollDOM.scrollTop)
       }
       // Cache réutilisable seulement s'il a été bâti au rev courant de l'onglet.
-      const cached = revs.get(tab.id) === tab.rev ? states.get(tab.id) : undefined
-      view.setState(cached ?? makeState(tab.id, tab.content))
+      const cached = editorRuntimeForTab(tab.id, tab.rev)
+      view.setState(cached?.state ?? makeState(tab.id, tab.content))
       renderedId = tab.id
       renderedRev = tab.rev
-      revs.set(tab.id, tab.rev)
+      if (cached) requestAnimationFrame(() => {
+        if (view && renderedId === tab.id) view.scrollDOM.scrollTop = cached.scrollTop
+      })
     } else if (tab && tab.rev !== renderedRev) {
       // Onglet actif rechargé depuis le disque : reconstruire depuis le contenu frais.
-      states.delete(tab.id)
       view.setState(makeState(tab.id, tab.content))
       renderedRev = tab.rev
-      revs.set(tab.id, tab.rev)
+      cacheEditorRuntime(tab.id, view.state, tab.rev, 0)
     }
-    const useSource = sourceMode || (tab?.heavy ?? false)
+    const useSource = effectiveSourceMode
     view.dispatch({ effects: livePreviewComp.reconfigure(useSource ? sourceExtensions() : previewExtensions()) })
     view.requestMeasure({ read: () => view && updateActiveHeading(view) })
     // Resync de la sélection publiée (16.1) : setState (changement d'onglet/reload) ne déclenche
     // pas toujours selectionSet — on lit l'état courant pour éviter une sélection périmée.
     const sel = view.state.selection.main
-    editorSel.from = sel.from
-    editorSel.to = sel.to
-    editorSel.text = sel.empty ? '' : view.state.sliceDoc(sel.from, sel.to)
+    publishEditorSelection(paneId, tab?.id ?? -1, view, {
+      from: sel.from,
+      to: sel.to,
+      text: sel.empty ? '' : view.state.sliceDoc(sel.from, sel.to),
+    })
     selectionMenu = null
   })
 
@@ -524,11 +547,15 @@
   )
   $effect(() => {
     const cur = rephrase.current
-    void activeTab()?.rev // re-déclenche sur rechargement externe de l'onglet actif
+    void tab?.rev // re-déclenche sur rechargement externe de l'onglet affiché
     if (!view) return
+    if (workspace.activePaneId !== paneId) {
+      syncRephrasePreview(view, null, { onAccept: acceptRephrase, onReject: cancelRephrase, onRetry: retryRephrase, onChooseModel: openModelSettings })
+      return
+    }
     if (cur) {
       const stale =
-        cur.tabId !== app.activeId ||
+        cur.tabId !== tab?.id ||
         cur.to > view.state.doc.length ||
         view.state.sliceDoc(cur.from, cur.to) !== cur.original
       if (stale) {
@@ -562,7 +589,6 @@
   $effect(() => {
     const reveal = app.pendingReveal
     if (!reveal || !view) return
-    const tab = activeTab()
     if (!tab || tab.path !== reveal.path) return
     revealMatch(view, reveal.line, reveal.col, reveal.length, { select: reveal.select })
     app.pendingReveal = null
@@ -570,27 +596,33 @@
 </script>
 
 <div class="doc">
-  {#if activeTab()?.heavy && !app.focus}
+  {#if tab?.heavy && !app.focus}
     <div class="heavy-notice" role="status">
       <span class="msr" style="font-size:16px">bolt</span>
       <span>Fichier volumineux — affiché en mode source pour rester fluide.</span>
-      <button class="heavy-action" onclick={() => forcePreview(activeTab()!.id)}>Afficher l'aperçu</button>
+      <button class="heavy-action" onclick={() => forcePreview(tab!.id)}>Afficher l'aperçu</button>
     </div>
   {/if}
-  {#if app.focus && activeTab() && isDirty(activeTab()!)}
+  {#if splitLargeSourceMode && !tab?.heavy && !app.focus}
+    <div class="heavy-notice" role="status">
+      <span class="msr" style="font-size:16px">bolt</span>
+      <span>Vue scindée — aperçu suspendu pour garder ce document volumineux fluide.</span>
+    </div>
+  {/if}
+  {#if app.focus && tab && isDirty(tab)}
     <!-- Mode focus : les onglets sont masqués ; on garde un signal « non enregistré » discret. -->
     <span class="focus-dirty" title="Modifications non enregistrées" aria-label="Modifications non enregistrées"></span>
   {/if}
   {#if htmlRender}
-    <iframe class="html-view" title="Aperçu HTML" sandbox="" srcdoc={sandboxDoc(activeTab()!.content, app.theme, COLUMN_PX[app.columnWidth])}></iframe>
+    <iframe class="html-view" title="Aperçu HTML" sandbox="" srcdoc={sandboxDoc(tab!.content, app.theme, COLUMN_PX[app.columnWidth])}></iframe>
   {/if}
   {#if pdfRender}
     <!-- Keyé par id : changer d'onglet PDF remonte le viewer → pdf.destroy()/cancel au démontage. -->
-    {#key activeTab()!.id}
-      <PdfView path={activeTab()!.path ?? ''} />
+    {#key tab!.id}
+      <PdfView path={tab!.path ?? ''} />
     {/key}
   {/if}
-  <div class="editor-host doku-doc" class:source-mode={app.sourceMode || activeTab()?.heavy} class:txt={activeTab()?.kind === 'txt'} class:hidden={htmlRender || pdfRender} bind:this={host}></div>
+  <div class="editor-host doku-doc" class:source-mode={effectiveSourceMode} class:txt={tab?.kind === 'txt'} class:hidden={htmlRender || pdfRender} bind:this={host}></div>
 
   {#if selectionMenu}
     <div
@@ -601,7 +633,7 @@
       role="menu"
       aria-label="Actions sur la sélection"
     >
-      {#if activeTab()?.kind === 'md'}
+      {#if tab?.kind === 'md'}
         <div class="selection-format-row" role="group" aria-label="Mise en forme">
           <button class="selection-format-btn" title="Gras (Ctrl+B)" aria-label="Gras" onmousedown={keepEditorFocus} onclick={() => runFormat(toggleBold)}>
             <span class="msr">format_bold</span>
@@ -631,7 +663,7 @@
         <span class="msr">content_paste</span><span class="selection-menu-label">Coller</span><kbd>Ctrl+V</kbd>
       </button>
       <div class="selection-menu-sep"></div>
-      {#if activeTab()?.kind === 'md'}
+      {#if tab?.kind === 'md'}
         <button
           class="selection-menu-action selection-menu-rewrite"
           class:open={selectionMenuInsertOpen}
@@ -732,7 +764,7 @@
     </div>
   {/if}
 
-  {#if !activeTab()}
+  {#if !tab}
     <div class="empty">
       <span class="empty-mark"><DokuMark size={64} /></span>
       <p class="empty-title">Aucun document ouvert</p>

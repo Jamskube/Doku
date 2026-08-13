@@ -1,6 +1,6 @@
 <script lang="ts">
   import { tick, untrack } from 'svelte'
-  import { activeTab, app, editorSel, isCloudProvider, openPath, type CopilotProvider } from '../lib/stores.svelte'
+  import { activeEditorSelection, activeTab, app, isCloudProvider, openPath, visibleTabs, type CopilotProvider, type DocTab } from '../lib/stores.svelte'
   import { closeWindow, fileSizeAt, isTauri, minimizeWindow, openContextFilesDialog, openFolderDialog, readFileBytes, readTextFileAt, toggleMaximizeWindow } from '../lib/tauri'
   import { formatBytes } from '../lib/ollama'
   import { addCopilotContext, beginOpenAiAuth, cancelOpenAiConnection, cancelPull, connectMinimax, copilot, disconnectMinimaxKey, disconnectOpenAiAccount, ensureCopilotReady, isEmbedModel, jumpToCitation, newChat as clearChat, pullModel, refreshMinimaxStatus, refreshModels, refreshOpenAiStatus, removeCopilotContext, removeModel, retryGeneration, saveMessageAsNote, sendChat, setActiveModel, setCopilotContextFolder, setCopilotMemoryFolder, setCopilotProvider, stopChat, summarizeDoc, type ChatMsg } from '../lib/copilot.svelte'
@@ -388,7 +388,15 @@
       state: docTruncated ? (docIndexAvailable ? 'Document entier (index)' : 'Lecture partielle') : 'Document entier',
     }
   })
-  const contextCount = $derived((copilot.scope === 'folder' ? (ragDir ? 1 : 0) : contextDetails.count) + copilot.contextItems.length)
+  const automaticContextTabs = $derived.by(() => {
+    if (copilot.scope !== 'doc') return []
+    const current = activeTab()?.id
+    return visibleTabs().filter((tab) => tab.id !== current)
+  })
+  const contextCount = $derived(
+    (copilot.scope === 'folder' ? (ragDir ? 1 : 0) : contextDetails.count + automaticContextTabs.length)
+      + copilot.contextItems.length,
+  )
   const contextSummary = $derived(
     copilot.scope === 'folder'
       ? `${ragDir ? '1 dossier' : 'Aucun dossier'}${copilot.contextItems.length ? ` + ${copilot.contextItems.length}` : ''}`
@@ -397,6 +405,15 @@
   const cloudDestination = $derived(
     app.copilotProvider === 'openai' ? 'OpenAI' : app.copilotProvider === 'minimax' ? 'MiniMax' : null,
   )
+  const hasSupplementalContext = $derived(
+    automaticContextTabs.length > 0 || copilot.contextItems.length > 0 || copilot.contextFolder !== null,
+  )
+
+  function automaticContextMeta(tab: DocTab): string {
+    if (tab.kind === 'pdf') return 'PDF · texte lu à la demande · volet visible'
+    const format = tab.kind === 'md' ? 'Markdown' : tab.kind === 'html' ? 'HTML' : 'Texte'
+    return `${format} · ${numberFormatter.format(tab.content.length)} caractères · volet visible`
+  }
   const memoryDocument = $derived.by(() => {
     const tab = activeTab()
     return tab?.path ? { path: tab.path, label: tab.name, kind: 'document' as const } : null
@@ -581,7 +598,7 @@
   let contextLoading = $state(false)
   let addMenuPos = $state<{ left: number; bottom: number } | null>(null)
   const ADD_MENU_W = 276
-  const selectionAvailable = $derived(!!editorSel.text.trim() && activeTab()?.kind !== 'pdf')
+  const selectionAvailable = $derived(!!activeEditorSelection().text.trim() && activeTab()?.kind !== 'pdf')
 
   function closeAddMenu(restoreFocus = false) {
     addMenuOpen = false
@@ -629,7 +646,8 @@
     if (!text.trim()) return null
     const bounded = truncateContextItem(text)
     const owner = activeTab()?.path ?? activeTab()?.id
-    const id = contextItemId({ kind, path, owner: owner == null ? null : String(owner), from: editorSel.from, to: editorSel.to, text: bounded.text })
+    const selection = activeEditorSelection()
+    const id = contextItemId({ kind, path, owner: owner == null ? null : String(owner), from: selection.from, to: selection.to, text: bounded.text })
     return {
       id,
       kind,
@@ -644,7 +662,7 @@
 
   function addSelection() {
     const tab = activeTab()
-    const item = contextItem('selection', `Sélection · ${tab?.name ?? 'document'}`, editorSel.text)
+    const item = contextItem('selection', `Sélection · ${tab?.name ?? 'document'}`, activeEditorSelection().text)
     if (item) addCopilotContext([item])
     closeAddMenu(true)
   }
@@ -2124,6 +2142,16 @@
                       {contextDetails.state}
                     </span>
                   </button>
+                  {#each automaticContextTabs as tab (tab.id)}
+                    <div class="cop-context-extra automatic" role="note" aria-label={`${tab.name}, ajouté automatiquement au contexte`}>
+                      <span class="msr" aria-hidden="true">description</span>
+                      <span class="cop-context-extra-copy">
+                        <strong>{tab.name}</strong>
+                        <small>{automaticContextMeta(tab)}</small>
+                      </span>
+                      <span class="cop-context-state">Automatique</span>
+                    </div>
+                  {/each}
                   <button
                     class="cop-scope"
                     class:sel={copilot.scope === 'folder'}
@@ -2168,12 +2196,16 @@
                       <span class="msr">chevron_right</span>
                     </button>
                   {/if}
-                  {#if cloudDestination && (copilot.contextItems.length || copilot.contextFolder)}
+                  {#if cloudDestination && hasSupplementalContext}
                     <p class="cop-context-destination"><span class="msr">cloud</span> Sera envoyé à {cloudDestination} avec votre question.</p>
                   {/if}
                   {#if copilot.contextError}<p class="cop-context-error" role="alert">{copilot.contextError}</p>{/if}
-                  {#if copilot.messages.length && (copilot.contextItems.length || copilot.contextFolder)}
-                    <p class="cop-context-history">Retirer une source agit sur les prochains envois. Nouvelle conversation purge aussi l’historique.</p>
+                  {#if copilot.messages.length && hasSupplementalContext}
+                    <p class="cop-context-history">
+                      {automaticContextTabs.length
+                        ? 'Les documents visibles sont recapturés à chaque envoi. Les sources ajoutées restent modifiables séparément.'
+                        : 'Retirer une source agit sur les prochains envois. Nouvelle conversation purge aussi l’historique.'}
+                    </p>
                   {/if}
                 </div>
               </div>

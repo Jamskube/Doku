@@ -29,6 +29,37 @@
 
 **Verdict : CodeMirror 6 live preview** — voir `docs/adr/0002-moteur-wysiwyg-cm6-live-preview.md`. Le comportement spécifié par FR-3 (« syntaxe du bloc courant visible pendant l'édition ») *est* le modèle live-preview ; Milkdown le contredit deux fois (round-trip destructif, perf).
 
+## Spikes M0/M2 — bureau scindé (2026-08-13)
+
+`/split-workspace.html` monte deux instances indépendantes de CodeMirror avec le document de stress de 500 Ko et la couche live-preview. Le bouton exécute 80 frappes dans le volet principal et vérifie que le second buffer reste strictement inchangé.
+
+- **PASS** si le volet secondaire est inchangé, le volet principal a reçu les frappes et le p95 reste ≤ 50 ms.
+- **FAIL** sinon : le bureau scindé doit basculer le volet secondaire en lecture seule ou revoir la cible de performance avant implémentation.
+- La cible produit p95 ≤ 16 ms reste plus stricte ; le seuil de 50 ms du spike est uniquement le kill-test contre les gels perceptibles.
+
+Résultat mesuré le 2026-08-13 dans Chromium sur la machine ARM64 de référence :
+
+| Mesure | Résultat |
+|---|---|
+| Montage + premier rendu des deux documents de 500 Ko | **73,9 ms** |
+| Frappe 80 caractères dans le volet principal | avg **19,2 ms** · p95 **29,5 ms** · max **37,4 ms** |
+| Buffer secondaire après la frappe | **strictement inchangé** |
+| Breakpoint 700 × 720 | colonne, deux surfaces **676 × 280 px** |
+| Verdict kill-test | **PASS** |
+
+Le checkpoint M2 ajoute un garde-fou produit : lorsque le bureau est scindé, un document d’au moins 450 000 caractères conserve son buffer CodeMirror éditable mais suspend temporairement les décorations live-preview. La vue propre revient automatiquement à la réunification.
+
+Mesure M2, cinq passages dans Chromium après montage :
+
+| Mesure | Résultat |
+|---|---|
+| Frappe 80 caractères, p95 | **18,6 à 20,0 ms** |
+| Maximum observé | **27,3 ms** |
+| Buffer secondaire | **strictement inchangé sur 5/5 passages** |
+| Checkpoint produit p95 ≤ 25 ms, max < 50 ms | **PASS** |
+
+Limite explicite : cette mesure valide l’interaction lourde du bureau scindé sur la machine ARM64 de référence. Elle ne remplace pas un profilage de documents dépassant nettement le corpus de 500 Ko.
+
 ## Notes de périmètre
 
 Le plugin `src/live-preview.ts` (candidat B) a été écrit pour ce spike (~170 lignes) : titres, gras/italique/barré, code inline + fences, liens, citations, checkbox-widgets, wikilinks — sélection-aware, limité au viewport. **Hors périmètre spike** et compté comme effort restant dans l'ADR : tableaux (le point dur documenté), images inline, `atomicRanges` (saut de curseur), copier-coller/IME polish.

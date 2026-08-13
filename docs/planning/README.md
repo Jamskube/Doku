@@ -8,9 +8,10 @@ Artefacts produit, dans l'ordre où ils tranchent : brainstorm → PRD → UX �
 |---|---|
 | `brainstorm-doku.md` | Idéation initiale |
 | `brainstorm-atelier-documentaire.md` | Convergence SCAMPER sur la lecture, l'édition multi-format et la prise de notes |
-| `PRD.md` · `PRD-v1.5.md` · `PRD-v2.md` | Exigences produit par palier (v2 = copilote IA local) |
-| `ux-spec.md` | Flows et wireframes |
-| `architecture.md` · `architecture-v2-copilot.md` | Architecture technique (base, puis copilote) |
+| `feasibility-v3-split-workspace.md` | Gate GO et kill-test ARM64 du bureau scindé v3 |
+| `PRD.md` · `PRD-v1.5.md` · `PRD-v2.md` · `PRD-v3.md` | Exigences produit par palier (v2 = copilote IA local ; v3 = bureau scindé et notes liées) |
+| `ux-spec.md` · `ux-spec-v3.md` | Flows et wireframes (socle, puis bureau scindé v3) |
+| `architecture.md` · `architecture-v2-copilot.md` · `architecture-v3-workspace.md` | Architecture technique (base, copilote, puis bureau scindé) |
 | `epics.md` | Décomposition en epics/stories — source des sprints. État : backlog vide (Epics 1-16, 18, 19 livrés ; 17 clos NO-GO) |
 | `claude-design-prompt.md` | Prompt de génération des maquettes |
 

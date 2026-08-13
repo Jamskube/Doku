@@ -18,3 +18,19 @@ body { margin: 0; font-family: system-ui, sans-serif; background: #F4F1E9; color
 .cm-task-checkbox { margin-right: .35em; transform: translateY(1px); cursor: pointer; }
 .cm-lp-wikilink { color: #6BA47B; cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
 .cm-lp-codeblock { background: #F9F5EC; font-family: ui-monospace, monospace; font-size: 13px; }
+
+/* M0 — bureau scindé */
+.workspace-spike { flex: 1; min-height: 0; display: flex; gap: 0; padding: 12px; background: #E8E3D8; }
+.pane-spike { flex: 1 1 0; min-width: 280px; display: flex; flex-direction: column; overflow: hidden; border-radius: 14px; background: #FDFBF5; box-shadow: 0 0 0 1px rgba(28,26,22,.12); }
+.pane-spike > header { flex: none; padding: 8px 12px; font-size: 12px; font-weight: 650; border-bottom: 1px solid rgba(28,26,22,.1); }
+.pane-spike .editor { flex: 1 1 0; min-height: 0; }
+.divider-spike { flex: 0 0 13px; cursor: col-resize; }
+.split-log { flex: 0 0 160px; border-top: 1px solid rgba(28,26,22,.15); }
+#verdict { margin-left: auto; font-size: 12px; font-weight: 700; }
+#verdict.pass { color: #287543; }
+#verdict.fail { color: #B12E2E; }
+@media (max-width: 719px) {
+  .workspace-spike { flex-direction: column; }
+  .pane-spike { min-width: 0; min-height: 280px; }
+  .divider-spike { flex-basis: 13px; cursor: row-resize; }
+}

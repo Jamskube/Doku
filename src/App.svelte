@@ -2,12 +2,13 @@
   import { onMount, type Component } from 'svelte'
   import Sidebar from './components/Sidebar.svelte'
   import TitleBar from './components/TitleBar.svelte'
-  import DocumentView from './components/DocumentView.svelte'
+  import WorkspaceView from './components/WorkspaceView.svelte'
   import ConfirmDialog from './components/ConfirmDialog.svelte'
   import WikilinkPrompt from './components/WikilinkPrompt.svelte'
-  import { app, activeTab, askSave, checkExternalChanges, cycleTab, dialog, dismissReloadPrompt, initApp, isDirty, openCopilot, openDropped, openPath, openTab, openWikilink, reloadPromptedTab, requestCloseTab, saveSession, saveSettings, saveTab, togglePin, toggleSidebarView } from './lib/stores.svelte'
+  import { activatePane, activeEditorView, app, activeTab, askSave, checkExternalChanges, cycleTab, dialog, dismissReloadPrompt, initApp, isDirty, openCopilot, openDropped, openPath, openTab, openWikilink, reloadPromptedTab, requestCloseTab, saveSession, saveSettings, saveTabOrSaveAs, toggleActiveSourceMode, togglePin, toggleSidebarView, workspace } from './lib/stores.svelte'
   import { onFileDrop, onOpenFile, onWindowCloseRequested, onWindowFocus, openFileDialog } from './lib/tauri'
   import { detectUnsupported } from './lib/encoding'
+  import { otherPane, type PaneId } from './lib/workspace'
 
   // Persiste les préférences (thème, état sidebar) à chaque changement — les lectures
   // de app.* dans saveSettings sont suivies par l'effet.
@@ -44,17 +45,24 @@
   // Persiste la session (onglets ouverts + actif), débouncée à 500 ms.
   let sessionTimer: ReturnType<typeof setTimeout> | undefined
   $effect(() => {
-    void [app.tabs.map((t) => t.path).join('|'), app.activeId]
+    void [
+      app.tabs.map((t) => t.path).join('|'),
+      workspace.split,
+      workspace.activePaneId,
+      workspace.primary.tabId,
+      workspace.secondary.tabId,
+      workspace.ratio,
+    ]
     clearTimeout(sessionTimer)
     sessionTimer = setTimeout(saveSession, 500)
   })
 
   async function saveActive() {
     const tab = activeTab()
-    if (tab) await saveTab(tab)
+    if (tab) await saveTabOrSaveAs(tab)
   }
 
-  async function openFromDialog() {
+  async function openFromDialog(targetPane: PaneId = workspace.activePaneId) {
     try {
       const file = await openFileDialog()
       if (!file) return
@@ -63,7 +71,7 @@
         app.banner = { tone: 'error', title: 'Fichier non pris en charge', message: reason }
         return
       }
-      openTab(file.name, file.path, file.content)
+      openTab(file.name, file.path, file.content, undefined, targetPane)
     } catch (err) {
       console.error('Ouverture du fichier échouée', err)
       app.banner = {
@@ -95,7 +103,7 @@
       )
       if (choice === 'cancel') return false
       if (choice === 'save') {
-        for (const t of dirty) if (!(await saveTab(t))) return false
+        for (const t of dirty) if (!(await saveTabOrSaveAs(t))) return false
       }
       return true
     })
@@ -140,6 +148,12 @@
         app.focus = false
         return
       }
+      if (e.key === 'F6' && workspace.split) {
+        e.preventDefault()
+        activatePane(otherPane(workspace.activePaneId))
+        requestAnimationFrame(() => activeEditorView()?.focus())
+        return
+      }
       const mod = e.ctrlKey || e.metaKey
       if (!mod) return
       const k = e.key.toLowerCase()
@@ -154,7 +168,7 @@
         cycleTab(e.shiftKey ? -1 : 1)
       } else if (e.key === '/') {
         e.preventDefault()
-        app.sourceMode = !app.sourceMode
+        toggleActiveSourceMode()
       } else if (k === 'o' && !e.shiftKey) {
         e.preventDefault()
         await openFromDialog()
@@ -245,8 +259,6 @@
             aria-pressed={app.copilotOpen}
             onclick={() => {
               if (app.copilotOpen) {
-                // Fermeture → réinitialise en 'chat' : la réouverture repart sur la coquille
-                // sans re-solliciter le moteur (la vue Modèles seule déclenche ensureReady).
                 app.copilotOpen = false
                 app.copilotView = 'chat'
                 app.copilotExpanded = false
@@ -258,7 +270,7 @@
             <svg width="17" height="17" viewBox="-0.5 -0.5 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" style="transform:scaleX(-1)"><path d="M5.625 2.1875v10.625M1.875 5.875c0 -1.4 0 -2.1 0.2725 -2.635a2.5 2.5 0 0 1 1.0925 -1.0925C3.775 1.875 4.475 1.875 5.875 1.875h3.25c1.4 0 2.1 0 2.635 0.2725a2.5 2.5 0 0 1 1.0925 1.0925C13.125 3.775 13.125 4.475 13.125 5.875v3.25c0 1.4 0 2.1 -0.2725 2.635a2.5 2.5 0 0 1 -1.0925 1.0925C11.225 13.125 10.525 13.125 9.125 13.125H5.875c-1.4 0 -2.1 0 -2.635 -0.2725a2.5 2.5 0 0 1 -1.0925 -1.0925C1.875 11.225 1.875 10.525 1.875 9.125z"></path></svg>
           </button>
         {/if}
-        <DocumentView onOpen={openFromDialog} />
+        <WorkspaceView onOpen={openFromDialog} />
       </div>
     </div>
   </div>
@@ -434,7 +446,6 @@
   }
   /* Panneau copilote ouvert : la jonction document↔chat est à angle droit. */
   .page.with-copilot { border-radius: 14px 0 0 0; }
-  /* Bouton d'ouverture du copilote, coin haut-droit du document (maquette w2-copilot). */
   .collapse-btn {
     position: absolute;
     top: 8px;
@@ -449,23 +460,15 @@
     border-radius: 9px;
     background: var(--cream-base);
     color: var(--ink-2);
-    box-shadow:
-      0 0 0 1px var(--elevation-ring),
-      0 4px 12px rgba(var(--shadow-rgb), 0.16);
+    box-shadow: 0 0 0 1px var(--elevation-ring), 0 4px 12px rgba(var(--shadow-rgb), 0.16);
     cursor: pointer;
-    transition:
-      background-color 140ms ease,
-      color 140ms ease,
-      box-shadow 140ms ease,
-      transform 100ms ease;
+    transition: background-color 140ms ease, color 140ms ease, box-shadow 140ms ease, transform 100ms ease;
   }
   .collapse-btn:hover,
   .collapse-btn.on {
     background: var(--cream-tint);
     color: var(--ink);
-    box-shadow:
-      0 0 0 1px var(--elevation-ring),
-      0 5px 14px rgba(var(--shadow-rgb), 0.20);
+    box-shadow: 0 0 0 1px var(--elevation-ring), 0 5px 14px rgba(var(--shadow-rgb), 0.20);
   }
   .collapse-btn:active { transform: scale(0.96); }
   .collapse-btn:focus-visible { outline: 2px solid var(--line-3); outline-offset: 2px; }

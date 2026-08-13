@@ -1,12 +1,14 @@
 <script lang="ts">
   import { onMount, tick } from 'svelte'
-  import { app, activeTab, requestCloseTab, isDirty, saveTab, setColumnWidth, toggleTheme, togglePin, type ColumnWidth, type DocKind } from '../lib/stores.svelte'
+  import { app, activeTab, requestCloseTab, isDirty, saveTabOrSaveAs, selectTab, setColumnWidth, toggleActiveSourceMode, togglePin, toggleWorkspaceSplit, workspace, workspaceLayout, type ColumnWidth, type DocKind } from '../lib/stores.svelte'
+  import type { PaneId } from '../lib/workspace'
   import { tabDiscriminator } from '../lib/tabs'
   import { parentPath } from '../lib/explorer'
   import { closeWindow, minimizeWindow, readImageDataUrl, saveDocxDialog, saveHtmlDialog, toggleMaximizeWindow } from '../lib/tauri'
   import DokuMark from '../lib/DokuMark.svelte'
+  import PaneTabSelector from './PaneTabSelector.svelte'
 
-  let { onOpen }: { onOpen: () => void } = $props()
+  let { onOpen }: { onOpen: (paneId?: PaneId) => void } = $props()
 
   let railHover = $state(false)
   let menuOpen = $state(false)
@@ -48,7 +50,7 @@
     if (restoreFocus) void tick().then(() => tabsMenuTriggerEl?.focus())
   }
   function pickTab(id: number) {
-    app.activeId = id
+    selectTab(id)
     closeTabsMenu(true)
   }
   function tabsMenuItems(): HTMLButtonElement[] {
@@ -99,7 +101,7 @@
 
   async function saveActive() {
     const tab = activeTab()
-    if (tab && tab.kind !== 'pdf') await saveTab(tab)
+    if (tab && tab.kind !== 'pdf') await saveTabOrSaveAs(tab)
   }
 
   // Exports HTML/print en import() dynamique (motif DOCX ci-dessous) : ils tirent
@@ -258,7 +260,7 @@
   })
 </script>
 
-<div class="titlebar">
+<div class="titlebar" class:split={workspace.split} class:copilot-open={app.copilotOpen}>
   <div class="rail-zone">
     <button
       class="rail-btn"
@@ -281,8 +283,17 @@
     </button>
   </div>
 
-  <div class="tabs" data-tauri-drag-region bind:this={tabsBox}>
-    {#if tabsCollapsed}
+  <div class="tabs" class:split={workspace.split} class:stacked={workspaceLayout.stacked} data-tauri-drag-region bind:this={tabsBox} style={`--workspace-ratio:${workspace.ratio}%`}>
+    {#if workspace.split}
+      <div class="split-slot primary" data-tauri-drag-region>
+        <PaneTabSelector paneId="primary" onOpen={() => onOpen('primary')} />
+      </div>
+      {#if !workspaceLayout.stacked}
+        <div class="split-slot secondary" data-tauri-drag-region>
+          <PaneTabSelector paneId="secondary" onOpen={() => onOpen('secondary')} />
+        </div>
+      {/if}
+    {:else if tabsCollapsed}
       {@const active = activeTab()}
       <div class="tabs-overflow-root" bind:this={tabsMenuRootEl}>
         <button
@@ -339,7 +350,7 @@
           role="tab"
           aria-selected={tab.id === app.activeId}
           title={(tab.path ?? tab.name) + (isDirty(tab) ? ' — non enregistré' : '')}
-          onclick={() => (app.activeId = tab.id)}
+          onclick={() => selectTab(tab.id)}
           onauxclick={(e) => { if (e.button === 1) requestCloseTab(tab.id) }}
         >
           {#if isDirty(tab)}<span class="dot">●</span>{/if}
@@ -358,9 +369,11 @@
         </button>
       {/each}
     {/if}
-    <button class="new-tab" title="Nouvel onglet (Ctrl+O)" aria-label="Nouvel onglet" onclick={onOpen}>
-      <span class="msr" style="font-size:20px">add</span>
-    </button>
+    {#if !workspace.split}
+      <button class="new-tab" title="Nouvel onglet (Ctrl+O)" aria-label="Nouvel onglet" onclick={() => onOpen()}>
+        <span class="msr" style="font-size:20px">add</span>
+      </button>
+    {/if}
   </div>
 
   <div class="document-menu-root" bind:this={menuRootEl}>
@@ -427,7 +440,7 @@
           aria-checked={app.sourceMode}
           disabled={!activeTab() || activeTab()?.kind === 'pdf'}
           onmouseenter={() => (submenu = null)}
-          onclick={() => runMenuAction(() => { app.sourceMode = !app.sourceMode })}
+          onclick={() => runMenuAction(toggleActiveSourceMode)}
         >
           <span class="menu-check">{app.sourceMode ? '✓' : ''}</span><span class="menu-label">Mode source</span><kbd>Ctrl+/</kbd>
         </button>
@@ -473,11 +486,17 @@
   </div>
 
   <div class="win-controls">
+    <button
+      class="ctrl"
+      title={workspace.split ? 'Réunir les volets' : 'Scinder la vue'}
+      aria-label={workspace.split ? 'Réunir les volets' : 'Scinder la vue'}
+      aria-pressed={workspace.split}
+      onclick={toggleWorkspaceSplit}
+    >
+      <span class="msr" style="font-size:18px">view_column</span>
+    </button>
     <button class="ctrl pin" class:on={app.pinned} title="Toujours au-dessus (Ctrl+Maj+T)" aria-label="Toujours au-dessus" aria-pressed={app.pinned} onclick={togglePin}>
       <span class="msr" style="font-size:19px">keep</span>
-    </button>
-    <button class="ctrl" title="Thème sombre" aria-label="Thème sombre" aria-pressed={app.theme === 'dark'} onclick={toggleTheme}>
-      <span class="msr" style="font-size:18px">{app.theme === 'dark' ? 'light_mode' : 'dark_mode'}</span>
     </button>
     {#if !app.copilotOpen}
       <!-- Panneau copilote ouvert → ces contrôles migrent dans son en-tête (maquette w2). -->
@@ -498,6 +517,7 @@
 <style>
   .titlebar {
     --titlebar-control-height: 32px;
+    --titlebar-right-safe: 292px;
     position: relative;
     z-index: 20;
     display: flex;
@@ -511,6 +531,11 @@
     box-shadow: inset 0 1px 0 var(--chrome-material-filet);
     user-select: none;
   }
+  .titlebar.copilot-open { --titlebar-right-safe: 156px; }
+  .titlebar.split .document-menu-root { margin-left: auto; }
+  .titlebar > .rail-zone,
+  .titlebar > .document-menu-root,
+  .titlebar > .win-controls { position: relative; z-index: 3; }
 
   .rail-zone { display: flex; align-items: center; flex-shrink: 0; }
   .rail-btn {
@@ -651,6 +676,41 @@
     gap: 3px;
     padding: 0 4px;
     min-width: 0;
+  }
+  .tabs.split {
+    position: absolute;
+    z-index: 1;
+    inset: 0;
+    display: grid;
+    grid-template-columns: var(--workspace-ratio) minmax(0, 1fr);
+    gap: 0;
+    padding: 0;
+    pointer-events: auto;
+  }
+  .split-slot {
+    position: relative;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    padding: 0 8px;
+  }
+  .split-slot.primary { padding-left: 48px; }
+  .split-slot.secondary {
+    padding-left: 0;
+    padding-right: max(8px, min(var(--titlebar-right-safe), calc(100% - 112px)));
+  }
+  .tabs.split.stacked {
+    position: relative;
+    z-index: auto;
+    inset: auto;
+    flex: 1;
+    display: flex;
+    grid-template-columns: none;
+    padding: 0 4px;
+  }
+  .tabs.split.stacked .split-slot.primary {
+    flex: 1;
+    padding: 0;
   }
 
   /* Mode replié : la rangée entière devient « onglet actif · n ▾ » + menu flottant

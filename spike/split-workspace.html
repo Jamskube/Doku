@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Spike — bureau scindé</title>
+  <link rel="stylesheet" href="/src/spike.css" />
+</head>
+<body>
+  <header class="bar">
+    <strong>M2 — deux éditeurs CodeMirror · garde 500 Ko</strong>
+    <button id="btn-run">Lancer le kill-test</button>
+    <span id="verdict" role="status">prêt</span>
+    <a href="/index.html">← hub</a>
+  </header>
+  <main class="workspace-spike" aria-label="Deux documents de test">
+    <section class="pane-spike" data-pane="primary">
+      <header>Source — 500 Ko</header>
+      <div id="primary" class="editor"></div>
+    </section>
+    <div class="divider-spike" role="separator" aria-orientation="vertical"></div>
+    <section class="pane-spike" data-pane="secondary">
+      <header>Notes — 500 Ko</header>
+      <div id="secondary" class="editor"></div>
+    </section>
+  </main>
+  <pre id="log" class="log split-log">prêt.</pre>
+  <script type="module" src="/src/split-workspace.ts"></script>
+</body>
+</html>

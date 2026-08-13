@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   buildContextBundle,
   contextItemId,
+  mergeAutomaticContextItems,
   normalizeContextPath,
   pathBelongsToFolder,
   truncateContextItem,
@@ -60,6 +61,14 @@ describe('copilot context', () => {
     const result = upsertContextItems(existing, [item('file:new', 'nouveau')])
     expect(result.items).toEqual(existing)
     expect(result.rejected).toBe(1)
+  })
+
+  it('préfère le document visible frais au même fichier ajouté manuellement', () => {
+    const manual = item('file:c:/notes/plan.md', 'ancienne version', 'C:\\Notes\\Plan.md')
+    const automatic = item('workspace:2', 'version visible', 'c:/notes/plan.md')
+    const clipboard = { ...item('clipboard:1', 'copié'), kind: 'clipboard' as const }
+
+    expect(mergeAutomaticContextItems([automatic], [manual, clipboard])).toEqual([automatic, clipboard])
   })
 
   it('distingue la troncature à l’ajout de celle du budget de requête', () => {

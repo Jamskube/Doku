@@ -5,10 +5,11 @@
 import {
   activeTab,
   app,
-  editorRef,
+  activeEditorView,
   isCloudProvider,
   openPath,
   refreshExplorer,
+  visibleTabs,
   type CopilotProvider,
   type DocKind,
 } from './stores.svelte'
@@ -72,6 +73,7 @@ import {
 } from './copilot-service'
 import {
   buildContextBundle,
+  mergeAutomaticContextItems,
   pathBelongsToFolder,
   upsertContextItems,
   type ContextBundle,
@@ -130,7 +132,7 @@ export interface ChatMsg {
   memorySources?: MemoryPromptSource[]
   // Posé sur une carte `failed` : ce qu'il faut rejouer pour « Réessayer » (la question ou le
   // mode de résumé). Le document est re-capturé au moment du retry (le dossier aussi, 15.3).
-  retry?: { kind: 'chat'; question: string; scope: ChatScope; contextRevision: number } | { kind: 'summary'; mode: SummaryMode }
+  retry?: { kind: 'chat'; question: string; scope: ChatScope; contextRevision: number; workspaceContextKey?: string } | { kind: 'summary'; mode: SummaryMode }
 }
 
 export const copilot = $state({
@@ -644,6 +646,48 @@ function generationFailure(error: unknown, provider: CopilotProvider, fallback: 
 // ne sont PAS avalées ici : elles remontent (throw) au catch appelant → carte `failed` +
 // retry. Met à jour `copilot.pdfDoc` pour le badge. `signal` rend l'extraction annulable.
 type PdfResolution = { ok: true; text: string } | { ok: false; message: string }
+
+type VisibleDocumentSnapshot = {
+  id: number
+  name: string
+  text: string
+  kind: DocKind
+  path: string | null
+  rev: number
+}
+
+function visibleContextKey(): string {
+  const current = activeTab()?.id ?? 0
+  return `${current}:${visibleTabs().map((tab) => `${tab.id}:${tab.rev}:${tab.content.length}`).join('|')}`
+}
+
+function snapshotAutomaticDocuments(): VisibleDocumentSnapshot[] {
+  const current = activeTab()?.id
+  if (current == null) return []
+  return visibleTabs()
+    .filter((tab) => tab.id !== current)
+    .map((tab) => ({
+      id: tab.id,
+      name: tab.name,
+      text: tab.content,
+      kind: tab.kind,
+      path: tab.path,
+      rev: tab.rev,
+    }))
+}
+
+function automaticContextItem(doc: VisibleDocumentSnapshot, text: string): CopilotContextItem {
+  return {
+    id: `workspace:${doc.id}`,
+    kind: 'file',
+    label: doc.name,
+    text,
+    charCount: text.length,
+    path: doc.path,
+    signature: String(doc.rev),
+    truncatedAtLoad: false,
+  }
+}
 async function resolvePdfText(
   path: string | null | undefined,
   signal: AbortSignal,
@@ -677,10 +721,12 @@ export async function sendChat(
   const localModel = app.activeModel
   // Snapshot synchrone avant tout await : ni retrait ni changement de dossier pendant le
   // streaming ne peut modifier le corpus de cette requête en vol.
-  const contextItems = copilot.contextItems.map((item) => ({ ...item }))
+  let contextItems = copilot.contextItems.map((item) => ({ ...item }))
   const contextFolder = copilot.contextFolder ? { ...copilot.contextFolder } : null
   const memoryFolder = copilot.memoryFolder ? { ...copilot.memoryFolder } : null
   const contextRevision = copilot.contextRevision
+  const automaticDocuments = scope === 'doc' ? snapshotAutomaticDocuments() : []
+  const workspaceContextKey = scope === 'doc' ? visibleContextKey() : undefined
 
   // Garde modèle : carte de CONFIG sans démarrer le sidecar (préserve le boot-safety 14.0).
   if (provider === 'ollama' && !localModel) {
@@ -716,11 +762,39 @@ export async function sendChat(
     role: 'assistant',
     content: '',
     streaming: true,
-    status: scope === 'folder' ? 'Doku-San cherche dans vos notes…' : 'Doku-San lit le document…',
+    status: scope === 'folder'
+      ? 'Doku-San cherche dans vos notes…'
+      : automaticDocuments.length
+        ? 'Doku-San lit les documents…'
+        : 'Doku-San lit le document…',
   })
   const idx = copilot.messages.length - 1 // index stable (generating sérialise les envois)
 
   try {
+    if (automaticDocuments.length) {
+      const automaticItems: CopilotContextItem[] = []
+      for (const automatic of automaticDocuments) {
+        if (automatic.kind !== 'pdf') {
+          automaticItems.push(automaticContextItem(automatic, automatic.text))
+          continue
+        }
+        const setStatus = (status: string) => {
+          const message = copilot.messages[idx]
+          if (message) message.status = status
+        }
+        const resolved = await resolvePdfText(automatic.path, signal, setStatus)
+        if (signal.aborted) return
+        if (!resolved.ok) {
+          const message = copilot.messages[idx]
+          message.content = `Le second document « ${automatic.name} » n’a pas pu rejoindre le contexte. ${resolved.message}`
+          message.notice = true
+          return
+        }
+        automaticItems.push(automaticContextItem(automatic, resolved.text))
+      }
+      contextItems = mergeAutomaticContextItems(automaticItems, contextItems)
+    }
+
     // PDF (18.2) : résoudre le texte AVANT le runtime — un PDF scanné/illisible poste sa
     // notice honnête SANS démarrer le sidecar. Mode dossier : le doc n'est pas utilisé.
     if (scope === 'doc' && doc.kind === 'pdf') {
@@ -748,7 +822,7 @@ export async function sendChat(
       } else {
         message.content = copilot.error || 'Le moteur IA est indisponible.'
         message.failed = true
-        message.retry = { kind: 'chat', question: q, scope, contextRevision }
+        message.retry = { kind: 'chat', question: q, scope, contextRevision, workspaceContextKey }
       }
       return
     }
@@ -870,7 +944,7 @@ export async function sendChat(
     }
     copilot.messages[idx].content = copilot.messages[idx].content || generationFailure(e, provider, 'La génération a échoué. Vérifiez que le moteur est prêt, puis réessayez.')
     copilot.messages[idx].failed = true
-    copilot.messages[idx].retry = { kind: 'chat', question: q, scope, contextRevision }
+    copilot.messages[idx].retry = { kind: 'chat', question: q, scope, contextRevision, workspaceContextKey }
   } finally {
     const m = copilot.messages[idx]
     if (m) {
@@ -913,7 +987,7 @@ export async function jumpToCitation(s: CitedPassage): Promise<void> {
   }
   // Document sans chemin (non enregistré) : l'onglet est déjà actif, révélation directe.
   const tab = activeTab()
-  const view = editorRef.view
+  const view = activeEditorView()
   if (!tab || tab.kind === 'pdf' || !view) return
   const loc = locatePassage(tab.content, s.text)
   if (loc) {
@@ -1374,7 +1448,7 @@ let rephraseSeq = 0
 // sendChat ; le tabId fige l'onglet cible (éditeur CM6 PARTAGÉ entre onglets).
 export async function rephraseSelection(mode: RephraseMode): Promise<void> {
   if (copilot.generating || rephrase.current) return
-  const view = editorRef.view
+  const view = activeEditorView()
   if (!view) return
   const sel = view.state.selection.main
   if (sel.empty) return
@@ -1471,7 +1545,7 @@ async function runRephrase(params: { tabId: number; from: number; to: number; or
 export function acceptRephrase(): void {
   const cur = rephrase.current
   if (!cur || cur.phase !== 'ready') return
-  const view = editorRef.view
+  const view = activeEditorView()
   if (!view || !cur.text) return
   if (app.activeId !== cur.tabId || cur.to > view.state.doc.length || view.state.sliceDoc(cur.from, cur.to) !== cur.original) {
     rephrase.current = null
@@ -1515,6 +1589,13 @@ export function retryGeneration(idx: number): void {
   const r = m.retry
   if (r.kind === 'chat' && r.contextRevision !== copilot.contextRevision) {
     m.content = 'Le contexte a changé — renvoyez la question pour utiliser les sources actuellement affichées.'
+    m.failed = false
+    m.notice = true
+    m.retry = undefined
+    return
+  }
+  if (r.kind === 'chat' && r.workspaceContextKey && r.workspaceContextKey !== visibleContextKey()) {
+    m.content = 'Les documents visibles ont changé — renvoyez la question pour utiliser les deux volets actuellement affichés.'
     m.failed = false
     m.notice = true
     m.retry = undefined

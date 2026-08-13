@@ -108,6 +108,23 @@ export function upsertContextItems(
   return { items: out, rejected }
 }
 
+function contextSourceKey(item: Pick<CopilotContextItem, 'id' | 'path'>): string {
+  return item.path ? `path:${normalizeContextPath(item.path)}` : `id:${item.id}`
+}
+
+/**
+ * Les documents visibles sont des sources implicites et fraîches. Ils passent avant les
+ * ajouts manuels afin qu'un même fichier, ajouté auparavant via « + », ne soit jamais envoyé
+ * deux fois avec deux versions potentiellement différentes.
+ */
+export function mergeAutomaticContextItems(
+  automatic: readonly CopilotContextItem[],
+  manual: readonly CopilotContextItem[],
+): CopilotContextItem[] {
+  const automaticKeys = new Set(automatic.map(contextSourceKey))
+  return [...automatic, ...manual.filter((item) => !automaticKeys.has(contextSourceKey(item)))]
+}
+
 function allocate(total: number, lengths: readonly number[]): number[] {
   const out = lengths.map(() => 0)
   let left = Math.max(0, total)
