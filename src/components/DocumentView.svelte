@@ -564,7 +564,7 @@
     if (!reveal || !view) return
     const tab = activeTab()
     if (!tab || tab.path !== reveal.path) return
-    revealMatch(view, reveal.line, reveal.col, reveal.length)
+    revealMatch(view, reveal.line, reveal.col, reveal.length, { select: reveal.select })
     app.pendingReveal = null
   })
 </script>

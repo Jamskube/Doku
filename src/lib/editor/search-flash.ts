@@ -27,16 +27,23 @@ export const searchFlashField = StateField.define<DecorationSet>({
 
 const FLASH_MS = 1600
 
-// Sélectionne et centre l'occurrence (line 1-based, col 0-based, longueur), pose le
-// cadre puis le retire après FLASH_MS. Positions bornées à la ligne (robuste si l'index
-// de recherche a légèrement dérivé du disque).
-export function revealMatch(view: EditorView, line: number, col: number, length: number) {
+export interface RevealMatchOptions {
+  // La recherche sélectionne son résultat ; une citation ne fait que le signaler.
+  // Garder une sélection vide empêche les actions d'édition de s'ouvrir sur un geste
+  // de navigation, tout en conservant exactement le même halo transitoire.
+  select?: boolean
+}
+
+// Centre l'occurrence (line 1-based, col 0-based, longueur), pose le cadre puis le
+// retire après FLASH_MS. La sélection du texte reste opt-in par contexte : active par
+// défaut pour la recherche, inactive pour une citation. Positions bornées à la ligne.
+export function revealMatch(view: EditorView, line: number, col: number, length: number, options: RevealMatchOptions = {}) {
   const doc = view.state.doc
   const l = doc.line(Math.min(Math.max(line, 1), doc.lines))
   const from = Math.min(l.from + col, l.to)
   const to = Math.min(from + length, l.to)
   view.dispatch({
-    selection: { anchor: from, head: to },
+    selection: options.select === false ? { anchor: from } : { anchor: from, head: to },
     effects: [
       ...(to > from ? [setSearchFlash.of({ from, to })] : []),
       EditorView.scrollIntoView(from, { y: 'center' }),

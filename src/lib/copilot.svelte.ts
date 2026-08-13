@@ -908,7 +908,7 @@ export async function jumpToCitation(s: CitedPassage): Promise<void> {
       return
     }
     const loc = locatePassage(tab.content, s.text)
-    if (loc) app.pendingReveal = { path: s.path, line: loc.line, col: loc.col, length: loc.length }
+    if (loc) app.pendingReveal = { path: s.path, line: loc.line, col: loc.col, length: loc.length, select: false }
     return
   }
   // Document sans chemin (non enregistré) : l'onglet est déjà actif, révélation directe.
@@ -918,7 +918,7 @@ export async function jumpToCitation(s: CitedPassage): Promise<void> {
   const loc = locatePassage(tab.content, s.text)
   if (loc) {
     const { revealMatch } = await import('./editor/search-flash')
-    revealMatch(view, loc.line, loc.col, loc.length)
+    revealMatch(view, loc.line, loc.col, loc.length, { select: false })
   }
 }
 
@@ -1587,8 +1587,19 @@ export function newChat(): void {
 // déclencher un saut de citation). import.meta.env.DEV = false en prod → code mort éliminé.
 if (import.meta.env.DEV) {
   ;(globalThis as Record<string, unknown>).__dokuCopilot = { copilot, jumpToCitation }
-  if (new URLSearchParams(globalThis.location?.search ?? '').has('memory-demo')) {
+  const demoParams = new URLSearchParams(globalThis.location?.search ?? '')
+  if (demoParams.has('memory-demo')) {
     app.copilotProvider = 'openai'
     app.copilotView = 'memory'
+  }
+  if (demoParams.has('citation-demo')) {
+    const tab = activeTab()
+    const text = tab?.content.split(/\r?\n/).map((line) => line.trim()).find((line) => line.length >= 24)
+      ?? 'Ce document sert de démonstration au rendu WYSIWYG de Doku.'
+    copilot.messages = [{
+      role: 'assistant',
+      content: 'Voici le passage demandé [1].',
+      sources: [{ n: 1, path: null, name: null, text }],
+    }]
   }
 }

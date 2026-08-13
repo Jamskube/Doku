@@ -330,7 +330,13 @@
 
 </script>
 
-<aside class="sidebar" class:open={app.sidebarOpen}>
+<aside
+  class="sidebar"
+  class:open={app.sidebarOpen}
+  class:covered={app.copilotExpanded}
+  aria-hidden={app.copilotExpanded || !app.sidebarOpen}
+  inert={app.copilotExpanded}
+>
   <div class="inner">
     <div class="ribbon">
       <button class="logo" title="À propos de Doku" aria-label="À propos de Doku" onclick={() => openSettings('about')}>
@@ -610,9 +616,12 @@
     box-shadow: inset 0 1px 0 var(--chrome-material-filet);
     /* Même tempo que le panneau copilote (.cop-panel) : les deux rideaux latéraux
        doivent respirer à la même vitesse. */
-    transition: width 240ms cubic-bezier(0.4, 0, 1, 1);
+    transition: width 300ms cubic-bezier(0.22, 1, 0.36, 1);
   }
-  .sidebar.open { width: 296px; }
+  .sidebar.open:not(.covered) { width: 296px; }
+  @media (prefers-reduced-motion: reduce) {
+    .sidebar { transition-duration: 0.01ms; }
+  }
   /* contain : le contenu (largeur figée) est isolé des invalidations externes — la
      transition de width de .sidebar ne re-layoute plus l'arbre entier à chaque frame. */
   .inner { width: 296px; height: 100%; display: flex; contain: layout paint; }

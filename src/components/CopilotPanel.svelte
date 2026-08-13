@@ -11,7 +11,7 @@
   import { MAX_DOC_CHARS, MAX_DOC_CHARS_CLOUD, type SummaryMode } from '../lib/copilot-service'
   import { openOpenAiAuthPage, OPENAI_MODEL } from '../lib/openai'
   import { renderChatMarkdown } from '../lib/export/render-md'
-  import { annotateCitations } from '../lib/citations'
+  import { annotateCitations, type CitedPassage } from '../lib/citations'
   import { cleanContextLabel, contextItemId, MAX_CONTEXT_ITEMS, MAX_CONTEXT_LOAD_CONCURRENCY, MAX_CONTEXT_PDF_BYTES, MAX_CONTEXT_TEXT_BYTES, pathBelongsToFolder, truncateContextItem, type CopilotContextItem } from '../lib/copilot-context'
   import { cloudMemory, deleteCloudMemoryRecord, loadCloudMemory, memoryWorkspace, undoCloudMemory, updateCloudMemoryRecord, type MemoryWorkspace } from '../lib/copilot-memory.svelte'
   import type { CloudMemoryProvider, MemoryRecord, MemoryType } from '../lib/copilot-memory'
@@ -30,7 +30,19 @@
     dismissCitePreview()
     const n = Number.parseInt(chip.getAttribute('data-cite') ?? '', 10)
     const passage = m.sources?.find((s) => s.n === n)
-    if (passage) void jumpToCitation(passage)
+    if (passage) void revealCitation(passage)
+  }
+
+  // En plein écran, une citation n'a de sens que si sa source redevient visible.
+  // On restaure d'abord la vue partagée, puis le pipeline existant ouvre et révèle
+  // le passage. `tick` laisse le layout sortir de l'état plein écran avant que
+  // CodeMirror/PDF calcule son scroll dans la largeur retrouvée.
+  async function revealCitation(passage: CitedPassage) {
+    if (app.copilotExpanded) {
+      app.copilotExpanded = false
+      await tick()
+    }
+    await jumpToCitation(passage)
   }
 
   // --- Aperçu flottant d'un passage cité (survol ou focus d'une puce [n]) : les lignes
@@ -1768,26 +1780,23 @@
           {/if}
         </section>
       {:else if copilot.messages.length === 0}
-        <!-- Conversation vide : accueil + actions rapides sur le document courant -->
+        <!-- Conversation vide : un vrai point de départ, pas une liste de commandes.
+             Les cartes conservent les trois livrables documentaires existants. -->
         <div class="cop-chat-empty">
           <div class="cop-empty-mark" aria-hidden="true"><span class="msr">spa</span></div>
-          <div class="cop-empty-title">Bonjour, que puis-je faire&nbsp;?</div>
-          <p class="cop-empty-sub">Discutez avec votre document ou partez d’une suggestion.</p>
+          <h2 class="cop-empty-title">Comment puis-je aider&nbsp;?</h2>
           <div class="cop-actions">
             <button class="cop-action" onclick={() => quickAction('summary')}>
-              <span class="cop-action-icon"><span class="msr">summarize</span></span>
-              <span class="cop-action-copy"><strong>Résumer le document</strong><small>Obtenir l’essentiel en quelques points</small></span>
-              <span class="msr cop-action-arrow">arrow_forward</span>
+              <span class="msr cop-action-icon" aria-hidden="true">summarize</span>
+              <strong>Résume le document</strong>
             </button>
             <button class="cop-action" onclick={() => quickAction('todos')}>
-              <span class="cop-action-icon"><span class="msr">checklist</span></span>
-              <span class="cop-action-copy"><strong>Lister les actions à faire</strong><small>Tâches, décisions ouvertes et suivis</small></span>
-              <span class="msr cop-action-arrow">arrow_forward</span>
+              <span class="msr cop-action-icon" aria-hidden="true">checklist</span>
+              <strong>Repère les actions à suivre</strong>
             </button>
             <button class="cop-action" onclick={() => quickAction('keypoints')}>
-              <span class="cop-action-icon"><span class="msr">key</span></span>
-              <span class="cop-action-copy"><strong>Extraire les points clés</strong><small>Repérer les idées et décisions importantes</small></span>
-              <span class="msr cop-action-arrow">arrow_forward</span>
+              <span class="msr cop-action-icon" aria-hidden="true">key</span>
+              <strong>Extrais les points clés</strong>
             </button>
           </div>
         </div>
@@ -1907,7 +1916,7 @@
                     <div class="cop-sources">
                       <span class="cop-sources-lbl">{m.citedOnly ? 'Passages cités' : 'Passages consultés'}</span>
                       {#each shown as s (s.n)}
-                        <button class="cop-source-chip" class:bare={!s.name} title={s.path ?? undefined} onclick={() => void jumpToCitation(s)}>
+                        <button class="cop-source-chip" class:bare={!s.name} title={s.path ?? undefined} onclick={() => void revealCitation(s)}>
                           <span class="cop-source-num">{s.n}</span>{#if s.name}{s.name}{/if}
                         </button>
                       {/each}
@@ -2225,9 +2234,10 @@
     visibility: hidden;
     pointer-events: none;
     contain: layout paint;
+    container-type: inline-size;
     transition:
-      flex-grow 240ms cubic-bezier(0.4, 0, 1, 1),
-      flex-basis 240ms cubic-bezier(0.4, 0, 1, 1),
+      flex-grow 300ms cubic-bezier(0.22, 1, 0.36, 1),
+      flex-basis 240ms cubic-bezier(0.22, 1, 0.36, 1),
       visibility 0s linear 240ms;
   }
   .cop-panel.open {
@@ -2235,8 +2245,8 @@
     visibility: visible;
     pointer-events: auto;
     transition:
-      flex-grow 240ms cubic-bezier(0.4, 0, 1, 1),
-      flex-basis 240ms cubic-bezier(0.4, 0, 1, 1),
+      flex-grow 300ms cubic-bezier(0.22, 1, 0.36, 1),
+      flex-basis 240ms cubic-bezier(0.22, 1, 0.36, 1),
       visibility 0s;
   }
   .cop-panel.open.expanded {
@@ -2244,14 +2254,9 @@
   }
   .cop-panel > .cop-head,
   .cop-panel > .cop-card {
-    width: var(--copilot-width);
+    width: 100%;
     min-width: var(--copilot-width);
     align-self: flex-end;
-  }
-  .cop-panel.expanded > .cop-head,
-  .cop-panel.expanded > .cop-card {
-    width: 100%;
-    min-width: 0;
   }
 
   /* En-tête */
@@ -2317,13 +2322,15 @@
     flex-direction: column;
     background: var(--cream-content);
     border-left: 1px solid var(--line-1);
-    border-radius: 0 14px 0 0;
+    /* En vue partagée, le coin gauche rejoint la page sans fente de chrome. Pendant
+       l'agrandissement, il s'arrondit progressivement jusqu'aux 14 px du plein écran. */
+    border-radius: clamp(0px, calc((100cqi - 400px) * 0.024), 14px) 14px 0 0;
     overflow: hidden;
   }
-  .cop-panel.expanded .cop-card { border-radius: 14px 14px 0 0; }
-  .cop-scroll { flex: 1; min-height: 0; overflow-y: auto; padding: 0 18px; contain: layout paint; }
-  .cop-panel.expanded .cop-scroll {
-    padding-inline: max(24px, calc((100% - 760px) / 2));
+  .cop-scroll {
+    flex: 1; min-height: 0; overflow-y: auto;
+    padding: 0 max(18px, calc((100% - 760px) / 2));
+    contain: layout paint;
   }
   .cop-msg { margin: 14px 4px; font-size: 12.5px; color: var(--ink-4); }
   .cop-msg.err { color: var(--err-text); }
@@ -2449,8 +2456,10 @@
   .cop-memory-toast button.icon { width: 28px; padding: 0; display: inline-flex; align-items: center; justify-content: center; background: transparent; }
   .cop-memory-toast button.icon .msr { font-size: 15px; }
 
-  .cop-memory-view { padding: 8px 16px 28px; color: var(--ink-2); }
-  .cop-panel.expanded .cop-memory-view { width: min(760px, 100%); margin-inline: auto; padding-top: 24px; }
+  .cop-memory-view {
+    width: min(760px, 100%); margin-inline: auto;
+    padding: clamp(8px, calc(4px + 1cqi), 24px) 16px 28px; color: var(--ink-2);
+  }
   .cop-memory-heading { min-height: 56px; display: flex; align-items: center; gap: 11px; margin-bottom: 14px; }
   .cop-memory-mark { width: 38px; height: 38px; flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; border-radius: 12px; background: var(--surface-2); color: var(--ink-3); }
   .cop-memory-mark .msr { font-size: 19px; }
@@ -2744,40 +2753,59 @@
 
   /* Chat — accueil */
   .cop-chat-empty {
-    min-height: 100%; padding: 32px 2px 68px; display: flex; flex-direction: column;
+    min-height: 100%;
+    padding: clamp(44px, calc(34px + 2.5cqi), 64px) 0 clamp(82px, calc(67px + 3.75cqi), 112px);
+    display: flex; flex-direction: column;
     justify-content: center; align-items: center; text-align: center;
   }
   .cop-empty-mark {
-    width: 42px; height: 42px; display: flex; align-items: center; justify-content: center;
-    margin-bottom: 17px; border-radius: 14px; background: var(--ink); color: var(--cream-content);
-    box-shadow: 0 8px 22px rgba(var(--shadow-rgb), 0.12);
+    width: clamp(46px, calc(42px + 1cqi), 54px); height: clamp(46px, calc(42px + 1cqi), 54px);
+    display: flex; align-items: center; justify-content: center;
+    margin-bottom: clamp(24px, calc(20px + 1cqi), 32px);
+    border-radius: clamp(15px, calc(13.5px + 0.375cqi), 18px);
+    background: transparent; color: var(--ink-4);
+    box-shadow: inset 0 0 0 1px var(--line-2);
   }
-  .cop-empty-mark .msr { font-size: 21px; }
-  .cop-empty-title { font-size: 17px; line-height: 1.3; font-weight: 600; color: var(--ink); margin-bottom: 6px; text-wrap: balance; }
-  .cop-empty-sub { max-width: 31ch; font-size: 12.5px; line-height: 1.55; color: var(--ink-4); margin-bottom: 23px; text-wrap: pretty; }
+  .cop-empty-mark .msr { font-size: clamp(23px, calc(21px + 0.5cqi), 27px); }
+  .cop-empty-title {
+    max-width: 30ch; margin: 0 0 clamp(38px, calc(30px + 2cqi), 54px); color: var(--ink);
+    font: 500 clamp(23px, calc(15.5px + 1.875cqi), 38px)/1.25 var(--font-sans);
+    letter-spacing: -0.022em; text-wrap: balance;
+  }
   .cop-actions {
-    width: 100%; display: flex; flex-direction: column; overflow: hidden;
-    border-radius: 15px; background: var(--surface-2); text-align: left;
+    width: 100%; max-width: 920px; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: clamp(9px, calc(5.5px + 0.875cqi), 16px);
+    text-align: left;
   }
   .cop-action {
-    display: flex; align-items: center; gap: 11px; width: 100%; min-height: 60px; padding: 9px 12px;
-    background: transparent; border: 0; color: var(--ink-2); font-family: var(--font-sans); text-align: left; cursor: pointer;
-    transition: background 160ms ease, color 160ms ease;
+    min-width: 0; min-height: clamp(132px, calc(106px + 6.5cqi), 184px);
+    padding: clamp(16px, calc(12px + 1cqi), 24px) clamp(14px, calc(8px + 1.5cqi), 26px);
+    display: flex; flex-direction: column; align-items: flex-start; justify-content: space-between;
+    gap: clamp(24px, calc(19px + 1.25cqi), 34px);
+    border: 1px solid var(--line-1);
+    border-radius: clamp(17px, calc(14.5px + 0.625cqi), 22px);
+    background: transparent; color: var(--ink-2);
+    box-shadow: none;
+    font-family: var(--font-sans); text-align: left; cursor: pointer;
+    transition: background 160ms ease, color 160ms ease, box-shadow 160ms ease, transform 100ms ease;
   }
-  .cop-action + .cop-action { border-top: 1px solid var(--line-1); }
-  .cop-action:hover { background: var(--surface-hover); color: var(--ink); }
-  .cop-action:active { background: var(--accent-soft); }
-  .cop-action:focus-visible { outline: 2px solid var(--line-3); outline-offset: -3px; }
+  .cop-action:hover {
+    background: var(--surface-hover); border-color: var(--line-2); color: var(--ink);
+    box-shadow: none;
+  }
+  .cop-action:active { background: var(--surface-2); transform: scale(0.985); }
+  .cop-action:focus-visible { outline: 2px solid var(--line-3); outline-offset: 2px; }
   .cop-action-icon {
-    width: 32px; height: 32px; flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center;
-    border-radius: 10px; background: var(--surface-2); color: var(--ink-3);
+    flex: 0 0 auto; color: var(--ink-3);
+    font-size: clamp(21px, calc(19px + 0.5cqi), 25px);
+    transition: color 160ms ease, transform 160ms cubic-bezier(0.22, 1, 0.36, 1);
   }
-  .cop-action-icon .msr { font-size: 17px; }
-  .cop-action-copy { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
-  .cop-action-copy strong { font-size: 12.5px; line-height: 1.3; font-weight: 550; color: var(--ink-2); }
-  .cop-action-copy small { font-size: 10.5px; line-height: 1.35; color: var(--ink-4); }
-  .cop-action-arrow { flex: 0 0 auto; font-size: 16px; color: var(--ink-5); transition: transform 160ms ease, color 160ms ease; }
-  .cop-action:hover .cop-action-arrow { transform: translateX(2px); color: var(--ink-3); }
+  .cop-action:hover .cop-action-icon { color: var(--ink); transform: translateY(-1px); }
+  .cop-action strong {
+    max-width: 17ch; color: inherit;
+    font-size: clamp(12px, calc(9.5px + 0.625cqi), 17px);
+    line-height: 1.45; font-weight: 600; text-wrap: pretty;
+  }
 
   /* Chat — conversation */
   .cop-conv { padding: 20px 2px 18px; display: flex; flex-direction: column; gap: 26px; }
@@ -2978,12 +3006,9 @@
   /* Composeur à deux plans : Question et Contexte permutent leur profondeur. */
   .cop-input-wrap {
     flex-shrink: 0;
-    padding: 8px 16px 10px;
+    padding: 8px max(16px, calc((100% - 760px) / 2)) 10px;
     background: var(--cream-content);
     container-type: inline-size;
-  }
-  .cop-panel.expanded .cop-input-wrap {
-    padding-inline: max(24px, calc((100% - 760px) / 2));
   }
   .cop-composer-shell {
     overflow: visible;
