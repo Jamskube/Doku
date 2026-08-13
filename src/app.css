@@ -1,16 +1,4 @@
 /* Tokens AIR — source de vérité : docs/design/w1/Doku W1 - Fenetre principale.dc.html */
-@property --chrome-material-cool-x {
-  syntax: '<percentage>';
-  inherits: true;
-  initial-value: 43%;
-}
-
-@property --chrome-material-cool-y {
-  syntax: '<percentage>';
-  inherits: true;
-  initial-value: 76%;
-}
-
 :root {
   --desk: #dedacf;
   --cream-base: #F4F1E9;
@@ -74,15 +62,15 @@
 }
 
 :root[data-theme='dark'] {
-  --desk: #161619;
-  --cream-base: #25252A;
-  --cream-content: #2E2E34;
-  --cream-soft: #36363D;
-  --cream-tint: #3D3D44;
-  --surface: #35353B;
-  --surface-2: #3D3D45;
+  --desk: #101010;
+  --cream-base: #151515;
+  --cream-content: #181818;
+  --cream-soft: #1D1D1D;
+  --cream-tint: #242424;
+  --surface: #202020;
+  --surface-2: #282828;
   --composer-bg: var(--surface-2);
-  --code-bg: #3A3A43;
+  --code-bg: #222222;
   --ink-rgb: 235, 237, 241;
   --shadow-rgb: 0, 0, 0;
   --elevation-ring: rgba(255, 255, 255, 0.07);
@@ -91,10 +79,10 @@
   --ink-3: rgba(var(--ink-rgb), 0.78);
   --ink-4: rgba(var(--ink-rgb), 0.62);
   --ink-5: rgba(var(--ink-rgb), 0.48);
-  --line-1: rgba(var(--ink-rgb), 0.14);
-  --line-2: rgba(var(--ink-rgb), 0.22);
-  --line-3: rgba(var(--ink-rgb), 0.32);
-  --surface-hover: rgba(var(--ink-rgb), 0.08);
+  --line-1: rgba(var(--ink-rgb), 0.12);
+  --line-2: rgba(var(--ink-rgb), 0.19);
+  --line-3: rgba(var(--ink-rgb), 0.29);
+  --surface-hover: rgba(var(--ink-rgb), 0.07);
   --accent-soft: rgba(var(--ink-rgb), 0.10);
   --ok-text: #8FC9A0;
   --warn-text: #DFB35F;
@@ -122,10 +110,8 @@
     var(--chrome-material-base);
 }
 
-/* Pas de transition sur --chrome-material-cool-x/y : ces propriétés héritées à la racine
-   invalident le style de TOUT le document et repeignent le fond multi-gradients plein
-   écran à chaque frame interpolée. onMoved est déjà lissé en rAF (main.ts) — le reflet
-   suit la fenêtre image par image, sans queue de 180 ms qui prolonge le repaint. */
+/* Le matériau CSS reste le rendu clair ainsi que le repli navigateur/Windows sans
+   Mica. En thème sombre natif Windows 11, le DWM anime lui-même la teinte du fond. */
 
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -140,6 +126,19 @@ body {
   text-rendering: optimizeLegibility;
   overflow: hidden;
   user-select: none;
+}
+
+/* Le DWM peint Mica sous la webview. Les surfaces de contenu restent opaques dans
+   leurs composants ; seul le chrome laisse apparaître ce fond système. */
+:root[data-window-backdrop='mica'],
+:root[data-window-backdrop='mica'] body,
+:root[data-window-backdrop='mica'] #app {
+  background: transparent;
+}
+
+:root[data-window-backdrop='mica'] :is(.titlebar, .sidebar, .cop-header) {
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
 }
 
 a { color: inherit; text-decoration: none; }

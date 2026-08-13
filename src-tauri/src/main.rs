@@ -15,6 +15,27 @@ use openai::OpenAiState;
 use sidecar::OllamaState;
 use tauri::{Emitter, Listener, Manager, WindowEvent};
 
+// Le matériau Mica est rendu par le DWM, pas simulé dans la webview. Doku ne
+// l'active qu'en thème sombre ; le thème clair restaure le chrome CSS opaque.
+#[tauri::command]
+fn set_system_backdrop(window: tauri::WebviewWindow, enabled: bool, dark: bool) -> bool {
+    #[cfg(windows)]
+    {
+        if enabled {
+            window_vibrancy::apply_mica(&window, Some(dark)).is_ok()
+        } else {
+            let _ = window_vibrancy::clear_mica(&window);
+            false
+        }
+    }
+
+    #[cfg(not(windows))]
+    {
+        let _ = (window, enabled, dark);
+        false
+    }
+}
+
 // Extrait un chemin de fichier des arguments (ignore l'exe en position 0 et les flags).
 fn file_from_args(args: &[String]) -> Option<String> {
     args.iter().skip(1).find(|a| !a.starts_with('-')).cloned()
@@ -42,6 +63,7 @@ fn main() {
         .manage(OpenAiState::default())
         .manage(CompatState::default())
         .invoke_handler(tauri::generate_handler![
+            set_system_backdrop,
             sidecar::start_ollama,
             sidecar::stop_ollama,
             openai::openai_status,
@@ -83,7 +105,9 @@ fn main() {
             if let Some(window) = app.get_webview_window("main") {
                 std::thread::spawn(move || {
                     std::thread::sleep(std::time::Duration::from_secs(4));
-                    if !window.is_visible().unwrap_or(true) {
+                    // Une erreur de lecture n'est pas une preuve de visibilité : tenter
+                    // show() est idempotent et constitue le vrai filet anti-fenêtre cachée.
+                    if !matches!(window.is_visible(), Ok(true)) {
                         let _ = window.show();
                     }
                 });

@@ -285,6 +285,10 @@
     background: var(--chrome-material);
     background-color: var(--chrome-material-base);
   }
+  :global(:root[data-window-backdrop='mica']) .app {
+    background: transparent;
+    background-color: transparent;
+  }
   .main {
     position: relative;
     flex: 1 1 0;
@@ -294,8 +298,8 @@
     overflow: hidden;
     opacity: 1;
     transition:
-      flex-grow 240ms cubic-bezier(0.4, 0, 1, 1),
-      opacity 130ms ease-in;
+      flex-grow 300ms cubic-bezier(0.22, 1, 0.36, 1),
+      opacity 110ms ease-out;
   }
   .main.copilot-expanded { flex-grow: 0; opacity: 0; pointer-events: none; }
   .drop-overlay {
@@ -414,6 +418,7 @@
   }
   @media (prefers-reduced-motion: reduce) {
     .notice { animation: none; }
+    .main { transition-duration: 0.01ms; }
   }
   .stage { flex: 1; min-height: 0; display: flex; background: transparent; }
   .page {

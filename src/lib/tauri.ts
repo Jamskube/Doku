@@ -10,6 +10,40 @@ import { parseStamp, selectPurgeable, snapshotPreview, snapshotStamp, type Snaps
 // atomique composée côté TS (tmp + rename).
 export const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
 
+let systemBackdropTheme: 'light' | 'dark' | null = null
+let systemBackdropPromise: Promise<boolean> | null = null
+let systemBackdropRevision = 0
+
+// Active le vrai matériau Mica Windows 11 uniquement en thème sombre. En clair,
+// l'effet natif est retiré et le chrome CSS historique redevient opaque.
+export function syncSystemBackdrop(theme: 'light' | 'dark'): Promise<boolean> {
+  if (!isTauri) return Promise.resolve(false)
+  if (systemBackdropTheme === theme && systemBackdropPromise) return systemBackdropPromise
+
+  const revision = ++systemBackdropRevision
+  systemBackdropTheme = theme
+  systemBackdropPromise = import('@tauri-apps/api/core')
+    .then(({ invoke }) => invoke<boolean>('set_system_backdrop', {
+      enabled: theme === 'dark',
+      dark: theme === 'dark',
+    }))
+    .then((enabled) => {
+      if (revision === systemBackdropRevision) {
+        document.documentElement.dataset.windowBackdrop = enabled ? 'mica' : 'fallback'
+      }
+      return enabled
+    })
+    .catch((error) => {
+      if (revision === systemBackdropRevision) {
+        document.documentElement.dataset.windowBackdrop = 'fallback'
+        systemBackdropTheme = null
+        systemBackdropPromise = null
+      }
+      throw error
+    })
+  return systemBackdropPromise
+}
+
 // Écoute les demandes d'ouverture de fichier venues de l'hôte Rust (double-clic,
 // association, 2e instance). Émet `doku://ready` pour déclencher l'ouverture du
 // fichier de lancement une fois le listener en place. Renvoie un unlisten.

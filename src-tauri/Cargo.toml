@@ -24,6 +24,7 @@ tokio = { version = "1", features = ["macros", "sync"] }
 # Job Object Windows (13.2) : kill fiable de l'arbre du sidecar (KILL_ON_JOB_CLOSE) même au
 # crash de Doku. Version alignée sur celle déjà résolue par Tauri (pas de 2e copie).
 [target.'cfg(windows)'.dependencies]
+window-vibrancy = "0.6"
 windows = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_Security",

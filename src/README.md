@@ -6,8 +6,8 @@ Frontend Svelte 5 de Doku (lecteur/éditeur de documents — shell W1 + éditeur
 ## Files
 | File | Purpose |
 |---|---|
-| `main.ts` | Point d'entrée : fonts bundlées, CSS global, montage de App |
-| `app.css` | Tokens AIR (crème + sombre), styles de base, icônes Material Symbols |
+| `main.ts` | Point d'entrée : fonts bundlées, montage de App, affichage sans flash puis activation du backdrop natif |
+| `app.css` | Tokens AIR, repli CSS du chrome, styles de base et icônes Material Symbols |
 | `App.svelte` | Assemblage shell (sidebar + titlebar + stage) + raccourcis clavier globaux |
 | `components/TitleBar.svelte` | Barre 40px : onglets Chrome-style, menu ⋯ du document, pin/thème/contrôles fenêtre |
 | `components/Sidebar.svelte` | Ruban d'icônes 46px + panneau (Fichiers / Plan / Historique), repliée = 0px |
@@ -19,7 +19,7 @@ Frontend Svelte 5 de Doku (lecteur/éditeur de documents — shell W1 + éditeur
 | `lib/stores.svelte.ts` | État global (runes) : onglets, thème, sidebar, TOC, dirty tracking |
 | `lib/editor/editor.ts` | Extensions CM6 : thème typographique du design, coloration, Compartment preview/source |
 | `lib/editor/live-preview.ts` | Décorations live preview (ADR-0002) : masquage syntaxe, checkboxes, wikilinks |
-| `lib/tauri.ts` | Garde Tauri : fenêtre, dialogues, écriture atomique — no-op en navigateur |
+| `lib/tauri.ts` | Garde Tauri : Mica Windows 11, fenêtre, dialogues et écriture atomique — no-op en navigateur |
 | `lib/demo.ts` | Contenu de démonstration (mode navigateur) |
 | `assets/doku-mark-rounded.svg` | Logo officiel (mark « D » pli de page) |
 

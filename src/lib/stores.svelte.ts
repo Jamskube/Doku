@@ -8,7 +8,7 @@ import { ragFileChanged } from './rag-index.svelte'
 import { classifyExternalChange } from './reload'
 import { makeSearchDoc, searchDocs, type SearchDoc, type SearchResult } from './search'
 import { snapshotKey, type SnapshotInfo } from './snapshot'
-import { buildSearchIndex, isTauri, listSnapshots, purgeAllSnapshots, readSnapshot, readTextFileAt, recordSnapshot, scanFiles, setAlwaysOnTop, writeTextFileAtomic } from './tauri'
+import { buildSearchIndex, isTauri, listSnapshots, purgeAllSnapshots, readSnapshot, readTextFileAt, recordSnapshot, scanFiles, setAlwaysOnTop, syncSystemBackdrop, writeTextFileAtomic } from './tauri'
 import { normalizeTarget, wikilinkCandidates, wikilinkFileName } from './wikilink'
 import type { CopilotVerbosity } from './copilot-service'
 
@@ -140,7 +140,7 @@ export const app = $state({
   searching: false,
   // Occurrence à révéler dans l'éditeur après ouverture (clic sur un résultat, 9.4).
   // Consommée par DocumentView une fois l'onglet monté, puis remise à null.
-  pendingReveal: null as { path: string; line: number; col: number; length: number } | null,
+  pendingReveal: null as { path: string; line: number; col: number; length: number; select?: boolean } | null,
   // Page à révéler dans le viewer PDF (citation ancrée sur un PDF). `text` = passage cité :
   // PdfView surligne ses rectangles dans la page (repli : halo de page si introuvable).
   // Consommée par PdfView une fois la page créée.
@@ -303,6 +303,9 @@ export function initApp() {
 
 export function applyTheme() {
   document.documentElement.dataset.theme = app.theme
+  // Mica est appliqué pendant que la fenêtre est encore cachée. main.ts attend cette
+  // même promesse avant le premier show(), ce qui évite que le DWM fige le fond opaque.
+  void syncSystemBackdrop(app.theme).catch((err) => console.error('Activation de Mica échouée', err))
 }
 
 export function toggleTheme() {
