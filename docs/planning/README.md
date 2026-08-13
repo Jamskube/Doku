@@ -7,6 +7,7 @@ Artefacts produit, dans l'ordre où ils tranchent : brainstorm → PRD → UX �
 | File | Purpose |
 |---|---|
 | `brainstorm-doku.md` | Idéation initiale |
+| `brainstorm-atelier-documentaire.md` | Convergence SCAMPER sur la lecture, l'édition multi-format et la prise de notes |
 | `PRD.md` · `PRD-v1.5.md` · `PRD-v2.md` | Exigences produit par palier (v2 = copilote IA local) |
 | `ux-spec.md` | Flows et wireframes |
 | `architecture.md` · `architecture-v2-copilot.md` | Architecture technique (base, puis copilote) |
