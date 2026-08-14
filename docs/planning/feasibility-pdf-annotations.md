@@ -1,6 +1,6 @@
 # Faisabilité — carnet d’annotations PDF non destructif
 
-_Date : 2026-08-13 · Verdict : **GO conditionnel** · Portée évaluée : sélection, surlignage, commentaire et persistance séparée_
+_Date : 2026-08-14 · Verdict : **GO conditionnel — matrice DPR/rotation PASS, geste WebView2 à confirmer** · Portée évaluée : sélection, surlignage, commentaire et persistance séparée_
 
 ## Décision
 
@@ -78,6 +78,16 @@ Le déplacement d’une page dans le document n’est pas promis au premier pali
 - Refuser URL, UNC, chemin de périphérique et traversée lors de toute réouverture depuis un manifeste.
 - Limiter le commentaire et la citation en taille ; borner le nombre de rectangles et d’annotations rendues simultanément.
 
+## Résultats du spike — 2026-08-14
+
+- Le banc est reproductible depuis le serveur principal ou depuis `spike/` grâce à des chemins relatifs pour le module et la fixture.
+- La fixture régénérée contient quatre pages texte réelles, tournées à 0°, 90°, 180° et 270° ; son générateur est conservé dans `spike/fixtures/`.
+- La matrice déterministe DPR 1 / 1,25 / 1,5 passe sur les quatre rotations : six rectangles de sélection par page, tous contenus dans la page.
+- L’écart maximal entre les boîtes CSS du canvas, de la TextLayer et de la page est de **0,62 px** sur la matrice ; le DPR Windows actif de **1,75** passe aussi avec **0,94 px**, sous le seuil de 2 px.
+- Le backing store mesuré suit chaque DPR demandé avec une erreur inférieure à 0,001.
+- Le défaut initial sur 90°/270° venait du contrat CSS incomplet du spike : les variables PDF.js `--total-scale-factor`, `--scale-round-x` et `--scale-round-y` manquaient, ce qui tournait une couche déjà dimensionnée comme la page tournée.
+- La validation reste conditionnelle jusqu’à une sélection multi-ligne effectuée physiquement dans WebView2 sur la machine Windows de référence ; l’automatisation disponible valide les géométries mais ne produit pas de sélection native persistante.
+
 ## Kill-tests du spike
 
 | Test | PASS | KILL / repli |
@@ -116,4 +126,4 @@ Le déplacement d’une page dans le document n’est pas promis au premier pali
 
 ## Étape suivante
 
-Créer un spike isolé `spike/pdf-text-selection.html` qui monte canvas + TextLayer sur un petit corpus local, mesure les coordonnées sélectionnées et exécute les kill-tests DPR/rotation avant toute intégration dans `PdfView.svelte`.
+Effectuer une sélection multi-ligne réelle dans le spike sous WebView2 sur la machine Windows de référence. Si le texte et les rectangles capturés correspondent visuellement au geste, lever la condition et planifier l’intégration dans `PdfView.svelte` ; sinon conserver le NO-GO pour la sélection PDF.

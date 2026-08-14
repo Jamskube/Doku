@@ -64,8 +64,10 @@ Limite explicite : cette mesure valide l’interaction lourde du bureau scindé 
 
 Le plugin `src/live-preview.ts` (candidat B) a été écrit pour ce spike (~170 lignes) : titres, gras/italique/barré, code inline + fences, liens, citations, checkbox-widgets, wikilinks — sélection-aware, limité au viewport. **Hors périmètre spike** et compté comme effort restant dans l'ADR : tableaux (le point dur documenté), images inline, `atomicRanges` (saut de curseur), copier-coller/IME polish.
 
-## Spike — sélection PDF non destructive (2026-08-13)
+## Spike — sélection PDF non destructive (2026-08-14)
 
 `/spike/pdf-text-selection.html` superpose la `TextLayer` PDF.js au canvas HiDPI et transforme une sélection DOM en texte + rectangles normalisés. Il charge par défaut `spike/fixtures/pdf-annotation-test.pdf` et accepte un PDF local via le sélecteur de fichier.
 
-Le kill-test automatique exige, pour chaque page du corpus synthétique, une sélection textuelle non vide, au moins un rectangle et des coordonnées entièrement contenues dans la page. Les gestes réels, le DPR Windows et la rotation restent à vérifier visuellement avant intégration dans `PdfView.svelte`.
+Depuis `spike/`, lancer `npm run dev -- --port 1421 --host 127.0.0.1`, puis ouvrir `/pdf-text-selection.html`. Le paramètre `?dpr=1`, `?dpr=1.25` ou `?dpr=1.5` force le backing store du canvas pour reproduire la matrice de mise à l’échelle sans modifier Windows.
+
+Le kill-test automatique exige, pour chaque page du corpus synthétique tournée à 0°, 90°, 180° et 270°, une sélection textuelle non vide, au moins un rectangle, des coordonnées entièrement contenues dans la page, un écart CSS canvas/TextLayer/page inférieur ou égal à 2 px et un backing store conforme au DPR demandé. La matrice DPR 1/1,25/1,5 passe avec un écart maximal mesuré de 0,62 px ; le DPR Windows actif de 1,75 passe également avec 0,94 px. Un geste réel de sélection dans WebView2 reste requis avant l’intégration dans `PdfView.svelte`.

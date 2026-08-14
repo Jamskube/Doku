@@ -44,7 +44,16 @@ button:hover, .pdf-file-button:hover { background: #2b2b30; }
   padding: 24px;
   background: #29292d;
 }
-.pdf-spike-page { position: relative; flex: 0 0 auto; background: white; box-shadow: 0 5px 20px rgb(0 0 0 / 0.3); }
+.pdf-spike-page {
+  --user-unit: 1;
+  --total-scale-factor: calc(var(--scale-factor) * var(--user-unit));
+  --scale-round-x: 1px;
+  --scale-round-y: 1px;
+  position: relative;
+  flex: 0 0 auto;
+  background: white;
+  box-shadow: 0 5px 20px rgb(0 0 0 / 0.3);
+}
 .pdf-spike-page canvas { position: absolute; inset: 0; display: block; }
 .pdf-spike-page .textLayer { position: absolute; inset: 0; }
 .pdf-spike-page .textLayer ::selection { background: rgb(64 128 255 / 0.34); }

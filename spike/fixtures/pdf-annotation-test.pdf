@@ -1,93 +1,166 @@
 %PDF-1.3
-%“Œ‹ž ReportLab Generated PDF document (opensource)
+%âãÏÓ
 1 0 obj
 <<
-/F1 2 0 R /F2 3 0 R
+/Producer (pypdf)
 >>
 endobj
 2 0 obj
 <<
-/BaseFont /Helvetica /Encoding /WinAnsiEncoding /Name /F1 /Subtype /Type1 /Type /Font
+/Type /Pages
+/Count 4
+/Kids [ 4 0 R 9 0 R 11 0 R 13 0 R ]
 >>
 endobj
 3 0 obj
 <<
-/BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding /Name /F2 /Subtype /Type1 /Type /Font
+/Type /Catalog
+/Pages 2 0 R
 >>
 endobj
 4 0 obj
 <<
-/Contents 9 0 R /MediaBox [ 0 0 595.2756 841.8898 ] /Parent 8 0 R /Resources <<
-/Font 1 0 R /ProcSet [ /PDF /Text /ImageB /ImageC /ImageI ]
->> /Rotate 0 /Trans <<
-
->> 
-  /Type /Page
+/Contents 5 0 R
+/MediaBox [ 0 0 595.2756 841.8898 ]
+/Resources <<
+/Font 6 0 R
+/ProcSet [ /PDF /Text /ImageB /ImageC /ImageI ]
+>>
+/Rotate 0
+/Trans <<
+>>
+/Type /Page
+/Parent 2 0 R
 >>
 endobj
 5 0 obj
 <<
-/Contents 10 0 R /MediaBox [ 0 0 841.8898 595.2756 ] /Parent 8 0 R /Resources <<
-/Font 1 0 R /ProcSet [ /PDF /Text /ImageB /ImageC /ImageI ]
->> /Rotate 90 /Trans <<
-
->> 
-  /Type /Page
+/Filter [ /ASCII85Decode /FlateDecode ]
+/Length 431
 >>
+stream
+GasbVd;FOi(kqF,MK?<[OkCo[]3OL$]J=nd#(E6ZMCDQggTN@kb=#W,+DH/9n*_\6'DJa!S^kNV_"0Viit*`FBeY6C?nOq)3X;8sf=AB5:4S]VN`_AgB`_/liN67$0nsDD[&VMk:JQTeC*+T_+J+%U__N;qnZ\`e/N2%u_T5H.*>u7_e3]nd<`Y21V$WGO/R#/&40!qId3HusfI%>c$SLLkN2*crL2*\EA>KW-3VLU]Y\mYlohMqS\5@M5cJ=G7dkhPDgdgY(U2NJ9jT.u_.]3ciOTjP@oCNGtr`!)pZR59aXuQ420aA)uNh]u?fPrb>45MpVXJrY9G14T=klQjdaUHrEl_n7-LT0((/neg9_KNE,Y+.:YEA.d\U`WsDUASBTM5P'66d5"UHgsc![JWngs%sTln?1E)?]'2UN4o;"?MWg~>
+endstream
 endobj
 6 0 obj
 <<
-/PageMode /UseNone /Pages 8 0 R /Type /Catalog
+/F1 7 0 R
+/F2 8 0 R
 >>
 endobj
 7 0 obj
 <<
-/Author (anonymous) /CreationDate (D:20260813164346+02'00') /Creator (anonymous) /Keywords () /ModDate (D:20260813164346+02'00') /Producer (ReportLab PDF Library - \(opensource\)) 
-  /Subject (unspecified) /Title (Doku PDF annotation fixture) /Trapped /False
+/BaseFont /Helvetica
+/Encoding /WinAnsiEncoding
+/Name /F1
+/Subtype /Type1
+/Type /Font
 >>
 endobj
 8 0 obj
 <<
-/Count 2 /Kids [ 4 0 R 5 0 R ] /Type /Pages
+/BaseFont /Helvetica-Bold
+/Encoding /WinAnsiEncoding
+/Name /F2
+/Subtype /Type1
+/Type /Font
 >>
 endobj
 9 0 obj
 <<
-/Filter [ /ASCII85Decode /FlateDecode ] /Length 466
+/Contents 10 0 R
+/MediaBox [ 0 0 595.2756 841.8898 ]
+/Resources <<
+/Font 6 0 R
+/ProcSet [ /PDF /Text /ImageB /ImageC /ImageI ]
 >>
-stream
-GasbV6#V??&;BTPMK`m+BO*m>CL]MQBH!&*2mC*+Y\SGaXoH,APUJ#ML4mGuo=js2@$oB[g3;*J0.EJo$nOYIJ45Y-ko-biW3$:1VS4,DWiQl$7>TuKOsGqgBnM2;rn:h?\)ds%.IFX/>/:O2*g(mqI6+A@NO?-4&e+)\iCPu1UdZGdFkCZN9>`\'G/D<e$4BU^*sX<2OgRHG)/Ur?W.ij*S[LmHdFcROPs1AUqFK!_MB(MXm0&k0nVq4l,Xa4W7:5c:<H-HWEOFif`PGI`plHuWHSU`R>23`8(ROHo:)aO?ag**[ja7O[g55Yk>Krj(!0,;(dX/J^ZBVAI>0&4e^Z*U_qaR</pq7_]]&#?&o($%cOq>/X"'9==%5rUOH%2N';)iZl[8^[?h:]tfZ+)UTpA3'J'&FS0N4?h9amV?NPB5dQrX/[IIT/;uJ$!ZO^e(4A@mK!.#=cIDpC-T~>endstream
+/Rotate 90
+/Trans <<
+>>
+/Type /Page
+/Parent 2 0 R
+>>
 endobj
 10 0 obj
 <<
-/Filter [ /ASCII85Decode /FlateDecode ] /Length 250
+/Filter [ /ASCII85Decode /FlateDecode ]
+/Length 432
 >>
 stream
-GarW35u,<O&4Q=V`Er[E9d`Y,fG;;\(%MO0AD0cngQ=X`lXM-gUf'(u/A=UBr?6""d'PkFln+en#ZSV]5ddS"5OiVm;dP%/^Utc^1?\:jf[XZ(`jG,K3V%FiMX$FQN:+d.4E.22_^"Lcp?B^N/t-$L;r))(G;JhB`mdX0g^O4R'oBVf!!ueSL7T5rWP&T;N%q<BeLpC!W,,7m0h>]2.:*?9_j0Lm%"6M4.VhoTo.s40NdO47l5-b5>g!~>endstream
+GasbV?#P<K'Sc)T(%:7m6q3)dluJN+o#gS81ie7E.&O+-s8=EgZcoV,"HjGTk;g2/+nc`<mY_9o'mP1??lWV^2Mss81JGc\Rre)o0^$9:*<@$J2J1?IP#!2=4M8)&%>HR=P>8M(H&R>I6Y%8^4s6GGWL%HF2\*?l;AO%^A81,9_Np-a.^G.L2RQK$>%rS`:BsNM/Iq3ID[a^$QA&k$nA1OJPOUKq@&T2[6e89e<+)V/"m95s8A1;^#'ZT-\5U0&rj[rC)#o]/XQ`qtS_QSHWs\.=CK]'p0[EPQq+nJZ1b1=76-%C1OuZXmPrt)TM^=G5YiK(O>dX1$d=,A(-s`Q)"do`ga#[rJn]OlQ:hR.W3+BL0@TP`M@9JgAfq]^^X0VS/hMXmLIRD?JM0nc6n[89\*<&iKioI7%N1Z#TGmqCeGRjRS~>
+endstream
+endobj
+11 0 obj
+<<
+/Contents 12 0 R
+/MediaBox [ 0 0 595.2756 841.8898 ]
+/Resources <<
+/Font 6 0 R
+/ProcSet [ /PDF /Text /ImageB /ImageC /ImageI ]
+>>
+/Rotate 180
+/Trans <<
+>>
+/Type /Page
+/Parent 2 0 R
+>>
+endobj
+12 0 obj
+<<
+/Filter [ /ASCII85Decode /FlateDecode ]
+/Length 432
+>>
+stream
+GasbV?#P<K'Sc)T(%:7m6q3(9mW+`-o#gS81ie7E.&O+-s8=EgZcoV,"HjGTk;g2/+nc`<mY_9o'mP1??lWV^2Mss81JGc\Rre)o0^$9:*<@$J2J,gX:ND6q%r^iMK-<qSUf4B"b@;5c)C#%anH&1PMnQ2"_/TGjQ*OLb,>095't.Z&;NZZ$Z`0K6ek-SqI6(K1BlT5)I:GN;ZRd@8KFcAhSrBRM#=FJM)R<D?V?/j@.QII^6L(\[2n7o/`1?`FpW%,5`;#,;APM%hlf9*Z>?+LT?H\LLJGJ7/T)Y&08@'N3&saO9D4-#&?-D7V^"Dm8%9q\s_aRdJ)X[9aL!h8N;inP/G-%Gc&\h$$!Hgk)LEj5h-[+TE':)($P3)Z;>a<k>nm4GI9Q#[^4`N-(0#!W9Lr4`-9UslQL[fG*09<pc$krKL~>
+endstream
+endobj
+13 0 obj
+<<
+/Contents 14 0 R
+/MediaBox [ 0 0 595.2756 841.8898 ]
+/Resources <<
+/Font 6 0 R
+/ProcSet [ /PDF /Text /ImageB /ImageC /ImageI ]
+>>
+/Rotate 270
+/Trans <<
+>>
+/Type /Page
+/Parent 2 0 R
+>>
+endobj
+14 0 obj
+<<
+/Filter [ /ASCII85Decode /FlateDecode ]
+/Length 432
+>>
+stream
+GasbV?#P<K'Sc)T(%:7m6q3(9mW+`-o#gS81ie7E.&O+-s8=EgZcoV,"HjGTk;g2/+nc`<mY_9o'mP1??lWV^2Mss81JGc\Rre)o0^$9:*<@$J2J,gX:ND6q%r^iMK-<qSUf4B"cXISf)C#%anH&1PMnQ2"_/TGjQ*OLb,>095't.Z&;NZZ$Z`0K6ek-SqI6(K1BlT5)I:GN;ZRd@8KFcAhSrBRM#=FJM)R<D?V?/j@.QII^6L(\[2n7o/`1?`FpW%,5`;#,;APM%hlf9*Z>?+LT?H\LLJGJ7/T)Y&08@'N3&saO9D4-#&?-D7V^"Dm8%9q\s_aRdJ)X[9aL!h8N;inP/G-%Gc&\h$$!Hgk)LEj5h-[+TE':)($P3)Z;>a<k>nm4GI9Q#[^4`N-(0#!W9Lr4`-9UslQL[fG*09<pc$l/WN~>
+endstream
 endobj
 xref
-0 11
+0 15
 0000000000 65535 f 
-0000000061 00000 n 
-0000000102 00000 n 
-0000000209 00000 n 
-0000000321 00000 n 
-0000000524 00000 n 
-0000000729 00000 n 
-0000000797 00000 n 
-0000001077 00000 n 
-0000001142 00000 n 
-0000001698 00000 n 
+0000000015 00000 n 
+0000000054 00000 n 
+0000000133 00000 n 
+0000000182 00000 n 
+0000000381 00000 n 
+0000000903 00000 n 
+0000000944 00000 n 
+0000001051 00000 n 
+0000001163 00000 n 
+0000001364 00000 n 
+0000001888 00000 n 
+0000002091 00000 n 
+0000002615 00000 n 
+0000002818 00000 n 
 trailer
 <<
-/ID 
-[<1d9c1d8be5830de2ac0878354d96f019><1d9c1d8be5830de2ac0878354d96f019>]
-% ReportLab generated PDF document -- digest (opensource)
-
-/Info 7 0 R
-/Root 6 0 R
-/Size 11
+/Size 15
+/Root 3 0 R
+/Info 1 0 R
 >>
 startxref
-2039
+3342
 %%EOF

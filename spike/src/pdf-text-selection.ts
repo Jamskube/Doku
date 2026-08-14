@@ -7,9 +7,24 @@ pdfjs.GlobalWorkerOptions.workerPort = new PdfWorker()
 
 interface NormalizedRect { left: number; top: number; width: number; height: number }
 interface SelectionResult { page: number; text: string; rects: NormalizedRect[] }
+interface PageAlignment {
+  page: number
+  cssDelta: number
+  backingScaleX: number
+  backingScaleY: number
+  pass: boolean
+}
 interface SpikeResult {
+  dpr: number
   pages: number
-  selections: Array<{ page: number; textLength: number; rectCount: number; rectsInsidePage: boolean }>
+  alignments: PageAlignment[]
+  selections: Array<{
+    page: number
+    textLength: number
+    rectCount: number
+    rectsInsidePage: boolean
+    rects: NormalizedRect[]
+  }>
   pass: boolean
 }
 
@@ -28,6 +43,11 @@ const textOut = document.querySelector<HTMLElement>('#selection-text')!
 const rectsOut = document.querySelector<HTMLElement>('#selection-rects')!
 
 let loadingTask: ReturnType<typeof pdfjs.getDocument> | null = null
+
+function requestedDpr() {
+  const override = Number(new URLSearchParams(window.location.search).get('dpr'))
+  return Math.min(Number.isFinite(override) && override > 0 ? override : window.devicePixelRatio || 1, 3)
+}
 
 function selectionForWrap(wrap: HTMLElement): SelectionResult | null {
   const selection = window.getSelection()
@@ -62,7 +82,7 @@ async function render(bytes: Uint8Array) {
   const task = pdfjs.getDocument({ data: bytes, disableFontFace: true, enableXfa: false })
   loadingTask = task
   const pdf = await task.promise
-  const dpr = Math.min(window.devicePixelRatio || 1, 3)
+  const dpr = requestedDpr()
 
   for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber++) {
     const page = await pdf.getPage(pageNumber)
@@ -75,6 +95,8 @@ async function render(bytes: Uint8Array) {
     wrap.dataset.page = String(pageNumber)
     wrap.style.width = `${cssViewport.width}px`
     wrap.style.height = `${cssViewport.height}px`
+    wrap.style.setProperty('--scale-factor', String(cssViewport.scale))
+    wrap.style.setProperty('--user-unit', String(cssViewport.userUnit))
 
     const canvas = document.createElement('canvas')
     canvas.width = renderViewport.width
@@ -85,7 +107,6 @@ async function render(bytes: Uint8Array) {
 
     const textLayer = document.createElement('div')
     textLayer.className = 'textLayer'
-    textLayer.style.setProperty('--scale-factor', String(cssViewport.scale))
     wrap.append(canvas, textLayer)
     viewer.append(wrap)
 
@@ -103,11 +124,44 @@ async function render(bytes: Uint8Array) {
 
 async function run(): Promise<SpikeResult> {
   const pages = Array.from(viewer.querySelectorAll<HTMLElement>('.pdf-spike-page'))
+  const dpr = requestedDpr()
+  const alignments = pages.map((page): PageAlignment => {
+    const canvas = page.querySelector<HTMLCanvasElement>('canvas')!
+    const textLayer = page.querySelector<HTMLElement>('.textLayer')!
+    const pageRect = page.getBoundingClientRect()
+    const canvasRect = canvas.getBoundingClientRect()
+    const layerRect = textLayer.getBoundingClientRect()
+    const cssDelta = Math.max(
+      Math.abs(canvasRect.left - pageRect.left),
+      Math.abs(canvasRect.top - pageRect.top),
+      Math.abs(canvasRect.width - pageRect.width),
+      Math.abs(canvasRect.height - pageRect.height),
+      Math.abs(layerRect.left - pageRect.left),
+      Math.abs(layerRect.top - pageRect.top),
+      Math.abs(layerRect.width - pageRect.width),
+      Math.abs(layerRect.height - pageRect.height),
+    )
+    const backingScaleX = canvas.width / canvasRect.width
+    const backingScaleY = canvas.height / canvasRect.height
+    return {
+      page: Number(page.dataset.page),
+      cssDelta,
+      backingScaleX,
+      backingScaleY,
+      pass: cssDelta <= 2 && Math.abs(backingScaleX - dpr) <= 0.02 && Math.abs(backingScaleY - dpr) <= 0.02,
+    }
+  })
   const selections: SpikeResult['selections'] = []
   for (const page of pages) {
     const spans = Array.from(page.querySelectorAll<HTMLElement>('.textLayer span')).filter((span) => span.textContent?.trim())
     if (!spans.length) {
-      selections.push({ page: Number(page.dataset.page), textLength: 0, rectCount: 0, rectsInsidePage: false })
+      selections.push({
+        page: Number(page.dataset.page),
+        textLength: 0,
+        rectCount: 0,
+        rectsInsidePage: false,
+        rects: [],
+      })
       continue
     }
     const range = document.createRange()
@@ -126,11 +180,14 @@ async function run(): Promise<SpikeResult> {
       textLength: result?.text.length ?? 0,
       rectCount: result?.rects.length ?? 0,
       rectsInsidePage,
+      rects: result?.rects ?? [],
     })
   }
   window.getSelection()?.removeAllRanges()
-  const pass = selections.length > 0 && selections.every((item) => item.textLength > 0 && item.rectCount > 0 && item.rectsInsidePage)
-  const result = { pages: pages.length, selections, pass }
+  const pass = selections.length > 0
+    && selections.every((item) => item.textLength > 0 && item.rectCount > 0 && item.rectsInsidePage)
+    && alignments.every((item) => item.pass)
+  const result = { dpr, pages: pages.length, alignments, selections, pass }
   verdict.textContent = pass ? 'PASS' : 'FAIL'
   verdict.className = pass ? 'pass' : 'fail'
   log.textContent = JSON.stringify(result, null, 2)
@@ -144,7 +201,7 @@ fileInput.addEventListener('change', async () => {
 document.querySelector('#btn-run')!.addEventListener('click', () => void run())
 window.__dokuPdfAnnotationSpike = { run }
 
-void fetch('/spike/fixtures/pdf-annotation-test.pdf')
+void fetch(new URL('./fixtures/pdf-annotation-test.pdf', window.location.href))
   .then((response) => response.arrayBuffer())
   .then((buffer) => render(new Uint8Array(buffer)))
   .catch((error) => {
