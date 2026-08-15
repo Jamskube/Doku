@@ -26,6 +26,10 @@
   // copie annotée (ADR-0022) — le menu change donc de contenu au lieu d'être grisé.
   const activeIsPdf = $derived(activeTab()?.kind === 'pdf')
   const canExport = $derived(!!activeTab())
+  // Les deux actions PDF travaillent depuis le CHEMIN du fichier : sans chemin, elles
+  // ne peuvent rien faire. On les désactive plutôt que de les laisser cliquables et
+  // muettes (règle « branché ou retiré », Epic 19).
+  const pdfPath = $derived(activeIsPdf ? (activeTab()?.path ?? null) : null)
 
   // --- Barre d'onglets : quand la place manque (chaque onglet < TAB_MIN), la rangée
   // entière se REPLIE en un seul bouton « onglet actif · n » qui ouvre un menu flottant
@@ -467,10 +471,10 @@
           {#if submenu === 'export' && canExport}
             <div class="app-menu flyout-menu" role="menu" tabindex="-1" aria-label="Exporter" bind:this={exportMenuEl} onkeydown={(event) => handleSubmenuKeydown(event, 'export')}>
               {#if activeIsPdf}
-                <button class="app-menu-item" role="menuitem" disabled={burningPdf} onclick={() => void exportAnnotatedActive()}>
+                <button class="app-menu-item" role="menuitem" disabled={burningPdf || !pdfPath} onclick={() => void exportAnnotatedActive()}>
                   <span class="msr">stylus_note</span><span class="menu-label">{burningPdf ? 'Gravure en cours…' : 'PDF avec les annotations'}</span><span class="menu-format">.pdf</span>
                 </button>
-                <button class="app-menu-item" role="menuitem" onclick={organizePagesActive}>
+                <button class="app-menu-item" role="menuitem" disabled={!pdfPath} onclick={organizePagesActive}>
                   <span class="msr">auto_stories</span><span class="menu-label">Organiser les pages…</span>
                 </button>
               {:else}
