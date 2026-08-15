@@ -13,3 +13,6 @@ src-tauri/binaries/*
 
 # Journaux des bancs de contrôle (sorties de serveur de dev, jamais des preuves)
 .agent/**/*.log
+
+# Fixture locale du banc de modification de texte (document de l utilisateur)
+.agent/visual/pdf-text-edit/doc.pdf

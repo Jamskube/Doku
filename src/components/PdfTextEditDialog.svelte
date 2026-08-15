@@ -31,6 +31,9 @@
   // tant que l'utilisateur n'enregistre pas.
   let edits = $state<Record<string, string>>({})
   let canvasEl = $state<HTMLCanvasElement | null>(null)
+  // Échelle du rendu : les tailles de police du PDF sont en POINTS, le canvas est rendu
+  // réduit. Sans ce facteur, le texte saisi ne fait pas la taille de celui du document.
+  let renderScale = $state(1)
 
   let bytes: Uint8Array | null = null
   let pdf: PdfDoc | null = null
@@ -120,6 +123,7 @@
       // Largeur fixe : la modale n'a pas à suivre le zoom du lecteur, et les overlays
       // sont posés en pourcentage, donc indépendants de l'échelle choisie.
       const scale = Math.min(720 / base.width, 940 / base.height)
+      renderScale = scale
       page.cleanup()
       // Une page demandée puis abandonnée (clics rapides) ne se rend pas pour rien.
       if (cible !== pageIndex) return
@@ -220,7 +224,7 @@
             style:top="{line.top * 100}%"
             style:min-width="{Math.min(line.width * 100 + 6, 100 - line.left * 100)}%"
             style:height="{line.height * 100}%"
-            style:font-size="{line.size}px"
+            style:font-size="{Math.max(6, line.size * renderScale)}px"
           />
         {/each}
       </div>
@@ -308,17 +312,31 @@
     max-width: 96%;
     transition: background-color 120ms ease, border-color 120ms ease;
   }
-  .line:hover:not(.locked) { border-color: rgba(var(--ink-rgb), 0.28); background: rgba(255, 255, 255, 0.35); }
+  /* Au survol : un CADRE, jamais de fond. Un fond semi-transparent délavait le texte du
+     document sans révéler celui du champ — on ne lisait plus ni l'un ni l'autre. */
+  /*
+   * `:not(:focus)` est INDISPENSABLE ici, pas un raffinement : `.line:hover:not(.locked)`
+   * a une spécificité plus forte que `.line:focus`, et la souris reste sur la ligne
+   * qu'on vient de cliquer. Sans cette exclusion, le survol imposait son fond au champ
+   * en cours de saisie — on ne lisait plus ni le document ni ce qu'on tapait.
+   */
+  .line:hover:not(.locked):not(:focus) {
+    border-color: var(--accent, #6b5bd2);
+    background: transparent;
+    cursor: text;
+  }
   /* Le fond blanc DÉBORDE de la boîte (`box-shadow` en anneau plein) : sans ça, le
      texte d'origine du canvas dépasse du champ et on lit les deux superposés — le mot
      modifié devient illisible. */
+  /* En saisie : fond OPAQUE et texte visible. C'est le seul état où l'on doit lire ce
+     qu'on écrit plutôt que ce qui était écrit — les deux superposés ne se lisent pas. */
   .line:focus {
     outline: none;
     border-color: var(--accent, #6b5bd2);
     background: #fff;
     color: var(--ink);
-    box-shadow: 0 0 0 3px #fff;
-    z-index: 2;
+    box-shadow: 0 0 0 3px #fff, 0 0 0 4px var(--accent, #6b5bd2);
+    z-index: 3;
   }
   /* Une ligne modifiée reste VISIBLE sans focus : sinon l'utilisateur perd de vue ce
      qu'il a déjà changé. */
@@ -330,7 +348,9 @@
     z-index: 1;
   }
   .line.locked { cursor: not-allowed; }
-  .line.locked:hover { border-color: rgba(179, 38, 30, 0.35); background: rgba(179, 38, 30, 0.06); }
+  /* Même précaution : une ligne verrouillée survolée ne doit pas voiler le document,
+     seulement dire qu'elle n'est pas modifiable. */
+  .line.locked:hover { border-color: rgba(179, 38, 30, 0.45); background: transparent; }
 
   footer { flex: 0 0 auto; display: flex; align-items: center; gap: 8px; padding: 12px 16px; border-top: 1px solid var(--line-1); }
   footer small { opacity: 0.6; }
