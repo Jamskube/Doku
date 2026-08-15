@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { PdfEditError, applyTextEdits, readEditableText } from './pdf-edit-text'
+import { PdfEditError, applyTextEdits, readEditableLines, readEditableText } from './pdf-edit-text'
 import { readFileSync } from 'node:fs'
 
 // Les documents RÉELS fournis par l'utilisateur. Un test qui ne tourne que sur des
@@ -126,5 +126,48 @@ describe('applyTextEdits', () => {
     const relu = mupdf.Document.openDocument(rapport.bytes, 'application/pdf')
     expect(relu.countPages()).toBeGreaterThan(0)
     expect(String.fromCharCode(...rapport.bytes.slice(0, 5))).toBe('%PDF-')
+  })
+})
+
+describe('readEditableLines', () => {
+  it('positionne chaque ligne en fractions de page', async () => {
+    const bytes = charger('lic-tech 3.pdf')
+    if (!bytes) return
+    const lignes = await readEditableLines(bytes)
+    expect(lignes.length).toBeGreaterThan(20)
+    for (const l of lignes) {
+      // Une fraction hors [0,1] poserait le champ de saisie à côté de son texte.
+      expect(l.left).toBeGreaterThanOrEqual(0)
+      expect(l.left).toBeLessThanOrEqual(1)
+      expect(l.top).toBeGreaterThanOrEqual(0)
+      expect(l.top).toBeLessThanOrEqual(1)
+      expect(l.width).toBeGreaterThan(0)
+      expect(l.height).toBeGreaterThan(0)
+      expect(l.size).toBeGreaterThan(0)
+    }
+  })
+
+  it('dit quelles lignes sont réécrivables sans dégradation', async () => {
+    const bytes = charger('manual.pdf')
+    if (!bytes) return
+    const lignes = await readEditableLines(bytes)
+    // La majorité doit l'être : sinon la fonctionnalité n'a pas d'intérêt, et il vaut
+    // mieux que le test le dise que l'utilisateur.
+    const part = lignes.filter((l) => l.editable).length / lignes.length
+    expect(part).toBeGreaterThan(0.5)
+  })
+
+  it('ne rattache pas deux boîtes au même passage', async () => {
+    const bytes = charger('plan-licence 5.pdf')
+    if (!bytes) return
+    const lignes = await readEditableLines(bytes)
+    const parPage = new Map<number, Set<string>>()
+    for (const l of lignes) {
+      const cle = `${l.left.toFixed(4)}:${l.top.toFixed(4)}`
+      const vues = parPage.get(l.page) ?? new Set<string>()
+      expect(vues.has(cle)).toBe(false)
+      vues.add(cle)
+      parPage.set(l.page, vues)
+    }
   })
 })

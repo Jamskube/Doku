@@ -44,6 +44,15 @@
 
   // Idem pour « Organiser les pages » : elle tire pdf.js ET la bibliothèque d'écriture,
   // qui n'ont rien à faire dans le bundle de démarrage.
+  let PdfTextEditDialogComp: Component | null = $state(null)
+  $effect(() => {
+    if (app.pdfTextEditPath && !PdfTextEditDialogComp) {
+      void import('./components/PdfTextEditDialog.svelte').then((m) => {
+        PdfTextEditDialogComp = m.default as unknown as Component
+      })
+    }
+  })
+
   let PdfPagesDialogComp: Component | null = $state(null)
   $effect(() => {
     if (app.pdfPagesPath && !PdfPagesDialogComp) {
@@ -300,6 +309,7 @@
 <WikilinkPrompt />
 {#if app.settingsOpen && SettingsDialogComp}<SettingsDialogComp />{/if}
 {#if app.pdfPagesPath && PdfPagesDialogComp}<PdfPagesDialogComp />{/if}
+{#if app.pdfTextEditPath && PdfTextEditDialogComp}<PdfTextEditDialogComp />{/if}
 
 <style>
   .app {

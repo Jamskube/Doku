@@ -122,6 +122,8 @@ export const app = $state({
   // Modale « Organiser les pages » (ADR-0022) : porte le chemin du PDF concerné, donc
   // null = fermée. Transitoire — elle ne doit jamais se rouvrir au démarrage.
   pdfPagesPath: null as string | null,
+  // Modale « Modifier le texte » (ADR-0023) : porte le chemin du PDF, null = fermée.
+  pdfTextEditPath: null as string | null,
   // Vue interne du panneau (transitoire, non persistée) : boot toujours 'chat'.
   copilotView: 'chat' as CopilotView,
   sourceMode: false,
@@ -821,6 +823,14 @@ export function openPdfPages(path: string) {
 
 export function closePdfPages() {
   app.pdfPagesPath = null
+}
+
+export function openPdfTextEdit(path: string) {
+  app.pdfTextEditPath = path
+}
+
+export function closePdfTextEdit() {
+  app.pdfTextEditPath = null
 }
 
 export interface Heading {

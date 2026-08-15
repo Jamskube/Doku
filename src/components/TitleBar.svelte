@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount, tick } from 'svelte'
-  import { app, activeTab, isBinaryKind, openPath, openPdfPages, requestCloseTab, isDirty, saveTabOrSaveAs, selectTab, setColumnWidth, toggleActiveSourceMode, togglePin, toggleWorkspaceSplit, workspace, workspaceLayout, type ColumnWidth, type DocKind } from '../lib/stores.svelte'
+  import { app, activeTab, isBinaryKind, openPath, openPdfPages, openPdfTextEdit, requestCloseTab, isDirty, saveTabOrSaveAs, selectTab, setColumnWidth, toggleActiveSourceMode, togglePin, toggleWorkspaceSplit, workspace, workspaceLayout, type ColumnWidth, type DocKind } from '../lib/stores.svelte'
   import type { PaneId } from '../lib/workspace'
   import { tabDiscriminator } from '../lib/tabs'
   import { parentPath } from '../lib/explorer'
@@ -189,6 +189,13 @@
     } finally {
       convertingPdf = false
     }
+  }
+
+  function editTextActive() {
+    const tab = activeTab()
+    if (!tab || tab.kind !== 'pdf' || !tab.path) return
+    closeMenus()
+    openPdfTextEdit(tab.path)
   }
 
   function organizePagesActive() {
@@ -515,6 +522,9 @@
                 </button>
                 <button class="app-menu-item" role="menuitem" disabled={convertingPdf || !pdfPath} onclick={() => void convertToDocxActive()}>
                   <span class="msr">description</span><span class="menu-label">{convertingPdf ? 'Conversion en cours…' : 'Document Word éditable'}</span><span class="menu-format">.docx</span>
+                </button>
+                <button class="app-menu-item" role="menuitem" disabled={!pdfPath} onclick={editTextActive}>
+                  <span class="msr">edit_document</span><span class="menu-label">Modifier le texte…</span>
                 </button>
                 <button class="app-menu-item" role="menuitem" disabled={!pdfPath} onclick={organizePagesActive}>
                   <span class="msr">auto_stories</span><span class="menu-label">Organiser les pages…</span>

@@ -101,9 +101,91 @@ function readContents(page: MuPage): { text: string; write: (value: string) => v
   return null
 }
 
+export interface PdfEditableLine {
+  page: number
+  text: string
+  /** Boîte en fractions de la page AFFICHÉE (0..1) — indépendante du zoom et du DPR,
+   *  comme les annotations (ADR-0022), donc directement posable en overlay. */
+  left: number
+  top: number
+  width: number
+  height: number
+  /** Taille de police en points, pour dimensionner le champ de saisie à l'identique. */
+  size: number
+  /** Faux quand un caractère de la ligne n'est pas réécrivable dans la police du
+   *  document : l'appelant bascule alors sur l'autre étage, ou le dit. */
+  editable: boolean
+}
+
 export interface PdfPageText {
   page: number
   runs: PdfTextRunRef[]
+}
+
+/**
+ * Lignes éditables AVEC leur position à l'écran.
+ *
+ * Le flux de contenu donne le texte et sa police ; `toStructuredText` donne les boîtes.
+ * On rapproche les deux PAR LE TEXTE : c'est le seul lien fiable, les offsets de flux
+ * n'ayant aucun rapport avec les coordonnées de rendu.
+ */
+export async function readEditableLines(bytes: Uint8Array): Promise<PdfEditableLine[]> {
+  const mupdf = await import('mupdf')
+  let doc: MuDoc
+  try {
+    doc = mupdf.Document.openDocument(bytes, 'application/pdf') as MuDoc
+  } catch {
+    throw new PdfEditError('Ce PDF n’a pas pu être ouvert.')
+  }
+  const lignes: PdfEditableLine[] = []
+  for (let index = 0; index < doc.countPages(); index++) {
+    try {
+      const page = doc.loadPage(index) as MuPage
+      const contents = readContents(page)
+      if (!contents) continue
+      const codecs = pageCodecs(page)
+      const runs = findTextRuns(contents.text, codecs)
+      if (!runs.length) continue
+
+      // Un même texte peut apparaître plusieurs fois : on consomme les passages dans
+      // l'ordre pour ne pas rattacher deux boîtes au même.
+      const restants = new Map<string, PdfTextRunRef[]>()
+      for (const run of runs) {
+        const liste = restants.get(run.text) ?? []
+        liste.push(run)
+        restants.set(run.text, liste)
+      }
+
+      const bounds = page.getBounds()
+      const largeur = Math.max(bounds[2] - bounds[0], 1)
+      const hauteur = Math.max(bounds[3] - bounds[1], 1)
+      const json = JSON.parse(page.toStructuredText('preserve-whitespace').asJSON()) as {
+        blocks?: { lines?: { text: string; bbox: { x: number; y: number; w: number; h: number }; font?: { size: number } }[] }[]
+      }
+      for (const bloc of json.blocks ?? []) {
+        for (const ligne of bloc.lines ?? []) {
+          const candidats = restants.get(ligne.text)
+          const run = candidats?.shift()
+          if (!run) continue
+          const codec = codecs.get(run.font)
+          const editable = Boolean(codec) && [...ligne.text].every((ch) => ch === ' ' || codec!.fromUnicode.has(ch))
+          lignes.push({
+            page: index + 1,
+            text: ligne.text,
+            left: ligne.bbox.x / largeur,
+            top: ligne.bbox.y / hauteur,
+            width: ligne.bbox.w / largeur,
+            height: ligne.bbox.h / hauteur,
+            size: ligne.font?.size ?? 10,
+            editable,
+          })
+        }
+      }
+    } catch {
+      // Page illisible : les autres restent éditables.
+    }
+  }
+  return lignes
 }
 
 /** Passages de texte éditables d'un document, page par page. */
