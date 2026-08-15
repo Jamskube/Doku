@@ -106,7 +106,17 @@ async function download(url, destination) {
 
 function extractCpuPayload(archive, stagingDir, cpuFiles) {
   const members = ['ollama.exe', ...cpuFiles.map((name) => `lib/ollama/${name}`)]
-  const result = spawnSync('tar', ['-xf', archive, '-C', stagingDir, ...members], { stdio: 'inherit' })
+  // REQUIERT bsdtar — le `tar.exe` de Windows (libarchive), donc un shell où il est en
+  // tête de PATH : PowerShell ou cmd. L'asset Ollama est un **zip**, que GNU tar ne
+  // sait pas lire ; lancé depuis Git Bash (GNU tar 1.35 en /usr/bin/tar), l'extraction
+  // échoue avec « Not found in archive » sur chaque membre.
+  // L'archive est par ailleurs passée en nom NU depuis son dossier : GNU tar lirait
+  // `G:\...` comme `hôte:chemin` et tenterait une connexion distante, ce qui masquait
+  // la vraie cause derrière un « Cannot connect to G: resolve failed ».
+  const result = spawnSync('tar', ['-xf', path.basename(archive), '-C', stagingDir, ...members], {
+    cwd: path.dirname(archive),
+    stdio: 'inherit',
+  })
   if (result.status !== 0) throw new Error(`Extraction sélective impossible (${result.status ?? 'spawn'})`)
   return {
     exe: path.join(stagingDir, 'ollama.exe'),
