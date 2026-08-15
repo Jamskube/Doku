@@ -36,10 +36,26 @@ Trois autres corrections imposées par la revue :
 
 Enfin, la revue rappelle que ce plan **n'amende pas** le NO_GO de l'ADR-0022 : il implémente le repli que l'ADR avait déjà accepté (« remplacer un passage, substitution de police assumée et affichée »). D'où le renommage : le mode s'appelle **« Remplacer un passage »**, jamais « éditer le texte ».
 
+## Mesures sur le corpus RÉEL de l'utilisateur
+
+Trois documents fournis (`lic-tech 3.pdf`, `manual.pdf`, `plan-licence 5.pdf` — 10, 20 et 16 pages), **853 lignes mesurées sur des pages de contenu**, pas des couvertures. Ce tableau remplace toutes les suppositions de la révision 1 :
+
+| Propriété | Résultat | Conséquence pour le plan |
+|---|---|---|
+| Caviardage d'une ligne | **1 ligne visée → 1 ligne disparue**, sur les 3 documents | Pas de dégât collatéral : la crainte principale de la revue ne mord pas |
+| Lignes multi-style | **0 %** | Le refus « multi-style » ne rejettera quasiment rien |
+| Lignes justifiées | **aucune** (bord droit au fil) | La dégradation du justifié ne concerne pas ce corpus |
+| Lignes non horizontales | **0** | Filtre à garder, mais inerte ici |
+| Caractères hors WinAnsi | **2 sur 853** | Le filtre suffit, sans incorporation de police |
+| Couleurs | **réelles et variées** : `26,26,26` corps, `37,99,235` bleu, `138,138,138` gris, `199,119,0`, `27,138,58` | **Ne PAS refuser les lignes colorées — les PRÉSERVER.** MuPDF donne la couleur par caractère, pdf-lib la réécrit. Refuser aurait rejeté 100 % du contenu |
+| Écart de largeur après substitution | **4 % en moyenne, 75-81 % des lignes sous 5 %** | Acceptable, à condition de choisir la police par FAMILLE |
+
+**Règle de substitution, mesurée et non devinée** : le nom de la police embarquée (`HCEZYJ+JetBrainsMonoNFM-Regular`, `QKHQXD+Archivo-Regular`) suffit à choisir la chasse. Tout envoyer sur Helvetica donnait **29 % d'écart sur les blocs de code** ; router les `mono|courier|consol` vers Courier et les `times|serif|garamond` vers Times ramène `manual.pdf` de 8 % à 4 % d'écart moyen, et de 62 % à 75 % de lignes sous 5 %.
+
 ## Refus explicites, dits à l'utilisateur
 
 Une ligne n'est éditable que si elle passe tous ces filtres — sinon elle reste inerte **avec la raison affichée** :
-- style unique et couleur noire (sinon on aplatirait des styles en silence) ;
+- style unique (la **couleur, elle, se préserve** : mesurée présente partout dans le corpus réel, la refuser rejetterait tout) ;
 - entièrement écrivable en WinAnsi, y compris **la partie non modifiée** ;
 - horizontale, gauche-à-droite (`wmode`/`direction` de `walk()`) ;
 - ne chevauchant horizontalement aucune autre ligne au même `y` (colonnes fusionnées par MuPDF) ;
