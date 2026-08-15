@@ -53,6 +53,8 @@
   --warn-text: #8A5F26;
   --err-text: #A9412F;
   --danger-action-text: #B51D2A;
+  --pdf-annotation-pin-bg: #1C1A16;
+  --pdf-annotation-pin-ink: #FDFBF5;
   /* 'Inter Variable' = nom exact du @font-face de @fontsource-variable/inter — un nom
      approximatif ne matche RIEN et toute l'UI tombe silencieusement sur la police
      système (vécu avec 'Geist' vs 'Geist Sans'). */

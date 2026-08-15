@@ -445,6 +445,59 @@ export async function writeTextFileAtomic(path: string, content: string) {
   await rename(tmp, path)
 }
 
+function validPdfAnnotationKey(key: string): boolean {
+  return /^[a-f0-9]{64}$/.test(key)
+}
+
+export async function readPdfAnnotationManifest(key: string): Promise<string | null> {
+  if (!validPdfAnnotationKey(key)) return null
+  if (!isTauri) return globalThis.localStorage?.getItem(`doku:pdf-annotations:${key}`) ?? null
+  try {
+    const { appDataDir, join } = await import('@tauri-apps/api/path')
+    const { readTextFile } = await import('@tauri-apps/plugin-fs')
+    return await readTextFile(await join(await appDataDir(), 'annotations', key, 'manifest.json'))
+  } catch {
+    return null
+  }
+}
+
+// Met de côté un carnet illisible (JSON cassé, ou écrit par une version postérieure)
+// AVANT que Doku n'écrive par-dessus. Rien n'est jamais détruit : le fichier est
+// simplement renommé, l'utilisateur peut le récupérer.
+export async function keepPdfAnnotationManifestAside(key: string, stamp: string): Promise<string | null> {
+  if (!validPdfAnnotationKey(key)) return null
+  if (!isTauri) {
+    const from = `doku:pdf-annotations:${key}`
+    const kept = globalThis.localStorage?.getItem(from)
+    if (kept === null || kept === undefined) return null
+    globalThis.localStorage?.setItem(`${from}:illisible:${stamp}`, kept)
+    return `${from}:illisible:${stamp}`
+  }
+  try {
+    const { appDataDir, join } = await import('@tauri-apps/api/path')
+    const { rename } = await import('@tauri-apps/plugin-fs')
+    const dir = await join(await appDataDir(), 'annotations', key)
+    const kept = await join(dir, `manifest.illisible-${stamp}.json`)
+    await rename(await join(dir, 'manifest.json'), kept)
+    return kept
+  } catch {
+    return null
+  }
+}
+
+export async function writePdfAnnotationManifest(key: string, content: string): Promise<void> {
+  if (!validPdfAnnotationKey(key)) throw new Error('Identifiant d’annotations PDF invalide.')
+  if (!isTauri) {
+    globalThis.localStorage?.setItem(`doku:pdf-annotations:${key}`, content)
+    return
+  }
+  const { appDataDir, join } = await import('@tauri-apps/api/path')
+  const { mkdir } = await import('@tauri-apps/plugin-fs')
+  const dir = await join(await appDataDir(), 'annotations', key)
+  await mkdir(dir, { recursive: true })
+  await writeTextFileAtomic(await join(dir, 'manifest.json'), content)
+}
+
 // Jumeau binaire de writeTextFileAtomic (tmp + rename) : écrire un .docx directement
 // via writeFile corromprait un fichier existant en cas d'interruption.
 export async function writeFileAtomic(path: string, bytes: Uint8Array) {

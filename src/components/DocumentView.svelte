@@ -619,7 +619,7 @@
   {#if pdfRender}
     <!-- Keyé par id : changer d'onglet PDF remonte le viewer → pdf.destroy()/cancel au démontage. -->
     {#key tab!.id}
-      <PdfView path={tab!.path ?? ''} />
+      <PdfView path={tab!.path ?? ''} {paneId} />
     {/key}
   {/if}
   <div class="editor-host doku-doc" class:source-mode={effectiveSourceMode} class:txt={tab?.kind === 'txt'} class:hidden={htmlRender || pdfRender} bind:this={host}></div>
