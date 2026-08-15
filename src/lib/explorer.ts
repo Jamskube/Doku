@@ -11,7 +11,7 @@ export type ExplorerSort = { key: SortKey; order: SortOrder }
 
 export const DEFAULT_SORT: ExplorerSort = { key: 'name', order: 'asc' }
 
-const SUPPORTED = ['md', 'markdown', 'txt', 'html', 'htm', 'pdf']
+const SUPPORTED = ['md', 'markdown', 'txt', 'html', 'htm', 'pdf', 'docx']
 
 export function isSupportedFile(name: string): boolean {
   const ext = name.split('.').pop()?.toLowerCase() ?? ''

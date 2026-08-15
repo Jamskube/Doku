@@ -1,10 +1,10 @@
 <script lang="ts">
   import { onMount, tick } from 'svelte'
-  import { app, activeTab, openPdfPages, requestCloseTab, isDirty, saveTabOrSaveAs, selectTab, setColumnWidth, toggleActiveSourceMode, togglePin, toggleWorkspaceSplit, workspace, workspaceLayout, type ColumnWidth, type DocKind } from '../lib/stores.svelte'
+  import { app, activeTab, isBinaryKind, openPath, openPdfPages, requestCloseTab, isDirty, saveTabOrSaveAs, selectTab, setColumnWidth, toggleActiveSourceMode, togglePin, toggleWorkspaceSplit, workspace, workspaceLayout, type ColumnWidth, type DocKind } from '../lib/stores.svelte'
   import type { PaneId } from '../lib/workspace'
   import { tabDiscriminator } from '../lib/tabs'
   import { parentPath } from '../lib/explorer'
-  import { closeWindow, minimizeWindow, readFileBytes, readImageDataUrl, readPdfAnnotationManifest, saveDocxDialog, saveHtmlDialog, savePdfDialog, toggleMaximizeWindow } from '../lib/tauri'
+  import { closeWindow, minimizeWindow, readFileBytes, readImageDataUrl, readPdfAnnotationManifest, saveDocxDialog, saveDocxDialogPath, saveHtmlDialog, savePdfDialog, toggleMaximizeWindow } from '../lib/tauri'
   import DokuMark from '../lib/DokuMark.svelte'
   import PaneTabSelector from './PaneTabSelector.svelte'
 
@@ -110,13 +110,13 @@
 
   async function saveActive() {
     const tab = activeTab()
-    if (tab && tab.kind !== 'pdf') await saveTabOrSaveAs(tab)
+    if (tab && !isBinaryKind(tab.kind)) await saveTabOrSaveAs(tab)
   }
 
   // Exports HTML/print en import() dynamique (motif DOCX ci-dessous) : ils tirent
   // marked + le pipeline de rendu, inutiles au démarrage.
   function exportHtml(tab: ExportTab) {
-    if (tab.kind === 'pdf') return
+    if (isBinaryKind(tab.kind)) return
     const kind = tab.kind // rétrécissement capturé (perdu sinon dans la closure du .then)
     import('../lib/export/standalone')
       .then((m) =>
@@ -129,7 +129,7 @@
   }
 
   function exportDocx(tab: ExportTab) {
-    if (tab.kind === 'pdf') return
+    if (isBinaryKind(tab.kind)) return
     const doc = { kind: tab.kind, name: tab.name, content: tab.content }
     import('../lib/export/docx')
       .then((m) => m.exportDocx(doc, { save: saveDocxDialog }))
@@ -137,7 +137,7 @@
   }
 
   function exportPrint(tab: ExportTab) {
-    if (tab.kind === 'pdf') return
+    if (isBinaryKind(tab.kind)) return
     const kind = tab.kind // rétrécissement capturé (perdu sinon dans la closure du .then)
     import('../lib/export/print')
       .then((m) => m.exportViaPrint({ kind, name: tab.name, content: tab.content, dir: parentPath(tab.path ?? null) ?? '' }))
@@ -146,7 +146,7 @@
 
   function exportActive(format: 'docx' | 'html' | 'pdf') {
     const tab = activeTab()
-    if (!tab || tab.kind === 'pdf') return
+    if (!tab || isBinaryKind(tab.kind)) return
     closeMenus()
     if (format === 'docx') exportDocx(tab)
     else if (format === 'html') exportHtml(tab)
@@ -167,7 +167,11 @@
         const bytes = await readFileBytes(tab.path)
         if (!bytes) throw new PdfConvertError('Le document source est introuvable.')
         const report = await convertPdfToDocx(bytes)
-        if (!await saveDocxDialog(convertedDocxName(tab.path), report.bytes)) return
+        const saved = await saveDocxDialogPath(convertedDocxName(tab.path), report.bytes)
+        if (!saved) return
+        // On rouvre le document converti DANS Doku : c'est ce qui fait de la conversion
+        // une étape d'édition, et non un export dont l'utilisateur devrait se débrouiller.
+        await openPath(saved)
         app.banner = {
           tone: report.emptyish ? 'warning' : 'success',
           title: 'Document Word créé',
@@ -482,7 +486,7 @@
         <button
           class="app-menu-item"
           role="menuitem"
-          disabled={!activeTab() || activeTab()?.kind === 'pdf' || !isDirty(activeTab()!)}
+          disabled={!activeTab() || isBinaryKind(activeTab()!.kind) || !isDirty(activeTab()!)}
           onmouseenter={() => (submenu = null)}
           onclick={() => runMenuAction(saveActive)}
         >
@@ -536,7 +540,7 @@
           class="app-menu-item"
           role="menuitemcheckbox"
           aria-checked={app.sourceMode}
-          disabled={!activeTab() || activeTab()?.kind === 'pdf'}
+          disabled={!activeTab() || isBinaryKind(activeTab()!.kind)}
           onmouseenter={() => (submenu = null)}
           onclick={() => runMenuAction(toggleActiveSourceMode)}
         >

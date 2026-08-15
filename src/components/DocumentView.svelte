@@ -29,6 +29,7 @@
   import { diffWords, type RephraseMode } from '../lib/copilot-service'
   import DokuMark from '../lib/DokuMark.svelte'
   import PdfView from './PdfView.svelte'
+  import DocxView from './DocxView.svelte'
   import type { PaneId } from '../lib/workspace'
 
   const MAX_PASTE_IMAGE = 25 * 1024 * 1024 // 25 Mo : garde-fou mémoire (tablette ARM)
@@ -137,6 +138,8 @@
   const htmlRender = $derived(tab?.kind === 'html' && !sourceMode)
   // Onglet PDF : viewer lecture seule (11.1), pas l'éditeur.
   const pdfRender = $derived(tab?.kind === 'pdf')
+  // Onglet DOCX (ADR-0023) : éditeur SuperDoc, chargé à la demande.
+  const docxRender = $derived(tab?.kind === 'docx')
 
   let host: HTMLElement | undefined = $state()
   let view: EditorView | null = null
@@ -616,13 +619,19 @@
   {#if htmlRender}
     <iframe class="html-view" title="Aperçu HTML" sandbox="" srcdoc={sandboxDoc(tab!.content, app.theme, COLUMN_PX[app.columnWidth])}></iframe>
   {/if}
+  {#if docxRender}
+    <!-- Keyé par id, comme le PDF : changer d'onglet détruit l'instance SuperDoc. -->
+    {#key tab!.id}
+      <DocxView path={tab!.path ?? ''} tabId={tab!.id} />
+    {/key}
+  {/if}
   {#if pdfRender}
     <!-- Keyé par id : changer d'onglet PDF remonte le viewer → pdf.destroy()/cancel au démontage. -->
     {#key tab!.id}
       <PdfView path={tab!.path ?? ''} {paneId} />
     {/key}
   {/if}
-  <div class="editor-host doku-doc" class:source-mode={effectiveSourceMode} class:txt={tab?.kind === 'txt'} class:hidden={htmlRender || pdfRender} bind:this={host}></div>
+  <div class="editor-host doku-doc" class:source-mode={effectiveSourceMode} class:txt={tab?.kind === 'txt'} class:hidden={htmlRender || pdfRender || docxRender} bind:this={host}></div>
 
   {#if selectionMenu}
     <div

@@ -166,7 +166,9 @@ export async function readFolderTexts(
 ): Promise<{ files: FolderTextFile[]; total: number; capped: number }> {
   if (!isTauri) return { files: [], total: 0, capped: 0 }
   const { readTextFile } = await import('@tauri-apps/plugin-fs')
-  const all = (await scanFiles(dir, maxDepth)).filter((f) => isSupportedFile(f.name) && !/\.pdf$/i.test(f.name))
+  // `.pdf` et `.docx` sont binaires : les lire en texte rendrait du bruit (ou lèverait),
+  // et surtout ferait charger tout le fichier pour rien.
+  const all = (await scanFiles(dir, maxDepth)).filter((f) => isSupportedFile(f.name) && !/\.(pdf|docx)$/i.test(f.name))
   const capped = all.slice(0, SEARCH_FILE_CAP)
   const readOne = async (f: { path: string; name: string }): Promise<FolderTextFile | null> => {
     try {
@@ -298,7 +300,7 @@ export async function openFileDialog(): Promise<{ path: string; name: string; co
   const { open } = await import('@tauri-apps/plugin-dialog')
   const path = await open({
     multiple: false,
-    filters: [{ name: 'Documents', extensions: ['md', 'markdown', 'txt', 'html', 'htm', 'pdf'] }],
+    filters: [{ name: 'Documents', extensions: ['md', 'markdown', 'txt', 'html', 'htm', 'pdf', 'docx'] }],
   })
   if (typeof path !== 'string') return null
   const name = path.split(/[\\/]/).pop() ?? path
@@ -348,7 +350,7 @@ export async function openContextFilesDialog(): Promise<string[]> {
   const { open } = await import('@tauri-apps/plugin-dialog')
   const paths = await open({
     multiple: true,
-    filters: [{ name: 'Documents', extensions: ['md', 'markdown', 'txt', 'html', 'htm', 'pdf'] }],
+    filters: [{ name: 'Documents', extensions: ['md', 'markdown', 'txt', 'html', 'htm', 'pdf', 'docx'] }],
   })
   if (!paths) return []
   return Array.isArray(paths) ? paths : [paths]
@@ -765,12 +767,19 @@ export async function saveHtmlDialog(defaultName: string, html: string): Promise
 // Dialogue save + écriture BINAIRE d'un .docx. Requiert la permission fs:allow-write-file.
 // false si annulé ou en navigateur.
 export async function saveDocxDialog(defaultName: string, bytes: Uint8Array): Promise<boolean> {
-  if (!isTauri) return false
+  return (await saveDocxDialogPath(defaultName, bytes)) !== null
+}
+
+// Même chose, mais rend le CHEMIN écrit : la conversion d'un PDF enchaîne dessus pour
+// rouvrir le document dans Doku, ce qui referme la boucle au lieu de laisser
+// l'utilisateur retrouver le fichier lui-même.
+export async function saveDocxDialogPath(defaultName: string, bytes: Uint8Array): Promise<string | null> {
+  if (!isTauri) return null
   const { save } = await import('@tauri-apps/plugin-dialog')
   const path = await save({ defaultPath: defaultName, filters: [{ name: 'Word', extensions: ['docx'] }] })
-  if (typeof path !== 'string') return false
+  if (typeof path !== 'string') return null
   await writeFileAtomic(path, bytes)
-  return true
+  return path
 }
 
 // Dialogue d'ouverture restreint aux PDF (insertion de pages, ADR-0022).
