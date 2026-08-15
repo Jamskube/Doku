@@ -8,14 +8,14 @@
   // c'est un format structuré qu'on relit et réécrit tel quel. Doku a donc deux moteurs
   // d'édition — CM6 pour le texte, ProseMirror pour le DOCX — et c'est assumé.
   import { app } from '../lib/stores.svelte'
-  import { readFileBytes, savePdfDialog, writeFileAtomic } from '../lib/tauri'
+  import { readFileBytes, writeFileAtomic } from '../lib/tauri'
 
   let { path, tabId }: { path: string; tabId: number } = $props()
 
   let host: HTMLElement | undefined = $state()
   let status: 'loading' | 'ready' | 'error' = $state('loading')
   let message = $state('')
-  let busy = $state<'' | 'save' | 'pdf'>('')
+  let busy = $state<'' | 'save'>('')
   let dirty = $state(false)
 
   // L'instance SuperDoc n'est pas un état réactif : c'est un objet impératif lourd qui
@@ -54,6 +54,10 @@
           selector: target,
           document: file,
           documentMode: 'editing',
+          // `documentMode` seul ne suffit pas : sans `role`, SuperDoc monte une surface
+          // de PRÉSENTATION, sans aucun `contenteditable` — le document s'affiche mais
+          // ne se modifie pas. Constaté au banc.
+          role: 'editor',
           onEditorUpdate: () => { dirty = true },
         }) as unknown as typeof editor
         status = 'ready'
@@ -103,27 +107,12 @@
     }
   }
 
-  // Le retour au PDF — la dernière marche de la boucle.
-  async function exportPdf() {
-    if (!editor || busy) return
-    busy = 'pdf'
-    try {
-      const bytes = await exportBlob('pdf')
-      if (!bytes) return
-      const base = fileName.replace(/\.docx$/i, '')
-      if (await savePdfDialog(`${base}.pdf`, bytes)) {
-        app.banner = { tone: 'success', title: 'PDF créé', message: `${base}.pdf` }
-      }
-    } catch {
-      app.banner = {
-        tone: 'error',
-        title: 'Export PDF impossible',
-        message: 'Doku n’a pas pu produire le PDF depuis ce document.',
-      }
-    } finally {
-      busy = ''
-    }
-  }
+  // PAS de bouton « Exporter en PDF » ici, et c'est délibéré : dans SuperDoc 2.6,
+  // `export({ exportType: 'pdf' })` rend une archive ZIP VIDE de 22 octets (idem pour
+  // 'html'), alors que 'docx' rend bien un fichier valide de plusieurs kilo-octets —
+  // mesuré au banc `.agent/visual/docx-edit/`. Brancher ce bouton produirait un fichier
+  // corrompu à chaque clic : mieux vaut pas de bouton qu'un bouton qui ment.
+  // Le retour au PDF reste donc à faire, par une autre voie que l'export de SuperDoc.
 
   export function saveDocx() {
     return save()
@@ -135,10 +124,6 @@
     <button disabled={status !== 'ready' || !!busy} onclick={() => void save()}>
       <span class="msr">save</span>
       <span>{busy === 'save' ? 'Enregistrement…' : dirty ? 'Enregistrer' : 'Enregistré'}</span>
-    </button>
-    <button disabled={status !== 'ready' || !!busy} onclick={() => void exportPdf()}>
-      <span class="msr">picture_as_pdf</span>
-      <span>{busy === 'pdf' ? 'Export…' : 'Exporter en PDF'}</span>
     </button>
   </div>
 
