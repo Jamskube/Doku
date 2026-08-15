@@ -171,3 +171,47 @@ describe('readEditableLines', () => {
     }
   })
 })
+
+describe('lignes au texte répété', () => {
+  // Un même libellé apparaissant deux fois dans une page a fait lever l'interface sur
+  // une clé dupliquée — le rafraîchissement s'arrêtait et plusieurs pages ne
+  // s'affichaient plus du tout. Le rang d'occurrence lève l'ambiguïté, à l'affichage
+  // comme à l'écriture.
+  it('numérote les occurrences d’un même texte dans une page', async () => {
+    const bytes = charger('lic-tech 3.pdf')
+    if (!bytes) return
+    const lignes = await readEditableLines(bytes)
+    const cles = lignes.map((l) => `${l.page}:${l.occurrence}:${l.text}`)
+    expect(new Set(cles).size).toBe(cles.length)
+  })
+
+  for (const nom of DOCS) {
+    it(`ne produit aucune clé dupliquée dans « ${nom} »`, async () => {
+      const bytes = charger(nom)
+      if (!bytes) return
+      const lignes = await readEditableLines(bytes)
+      const cles = lignes.map((l) => `${l.page}:${l.occurrence}:${l.text}`)
+      const doublons = cles.filter((c, i) => cles.indexOf(c) !== i)
+      expect(doublons).toEqual([])
+    })
+  }
+
+  it('écrit dans l’occurrence VISÉE, pas dans la première venue', async () => {
+    const bytes = charger('lic-tech 3.pdf')
+    if (!bytes) return
+    const lignes = await readEditableLines(bytes)
+    // Une ligne dont le texte se répète et qui est réécrivable.
+    const repetee = lignes.find((l) => l.occurrence === 1 && l.editable && /[a-z]{4,}/.test(l.text))
+    if (!repetee) return
+    const rapport = await applyTextEdits(bytes, [{
+      page: repetee.page,
+      occurrence: repetee.occurrence,
+      from: repetee.text,
+      to: repetee.text.replace(/[a-z]{4,}/, (m) => m.toUpperCase()),
+    }])
+    expect(rapport.applied).toBe(1)
+    // La PREMIÈRE occurrence doit être restée intacte.
+    const apres = await texteDe(rapport.bytes, repetee.page)
+    expect(apres).toContain(repetee.text)
+  })
+})

@@ -31,6 +31,9 @@ export interface PdfEditRequest {
   page: number
   /** Texte actuellement affiché, tel que lu dans le flux. */
   from: string
+  /** Rang de l'occurrence visée quand le même texte apparaît plusieurs fois (0 par
+   *  défaut). Sans lui, on écrirait dans la première occurrence rencontrée. */
+  occurrence?: number
   /** Texte voulu. */
   to: string
 }
@@ -104,6 +107,12 @@ function readContents(page: MuPage): { text: string; write: (value: string) => v
 export interface PdfEditableLine {
   page: number
   text: string
+  /** Rang de CETTE occurrence du texte dans la page (0 pour la première).
+   *  Un même libellé peut apparaître plusieurs fois — « online », un en-tête de tableau,
+   *  une puce répétée. Sans ce rang, deux lignes identiques se confondent : l'interface
+   *  levait sur une clé dupliquée (et cessait de se rafraîchir), et l'écriture aurait
+   *  visé la mauvaise. */
+  occurrence: number
   /** Boîte en fractions de la page AFFICHÉE (0..1) — indépendante du zoom et du DPR,
    *  comme les annotations (ADR-0022), donc directement posable en overlay. */
   left: number
@@ -162,6 +171,7 @@ export async function readEditableLines(bytes: Uint8Array): Promise<PdfEditableL
         restants.set(run.text, liste)
       }
 
+      const vues = new Map<string, number>()
       const bounds = page.getBounds()
       const largeur = Math.max(bounds[2] - bounds[0], 1)
       const hauteur = Math.max(bounds[3] - bounds[1], 1)
@@ -201,9 +211,12 @@ export async function readEditableLines(bytes: Uint8Array): Promise<PdfEditableL
           if (!run) continue
           const codec = codecs.get(run.font)
           const editable = Boolean(codec) && [...ligne.text].every((ch) => ch === ' ' || codec!.fromUnicode.has(ch))
+          const rang = vues.get(ligne.text) ?? 0
+          vues.set(ligne.text, rang + 1)
           lignes.push({
             page: index + 1,
             text: ligne.text,
+            occurrence: rang,
             left: ligne.bbox.x / largeur,
             top: ligne.bbox.y / hauteur,
             width: ligne.bbox.w / largeur,
@@ -290,7 +303,8 @@ export async function applyTextEdits(bytes: Uint8Array, edits: PdfEditRequest[])
     for (const demande of demandes) {
       // On vise le passage dont le texte correspond EXACTEMENT : un ancrage approximatif
       // écrirait au mauvais endroit sans qu'on s'en aperçoive.
-      const cible = runs.find((run) => run.text === demande.from)
+      const memeTexte = runs.filter((run) => run.text === demande.from)
+      const cible = memeTexte[demande.occurrence ?? 0]
       if (!cible) {
         refused.push({ ...demande, reason: 'passage introuvable dans la page' })
         continue

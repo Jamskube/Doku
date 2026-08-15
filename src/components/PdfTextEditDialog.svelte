@@ -34,6 +34,9 @@
   // Échelle du rendu : les tailles de police du PDF sont en POINTS, le canvas est rendu
   // réduit. Sans ce facteur, le texte saisi ne fait pas la taille de celui du document.
   let renderScale = $state(1)
+  // Le rendu d'une page dense prend une à deux secondes : sans témoin, l'application
+  // paraît figée et l'utilisateur reclique — ce qui empile les demandes.
+  let rendering = $state(false)
 
   let bytes: Uint8Array | null = null
   let pdf: PdfDoc | null = null
@@ -43,7 +46,7 @@
   const fileName = $derived(path.split(/[\\/]/).pop() ?? 'document.pdf')
   const pageLines = $derived(lines.filter((l) => l.page === pageIndex))
   const pending = $derived(Object.entries(edits).filter(([, v]) => v.trim() !== ''))
-  const key = (l: PdfEditableLine) => `${l.page}:${l.text}`
+  const key = (l: PdfEditableLine) => `${l.page}:${l.occurrence}:${l.text}`
 
   $effect(() => {
     const el = dlg
@@ -108,28 +111,39 @@
     if (status === 'ready') void renderPage()
   })
 
-  // Les rendus sont SÉRIALISÉS : pdf.js refuse deux `render()` simultanés sur le même
-  // canvas, et l'effet de page peut se déclencher pendant le rendu initial.
+  // Les rendus sont sérialisés ET annulables. Sérialiser seul ne suffisait pas : sur un
+  // document dont certaines pages sont lourdes, la file prenait du retard et les
+  // demandes suivantes étaient écartées comme « obsolètes » — donc plusieurs pages ne
+  // s'affichaient jamais. Désormais un changement de page ABANDONNE le rendu en cours.
   let renderChain: Promise<void> = Promise.resolve()
+  let renderAbort: AbortController | null = null
 
   function renderPage(): Promise<void> {
+    renderAbort?.abort()
+    const abort = new AbortController()
+    renderAbort = abort
+    const cible = pageIndex
+    rendering = true
     renderChain = renderChain.then(async () => {
       const canvas = canvasEl
-      const cible = pageIndex
-      if (!pdf || !canvas) return
-      const { renderPage: render } = await import('../lib/pdf')
-      const page = await pdf.getPage(cible)
-      const base = page.getViewport({ scale: 1 })
+      if (!pdf || !canvas || abort.signal.aborted) return
+      const { pageSize, renderPage: render } = await import('../lib/pdf')
+      // On mesure la page par `pageSize`, qui fait son propre ménage. Appeler
+      // `cleanup()` soi-même juste avant de rendre CETTE page libère les ressources dont
+      // le rendu a besoin — et le canvas ressort vide.
+      const base = await pageSize(pdf, cible, 1)
       // Largeur fixe : la modale n'a pas à suivre le zoom du lecteur, et les overlays
       // sont posés en pourcentage, donc indépendants de l'échelle choisie.
       const scale = Math.min(720 / base.width, 940 / base.height)
+      if (abort.signal.aborted) return
       renderScale = scale
-      page.cleanup()
-      // Une page demandée puis abandonnée (clics rapides) ne se rend pas pour rien.
-      if (cible !== pageIndex) return
-      await render(pdf, cible, canvas, scale)
+      await render(pdf, cible, canvas, scale, abort.signal)
     }).catch(() => {
       // Un rendu abandonné ne doit pas casser la chaîne des suivants.
+    }).finally(() => {
+      // Seul le rendu le PLUS RÉCENT éteint le témoin : un abandon ne doit pas
+      // faire croire que la page en cours est prête.
+      if (renderAbort === abort) rendering = false
     })
     return renderChain
   }
@@ -148,8 +162,14 @@
     try {
       const { applyTextEdits, PdfEditError } = await import('../lib/export/pdf-edit-text')
       const demandes = pending.map(([id, to]) => {
-        const separateur = id.indexOf(':')
-        return { page: Number(id.slice(0, separateur)), from: id.slice(separateur + 1), to }
+        const premier = id.indexOf(':')
+        const second = id.indexOf(':', premier + 1)
+        return {
+          page: Number(id.slice(0, premier)),
+          occurrence: Number(id.slice(premier + 1, second)),
+          from: id.slice(second + 1),
+          to,
+        }
       })
       try {
         const rapport = await applyTextEdits(bytes.slice(), demandes)
@@ -190,6 +210,7 @@
     <div class="tools">
       <button disabled={pageIndex <= 1} onclick={() => pageIndex--} aria-label="Page précédente"><span class="msr">chevron_left</span></button>
       <span class="pageno">{pageIndex} / {pageCount || '…'}</span>
+      {#if rendering}<span class="rendering" role="status">rendu…</span>{/if}
       <button disabled={pageIndex >= pageCount} onclick={() => pageIndex++} aria-label="Page suivante"><span class="msr">chevron_right</span></button>
       <span class="spacer"></span>
       <span class="summary">
@@ -285,6 +306,7 @@
   .tools button:hover:not(:disabled), footer button:hover:not(:disabled) { background: rgba(var(--ink-rgb), 0.06); }
   .tools button:disabled, footer button:disabled { opacity: 0.4; cursor: default; }
   .pageno { font-variant-numeric: tabular-nums; font-size: 13px; opacity: 0.75; }
+  .rendering { font-size: 12px; opacity: 0.55; }
   .summary { font-size: 12px; opacity: 0.7; }
   .message { margin: 0; padding: 8px 16px; font-size: 13px; color: var(--danger, #b3261e); }
 

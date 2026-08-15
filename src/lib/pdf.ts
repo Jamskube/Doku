@@ -50,17 +50,38 @@ export async function pageSize(pdf: PdfDoc, pageNumber: number, scale: number): 
   return { width: vp.width, height: vp.height }
 }
 
-export async function renderPage(pdf: PdfDoc, pageNumber: number, canvas: HTMLCanvasElement, scale: number): Promise<void> {
+// `signal` permet d'ABANDONNER un rendu devenu inutile (page tournée avant la fin).
+// Sans lui, les demandes s'empilent : sur un document dont certaines pages sont lourdes,
+// la file prend du retard et l'utilisateur voit des pages qui « ne s'affichent pas ».
+// pdf.js sait annuler proprement — encore faut-il lui garder la main sur la tâche.
+export async function renderPage(
+  pdf: PdfDoc,
+  pageNumber: number,
+  canvas: HTMLCanvasElement,
+  scale: number,
+  signal?: AbortSignal,
+): Promise<void> {
+  if (signal?.aborted) return
   const page = await pdf.getPage(pageNumber)
   const viewport = page.getViewport({ scale })
   const ctx = canvas.getContext('2d')
   if (!ctx) return
+  if (signal?.aborted) {
+    page.cleanup()
+    return
+  }
   canvas.width = viewport.width
   canvas.height = viewport.height
   const task = page.render({ canvas, canvasContext: ctx, viewport })
+  const abandon = () => task.cancel()
+  signal?.addEventListener('abort', abandon, { once: true })
   try {
     await task.promise
+  } catch (error) {
+    // Une annulation demandée n'est pas une erreur ; le reste doit remonter.
+    if (!(error instanceof Error) || error.name !== 'RenderingCancelledException') throw error
   } finally {
+    signal?.removeEventListener('abort', abandon)
     page.cleanup()
   }
 }
