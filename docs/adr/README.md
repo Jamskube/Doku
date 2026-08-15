@@ -25,3 +25,5 @@ Registre des décisions d'architecture. Une décision par fichier ; on ne suppri
 | [0019](./0019-memoire-travail-cloud-automatisee.md) | Mémoire de travail cloud automatisée et locale | accepted | 2026-08-12 | ia, mémoire, cloud, markdown, confidentialité, ux |
 | [0020](./0020-volets-affichage-sans-duplication-buffer.md) | Volets d'affichage sans duplication des buffers | accepted | 2026-08-13 | workspace, split-view, éditeur, fiabilité |
 | [0021](./0021-citations-markdown-portables.md) | Citations Markdown portables avec ancrage Doku facultatif | accepted | 2026-08-13 | notes, citations, markdown, sécurité, portabilité |
+| [0022](./0022-ecriture-pdf-pdf-lib.md) | Écriture PDF : `@cantoo/pdf-lib`, export non destructif — édition de texte refusée | accepted | 2026-08-15 | pdf, écriture, pdf-lib, annotations, formulaires, licence, arm64 |
+| [0023](./0023-licence-agpl.md) | Licence : AGPL-3.0-or-later | accepted | 2026-08-15 | licence, agpl, docx, pdf, distribution, stratégie |

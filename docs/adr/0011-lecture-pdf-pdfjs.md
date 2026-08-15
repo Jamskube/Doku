@@ -45,6 +45,7 @@ Le worker + la CSP **ne s'appliquent qu'en natif** (leçon AGENTS) → **essai N
 
 ## Related
 
+- **[ADR-0022](./0022-ecriture-pdf-pdf-lib.md) amende celui-ci** : la lecture reste PDF.js en canvas seul, mais un chemin d'**écriture** séparé (`@cantoo/pdf-lib`) est ajouté pour graver les annotations, recomposer les pages et remplir les formulaires — l'interdiction de la couche formulaire y est levée sous conditions de preuve.
 - [ADR-0004](./0004-io-fichiers-plugins-officiels.md) (zéro Rust — écarte PDFium) · [ADR-0005](./0005-scope-fs-large-assume.md).
 - `docs/planning/PRD-v1.5.md` (FR-3) · `docs/sprints/sprint-10.md` (Epic 11) · story 11.2 (`.pdf` associations).
 - PDF.js : https://mozilla.github.io/pdf.js/
