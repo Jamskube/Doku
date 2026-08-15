@@ -190,27 +190,45 @@
   // donc être réactif, sinon Svelte ne re-rend pas.
   let dragArmed = $state(false)
 
-  // Le tactile est laissé au défilement de la grille (les flèches restent le chemin
-  // accessible) ; souris et stylet déplacent, ce qui couvre l'usage Surface.
+  // Suivi sur `window` plutôt que par `setPointerCapture` : la capture se comporte
+  // différemment d'un moteur à l'autre, et un `pointercancel` de la WebView suffisait à
+  // la perdre. Des écouteurs globaux posés pour la durée du geste, retirés
+  // systématiquement au relâchement, ne dépendent d'aucune de ces subtilités.
+  function trackDrag(on: boolean) {
+    // Mêmes options à l'ajout et au retrait : le drapeau de capture fait partie de
+    // l'identité de l'écouteur (leçon AGENTS 2026-08-14). Et surtout : appeler
+    // `window.addEventListener` par une référence détachée perdrait `this` et ne
+    // poserait rien du tout, en silence.
+    const types = ['pointermove', 'pointerup', 'pointercancel'] as const
+    for (const type of types) {
+      const handler = (type === 'pointermove' ? moveDrag : endDrag) as EventListener
+      if (on) window.addEventListener(type, handler, true)
+      else window.removeEventListener(type, handler, true)
+    }
+  }
+
   function startDrag(event: PointerEvent, index: number) {
-    if (event.button !== 0 || saving) return
-    if (event.pointerType === 'touch') return
+    if (event.button !== 0 || saving || dragPointer !== -1) return
     // Un appui qui commence sur un bouton reste un clic de bouton : sans cette sortie,
     // le seuil ci-dessous avalerait des pivotements et des suppressions.
     if ((event.target as HTMLElement).closest('button')) return
+    // Coupe court à toute réaction native de la WebView (sélection, glisser d'élément).
+    // Sans risque ici : la carte elle-même n'a aucun clic à préserver.
+    event.preventDefault()
     dragPointer = event.pointerId
     dragOrigin = { x: event.clientX, y: event.clientY }
     dragArmed = true
     dragFrom = index
-    ;(event.currentTarget as HTMLElement).setPointerCapture(event.pointerId)
+    trackDrag(true)
   }
 
   function moveDrag(event: PointerEvent) {
     if (dragPointer !== event.pointerId || dragFrom === null) return
     if (dragArmed) {
-      // Seuil : en deçà, c'est un clic, pas un déplacement.
-      const far = Math.hypot(event.clientX - dragOrigin.x, event.clientY - dragOrigin.y) >= 4
-      if (!far) return
+      // Seuil : en deçà, c'est un clic, pas un déplacement. Au doigt, `touch-action:
+      // pan-y` laisse le défilement vertical au navigateur et ne nous donne que les
+      // gestes horizontaux — donc réordonner et faire défiler ne se marchent pas dessus.
+      if (Math.hypot(event.clientX - dragOrigin.x, event.clientY - dragOrigin.y) < 4) return
       dragArmed = false
     }
     const card = (document.elementFromPoint(event.clientX, event.clientY) as HTMLElement | null)?.closest('.card')
@@ -220,8 +238,10 @@
 
   function endDrag(event: PointerEvent) {
     if (dragPointer !== event.pointerId) return
+    trackDrag(false)
     // `dragArmed` encore vrai = le seuil n'a jamais été franchi : simple clic, rien à
-    // déplacer.
+    // déplacer. Un `pointercancel` en cours de geste dépose la page là où elle est,
+    // plutôt que de perdre le déplacement.
     if (!dragArmed && dragFrom !== null && dragOver !== null) {
       plan = movePdfPagePlan(plan, dragFrom, dragOver)
     }
@@ -230,6 +250,10 @@
     dragFrom = null
     dragOver = null
   }
+
+  // Filet de sécurité : si la modale se ferme en plein geste, l'écouteur global ne doit
+  // pas survivre à son composant (leçon AGENTS sur les écouteurs `document` fantômes).
+  $effect(() => () => trackDrag(false))
 </script>
 
 <dialog class="pages" bind:this={dlg} onclose={closePdfPages} aria-label="Organiser les pages">
@@ -282,13 +306,13 @@
             role="listitem"
             data-index={index}
             onpointerdown={(event) => startDrag(event, index)}
-            onpointermove={moveDrag}
-            onpointerup={endDrag}
-            onpointercancel={endDrag}
           >
             <div class="thumb" use:observe={entry}>
               {#if thumbFor(entry)}
-                <img src={thumbFor(entry)} alt="" style:transform={`rotate(${entry.turn * 90}deg)`} />
+                <!-- `draggable=false` : sans ça, l'appui sur la vignette lance le
+                     glisser NATIF d'image de la WebView, qui émet un `pointercancel`
+                     et tue le déplacement avant qu'il commence. -->
+                <img src={thumbFor(entry)} alt="" draggable="false" style:transform={`rotate(${entry.turn * 90}deg)`} />
               {:else}
                 <span class="placeholder"></span>
               {/if}
@@ -412,7 +436,12 @@
     cursor: grab;
     /* Sans ça, déplacer à la souris sélectionne le numéro et le badge au passage. */
     user-select: none;
+    /* Et sans ça, la WebView démarre son propre glisser d'élément, qui annule le nôtre. */
+    -webkit-user-drag: none;
+    /* Le pointeur nous appartient : pas de défilement tactile parasite pendant le geste. */
+    touch-action: pan-y;
   }
+  .card :global(img) { -webkit-user-drag: none; pointer-events: none; }
   .card:active { cursor: grabbing; }
   .card.dragging { opacity: 0.45; }
   .card.over { border-color: var(--accent, #6b5bd2); box-shadow: 0 0 0 2px rgba(107, 91, 210, 0.28); }
