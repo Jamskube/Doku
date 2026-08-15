@@ -175,11 +175,19 @@ export function smoothPdfDrawingStroke(points: PdfDrawingPoint[], passes = 2): P
 // Catmull-Rom converti en Béziers cubiques : la courbe passe par TOUS les points, mais
 // le contour cesse d'être polygonal. C'est ce qui manque à un tracé à main levée une
 // fois simplifié — les segments droits rendent visibles les points de rupture.
-export function pdfStrokePathData(strokes: PdfDrawingPoint[][], width: number, height: number): string {
+//
+// La projection est un paramètre : le même tracé se peint à l'écran (fractions × taille
+// du wrap) et se grave dans le PDF (fractions → repère de la page, rotation comprise).
+// Une seule courbe pour les deux, donc aucune divergence possible entre l'aperçu et
+// l'export.
+export function pdfBezierPathData(
+  strokes: PdfDrawingPoint[][],
+  project: (point: PdfDrawingPoint) => PdfDrawingPoint,
+): string {
   const round = (value: number) => Math.round(value * 100) / 100
   const parts: string[] = []
   for (const stroke of strokes) {
-    const points = stroke.map((point) => ({ x: point.x * width, y: point.y * height }))
+    const points = stroke.map(project)
     if (points.length < 2) continue
     parts.push(`M ${round(points[0].x)} ${round(points[0].y)}`)
     if (points.length === 2) {
@@ -199,6 +207,10 @@ export function pdfStrokePathData(strokes: PdfDrawingPoint[][], width: number, h
     }
   }
   return parts.join(' ')
+}
+
+export function pdfStrokePathData(strokes: PdfDrawingPoint[][], width: number, height: number): string {
+  return pdfBezierPathData(strokes, (point) => ({ x: point.x * width, y: point.y * height }))
 }
 
 export function simplifyPdfDrawingPoints(points: PdfDrawingPoint[], minimumDistance = PDF_DRAWING_MIN_STEP): PdfDrawingPoint[] {

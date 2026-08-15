@@ -773,6 +773,18 @@ export async function saveDocxDialog(defaultName: string, bytes: Uint8Array): Pr
   return true
 }
 
+// Dialogue save + écriture BINAIRE d'un .pdf (ADR-0022 : gravure des annotations).
+// TOUJOURS par dialogue, jamais d'écrasement implicite du document source — un PDF
+// écrasé n'est pas récupérable, et le carnet reste la seule version éditable.
+export async function savePdfDialog(defaultName: string, bytes: Uint8Array): Promise<boolean> {
+  if (!isTauri) return false
+  const { save } = await import('@tauri-apps/plugin-dialog')
+  const path = await save({ defaultPath: defaultName, filters: [{ name: 'PDF', extensions: ['pdf'] }] })
+  if (typeof path !== 'string') return false
+  await writeFileAtomic(path, bytes)
+  return true
+}
+
 // --- SnapshotService (FR-12, ADR-0003) ---
 // Historique local dans %APPDATA%\<app>\snapshots\<key>\ : un fichier daté par
 // version + meta.json (index avec aperçus). Toute la logique de sélection/datation

@@ -4,7 +4,7 @@
   import type { PaneId } from '../lib/workspace'
   import { tabDiscriminator } from '../lib/tabs'
   import { parentPath } from '../lib/explorer'
-  import { closeWindow, minimizeWindow, readImageDataUrl, saveDocxDialog, saveHtmlDialog, toggleMaximizeWindow } from '../lib/tauri'
+  import { closeWindow, minimizeWindow, readFileBytes, readImageDataUrl, readPdfAnnotationManifest, saveDocxDialog, saveHtmlDialog, savePdfDialog, toggleMaximizeWindow } from '../lib/tauri'
   import DokuMark from '../lib/DokuMark.svelte'
   import PaneTabSelector from './PaneTabSelector.svelte'
 
@@ -20,8 +20,12 @@
   let widthMenuEl: HTMLElement | undefined = $state()
   let exportTriggerEl: HTMLButtonElement | undefined = $state()
   let widthTriggerEl: HTMLButtonElement | undefined = $state()
+  let burningPdf = $state(false)
   const showLogo = $derived(!app.sidebarOpen && !railHover)
-  const canExport = $derived(activeTab()?.kind !== 'pdf' && !!activeTab())
+  // Un onglet PDF n'exporte pas vers les autres formats, mais il exporte sa propre
+  // copie annotée (ADR-0022) — le menu change donc de contenu au lieu d'être grisé.
+  const activeIsPdf = $derived(activeTab()?.kind === 'pdf')
+  const canExport = $derived(!!activeTab())
 
   // --- Barre d'onglets : quand la place manque (chaque onglet < TAB_MIN), la rangée
   // entière se REPLIE en un seul bouton « onglet actif · n » qui ouvre un menu flottant
@@ -142,6 +146,42 @@
     if (format === 'docx') exportDocx(tab)
     else if (format === 'html') exportHtml(tab)
     else exportPrint(tab)
+  }
+
+  // Grave le carnet d'annotations dans une COPIE du PDF. Tout est relu du disque par le
+  // chemin du fichier : l'export ne dépend pas du lecteur monté ni du volet actif.
+  async function exportAnnotatedActive() {
+    const tab = activeTab()
+    if (!tab || tab.kind !== 'pdf' || !tab.path || burningPdf) return
+    closeMenus()
+    burningPdf = true
+    try {
+      const [{ exportAnnotatedPdf, annotatedPdfSummary }, { PdfBurnError }] = await Promise.all([
+        import('../lib/export/pdf-annotated'),
+        import('../lib/pdf-write'),
+      ])
+      try {
+        const report = await exportAnnotatedPdf(tab.path, {
+          readFileBytes,
+          readManifest: readPdfAnnotationManifest,
+          save: savePdfDialog,
+        })
+        if (!report.saved) return
+        app.banner = {
+          tone: 'success',
+          title: 'PDF annoté enregistré',
+          message: annotatedPdfSummary(report),
+        }
+      } catch (error) {
+        app.banner = {
+          tone: 'error',
+          title: 'Gravure impossible',
+          message: error instanceof PdfBurnError ? error.message : 'Doku n’a pas pu écrire ce PDF annoté.',
+        }
+      }
+    } finally {
+      burningPdf = false
+    }
   }
 
   // Délègue au store : la modale Paramètres règle la même chose, un seul chemin
@@ -419,15 +459,21 @@
           </button>
           {#if submenu === 'export' && canExport}
             <div class="app-menu flyout-menu" role="menu" tabindex="-1" aria-label="Exporter" bind:this={exportMenuEl} onkeydown={(event) => handleSubmenuKeydown(event, 'export')}>
-              <button class="app-menu-item" role="menuitem" onclick={() => exportActive('docx')}>
-                <span class="msr">description</span><span class="menu-label">Document Word</span><span class="menu-format">.docx</span>
-              </button>
-              <button class="app-menu-item" role="menuitem" onclick={() => exportActive('html')}>
-                <span class="msr">html</span><span class="menu-label">Page web autonome</span><span class="menu-format">.html</span>
-              </button>
-              <button class="app-menu-item" role="menuitem" onclick={() => exportActive('pdf')}>
-                <span class="msr">picture_as_pdf</span><span class="menu-label">Document PDF</span><span class="menu-format">.pdf</span>
-              </button>
+              {#if activeIsPdf}
+                <button class="app-menu-item" role="menuitem" disabled={burningPdf} onclick={() => void exportAnnotatedActive()}>
+                  <span class="msr">stylus_note</span><span class="menu-label">{burningPdf ? 'Gravure en cours…' : 'PDF avec les annotations'}</span><span class="menu-format">.pdf</span>
+                </button>
+              {:else}
+                <button class="app-menu-item" role="menuitem" onclick={() => exportActive('docx')}>
+                  <span class="msr">description</span><span class="menu-label">Document Word</span><span class="menu-format">.docx</span>
+                </button>
+                <button class="app-menu-item" role="menuitem" onclick={() => exportActive('html')}>
+                  <span class="msr">html</span><span class="menu-label">Page web autonome</span><span class="menu-format">.html</span>
+                </button>
+                <button class="app-menu-item" role="menuitem" onclick={() => exportActive('pdf')}>
+                  <span class="msr">picture_as_pdf</span><span class="menu-label">Document PDF</span><span class="menu-format">.pdf</span>
+                </button>
+              {/if}
             </div>
           {/if}
         </div>
