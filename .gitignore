@@ -10,3 +10,6 @@ Thumbs.db
 # Binaire sidecar Ollama (exe + lib/ DLLs, ~50 Mo) — non commité, placé localement (voir src-tauri/binaries/README.md)
 src-tauri/binaries/*
 !src-tauri/binaries/README.md
+
+# Journaux des bancs de contrôle (sorties de serveur de dev, jamais des preuves)
+.agent/**/*.log
