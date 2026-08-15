@@ -1,6 +1,6 @@
 # Faisabilité — carnet d’annotations PDF non destructif
 
-_Date : 2026-08-14 · Verdict : **GO conditionnel — matrice DPR/rotation PASS, geste WebView2 à confirmer** · Portée évaluée : sélection, surlignage, commentaire et persistance séparée_
+_Date : 2026-08-14 · Verdict : **GO conditionnel — backing store/rotations PASS, DPR et geste WebView2 à confirmer** · Portée évaluée : sélection, surlignage, commentaire et persistance séparée_
 
 ## Décision
 
@@ -82,11 +82,13 @@ Le déplacement d’une page dans le document n’est pas promis au premier pali
 
 - Le banc est reproductible depuis le serveur principal ou depuis `spike/` grâce à des chemins relatifs pour le module et la fixture.
 - La fixture régénérée contient quatre pages texte réelles, tournées à 0°, 90°, 180° et 270° ; son générateur est conservé dans `spike/fixtures/`.
-- La matrice déterministe DPR 1 / 1,25 / 1,5 passe sur les quatre rotations : six rectangles de sélection par page, tous contenus dans la page.
-- L’écart maximal entre les boîtes CSS du canvas, de la TextLayer et de la page est de **0,62 px** sur la matrice ; le DPR Windows actif de **1,75** passe aussi avec **0,94 px**, sous le seuil de 2 px.
-- Le backing store mesuré suit chaque DPR demandé avec une erreur inférieure à 0,001.
+- La matrice déterministe `backingScale` 1 / 1,25 / 1,5 passe sur les quatre rotations : six rectangles synthétiques par page, tous contenus dans la page.
+- Cette matrice force uniquement le backing store du canvas ; elle ne modifie pas le vrai `window.devicePixelRatio` utilisé par la TextLayer et ne prouve donc pas plusieurs DPR réels.
+- Le navigateur de contrôle à `devicePixelRatio = 1,75` passe avec un écart maximal de **0,90 px** entre les boîtes CSS du canvas, de la TextLayer et de la page, sous le seuil de 2 px ; ce résultat navigateur ne remplace pas les smokes WebView2 physiques.
+- Le résultat du spike expose séparément `backingScale`, `devicePixelRatio` et `backingScaleMatchesDevicePixelRatio` pour empêcher toute confusion future.
 - Le défaut initial sur 90°/270° venait du contrat CSS incomplet du spike : les variables PDF.js `--total-scale-factor`, `--scale-round-x` et `--scale-round-y` manquaient, ce qui tournait une couche déjà dimensionnée comme la page tournée.
-- La validation reste conditionnelle jusqu’à une sélection multi-ligne effectuée physiquement dans WebView2 sur la machine Windows de référence ; l’automatisation disponible valide les géométries mais ne produit pas de sélection native persistante.
+- Le smoke natif Tauri/WebView2 passe à **100 %** (`devicePixelRatio = 1`) : kill-test global PASS, quatre rotations alignées avec un écart maximal de **0,89 px**, et sélection multiligne réelle capturée sur la page 270° (`page = 4`, rectangles tous contenus dans la page).
+- La validation reste conditionnelle jusqu’aux smokes physiques WebView2 à **125 %** et **150 %** sur la machine Windows de référence.
 
 ## Kill-tests du spike
 
@@ -124,6 +126,10 @@ Le déplacement d’une page dans le document n’est pas promis au premier pali
 - [PDF.js — FAQ annotations](https://github.com/mozilla/pdf.js/wiki/Frequently-Asked-Questions#is-it-possible-to-add-annotations-to-a-pdf)
 - [PDF Association — objets et annotations PDF](https://pdfa.org/resource/pdf-cheat-sheets/)
 
+## État de l’intégration — 2026-08-14
+
+Le premier palier est intégré dans `PdfView.svelte` : TextLayer paresseuse, menu contextuel après sélection, surlignage ou commentaire, carnet compact, suppression et restauration après rechargement. Le manifeste est écrit atomiquement dans AppData ; le PDF source n’est jamais modifié. Les overlays ne sont montés que pour les pages visibles et une empreinte différente rend les anciennes annotations orphelines au lieu de les replacer à tort.
+
 ## Étape suivante
 
-Effectuer une sélection multi-ligne réelle dans le spike sous WebView2 sur la machine Windows de référence. Si le texte et les rectangles capturés correspondent visuellement au geste, lever la condition et planifier l’intégration dans `PdfView.svelte` ; sinon conserver le NO-GO pour la sélection PDF.
+Effectuer, sans bloquer le développement, les deux smokes WebView2 physiques restants à **125 %** et **150 %**, puis vérifier une écriture/relecture réelle du manifeste AppData dans l’installateur x64. Ces validations renforcent la couverture native mais ne bloquent plus l’usage du premier palier déjà testé en navigateur et à 100 %.
