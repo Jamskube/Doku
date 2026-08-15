@@ -1,6 +1,6 @@
-# Plan : édition du texte d'un PDF en place
+# Plan : remplacer un passage de texte dans un PDF
 
-_Date : 2026-08-15 · Portée estimée : L_
+_Date : 2026-08-15 · Portée estimée : L · **Révision 2** après revue critique (verdict initial : Block)_
 
 ## Objectif
 
@@ -17,10 +17,35 @@ Kill-test exécuté avant d'écrire ce plan (`src/lib/zz-redact-probe`, supprim�
 | MuPDF supprime réellement un passage du flux de contenu | 8 lignes → 7, texte ré-extrait : la ligne visée a disparu |
 | Les autres lignes survivent | vérifié par ré-extraction |
 | Images et tracés vectoriels préservables | `REDACT_IMAGE_NONE` + `REDACT_LINE_ART_NONE`, sans boîte noire |
-| Réécriture à la même position | **écart de ligne de base 0,00 pt** |
+| Réécriture à la même position, page droite | écart 0,00 pt |
+| Réécriture sur page **tournée** avec la conversion naïve | **90° : texte hors page · 180° : 395 pt · 270° : 353 pt** |
+| Réécriture via `pdfBurnPoint` + fractions de l'espace affiché + `rotate` | **0,00 pt sur les 4 rotations × 2 CropBox** |
 | MuPDF donne la police et la taille par ligne | `Helvetica 12` sur la ligne testée |
 
 Les deux bibliothèques nécessaires sont **déjà installées et déjà couvertes par l'AGPL** (ADR-0023) : `mupdf` pour supprimer, `@cantoo/pdf-lib` pour écrire.
+
+## Ce que la revue critique a corrigé dans ce plan
+
+La première version affirmait un « écart 0,00 pt » mesuré sur **une page triviale**. Vérifié sur les quatre rotations, la conversion naïve écrivait hors page ou à 400 pt de la cible. **Règle qui en découle** : les coordonnées MuPDF vivent dans l'espace AFFICHÉ (page déjà tournée, origine au coin haut gauche de la CropBox) ; il faut les ramener en fractions de cet espace et passer par `pdfBurnPoint` (`pdf-write.ts`), déjà prouvé contre pdf.js — ne JAMAIS écrire un second transform.
+
+Trois autres corrections imposées par la revue :
+
+- **`asJSON()` ne donne qu'une police par ligne** (celle du premier caractère) et **aucune couleur**. Une ligne à un mot en gras ressortirait toute en romain, un titre bleu deviendrait noir. → passer par `StructuredText.walk()`, qui fournit police, taille, couleur et quad **par caractère** ; `PdfLineAnchor` porte des RUNS, pas une police.
+- **Le texte justifié se dégrade même à longueur égale** : les mots y sont positionnés par décalages calculés, la réécriture donne un espacement naturel et le bord droit n'est plus au fer. Ce n'est pas du reflow, c'est une dégradation visible → mesurer la largeur de la ligne réécrite contre la bbox d'origine et la signaler.
+- **Aucune garantie d'exécution que le texte a disparu** : si l'apparence d'une annotation survit au caviardage, on écrit par-dessus l'ancien, en double, sans erreur → après application, ré-extraire et exiger que l'ancien soit absent et le neuf présent, sinon **refuser d'enregistrer** en le nommant.
+
+Enfin, la revue rappelle que ce plan **n'amende pas** le NO_GO de l'ADR-0022 : il implémente le repli que l'ADR avait déjà accepté (« remplacer un passage, substitution de police assumée et affichée »). D'où le renommage : le mode s'appelle **« Remplacer un passage »**, jamais « éditer le texte ».
+
+## Refus explicites, dits à l'utilisateur
+
+Une ligne n'est éditable que si elle passe tous ces filtres — sinon elle reste inerte **avec la raison affichée** :
+- style unique et couleur noire (sinon on aplatirait des styles en silence) ;
+- entièrement écrivable en WinAnsi, y compris **la partie non modifiée** ;
+- horizontale, gauche-à-droite (`wmode`/`direction` de `walk()`) ;
+- ne chevauchant horizontalement aucune autre ligne au même `y` (colonnes fusionnées par MuPDF) ;
+- dans la CropBox.
+
+Documents refusés en le nommant : chiffré, **signé** (`/Sig` — la réécriture invalide la signature), portant déjà des annotations `Redact` en attente (`applyRedactions` les appliquerait toutes), scanné sans couche texte.
 
 ## Hors périmètre
 
