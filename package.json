@@ -37,6 +37,7 @@
     "docx": "^9.7.1",
     "dompurify": "^3.4.11",
     "marked": "^18.0.6",
+    "mupdf": "^1.28.0",
     "pdfjs-dist": "^6.1.200"
   },
   "devDependencies": {

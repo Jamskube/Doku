@@ -21,6 +21,7 @@
   let exportTriggerEl: HTMLButtonElement | undefined = $state()
   let widthTriggerEl: HTMLButtonElement | undefined = $state()
   let burningPdf = $state(false)
+  let convertingPdf = $state(false)
   const showLogo = $derived(!app.sidebarOpen && !railHover)
   // Un onglet PDF n'exporte pas vers les autres formats, mais il exporte sa propre
   // copie annotée (ADR-0022) — le menu change donc de contenu au lieu d'être grisé.
@@ -150,6 +151,40 @@
     if (format === 'docx') exportDocx(tab)
     else if (format === 'html') exportHtml(tab)
     else exportPrint(tab)
+  }
+
+  // Convertit le PDF en DOCX ÉDITABLE (ADR-0023). Ce n'est pas le PDF modifié : c'est
+  // un document réécrit à partir de ce que la reconstruction a su retrouver. Le message
+  // de fin le dit, pour que personne ne croie à une conversion fidèle.
+  async function convertToDocxActive() {
+    const tab = activeTab()
+    if (!tab || tab.kind !== 'pdf' || !tab.path || convertingPdf) return
+    closeMenus()
+    convertingPdf = true
+    try {
+      const { convertPdfToDocx, convertedDocxName, PdfConvertError } = await import('../lib/export/pdf-to-docx')
+      try {
+        const bytes = await readFileBytes(tab.path)
+        if (!bytes) throw new PdfConvertError('Le document source est introuvable.')
+        const report = await convertPdfToDocx(bytes)
+        if (!await saveDocxDialog(convertedDocxName(tab.path), report.bytes)) return
+        app.banner = {
+          tone: report.emptyish ? 'warning' : 'success',
+          title: 'Document Word créé',
+          message: report.emptyish
+            ? `Peu de texte retrouvé (${report.paragraphs} paragraphe${report.paragraphs > 1 ? 's' : ''} sur ${report.pages} page${report.pages > 1 ? 's' : ''}) : ce PDF est probablement scanné ou surtout graphique.`
+            : `${report.paragraphs} paragraphe${report.paragraphs > 1 ? 's' : ''} reconstruit${report.paragraphs > 1 ? 's' : ''} depuis ${report.pages} page${report.pages > 1 ? 's' : ''}. C’est un document réécrit, éditable — la mise en page d’origine est approchée, pas reproduite.`,
+        }
+      } catch (error) {
+        app.banner = {
+          tone: 'error',
+          title: 'Conversion impossible',
+          message: error instanceof PdfConvertError ? error.message : 'Doku n’a pas pu convertir ce PDF.',
+        }
+      }
+    } finally {
+      convertingPdf = false
+    }
   }
 
   function organizePagesActive() {
@@ -473,6 +508,9 @@
               {#if activeIsPdf}
                 <button class="app-menu-item" role="menuitem" disabled={burningPdf || !pdfPath} onclick={() => void exportAnnotatedActive()}>
                   <span class="msr">stylus_note</span><span class="menu-label">{burningPdf ? 'Gravure en cours…' : 'PDF avec les annotations'}</span><span class="menu-format">.pdf</span>
+                </button>
+                <button class="app-menu-item" role="menuitem" disabled={convertingPdf || !pdfPath} onclick={() => void convertToDocxActive()}>
+                  <span class="msr">description</span><span class="menu-label">{convertingPdf ? 'Conversion en cours…' : 'Document Word éditable'}</span><span class="menu-format">.docx</span>
                 </button>
                 <button class="app-menu-item" role="menuitem" disabled={!pdfPath} onclick={organizePagesActive}>
                   <span class="msr">auto_stories</span><span class="menu-label">Organiser les pages…</span>
