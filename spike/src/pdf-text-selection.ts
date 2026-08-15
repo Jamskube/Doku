@@ -15,7 +15,9 @@ interface PageAlignment {
   pass: boolean
 }
 interface SpikeResult {
-  dpr: number
+  backingScale: number
+  devicePixelRatio: number
+  backingScaleMatchesDevicePixelRatio: boolean
   pages: number
   alignments: PageAlignment[]
   selections: Array<{
@@ -44,8 +46,8 @@ const rectsOut = document.querySelector<HTMLElement>('#selection-rects')!
 
 let loadingTask: ReturnType<typeof pdfjs.getDocument> | null = null
 
-function requestedDpr() {
-  const override = Number(new URLSearchParams(window.location.search).get('dpr'))
+function requestedBackingScale() {
+  const override = Number(new URLSearchParams(window.location.search).get('backingScale'))
   return Math.min(Number.isFinite(override) && override > 0 ? override : window.devicePixelRatio || 1, 3)
 }
 
@@ -82,14 +84,14 @@ async function render(bytes: Uint8Array) {
   const task = pdfjs.getDocument({ data: bytes, disableFontFace: true, enableXfa: false })
   loadingTask = task
   const pdf = await task.promise
-  const dpr = requestedDpr()
+  const backingScale = requestedBackingScale()
 
   for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber++) {
     const page = await pdf.getPage(pageNumber)
     const natural = page.getViewport({ scale: 1 })
     const cssScale = Math.min(1.35, Math.max(0.5, (viewer.clientWidth - 40) / natural.width))
     const cssViewport = page.getViewport({ scale: cssScale })
-    const renderViewport = page.getViewport({ scale: cssScale * dpr })
+    const renderViewport = page.getViewport({ scale: cssScale * backingScale })
     const wrap = document.createElement('article')
     wrap.className = 'pdf-spike-page'
     wrap.dataset.page = String(pageNumber)
@@ -124,7 +126,8 @@ async function render(bytes: Uint8Array) {
 
 async function run(): Promise<SpikeResult> {
   const pages = Array.from(viewer.querySelectorAll<HTMLElement>('.pdf-spike-page'))
-  const dpr = requestedDpr()
+  const backingScale = requestedBackingScale()
+  const devicePixelRatio = window.devicePixelRatio || 1
   const alignments = pages.map((page): PageAlignment => {
     const canvas = page.querySelector<HTMLCanvasElement>('canvas')!
     const textLayer = page.querySelector<HTMLElement>('.textLayer')!
@@ -148,7 +151,9 @@ async function run(): Promise<SpikeResult> {
       cssDelta,
       backingScaleX,
       backingScaleY,
-      pass: cssDelta <= 2 && Math.abs(backingScaleX - dpr) <= 0.02 && Math.abs(backingScaleY - dpr) <= 0.02,
+      pass: cssDelta <= 2
+        && Math.abs(backingScaleX - backingScale) <= 0.02
+        && Math.abs(backingScaleY - backingScale) <= 0.02,
     }
   })
   const selections: SpikeResult['selections'] = []
@@ -187,7 +192,15 @@ async function run(): Promise<SpikeResult> {
   const pass = selections.length > 0
     && selections.every((item) => item.textLength > 0 && item.rectCount > 0 && item.rectsInsidePage)
     && alignments.every((item) => item.pass)
-  const result = { dpr, pages: pages.length, alignments, selections, pass }
+  const result = {
+    backingScale,
+    devicePixelRatio,
+    backingScaleMatchesDevicePixelRatio: Math.abs(backingScale - devicePixelRatio) <= 0.001,
+    pages: pages.length,
+    alignments,
+    selections,
+    pass,
+  }
   verdict.textContent = pass ? 'PASS' : 'FAIL'
   verdict.className = pass ? 'pass' : 'fail'
   log.textContent = JSON.stringify(result, null, 2)
