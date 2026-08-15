@@ -1,30 +1,21 @@
 # Next session pointer
-_Updated: 2026-08-15 11:50_
+_Updated: 2026-08-15 14:22_
 
 ## Where I left off
-Doku sait **modifier un PDF**, et la boucle complète est fermée.
-
-Quatre capacités livrées et vérifiées :
-1. **Graver les annotations** dans une copie du PDF — surlignages en `multiply`, tracés en Béziers, formes, notes converties en vraies annotations PDF lisibles dans Acrobat.
-2. **Organiser les pages** — pivoter, supprimer, réordonner au glisser-déposer, fusionner un autre PDF.
-3. **Convertir en DOCX éditable** — MuPDF extrait texte/police/graisse/taille, `pdf-structure` reconstruit les paragraphes et détecte les titres.
-4. **Éditer le DOCX dans Doku puis réexporter en PDF** — SuperDoc pour l'édition, `docx-to-pdf` (écrit par Doku) pour le retour.
-
-Le tout est **entièrement hors ligne**, rendu possible par le passage en **AGPL-3.0-or-later** (ADR-0023), qui a débloqué MuPDF.js et SuperDoc.
+La question du jour — « comment modifier un PDF dans Doku ? » — a été menée jusqu'à sa conclusion. Doku est passé en **AGPL-3.0-or-later** (ADR-0023), ce qui a débloqué MuPDF.js et SuperDoc, puis quatre capacités sont arrivées en production : gravure des annotations dans une copie du PDF, organisateur de pages (pivoter / supprimer / réordonner / fusionner), aller-retour PDF → DOCX → PDF, et surtout **l'édition du texte directement dans le flux de contenu** — celle que l'ADR-0022 déclarait impossible le matin même. C'est l'intuition de l'utilisateur (« coder de 0 une façon de modifier un PDF ») qui a fait basculer la journée, et elle était juste : en réécrivant les opérateurs `Tj`/`TJ` avec les codes de glyphes de la police déjà embarquée, police, taille, couleur, position, images et tableaux restent intacts *parce qu'on n'y touche pas*. Couverture mesurée à **92 %** des lignes visibles sur les propres documents de l'utilisateur. 29 commits, tout poussé, arbre propre. **Ce qui n'a PAS été vérifié : rien n'a tourné en natif sur la Surface** — toutes les preuves sont au navigateur et en tests.
 
 ## Open work
-- Branch `main`, tout est poussé.
-- 628 tests verts, 0 erreur de type, build vert.
-- Installateurs : à reconstruire sur `HEAD` (une compilation ARM64 était en cours à la fin de session).
+- Branche : `main` (propre, poussée jusqu'à `e6d0527`)
+- PR ouvertes : aucune
+- Plans / brouillons :
+  - `docs/plans/edition-texte-pdf-en-place.md` — révision 3, exécutée ; sert de référence, pas de reste-à-faire
+  - `docs/planning/feasibility-pdf-edition.md` — palier 4 (formulaires AcroForm) toujours non commencé
+  - `docs/autopilot/run-2026-08-15.md` — journal de bord de la conduite autonome
+
+## À trancher par toi (parqué, en attente depuis aujourd'hui)
+1. **Le numéro de version** — toujours `2.2.0` alors que quatre fonctionnalités sont arrivées. Un installateur a été renommé `2.4.0` à la main : l'écart entre le nom du fichier et ce que le binaire déclare est un piège pour plus tard.
+2. **`pdfjs-dist` → 6.2.108** — avis de sécurité (exécution de JS arbitraire à l'ouverture d'un PDF hostile). Volontairement différé pour ne pas invalider les vérifications de rendu faites dans la foulée. À faire **avant** la prochaine diffusion, avec re-passage des contrôles visuels.
+3. **Installateurs** — ceux qui existent datent d'avant l'édition de texte. À reconstruire (ARM64 + x64) une fois les deux points ci-dessus tranchés.
 
 ## Next concrete step
-**Smoke natif sur la Surface** : ouvrir un PDF → `Exporter → Document Word éditable` → le document se rouvre tout seul dans Doku → **taper dedans** → `Exporter en PDF`. C'est le seul maillon que le banc navigateur n'a pas pu prouver (voir ci-dessous), et il se tranche en trente secondes.
-
-## Restes connus
-- **La frappe dans SuperDoc n'est pas prouvée.** Il n'utilise pas `contenteditable` mais une surface `role="textbox"` avec pont clavier, que le pilotage synthétique n'atteint pas ; ses propres diagnostics annoncent pourtant `editableEnabled: true`, `editingMounted: true` et `text.insert` supporté. L'ouverture, l'enregistrement et l'export sont, eux, prouvés de bout en bout. **À trancher à la main.**
-- **Retour au PDF : texte seulement.** `docx-to-pdf` reprend texte, graisse, italique, taille, alignement, titres et pagination. Images, tableaux, en-têtes/pieds et colonnes ne sont **pas** repris — le bandeau de fin le dit à l'utilisateur.
-- **Qualité de conversion PDF → DOCX** : niveau `pdf2docx`, bonne sur une mise en page simple, en dessous d'un convertisseur commercial sur un document complexe. Mesurée sur un contrat texte, pas encore sur un corpus varié.
-- **Sécurité, à traiter en priorité** : `pdfjs-dist` est en **6.1.200**, l'avis « exécution de JavaScript arbitraire à l'ouverture d'un PDF malveillant » couvre `>=5.6.83 <6.2.108`. **Le correctif existe : 6.2.108.** Non appliqué à dessein — il aurait invalidé les vérifications de rendu. Parade en place : ADR-0011 (aucune couche scripting montée). À faire : monter en 6.2.108 puis rejouer `.agent/visual/pdf-annotations/` et `pdf-burn/`.
-- **Numéro de version** : toujours `2.2.0` alors que quatre fonctionnalités sont arrivées, et un installateur avait été renommé `2.4.0` à la main. **Choix produit à trancher avant publication.**
-- `PdfView.svelte` fait ~3 000 lignes ; le peintre SVG gagnerait à sortir en module `lib`.
-- Le zoom PDF ne se mémorise pas d'un document à l'autre.
+Lancer Doku en natif sur la Surface et faire le parcours réel sur un vrai PDF — `Exporter → Modifier le texte…`, corriger une ligne, enregistrer la copie, rouvrir le fichier produit — c'est le seul maillon de la chaîne qui n'a encore jamais tourné hors du navigateur.
