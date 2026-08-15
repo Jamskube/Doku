@@ -112,6 +112,12 @@ export interface PdfEditableLine {
   height: number
   /** Taille de police en points, pour dimensionner le champ de saisie à l'identique. */
   size: number
+  /** Couleur du texte dans le document (`#rrggbb`) : le champ de saisie l'emploie telle
+   *  quelle. Sans elle, on écrirait avec la couleur d'encre du THÈME — donc en blanc sur
+   *  papier blanc en thème sombre (même piège que les ombres, cf. AGENTS.md). */
+  color: string
+  bold: boolean
+  italic: boolean
   /** Faux quand un caractère de la ligne n'est pas réécrivable dans la police du
    *  document : l'appelant bascule alors sur l'autre étage, ou le dit. */
   editable: boolean
@@ -159,11 +165,37 @@ export async function readEditableLines(bytes: Uint8Array): Promise<PdfEditableL
       const bounds = page.getBounds()
       const largeur = Math.max(bounds[2] - bounds[0], 1)
       const hauteur = Math.max(bounds[3] - bounds[1], 1)
-      const json = JSON.parse(page.toStructuredText('preserve-whitespace').asJSON()) as {
-        blocks?: { lines?: { text: string; bbox: { x: number; y: number; w: number; h: number }; font?: { size: number } }[] }[]
+      const stext = page.toStructuredText('preserve-whitespace')
+
+      // `asJSON` ne rend PAS la couleur. On la relève donc par un parcours `walk()`, qui
+      // la donne par caractère — les deux parcourent la même page dans le même ordre,
+      // donc l'indice de ligne les rapproche.
+      const couleurs: string[] = []
+      let premierDeLaLigne: number[] | null = null
+      try {
+        stext.walk({
+          beginLine: () => { premierDeLaLigne = null },
+          endLine: () => {
+            const c = premierDeLaLigne
+            couleurs.push(c && c.length >= 3
+              ? `#${c.slice(0, 3).map((v) => Math.round(Math.min(Math.max(v, 0), 1) * 255).toString(16).padStart(2, '0')).join('')}`
+              : '#000000')
+          },
+          onChar: (_c: string, _o: unknown, _f: unknown, _s: number, _q: unknown, color: unknown) => {
+            if (premierDeLaLigne === null && Array.isArray(color)) premierDeLaLigne = color as number[]
+          },
+        } as never)
+      } catch {
+        // Sans couleurs relevées, on retombe sur le noir : lisible partout.
       }
+
+      const json = JSON.parse(stext.asJSON()) as {
+        blocks?: { lines?: { text: string; bbox: { x: number; y: number; w: number; h: number }; font?: { size: number; weight?: string; style?: string; name?: string } }[] }[]
+      }
+      let indexLigne = -1
       for (const bloc of json.blocks ?? []) {
         for (const ligne of bloc.lines ?? []) {
+          indexLigne++
           const candidats = restants.get(ligne.text)
           const run = candidats?.shift()
           if (!run) continue
@@ -177,6 +209,9 @@ export async function readEditableLines(bytes: Uint8Array): Promise<PdfEditableL
             width: ligne.bbox.w / largeur,
             height: ligne.bbox.h / hauteur,
             size: ligne.font?.size ?? 10,
+            color: couleurs[indexLigne] ?? '#000000',
+            bold: /bold|black|semibold|heavy/i.test(`${ligne.font?.weight ?? ''} ${ligne.font?.name ?? ''}`),
+            italic: /italic|oblique/i.test(`${ligne.font?.style ?? ''} ${ligne.font?.name ?? ''}`),
             editable,
           })
         }

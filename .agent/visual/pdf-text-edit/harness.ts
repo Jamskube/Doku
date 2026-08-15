@@ -5,7 +5,7 @@ import '../../../src/app.css'
 import PdfTextEditDialog from '../../../src/components/PdfTextEditDialog.svelte'
 import { app } from '../../../src/lib/stores.svelte'
 
-document.documentElement.dataset.theme = 'light'
+document.documentElement.dataset.theme = new URLSearchParams(location.search).get('theme') ?? 'light'
 
 const written: { name: string; bytes: Uint8Array }[] = []
 ;(globalThis as unknown as { __written: typeof written }).__written = written

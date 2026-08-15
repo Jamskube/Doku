@@ -225,6 +225,10 @@
             style:min-width="{Math.min(line.width * 100 + 6, 100 - line.left * 100)}%"
             style:height="{line.height * 100}%"
             style:font-size="{Math.max(6, line.size * renderScale)}px"
+            style:--doc-color={line.color}
+            style:caret-color={line.color}
+            style:font-weight={line.bold ? '700' : '400'}
+            style:font-style={line.italic ? 'italic' : 'normal'}
           />
         {/each}
       </div>
@@ -300,8 +304,11 @@
     border: 1px solid transparent;
     border-radius: 3px;
     background: transparent;
+    /* Au repos le champ est invisible : c'est le texte du canvas qu'on lit à travers.
+       La couleur n'apparaît qu'en saisie, et c'est CELLE DU DOCUMENT — jamais
+       `var(--ink)`, qui vire au blanc en thème sombre et rendrait le texte invisible
+       sur le papier blanc de la page (même piège que les ombres, cf. AGENTS.md). */
     color: transparent;
-    caret-color: var(--ink);
     font-family: inherit;
     line-height: 1;
     box-sizing: content-box;
@@ -334,7 +341,8 @@
     outline: none;
     border-color: var(--accent, #6b5bd2);
     background: #fff;
-    color: var(--ink);
+    /* La couleur vient du DOCUMENT, transportée par une propriété personnalisée. */
+    color: var(--doc-color, #1a1a1a);
     box-shadow: 0 0 0 3px #fff, 0 0 0 4px var(--accent, #6b5bd2);
     z-index: 3;
   }
@@ -342,7 +350,7 @@
      qu'il a déjà changé. */
   .line.changed {
     background: #fff;
-    color: var(--ink);
+    color: var(--doc-color, #1a1a1a);
     border-color: var(--accent, #6b5bd2);
     box-shadow: 0 0 0 3px #fff;
     z-index: 1;
