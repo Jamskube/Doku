@@ -42,6 +42,17 @@
     }
   })
 
+  // Idem pour « Organiser les pages » : elle tire pdf.js ET la bibliothèque d'écriture,
+  // qui n'ont rien à faire dans le bundle de démarrage.
+  let PdfPagesDialogComp: Component | null = $state(null)
+  $effect(() => {
+    if (app.pdfPagesPath && !PdfPagesDialogComp) {
+      void import('./components/PdfPagesDialog.svelte').then((m) => {
+        PdfPagesDialogComp = m.default as unknown as Component
+      })
+    }
+  })
+
   // Persiste la session (onglets ouverts + actif), débouncée à 500 ms.
   let sessionTimer: ReturnType<typeof setTimeout> | undefined
   $effect(() => {
@@ -288,6 +299,7 @@
 <ConfirmDialog />
 <WikilinkPrompt />
 {#if app.settingsOpen && SettingsDialogComp}<SettingsDialogComp />{/if}
+{#if app.pdfPagesPath && PdfPagesDialogComp}<PdfPagesDialogComp />{/if}
 
 <style>
   .app {

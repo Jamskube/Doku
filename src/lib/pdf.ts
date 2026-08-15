@@ -24,9 +24,15 @@ export interface LoadedPdf {
   destroy: () => Promise<void>
 }
 
+// ATTENTION : PDF.js **transfère** le tableau passé en `data` à son worker — le
+// buffer de l'appelant est DÉTACHÉ (`byteLength` tombe à 0) dès le chargement. Tout
+// appelant qui garde ses octets pour plus tard (écrire une copie, calculer une
+// empreinte) récupérerait un tableau vide, sans la moindre erreur. On lui en donne
+// donc une copie : le coût d'une duplication vaut mieux qu'un piège invisible posé
+// pour chaque futur appelant.
 export async function loadPdf(bytes: Uint8Array): Promise<LoadedPdf> {
   const task = pdfjs.getDocument({
-    data: bytes,
+    data: bytes.slice(),
     disableFontFace: true,
     enableXfa: false,
   })

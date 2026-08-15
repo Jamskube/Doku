@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   PDF_BURN_MIN_STROKE,
   PdfBurnError,
+  applyPdfPagePlan,
   burnPdfAnnotations,
   normalizePdfRotation,
   pdfBurnAnchor,
@@ -20,6 +21,13 @@ import {
   createPdfTextHighlightDrawing,
   type PdfDrawing,
 } from './pdf-drawing'
+import {
+  dropPdfPagePlan,
+  identityPdfPagePlan,
+  insertPdfPagePlan,
+  movePdfPagePlan,
+  turnPdfPagePlan,
+} from './pdf-pages'
 
 function page(rotation: number, extra: Partial<PdfBurnPage> = {}): PdfBurnPage {
   return { x: 0, y: 0, width: 600, height: 800, rotation, ...extra }
@@ -241,5 +249,77 @@ describe('burnPdfAnnotations', () => {
   it('refuse un carnet vide plutôt que de produire une copie muette', async () => {
     const source = await blankPdf([{ width: 600, height: 800 }])
     await expect(burnPdfAnnotations(source, [])).rejects.toBeInstanceOf(PdfBurnError)
+  })
+})
+
+describe('applyPdfPagePlan', () => {
+  const four = () => blankPdf([
+    { width: 600, height: 800 },
+    { width: 600, height: 800 },
+    { width: 400, height: 400 },
+    { width: 600, height: 800 },
+  ])
+
+  async function pageSizes(bytes: Uint8Array) {
+    const { PDFDocument } = await import('@cantoo/pdf-lib')
+    const doc = await PDFDocument.load(bytes)
+    return doc.getPages().map((page) => ({
+      width: Math.round(page.getWidth()),
+      height: Math.round(page.getHeight()),
+      rotation: page.getRotation().angle,
+    }))
+  }
+
+  it('réordonne les pages sans en perdre', async () => {
+    const source = await four()
+    // La page carrée est reconnaissable : elle prouve que c'est bien ELLE qui a bougé.
+    const plan = movePdfPagePlan(identityPdfPagePlan(4), 2, 0)
+    const result = await applyPdfPagePlan([source], plan)
+    expect(result.pages).toBe(4)
+    const sizes = await pageSizes(result.bytes)
+    expect(sizes[0]).toMatchObject({ width: 400, height: 400 })
+    expect(sizes).toHaveLength(4)
+  })
+
+  it('supprime une page', async () => {
+    const source = await four()
+    const result = await applyPdfPagePlan([source], dropPdfPagePlan(identityPdfPagePlan(4), 2))
+    expect(result.pages).toBe(3)
+    expect(await pageSizes(result.bytes)).not.toContainEqual(expect.objectContaining({ width: 400 }))
+  })
+
+  it('compose la rotation avec celle que la page portait déjà', async () => {
+    const source = await blankPdf([{ width: 600, height: 800, rotation: 90 }])
+    const result = await applyPdfPagePlan([source], turnPdfPagePlan(identityPdfPagePlan(1), 0, 1))
+    expect((await pageSizes(result.bytes))[0].rotation).toBe(180)
+  })
+
+  it('fusionne deux documents', async () => {
+    const first = await blankPdf([{ width: 600, height: 800 }])
+    const second = await blankPdf([{ width: 300, height: 300 }, { width: 300, height: 300 }])
+    const plan = insertPdfPagePlan(identityPdfPagePlan(1), 1, 1, 2)
+    const result = await applyPdfPagePlan([first, second], plan)
+    expect(result.pages).toBe(3)
+    const sizes = await pageSizes(result.bytes)
+    expect(sizes[0].width).toBe(600)
+    expect(sizes[1].width).toBe(300)
+    expect(sizes[2].width).toBe(300)
+  })
+
+  it('ne touche jamais les octets des sources', async () => {
+    const source = await four()
+    const copy = source.slice()
+    await applyPdfPagePlan([source], movePdfPagePlan(identityPdfPagePlan(4), 0, 3))
+    expect(source).toEqual(copy)
+  })
+
+  it('refuse un document sans page', async () => {
+    const source = await four()
+    await expect(applyPdfPagePlan([source], [])).rejects.toBeInstanceOf(PdfBurnError)
+  })
+
+  it('refuse une page qui n’existe pas dans sa source', async () => {
+    const source = await blankPdf([{ width: 600, height: 800 }])
+    await expect(applyPdfPagePlan([source], [{ from: 0, source: 9, turn: 0 }])).rejects.toBeInstanceOf(PdfBurnError)
   })
 })

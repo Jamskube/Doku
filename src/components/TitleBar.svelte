@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount, tick } from 'svelte'
-  import { app, activeTab, requestCloseTab, isDirty, saveTabOrSaveAs, selectTab, setColumnWidth, toggleActiveSourceMode, togglePin, toggleWorkspaceSplit, workspace, workspaceLayout, type ColumnWidth, type DocKind } from '../lib/stores.svelte'
+  import { app, activeTab, openPdfPages, requestCloseTab, isDirty, saveTabOrSaveAs, selectTab, setColumnWidth, toggleActiveSourceMode, togglePin, toggleWorkspaceSplit, workspace, workspaceLayout, type ColumnWidth, type DocKind } from '../lib/stores.svelte'
   import type { PaneId } from '../lib/workspace'
   import { tabDiscriminator } from '../lib/tabs'
   import { parentPath } from '../lib/explorer'
@@ -146,6 +146,13 @@
     if (format === 'docx') exportDocx(tab)
     else if (format === 'html') exportHtml(tab)
     else exportPrint(tab)
+  }
+
+  function organizePagesActive() {
+    const tab = activeTab()
+    if (!tab || tab.kind !== 'pdf' || !tab.path) return
+    closeMenus()
+    openPdfPages(tab.path)
   }
 
   // Grave le carnet d'annotations dans une COPIE du PDF. Tout est relu du disque par le
@@ -462,6 +469,9 @@
               {#if activeIsPdf}
                 <button class="app-menu-item" role="menuitem" disabled={burningPdf} onclick={() => void exportAnnotatedActive()}>
                   <span class="msr">stylus_note</span><span class="menu-label">{burningPdf ? 'Gravure en cours…' : 'PDF avec les annotations'}</span><span class="menu-format">.pdf</span>
+                </button>
+                <button class="app-menu-item" role="menuitem" onclick={organizePagesActive}>
+                  <span class="msr">auto_stories</span><span class="menu-label">Organiser les pages…</span>
                 </button>
               {:else}
                 <button class="app-menu-item" role="menuitem" onclick={() => exportActive('docx')}>

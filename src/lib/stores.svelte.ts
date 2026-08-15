@@ -105,6 +105,9 @@ export const app = $state({
   settingsOpen: false,
   // Section à mettre en avant à l'ouverture ('about' quand on vient du logo).
   settingsFocus: null as 'about' | null,
+  // Modale « Organiser les pages » (ADR-0022) : porte le chemin du PDF concerné, donc
+  // null = fermée. Transitoire — elle ne doit jamais se rouvrir au démarrage.
+  pdfPagesPath: null as string | null,
   // Vue interne du panneau (transitoire, non persistée) : boot toujours 'chat'.
   copilotView: 'chat' as CopilotView,
   sourceMode: false,
@@ -794,6 +797,14 @@ export function openSettings(focus: 'about' | null = null) {
 export function closeSettings() {
   app.settingsOpen = false
   app.settingsFocus = null
+}
+
+export function openPdfPages(path: string) {
+  app.pdfPagesPath = path
+}
+
+export function closePdfPages() {
+  app.pdfPagesPath = null
 }
 
 export interface Heading {

@@ -18,6 +18,7 @@ import {
   type PdfDrawingPoint,
   type PdfDrawingRect,
 } from './pdf-drawing'
+import { normalizePdfTurn, type PdfPagePlan } from './pdf-pages'
 
 // Opacités du rendu écran, reproduites à l'identique (`.pdf-highlight-stroke` et
 // `.pdf-text-fill` dans PdfView) : l'export doit ressembler à ce qu'on voyait.
@@ -246,4 +247,52 @@ export async function burnPdfAnnotations(source: Uint8Array, drawings: PdfDrawin
   if (!burned) throw new PdfBurnError('Aucune annotation n’a pu être placée dans ce PDF.')
   const bytes = await doc.save()
   return { bytes, burned, notes, skipped }
+}
+
+// --- Recomposition des pages (ADR-0022, palier 2) ----------------------------------
+
+export interface PdfPagesOutcome {
+  bytes: Uint8Array
+  pages: number
+}
+
+// Applique un plan de pages : `sources[0]` est le document ouvert, les suivants sont les
+// PDF insérés. Les pages sont COPIÉES dans un document neuf — ce qui embarque au passage
+// leurs polices et leurs images, et laisse derrière ce que plus aucune page n'utilise.
+export async function applyPdfPagePlan(sources: Uint8Array[], plan: PdfPagePlan): Promise<PdfPagesOutcome> {
+  if (!plan.length) throw new PdfBurnError('Un PDF ne peut pas être vide.')
+  const { PDFDocument, degrees } = await import('@cantoo/pdf-lib')
+
+  const loaded: Awaited<ReturnType<typeof PDFDocument.load>>[] = []
+  for (const bytes of sources) {
+    try {
+      loaded.push(await PDFDocument.load(bytes, { updateMetadata: false }))
+    } catch {
+      throw new PdfBurnError('Un des documents n’a pas pu être ouvert.')
+    }
+  }
+
+  const out = await PDFDocument.create()
+  // Une seule copie par document d'origine : `copyPages` déduplique les ressources
+  // partagées, alors qu'un appel par page rembarquerait la même police à chaque fois.
+  const copied = new Map<number, Awaited<ReturnType<typeof out.copyPages>>>()
+  for (const entry of plan) {
+    const origin = loaded[entry.from]
+    if (!origin) throw new PdfBurnError('Un des documents insérés est introuvable.')
+    if (!copied.has(entry.from)) {
+      copied.set(entry.from, await out.copyPages(origin, origin.getPageIndices()))
+    }
+    const page = copied.get(entry.from)![entry.source - 1]
+    if (!page) throw new PdfBurnError('Une des pages demandées n’existe plus.')
+    out.addPage(page)
+  }
+
+  // Rotation appliquée APRÈS l'ajout : elle compose avec le `/Rotate` que la page
+  // portait déjà, au lieu de l'écraser.
+  out.getPages().forEach((page, index) => {
+    const turn = normalizePdfTurn(plan[index].turn)
+    if (turn) page.setRotation(degrees(normalizePdfRotation(page.getRotation().angle + turn * 90)))
+  })
+
+  return { bytes: await out.save(), pages: plan.length }
 }

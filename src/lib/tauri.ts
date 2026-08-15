@@ -773,6 +773,14 @@ export async function saveDocxDialog(defaultName: string, bytes: Uint8Array): Pr
   return true
 }
 
+// Dialogue d'ouverture restreint aux PDF (insertion de pages, ADR-0022).
+export async function openPdfDialog(): Promise<string | null> {
+  if (!isTauri) return null
+  const { open } = await import('@tauri-apps/plugin-dialog')
+  const path = await open({ multiple: false, filters: [{ name: 'PDF', extensions: ['pdf'] }] })
+  return typeof path === 'string' ? path : null
+}
+
 // Dialogue save + écriture BINAIRE d'un .pdf (ADR-0022 : gravure des annotations).
 // TOUJOURS par dialogue, jamais d'écrasement implicite du document source — un PDF
 // écrasé n'est pas récupérable, et le carnet reste la seule version éditable.
