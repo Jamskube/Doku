@@ -67,6 +67,29 @@ Les dépendances actuelles sont toutes permissives (MIT, Apache-2.0, BSD : Tauri
 - Mention dans `README.md` avec renvoi à cet ADR.
 - Aucune dépendance actuelle en conflit — les licences des dépendances directes sont permissives.
 
+## Validation — 2026-08-15
+
+La boucle **PDF → DOCX → édition → PDF** est fermée et mesurée de bout en bout au banc `.agent/visual/docx-edit/`, sur un contrat texte réel :
+
+| Étape | Mesure |
+|---|---|
+| PDF de départ | 1 695 o |
+| PDF → DOCX (MuPDF + `pdf-structure`) | 4 paragraphes, 8 882 o |
+| SuperDoc ouvre le DOCX | rendu fidèle |
+| SuperDoc → DOCX | 7 435 o |
+| DOCX → PDF (`docx-to-pdf`, écrit par Doku) | 4 paragraphes, 1 page, 1 753 o |
+| PDF final relu par pdf.js | texte, accents et apostrophes intacts ; rendu contrôlé à l'image |
+
+628 tests verts, 0 erreur de type, build vert.
+
+**Découverte qui a coûté le plus cher : SuperDoc ne sait pas produire de PDF.** Son type `ExportType` annonce `'docx' | 'pdf' | 'html'`, mais `export({ exportType: 'pdf' })` rend une **archive ZIP vide de 22 octets** (idem `'html'`), alors que `'docx'` rend bien un fichier valide. Sa documentation ne mentionne aucun export PDF, et son bundle ne contient ni `exportPdf`, ni `jspdf`, ni `html2pdf`, ni impression. Ce n'est donc pas un réglage à trouver : la capacité n'existe pas.
+
+Doku écrit donc le PDF lui-même (`src/lib/export/docx-to-pdf.ts`) avec `@cantoo/pdf-lib`, déjà présent pour la gravure (ADR-0022) : lecture de `word/document.xml`, retour au **même modèle de paragraphes** que le sens aller, puis rendu paginé avec coupure de lignes aux vraies métriques de police. Bénéfice inattendu : les deux sens partagent une seule représentation, donc une seule sémantique à maintenir.
+
+**Limites assumées du retour au PDF** : texte, graisse, italique, taille, alignement, titres et pagination sont repris ; **images, tableaux, en-têtes/pieds et colonnes ne le sont pas**. Le bandeau de fin le dit à l'utilisateur.
+
+**Reste non prouvé** : que la frappe soit prise en compte dans SuperDoc. Il n'utilise pas `contenteditable` mais une surface `role="textbox"` avec pont clavier, que le pilotage synthétique n'atteint pas ; ses propres diagnostics annoncent pourtant `editableEnabled: true` et `text.insert` supporté. L'affichage, l'enregistrement et l'export sont, eux, prouvés.
+
 ## Related
 
 - [ADR-0022](./0022-ecriture-pdf-pdf-lib.md) — avait écarté MuPDF.js **pour cause de licence** ; cette décision lève l'obstacle et ouvre le réexamen de l'extraction de structure PDF.
