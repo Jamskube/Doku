@@ -180,8 +180,53 @@
     }
   }
 
-  function onDrop(to: number) {
-    if (dragFrom !== null) plan = movePdfPagePlan(plan, dragFrom, to)
+  // Réordonnancement en ÉVÉNEMENTS POINTEUR, et non en glisser-déposer HTML5 : la
+  // fenêtre Tauri a `dragDropEnabled` (dépôt de fichiers, story 2.4), donc WebView2
+  // capte le glisser au niveau natif et la page ne reçoit jamais `dragstart`. Le
+  // navigateur ne le montre pas — ça ne se voit qu'en natif.
+  let dragPointer = -1
+  let dragOrigin = { x: 0, y: 0 }
+  // Lu dans le template (la carte ne s'estompe qu'une fois le seuil franchi) : doit
+  // donc être réactif, sinon Svelte ne re-rend pas.
+  let dragArmed = $state(false)
+
+  // Le tactile est laissé au défilement de la grille (les flèches restent le chemin
+  // accessible) ; souris et stylet déplacent, ce qui couvre l'usage Surface.
+  function startDrag(event: PointerEvent, index: number) {
+    if (event.button !== 0 || saving) return
+    if (event.pointerType === 'touch') return
+    // Un appui qui commence sur un bouton reste un clic de bouton : sans cette sortie,
+    // le seuil ci-dessous avalerait des pivotements et des suppressions.
+    if ((event.target as HTMLElement).closest('button')) return
+    dragPointer = event.pointerId
+    dragOrigin = { x: event.clientX, y: event.clientY }
+    dragArmed = true
+    dragFrom = index
+    ;(event.currentTarget as HTMLElement).setPointerCapture(event.pointerId)
+  }
+
+  function moveDrag(event: PointerEvent) {
+    if (dragPointer !== event.pointerId || dragFrom === null) return
+    if (dragArmed) {
+      // Seuil : en deçà, c'est un clic, pas un déplacement.
+      const far = Math.hypot(event.clientX - dragOrigin.x, event.clientY - dragOrigin.y) >= 4
+      if (!far) return
+      dragArmed = false
+    }
+    const card = (document.elementFromPoint(event.clientX, event.clientY) as HTMLElement | null)?.closest('.card')
+    const at = card ? Number((card as HTMLElement).dataset.index) : Number.NaN
+    dragOver = Number.isInteger(at) ? at : null
+  }
+
+  function endDrag(event: PointerEvent) {
+    if (dragPointer !== event.pointerId) return
+    // `dragArmed` encore vrai = le seuil n'a jamais été franchi : simple clic, rien à
+    // déplacer.
+    if (!dragArmed && dragFrom !== null && dragOver !== null) {
+      plan = movePdfPagePlan(plan, dragFrom, dragOver)
+    }
+    dragPointer = -1
+    dragArmed = false
     dragFrom = null
     dragOver = null
   }
@@ -232,14 +277,14 @@
         {#each plan as entry, index (`${entry.from}:${entry.source}:${index}`)}
           <div
             class="card"
-            class:dragging={dragFrom === index}
+            class:dragging={dragFrom === index && !dragArmed}
             class:over={dragOver === index && dragFrom !== index}
-            draggable="true"
             role="listitem"
-            ondragstart={() => dragFrom = index}
-            ondragend={() => { dragFrom = null; dragOver = null }}
-            ondragover={(event) => { event.preventDefault(); dragOver = index }}
-            ondrop={(event) => { event.preventDefault(); onDrop(index) }}
+            data-index={index}
+            onpointerdown={(event) => startDrag(event, index)}
+            onpointermove={moveDrag}
+            onpointerup={endDrag}
+            onpointercancel={endDrag}
           >
             <div class="thumb" use:observe={entry}>
               {#if thumbFor(entry)}
@@ -365,7 +410,10 @@
     border-radius: 12px;
     background: rgba(var(--ink-rgb), 0.02);
     cursor: grab;
+    /* Sans ça, déplacer à la souris sélectionne le numéro et le badge au passage. */
+    user-select: none;
   }
+  .card:active { cursor: grabbing; }
   .card.dragging { opacity: 0.45; }
   .card.over { border-color: var(--accent, #6b5bd2); box-shadow: 0 0 0 2px rgba(107, 91, 210, 0.28); }
   .thumb {
