@@ -82,7 +82,40 @@ export function parseDocxDocument(xml: string, parse: (source: string) => Docume
 
   const bodies = doc.getElementsByTagNameNS(W, 'body')
   const body = bodies.length ? bodies[0] : doc.documentElement
-  const rawParagraphs = Array.from(body?.getElementsByTagNameNS(W, 'p') ?? [])
+
+  // Word encapsule toute zone de texte / forme / page de garde dans un
+  // `mc:AlternateContent` qui porte DEUX variantes équivalentes (`mc:Choice` et
+  // `mc:Fallback`), chacune avec ses propres `w:p`. Une recherche descendante naïve
+  // sort donc le même texte deux fois, et le `w:p` extérieur le ramasse une troisième
+  // fois par descendance. On ne garde que les paragraphes dont aucun ancêtre n'est
+  // lui-même un `w:p`, et on ignore la branche `mc:Fallback`.
+  // On ne rejette QUE la branche `mc:Fallback` : le paragraphe intérieur de la
+  // `mc:Choice` porte le vrai texte de la zone, il doit être gardé. Le paragraphe
+  // EXTÉRIEUR, lui, ne sort rien de lui-même — `ownRuns` ci-dessous ne lui attribue
+  // pas les runs de la zone qu'il contient.
+  const nested = (element: Element): boolean => {
+    let node = element.parentNode as Element | null
+    while (node && node !== body) {
+      if (node.localName === 'Fallback') return true
+      node = node.parentNode as Element | null
+    }
+    return false
+  }
+  const rawParagraphs = Array.from(body?.getElementsByTagNameNS(W, 'p') ?? []).filter((p) => !nested(p))
+
+  // Un run n'appartient à un paragraphe que si son plus proche ancêtre `w:p` EST ce
+  // paragraphe : sans ce filtre, un `w:p` extérieur avale les runs des zones de texte
+  // qu'il contient.
+  const ownRuns = (p: Element): Element[] =>
+    Array.from(p.getElementsByTagNameNS(W, 'r')).filter((r) => {
+      let node = r.parentNode as Element | null
+      while (node && node !== body) {
+        if (node.localName === 'p') return node === p
+        if (node.localName === 'Fallback') return false
+        node = node.parentNode as Element | null
+      }
+      return false
+    })
 
   interface Draft {
     runs: PdfTextRun[]
@@ -92,15 +125,17 @@ export function parseDocxDocument(xml: string, parse: (source: string) => Docume
   const drafts: Draft[] = []
 
   for (const p of rawParagraphs) {
-    // Un paragraphe imbriqué dans un tableau est visité une seule fois, par son plus
-    // proche ancêtre : sans ce garde, une cellule sortirait en double.
     const properties = child(p, 'pPr')
     const runs: PdfTextRun[] = []
-    for (const r of Array.from(p.getElementsByTagNameNS(W, 'r'))) {
+    for (const r of ownRuns(p)) {
       const rPr = child(r, 'rPr')
       const bold = onOff(child(rPr, 'b'))
       const italic = onOff(child(rPr, 'i'))
-      const size = sizeFromHalfPoints(attr(child(rPr, 'sz'), 'val')) ?? 11
+      // `sizeExplicit` distingue une taille ÉCRITE dans le document d'une taille par
+      // défaut. Sans cette distinction, un titre déjà dimensionné se voyait remultiplier
+      // par l'échelle de titre au rendu — 22 pt devenaient 37 pt en aller-retour.
+      const explicit = sizeFromHalfPoints(attr(child(rPr, 'sz'), 'val'))
+      const size = explicit ?? 11
       let text = ''
       for (const node of Array.from(r.childNodes)) {
         const element = node as Element
@@ -115,7 +150,7 @@ export function parseDocxDocument(xml: string, parse: (source: string) => Docume
       if (previous && previous.bold === bold && previous.italic === italic && previous.size === size) {
         previous.text += text
       } else {
-        runs.push({ text, bold, italic, size })
+        runs.push({ text, bold, italic, size, sizeExplicit: explicit !== null })
       }
       sizes.set(size, (sizes.get(size) ?? 0) + text.trim().length)
     }

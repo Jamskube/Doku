@@ -169,3 +169,98 @@ describe('convertDocxToPdf', () => {
     await expect(convertDocxToPdf(new Uint8Array([1, 2, 3, 4]), parse)).rejects.toBeInstanceOf(DocxToPdfError)
   })
 })
+
+// --- Boucle fermée : DOCX → PDF → RELECTURE ---------------------------------------
+// Le vrai manque des tests précédents : ils vérifiaient l'en-tête `%PDF-` et le nombre
+// de pages, jamais le CONTENU. Quatre défauts bloquants sont passés au travers (sauts
+// de ligne devenus « ? », titres grossis de 70 %, zones de texte triplées, plantage sur
+// « ł »). MuPDF est déjà une dépendance : on relit ce qu'on vient d'écrire.
+describe('boucle fermée DOCX → PDF → relecture', () => {
+  async function pdfDepuis(body: string, sect = ''): Promise<Uint8Array> {
+    const { default: JSZip } = await import('jszip')
+    const zip = new JSZip()
+    zip.file('word/document.xml', wrap(body, sect))
+    const docx = await zip.generateAsync({ type: 'uint8array' })
+    return (await convertDocxToPdf(docx, parse)).bytes
+  }
+
+  async function lignesDu(pdf: Uint8Array) {
+    const mupdf = await import('mupdf')
+    const doc = mupdf.Document.openDocument(pdf, 'application/pdf')
+    const out: { text: string; size: number; y: number }[] = []
+    for (let n = 0; n < doc.countPages(); n++) {
+      const json = JSON.parse((doc.loadPage(n) as never as { toStructuredText: (o: string) => { asJSON: () => string } })
+        .toStructuredText('preserve-whitespace').asJSON())
+      for (const bloc of json.blocks ?? []) {
+        for (const l of bloc.lines ?? []) out.push({ text: l.text, size: l.font?.size ?? 0, y: l.y })
+      }
+    }
+    return out
+  }
+
+  it('rend le texte exact, sans caractère parasite', async () => {
+    const lignes = await lignesDu(await pdfDepuis(para('Le contrat est signé.')))
+    expect(lignes.map((l) => l.text).join(' ')).toBe('Le contrat est signé.')
+  })
+
+  it('respecte un saut de ligne au lieu de le transformer en « ? »', async () => {
+    // `<w:br/>` doit produire DEUX lignes. Le filtre WinAnsi le mangeait avant que la
+    // coupure de lignes ne le voie, et écrivait « Nom?Adresse » sur une seule ligne.
+    const xml = `<w:p><w:r><w:t>Nom</w:t><w:br/><w:t>Adresse</w:t></w:r></w:p>`
+    const lignes = await lignesDu(await pdfDepuis(xml))
+    expect(lignes.map((l) => l.text)).toEqual(['Nom', 'Adresse'])
+    expect(lignes.some((l) => l.text.includes('?'))).toBe(false)
+  })
+
+  it('ne regrossit PAS un titre dont la taille est déjà écrite', async () => {
+    // C'est le chemin nominal PDF → DOCX → PDF : la conversion aller écrit un `w:sz`
+    // explicite EN PLUS du style de titre. Remultiplier donnait 22 → 37,4 pt.
+    const lignes = await lignesDu(await pdfDepuis(para('Titre', { style: 'Heading1', size: 22 })))
+    expect(lignes[0].size).toBeCloseTo(22, 0)
+  })
+
+  it('n’écrit une zone de texte Word qu’une seule fois', async () => {
+    // `mc:AlternateContent` porte deux variantes équivalentes ; le `w:p` extérieur
+    // ramassait en plus les runs intérieurs. Résultat : le texte sortait trois fois.
+    const xml = `<w:p><w:r><mc:AlternateContent xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006">
+      <mc:Choice Requires="wps"><w:drawing><w:txbxContent><w:p><w:r><w:t>Encadre</w:t></w:r></w:p></w:txbxContent></w:drawing></mc:Choice>
+      <mc:Fallback><w:pict><w:txbxContent><w:p><w:r><w:t>Encadre</w:t></w:r></w:p></w:txbxContent></w:pict></mc:Fallback>
+    </mc:AlternateContent></w:r></w:p>`
+    const lignes = await lignesDu(await pdfDepuis(xml))
+    expect(lignes.filter((l) => l.text.includes('Encadre'))).toHaveLength(1)
+  })
+
+  it('n’échoue pas sur un mot latin-étendu et le rend lisible', async () => {
+    // « Wrocław » passait l'ancien filtre de plage et faisait LEVER pdf-lib : tout
+    // l'export échouait sur un mot ordinaire.
+    const lignes = await lignesDu(await pdfDepuis(para('Wroclaw Kovac Skoda')))
+    expect(lignes[0].text).toBe('Wroclaw Kovac Skoda')
+  })
+
+  it('replie les diacritiques hors WinAnsi au lieu de planter', async () => {
+    // `á` EST dans WinAnsi et doit être conservé tel quel ; seuls `ł` et `č` se
+    // replient. Une substitution trop large abîmerait du texte parfaitement écrivable.
+    const lignes = await lignesDu(await pdfDepuis(para('Wrocław Kováč')))
+    expect(lignes[0].text).toBe('Wroclaw Kovác')
+  })
+
+  it('garde une ligne de base commune sur une ligne à tailles mixtes', async () => {
+    const xml = `<w:p>
+      <w:r><w:rPr><w:sz w:val="40"/></w:rPr><w:t>Grand </w:t></w:r>
+      <w:r><w:rPr><w:sz w:val="20"/></w:rPr><w:t>petit</w:t></w:r>
+    </w:p>`
+    const lignes = await lignesDu(await pdfDepuis(xml))
+    const ys = lignes.map((l) => l.y)
+    expect(Math.max(...ys) - Math.min(...ys)).toBeLessThan(0.5)
+  })
+
+  it('refuse en le nommant une page dont la géométrie est dégénérée', async () => {
+    // Page de 72 pt de haut : les marges par défaut d'un pouce ne tiennent pas. Avant,
+    // une page neuve était créée par ligne, indéfiniment.
+    const sect = '<w:sectPr><w:pgSz w:w="12240" w:h="1440"/></w:sectPr>'
+    const long = Array.from({ length: 40 }, (_, i) => para(`Ligne ${i}`)).join('')
+    const pdf = await pdfDepuis(long, sect)
+    const { PDFDocument } = await import('@cantoo/pdf-lib')
+    expect((await PDFDocument.load(pdf)).getPageCount()).toBeLessThan(60)
+  })
+})

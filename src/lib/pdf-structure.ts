@@ -32,6 +32,10 @@ export interface PdfTextRun {
   bold: boolean
   italic: boolean
   size: number
+  // La taille a-t-elle été ÉCRITE dans le document, ou déduite ? Un titre déjà
+  // dimensionné ne doit pas être remultiplié par l'échelle de titre au rendu : c'est
+  // ce qui faisait passer un titre de 22 pt à 37 pt en aller-retour PDF → DOCX → PDF.
+  sizeExplicit?: boolean
 }
 
 export type PdfParagraphKind = 'paragraph' | 'heading1' | 'heading2' | 'heading3'
