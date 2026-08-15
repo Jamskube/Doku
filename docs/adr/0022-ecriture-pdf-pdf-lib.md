@@ -74,7 +74,21 @@ Deux règles fermes accompagnent la décision :
 
 ## Validation
 
-Non validé tant que le premier palier n'est pas mesuré. Critères, sur un corpus de **10 PDF réels** incluant un document à pages tournées, un export Word, un export LaTeX, un scanné et un document de 200 pages :
+### Acquis — 2026-08-15
+
+**Paliers 1 et 2 livrés et vérifiés** (`pdf-write.ts`, `pdf-pages.ts`, `export/pdf-annotated.ts`, `PdfPagesDialog.svelte`) :
+
+- **Repère de gravure prouvé contre pdf.js.** `pdfBurnPoint` a été confronté à `viewport.convertToPdfPoint()` — l'autorité du domaine, implémentation indépendante — sur les quatre rotations et sur une CropBox décalée : **écart exactement nul**, pas « sous le seuil ».
+- **Gravure vérifiée à l'œil** sur un document texte réel : surlignage en `multiply` (le texte se lit au travers), tracé lissé en Béziers, encadré et ellipse à leur place. Preuves dans `.agent/visual/pdf-burn/`.
+- **Recomposition vérifiée aux vrais gestes** (glisser-déposer Playwright inclus) : la sortie contient bien `A1` pivotée, `A2` supprimée, `A3` avec sa rotation d'origine non cumulée, et les pages fusionnées d'un second document. Preuves dans `.agent/visual/pdf-pages/`.
+- 589 tests au vert, 0 erreur de type, chunks paresseux confirmés au build.
+- **Un défaut réel attrapé au banc, invisible en test unitaire** : pdf.js *transfère* le tableau passé en `data` à son worker et **détache** le buffer de l'appelant — l'organisateur écrivait donc 0 octet. Corrigé dans `loadPdf` (copie défensive), consigné dans les mémoires d'`AGENTS.md`.
+
+**Palier 4 (formulaires) : non commencé.** L'amendement de l'ADR-0011 sur la couche formulaire reste donc en suspens, et la preuve « 0 exécution de JS sur un PDF piégé » n'a pas été faite. Rien n'est branché côté produit — conformément à la règle « branché ou retiré, jamais muet ».
+
+### Reste à mesurer
+
+Critères, sur un corpus de **10 PDF réels** incluant un document à pages tournées, un export Word, un export LaTeX, un scanné et un document de 200 pages :
 
 - **Gravure** : écart ≤ 2 px CSS entre la position dans Doku à 100 % et le PDF exporté rouvert dans Acrobat, Chrome et pdf.js ; surlignage en `multiply` ; 0 annotation perdue ; **fichier source bit-à-bit inchangé**.
 - **Pages** : 10/10 recomposés s'ouvrent sans erreur dans les trois lecteurs ; 200 pages en < 3 s sur la Surface ARM64.

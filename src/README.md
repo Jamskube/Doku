@@ -28,6 +28,10 @@ Frontend Svelte 5 de Doku (lecteur/éditeur de documents — shell W1 + éditeur
 | `lib/save-as.ts` | Transaction pure « Enregistrer sous » avec extension, collision et rollback |
 | `lib/pdf-annotations.ts` | Identité, migration et manifeste local des annotations PDF non destructives ; carnet unifié (notes) et regroupement des épingles |
 | `lib/pdf-drawing.ts` | Primitives pures des tracés PDF (crayon, surligneur, rectangle, ellipse) : épaisseur, normalisation, simplification et déplacement borné |
+| `lib/pdf-write.ts` | Écriture PDF (ADR-0022) : gravure des annotations et application d'un plan de pages ; changement de repère affichage → PDF, rotation `/Rotate` comprise |
+| `lib/pdf-pages.ts` | Plan de recomposition des pages, pur : pivoter, supprimer, déplacer, insérer, résumer |
+| `lib/export/pdf-annotated.ts` | Orchestration de l'export « PDF annoté » (ports injectés) |
+| `components/PdfPagesDialog.svelte` | Modale « Organiser les pages » : vignettes paresseuses, glisser-déposer, insertion d'un autre PDF |
 | `lib/pdf-highlight-text.ts` | Géométrie pure de la citation d'un surlignage : quelles lignes de texte le trait balaie, et sur quelle plage |
 | `lib/editor/editor.ts` | Extensions CM6 : thème typographique du design, coloration, Compartment preview/source |
 | `lib/editor/live-preview.ts` | Décorations live preview (ADR-0002) : masquage syntaxe, checkboxes, wikilinks |
