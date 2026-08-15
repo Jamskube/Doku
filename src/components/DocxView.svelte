@@ -8,14 +8,14 @@
   // c'est un format structuré qu'on relit et réécrit tel quel. Doku a donc deux moteurs
   // d'édition — CM6 pour le texte, ProseMirror pour le DOCX — et c'est assumé.
   import { app } from '../lib/stores.svelte'
-  import { readFileBytes, writeFileAtomic } from '../lib/tauri'
+  import { readFileBytes, savePdfDialog, writeFileAtomic } from '../lib/tauri'
 
   let { path, tabId }: { path: string; tabId: number } = $props()
 
   let host: HTMLElement | undefined = $state()
   let status: 'loading' | 'ready' | 'error' = $state('loading')
   let message = $state('')
-  let busy = $state<'' | 'save'>('')
+  let busy = $state<'' | 'save' | 'pdf'>('')
   let dirty = $state(false)
 
   // L'instance SuperDoc n'est pas un état réactif : c'est un objet impératif lourd qui
@@ -107,12 +107,39 @@
     }
   }
 
-  // PAS de bouton « Exporter en PDF » ici, et c'est délibéré : dans SuperDoc 2.6,
-  // `export({ exportType: 'pdf' })` rend une archive ZIP VIDE de 22 octets (idem pour
-  // 'html'), alors que 'docx' rend bien un fichier valide de plusieurs kilo-octets —
-  // mesuré au banc `.agent/visual/docx-edit/`. Brancher ce bouton produirait un fichier
-  // corrompu à chaque clic : mieux vaut pas de bouton qu'un bouton qui ment.
-  // Le retour au PDF reste donc à faire, par une autre voie que l'export de SuperDoc.
+  // Retour au PDF — la dernière marche de la boucle. Elle ne passe PAS par SuperDoc :
+  // son `export({ exportType: 'pdf' })` rend une archive vide de 22 octets, il n'existe
+  // aucun `exportPdf` dans son bundle et sa documentation n'en parle pas. Doku écrit
+  // donc le PDF lui-même (`export/docx-to-pdf.ts`), à partir du DOCX que SuperDoc vient
+  // de produire — ce qui garantit d'exporter exactement ce qui a été enregistré.
+  async function exportPdf() {
+    if (!editor || busy) return
+    busy = 'pdf'
+    try {
+      const [{ convertDocxToPdf, DocxToPdfError }] = await Promise.all([import('../lib/export/docx-to-pdf')])
+      const docx = await exportBlob('docx')
+      if (!docx) return
+      try {
+        const report = await convertDocxToPdf(docx, (xml) => new DOMParser().parseFromString(xml, 'application/xml'))
+        const base = fileName.replace(/\.docx$/i, '')
+        if (await savePdfDialog(`${base}.pdf`, report.bytes)) {
+          app.banner = {
+            tone: 'success',
+            title: 'PDF créé',
+            message: `${report.paragraphs} paragraphe${report.paragraphs > 1 ? 's' : ''} sur ${report.pages} page${report.pages > 1 ? 's' : ''}. Texte, styles et titres sont repris ; images et tableaux ne le sont pas encore.`,
+          }
+        }
+      } catch (error) {
+        app.banner = {
+          tone: 'error',
+          title: 'Export PDF impossible',
+          message: error instanceof DocxToPdfError ? error.message : 'Doku n’a pas pu produire le PDF.',
+        }
+      }
+    } finally {
+      busy = ''
+    }
+  }
 
   export function saveDocx() {
     return save()
@@ -124,6 +151,10 @@
     <button disabled={status !== 'ready' || !!busy} onclick={() => void save()}>
       <span class="msr">save</span>
       <span>{busy === 'save' ? 'Enregistrement…' : dirty ? 'Enregistrer' : 'Enregistré'}</span>
+    </button>
+    <button disabled={status !== 'ready' || !!busy} onclick={() => void exportPdf()}>
+      <span class="msr">picture_as_pdf</span>
+      <span>{busy === 'pdf' ? 'Export…' : 'Exporter en PDF'}</span>
     </button>
   </div>
 
