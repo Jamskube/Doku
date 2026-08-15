@@ -2,6 +2,7 @@
 name = "doku"
 version = "2.2.0"
 description = "Doku — lire et écrire, sans friction"
+license = "AGPL-3.0-or-later"
 edition = "2021"
 
 [build-dependencies]

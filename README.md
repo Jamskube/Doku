@@ -33,3 +33,8 @@ Le build x64 automatisé est aussi disponible dans GitHub Actions via le workflo
 
 ## Contexte IA
 Le fichier `AGENTS.md` contient le contexte pour les assistants de code — à lire en début de session. Reprise de session : `docs/journal/_next-session.md`.
+
+## Licence
+**AGPL-3.0-or-later** — voir [`LICENSE`](./LICENSE). Copyright © 2026 Kubo.
+
+Ce choix ouvre l'accès aux moteurs documentaires sous AGPL (MuPDF.js, SuperDoc) dont Doku a besoin pour l'édition de documents ; le raisonnement est dans [ADR-0023](./docs/adr/0023-licence-agpl.md). Toute redistribution, modifiée ou non, doit rester sous AGPL et fournir le code source correspondant.
