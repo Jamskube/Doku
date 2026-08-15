@@ -18,7 +18,8 @@ function charger(nom: string): Uint8Array | null {
 
 async function texteDe(bytes: Uint8Array, page: number): Promise<string[]> {
   const mupdf = await import('mupdf')
-  const doc = mupdf.Document.openDocument(bytes, 'application/pdf')
+  // Copie : `openDocument` détache le tableau, et l'appelant réutilise souvent le sien.
+  const doc = mupdf.Document.openDocument(bytes.slice(), 'application/pdf')
   const json = JSON.parse((doc.loadPage(page - 1) as never as { toStructuredText: (o: string) => { asJSON: () => string } })
     .toStructuredText('preserve-whitespace').asJSON())
   return (json.blocks ?? []).flatMap((b: { lines?: { text: string }[] }) => b.lines ?? []).map((x: { text: string }) => x.text)

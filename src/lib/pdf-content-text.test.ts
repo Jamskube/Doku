@@ -5,8 +5,10 @@ import {
   encodeGlyphs,
   encodePdfString,
   findTextRuns,
+  groupRunsIntoLines,
   invertToUnicode,
   parseToUnicode,
+  planLineEdit,
   rewriteTextRuns,
   type PdfGlyphCodec,
 } from './pdf-content-text'
@@ -215,5 +217,87 @@ describe('rewriteTextRuns', () => {
   it('rend le flux inchangé sans édition', () => {
     const flux = '/f0 12 Tf [(\\000\\003)] TJ'
     expect(rewriteTextRuns(flux, codecs, []).flux).toBe(flux)
+  })
+})
+
+describe('groupRunsIntoLines', () => {
+  const codecs = new Map([['f0', codec()]])
+  // `a`=0x03 `b`=0x04 `c`=0x05 `A`=0x24 dans la CMap de test.
+  const flux = '/f0 12 Tf [(\\000\\003)] TJ [(\\000\\004)] TJ [(\\000\\005)] TJ'
+
+  it('reconstitue une ligne portée par plusieurs passages', () => {
+    // Une ligne affichée mêlant les styles est écrite en plusieurs opérateurs : exiger
+    // qu'UN passage la couvre entièrement laissait 31 % des lignes sans champ.
+    const groupes = groupRunsIntoLines(findTextRuns(flux, codecs), ['abc'])
+    expect(groupes).toHaveLength(1)
+    expect(groupes[0].runs).toHaveLength(3)
+    expect(groupes[0].text).toBe('abc')
+  })
+
+  it('garde une ligne d’un seul passage', () => {
+    const groupes = groupRunsIntoLines(findTextRuns(flux, codecs), ['a', 'b', 'c'])
+    expect(groupes.map((g) => g.runs.length)).toEqual([1, 1, 1])
+  })
+
+  it('trouve la suite même si l’ordre du flux diffère de l’ordre de lecture', () => {
+    // L'ordre du flux est celui du DESSIN ; celui des lignes, celui de la LECTURE.
+    // Les deux divergent dès qu'il y a colonnes ou encadrés.
+    const groupes = groupRunsIntoLines(findTextRuns(flux, codecs), ['c', 'ab'])
+    expect(groupes.map((g) => g.text)).toEqual(['c', 'ab'])
+  })
+
+  it('ne réutilise jamais un passage déjà pris', () => {
+    const groupes = groupRunsIntoLines(findTextRuns(flux, codecs), ['ab', 'ab'])
+    expect(groupes).toHaveLength(1)
+  })
+
+  it('ignore une ligne sans correspondance sans désaligner les suivantes', () => {
+    const groupes = groupRunsIntoLines(findTextRuns(flux, codecs), ['zzz', 'ab'])
+    expect(groupes.map((g) => g.text)).toEqual(['ab'])
+  })
+})
+
+describe('planLineEdit', () => {
+  const codecs = new Map([['f0', codec()]])
+  const flux = '/f0 12 Tf [(\\000\\003)] TJ [(\\000\\004)] TJ [(\\000\\005)] TJ'
+  const ligne = () => groupRunsIntoLines(findTextRuns(flux, codecs), ['abc'])[0]
+
+  it('ne réécrit QUE le passage touché', () => {
+    // Corriger le milieu d'une ligne doit laisser intacts les passages voisins —
+    // c'est ce qui préserve un mot en gras ou un extrait de code au sein de la ligne.
+    const edits = planLineEdit(ligne(), 'aXc')
+    expect(edits).toHaveLength(1)
+    expect(edits[0].run.text).toBe('b')
+    expect(edits[0].text).toBe('X')
+  })
+
+  it('couvre plusieurs passages quand la modification les traverse', () => {
+    const edits = planLineEdit(ligne(), 'aZZ')
+    expect(edits.length).toBeGreaterThan(1)
+    // Le premier porte le texte neuf, les suivants sont vidés.
+    expect(edits[0].text).toBe('ZZ')
+    expect(edits.slice(1).every((e) => e.text === '')).toBe(true)
+  })
+
+  it('rend une liste vide quand rien ne change', () => {
+    expect(planLineEdit(ligne(), 'abc')).toEqual([])
+  })
+
+  it('traite une ligne d’un seul passage sans découpage', () => {
+    const simple = groupRunsIntoLines(findTextRuns(flux, codecs), ['a'])[0]
+    expect(planLineEdit(simple, 'cc')).toEqual([{ run: simple.runs[0], text: 'cc' }])
+  })
+
+  it('gère un ajout en fin de ligne', () => {
+    const edits = planLineEdit(ligne(), 'abcc')
+    expect(edits).toHaveLength(1)
+    expect(edits[0].run.text).toBe('c')
+    expect(edits[0].text).toBe('cc')
+  })
+
+  it('gère une suppression en début de ligne', () => {
+    const edits = planLineEdit(ligne(), 'bc')
+    expect(edits[0].run.text).toBe('a')
+    expect(edits[0].text).toBe('')
   })
 })

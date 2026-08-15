@@ -220,3 +220,110 @@ export function rewriteTextRuns(
   }
   return { flux: sortie, applied: retenus.length, rejected }
 }
+
+// --- Lignes composées de PLUSIEURS passages ----------------------------------------
+// Une ligne affichée mêle souvent les styles : « remplace est dans » + « le nombre »
+// en gras + « des mécanismes… ». Le flux la porte donc en plusieurs opérateurs. Exiger
+// qu'UN passage égale toute la ligne laissait 31 % des lignes sans champ de saisie.
+
+export interface PdfLineRuns {
+  text: string
+  runs: PdfTextRunRef[]
+}
+
+/**
+ * Regroupe les passages en lignes, en suivant les textes de lignes attendus.
+ * Consomme les passages dans l'ordre : c'est le même ordre que celui du rendu, donc
+ * l'appariement est déterministe — et il le restera à la réécriture.
+ */
+export function groupRunsIntoLines(runs: PdfTextRunRef[], lineTexts: string[]): PdfLineRuns[] {
+  const out: PdfLineRuns[] = []
+  const utilise = new Array<boolean>(runs.length).fill(false)
+
+  // On CHERCHE la suite correspondante au lieu de l'exiger séquentielle : l'ordre du
+  // flux est l'ordre de DESSIN, celui des lignes est l'ordre de LECTURE, et les deux
+  // divergent dès qu'un document a des colonnes, des encadrés ou des notes. Exiger la
+  // séquence faisait chuter la couverture à 18 % sur un document réel.
+  for (const attendu of lineTexts) {
+    if (!attendu) continue
+    let trouve: PdfTextRunRef[] | null = null
+    for (let depart = 0; depart < runs.length && !trouve; depart++) {
+      if (utilise[depart] || !attendu.startsWith(runs[depart].text) || !runs[depart].text) continue
+      const pris: PdfTextRunRef[] = []
+      let assemble = ''
+      for (let k = depart; k < runs.length; k++) {
+        if (utilise[k]) break
+        const suivant = assemble + runs[k].text
+        if (!attendu.startsWith(suivant)) break
+        pris.push(runs[k])
+        assemble = suivant
+        if (assemble === attendu) break
+      }
+      if (assemble === attendu && pris.length) trouve = pris
+    }
+    if (!trouve) continue
+    for (const run of trouve) utilise[runs.indexOf(run)] = true
+    out.push({ text: attendu, runs: trouve })
+  }
+  return out
+}
+
+export interface RunEdit {
+  run: PdfTextRunRef
+  text: string
+}
+
+/**
+ * Répartit la modification d'une LIGNE sur les passages qui la composent.
+ *
+ * On isole ce qui a réellement changé (préfixe et suffixe communs) et on ne réécrit que
+ * le ou les passages touchés. Une correction d'un mot au milieu d'une ligne laisse donc
+ * intacts les passages voisins — c'est ce qui préserve les mots en gras et les extraits
+ * de code d'une ligne mixte.
+ */
+export function planLineEdit(line: PdfLineRuns, nouveau: string): RunEdit[] {
+  const ancien = line.text
+  if (ancien === nouveau) return []
+  if (line.runs.length === 1) return [{ run: line.runs[0], text: nouveau }]
+
+  let debut = 0
+  while (debut < ancien.length && debut < nouveau.length && ancien[debut] === nouveau[debut]) debut++
+  let fin = 0
+  while (
+    fin < ancien.length - debut &&
+    fin < nouveau.length - debut &&
+    ancien[ancien.length - 1 - fin] === nouveau[nouveau.length - 1 - fin]
+  ) fin++
+
+  const finAncien = ancien.length - fin
+  // Bornes de chaque passage dans le texte de la ligne.
+  const bornes: { run: PdfTextRunRef; from: number; to: number }[] = []
+  let position = 0
+  for (const run of line.runs) {
+    bornes.push({ run, from: position, to: position + run.text.length })
+    position += run.text.length
+  }
+
+  // Une INSERTION pure (ajout sans suppression) donne un intervalle de longueur nulle :
+  // aucun passage ne le « chevauche ». On rattache alors le point d'insertion au passage
+  // qui le contient — et à la fin de ligne, au dernier. Sans ce cas, un simple ajout en
+  // bout de ligne aplatissait toute la ligne dans son premier passage.
+  const finReelle = Math.max(finAncien, debut)
+  const touches = debut === finReelle
+    ? bornes.filter((b) => (debut > b.from && debut <= b.to) || (debut === 0 && b.from === 0))
+    : bornes.filter((b) => b.to > debut && b.from < finReelle)
+  if (!touches.length) return [{ run: line.runs[0], text: nouveau }]
+
+  const premier = touches[0]
+  const dernier = touches[touches.length - 1]
+  // Le passage touché reçoit sa part inchangée, plus le texte neuf.
+  const avant = ancien.slice(premier.from, debut)
+  const apres = ancien.slice(finAncien, dernier.to)
+  const remplacement = avant + nouveau.slice(debut, nouveau.length - fin) + apres
+
+  const edits: RunEdit[] = [{ run: premier.run, text: remplacement }]
+  // Les autres passages couverts par la modification sont vidés : leur contenu est
+  // désormais porté par le premier.
+  for (const b of touches.slice(1)) edits.push({ run: b.run, text: '' })
+  return edits
+}

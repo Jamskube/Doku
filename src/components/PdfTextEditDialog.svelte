@@ -238,7 +238,7 @@
             class:changed={!!edits[key(line)]}
             class:locked={!line.editable}
             readonly={!line.editable}
-            title={line.editable ? line.text : 'Cette ligne contient des caractères que la police du document ne sait pas réécrire.'}
+            title={line.editable ? line.text : (line.reason ?? 'Cette ligne ne peut pas être modifiée.')}
             value={edits[key(line)] || line.text}
             oninput={(event) => edit(line, event.currentTarget.value)}
             style:left="{line.left * 100}%"

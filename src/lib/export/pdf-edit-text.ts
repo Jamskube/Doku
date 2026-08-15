@@ -17,10 +17,13 @@
 // passe par un dialogue d'enregistrement.
 import {
   findTextRuns,
+  groupRunsIntoLines,
   invertToUnicode,
   parseToUnicode,
+  planLineEdit,
   rewriteTextRuns,
   type PdfGlyphCodec,
+  type PdfLineRuns,
   type PdfTextRunRef,
 } from '../pdf-content-text'
 
@@ -127,9 +130,12 @@ export interface PdfEditableLine {
   color: string
   bold: boolean
   italic: boolean
-  /** Faux quand un caractère de la ligne n'est pas réécrivable dans la police du
-   *  document : l'appelant bascule alors sur l'autre étage, ou le dit. */
+  /** Faux quand la ligne ne peut pas être réécrite telle quelle. */
   editable: boolean
+  /** POURQUOI elle ne peut pas l'être, en clair. Une ligne inerte sans explication est
+   *  une affordance morte : l'utilisateur voit deux lignes semblables dont une seule
+   *  répond, sans rien pour comprendre. */
+  reason?: string
 }
 
 export interface PdfPageText {
@@ -148,7 +154,9 @@ export async function readEditableLines(bytes: Uint8Array): Promise<PdfEditableL
   const mupdf = await import('mupdf')
   let doc: MuDoc
   try {
-    doc = mupdf.Document.openDocument(bytes, 'application/pdf') as MuDoc
+    // Copie défensive : `openDocument` DÉTACHE le tableau reçu. L'appelant garde
+    // souvent ses octets pour écrire ensuite — les lui vider serait invisible.
+    doc = mupdf.Document.openDocument(bytes.slice(), 'application/pdf') as MuDoc
   } catch {
     throw new PdfEditError('Ce PDF n’a pas pu être ouvert.')
   }
@@ -162,14 +170,6 @@ export async function readEditableLines(bytes: Uint8Array): Promise<PdfEditableL
       const runs = findTextRuns(contents.text, codecs)
       if (!runs.length) continue
 
-      // Un même texte peut apparaître plusieurs fois : on consomme les passages dans
-      // l'ordre pour ne pas rattacher deux boîtes au même.
-      const restants = new Map<string, PdfTextRunRef[]>()
-      for (const run of runs) {
-        const liste = restants.get(run.text) ?? []
-        liste.push(run)
-        restants.set(run.text, liste)
-      }
 
       const vues = new Map<string, number>()
       const bounds = page.getBounds()
@@ -199,6 +199,18 @@ export async function readEditableLines(bytes: Uint8Array): Promise<PdfEditableL
         // Sans couleurs relevées, on retombe sur le noir : lisible partout.
       }
 
+      const textesDeLignes: string[] = []
+      const brut = JSON.parse(stext.asJSON()) as { blocks?: { lines?: { text: string }[] }[] }
+      for (const b of brut.blocks ?? []) for (const li of b.lines ?? []) textesDeLignes.push(li.text)
+      // Une ligne affichée mêle souvent les styles et se trouve donc portée par
+      // plusieurs opérateurs du flux : on la reconstitue par une SUITE de passages.
+      const parLigne = new Map<string, PdfLineRuns[]>()
+      for (const groupe of groupRunsIntoLines(runs, textesDeLignes)) {
+        const liste = parLigne.get(groupe.text) ?? []
+        liste.push(groupe)
+        parLigne.set(groupe.text, liste)
+      }
+
       const json = JSON.parse(stext.asJSON()) as {
         blocks?: { lines?: { text: string; bbox: { x: number; y: number; w: number; h: number }; font?: { size: number; weight?: string; style?: string; name?: string } }[] }[]
       }
@@ -206,11 +218,22 @@ export async function readEditableLines(bytes: Uint8Array): Promise<PdfEditableL
       for (const bloc of json.blocks ?? []) {
         for (const ligne of bloc.lines ?? []) {
           indexLigne++
-          const candidats = restants.get(ligne.text)
-          const run = candidats?.shift()
-          if (!run) continue
-          const codec = codecs.get(run.font)
-          const editable = Boolean(codec) && [...ligne.text].every((ch) => ch === ' ' || codec!.fromUnicode.has(ch))
+          const candidats = parLigne.get(ligne.text)
+          const groupe = candidats?.shift()
+          const codec = groupe ? codecs.get(groupe.runs[0].font) : undefined
+          const manquants = codec
+            ? [...new Set([...ligne.text].filter((ch) => ch !== ' ' && !codec.fromUnicode.has(ch)))]
+            : []
+          // Toutes les lignes visibles sont rendues, même non modifiables : sinon
+          // l'utilisateur clique dans le vide sans savoir pourquoi.
+          const editable = Boolean(groupe) && Boolean(codec) && manquants.length === 0
+          const reason = editable
+            ? undefined
+            : !groupe
+              ? 'Doku n’a pas su relier cette ligne au contenu du document.'
+              : !codec
+                ? 'La police de cette ligne ne fournit pas de table de caractères.'
+                : `La police du document ne sait pas écrire : ${manquants.join(' ')}`
           const rang = vues.get(ligne.text) ?? 0
           vues.set(ligne.text, rang + 1)
           lignes.push({
@@ -223,6 +246,7 @@ export async function readEditableLines(bytes: Uint8Array): Promise<PdfEditableL
             height: ligne.bbox.h / hauteur,
             size: ligne.font?.size ?? 10,
             color: couleurs[indexLigne] ?? '#000000',
+            reason,
             bold: /bold|black|semibold|heavy/i.test(`${ligne.font?.weight ?? ''} ${ligne.font?.name ?? ''}`),
             italic: /italic|oblique/i.test(`${ligne.font?.style ?? ''} ${ligne.font?.name ?? ''}`),
             editable,
@@ -241,7 +265,9 @@ export async function readEditableText(bytes: Uint8Array): Promise<PdfPageText[]
   const mupdf = await import('mupdf')
   let doc: MuDoc
   try {
-    doc = mupdf.Document.openDocument(bytes, 'application/pdf') as MuDoc
+    // Copie défensive : `openDocument` DÉTACHE le tableau reçu. L'appelant garde
+    // souvent ses octets pour écrire ensuite — les lui vider serait invisible.
+    doc = mupdf.Document.openDocument(bytes.slice(), 'application/pdf') as MuDoc
   } catch {
     throw new PdfEditError('Ce PDF n’a pas pu être ouvert.')
   }
@@ -269,7 +295,9 @@ export async function applyTextEdits(bytes: Uint8Array, edits: PdfEditRequest[])
   const mupdf = await import('mupdf')
   let doc: MuDoc
   try {
-    doc = mupdf.Document.openDocument(bytes, 'application/pdf') as MuDoc
+    // Copie défensive : `openDocument` DÉTACHE le tableau reçu. L'appelant garde
+    // souvent ses octets pour écrire ensuite — les lui vider serait invisible.
+    doc = mupdf.Document.openDocument(bytes.slice(), 'application/pdf') as MuDoc
   } catch {
     throw new PdfEditError('Ce PDF n’a pas pu être ouvert.')
   }
@@ -299,21 +327,35 @@ export async function applyTextEdits(bytes: Uint8Array, edits: PdfEditRequest[])
     const codecs = pageCodecs(page)
     const runs = findTextRuns(contents.text, codecs)
 
+    // Mêmes lignes qu'à la lecture, reconstituées de la même façon : l'appariement est
+    // déterministe, donc ce que l'utilisateur a vu est bien ce qu'on modifie.
+    const textesDeLignes: string[] = []
+    try {
+      const brut = JSON.parse(page.toStructuredText('preserve-whitespace').asJSON()) as { blocks?: { lines?: { text: string }[] }[] }
+      for (const b of brut.blocks ?? []) for (const li of b.lines ?? []) textesDeLignes.push(li.text)
+    } catch {
+      // Sans structure lisible, on retombe sur un passage = une ligne.
+    }
+    const lignes = groupRunsIntoLines(runs, textesDeLignes)
+
     const aEcrire: { run: PdfTextRunRef; text: string }[] = []
     for (const demande of demandes) {
-      // On vise le passage dont le texte correspond EXACTEMENT : un ancrage approximatif
-      // écrirait au mauvais endroit sans qu'on s'en aperçoive.
-      const memeTexte = runs.filter((run) => run.text === demande.from)
+      const memeTexte = lignes.filter((ligne) => ligne.text === demande.from)
       const cible = memeTexte[demande.occurrence ?? 0]
+        ?? (runs.filter((r) => r.text === demande.from)[demande.occurrence ?? 0]
+          ? { text: demande.from, runs: [runs.filter((r) => r.text === demande.from)[demande.occurrence ?? 0]] }
+          : undefined)
       if (!cible) {
         refused.push({ ...demande, reason: 'passage introuvable dans la page' })
         continue
       }
-      if (aEcrire.some((x) => x.run.start === cible.start)) {
+      if (cible.runs.some((r) => aEcrire.some((x) => x.run.start === r.start))) {
         refused.push({ ...demande, reason: 'passage déjà modifié' })
         continue
       }
-      aEcrire.push({ run: cible, text: demande.to })
+      // Seul le passage réellement touché est réécrit : une correction au milieu d'une
+      // ligne laisse intacts les mots en gras et les extraits de code qui l'entourent.
+      aEcrire.push(...planLineEdit(cible, demande.to))
     }
 
     const sortie = rewriteTextRuns(contents.text, codecs, aEcrire)
@@ -338,12 +380,18 @@ export async function applyTextEdits(bytes: Uint8Array, edits: PdfEditRequest[])
       : 'Aucune modification écrite.')
   }
 
-  const out = doc.saveToBuffer('').asUint8Array()
+  // COPIE HORS DU TAS WASM, immédiatement. `asUint8Array()` rend une VUE sur la
+  // mémoire de MuPDF : la moindre allocation ultérieure (ici, la relecture de contrôle)
+  // fait croître ce tas et DÉTACHE toutes les vues existantes. On rendrait alors des
+  // octets morts, sans la moindre erreur au moment de l'écriture.
+  const out = new Uint8Array(doc.saveToBuffer('').asUint8Array())
 
   // Garde d'exécution : on relit ce qu'on vient d'écrire. Sans elle, un remplacement
   // qui n'atteint pas le rendu passerait pour un succès.
   try {
-    const relu = mupdf.Document.openDocument(out, 'application/pdf') as MuDoc
+    // Sur une COPIE : `openDocument` détache le tableau qu'on lui donne, et on rendrait
+    // sinon des octets vides à l'appelant (même piège que `pdf.js`, cf. AGENTS.md).
+    const relu = mupdf.Document.openDocument(out.slice(), 'application/pdf') as MuDoc
     for (const [numero, demandes] of parPage) {
       const page = relu.loadPage(numero - 1) as MuPage
       const texte = page.toStructuredText('preserve-whitespace').asJSON()
