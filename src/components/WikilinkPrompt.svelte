@@ -54,7 +54,11 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    background: rgba(var(--ink-rgb), 0.32);
+    /* Voile NOIR, comme les deux autres modales — pas `rgba(var(--ink-rgb), …)`.
+       `--ink-rgb` est le token du TEXTE : il vaut 235,237,241 en thème sombre, donc ce
+       voile y était un lavis BLANC qui éclaircissait la page au lieu de l'assombrir.
+       C'est exactement la leçon d'AGENTS.md du 2026-07-17 sur les ombres, reproduite ici. */
+    background: rgb(0 0 0 / 0.38);
     backdrop-filter: blur(1.5px);
   }
   .card {
@@ -108,4 +112,12 @@
   .btn.ghost:hover { background: var(--accent-soft); color: var(--ink); }
   .btn.primary { background: var(--ink); color: var(--cream-content); }
   .btn.primary:hover { background: var(--ink-2); }
+  /* Focus CLAVIER : c'est une boîte de dialogue, elle se pilote au clavier. */
+  .btn:focus-visible,
+  .cand:focus-visible { outline: 2px solid var(--ink-3); outline-offset: 2px; }
+
+  @media (prefers-reduced-motion: reduce) {
+    /* Seul composant de l'application à ne pas honorer la préférence système. */
+    .btn, .cand { transition: none !important; }
+  }
 </style>
