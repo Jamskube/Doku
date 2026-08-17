@@ -65,7 +65,6 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             set_system_backdrop,
             sidecar::start_ollama,
-            sidecar::stop_ollama,
             openai::openai_status,
             openai::openai_auth_start,
             openai::openai_auth_poll,

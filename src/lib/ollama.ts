@@ -29,12 +29,6 @@ export async function startOllama(): Promise<number | null> {
   return await invoke<number>('start_ollama')
 }
 
-export async function stopOllama(): Promise<void> {
-  if (!isTauri) return
-  const { invoke } = await import('@tauri-apps/api/core')
-  await invoke('stop_ollama')
-}
-
 // Attend que `ollama serve` réponde (GET /api/tags 200). Poll borné.
 export async function waitReady(port: number, tries = 40, delayMs = 300): Promise<boolean> {
   for (let i = 0; i < tries; i++) {

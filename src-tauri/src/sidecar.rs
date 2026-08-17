@@ -232,8 +232,3 @@ pub async fn start_ollama(
     Ok(port)
 }
 
-#[tauri::command]
-pub async fn stop_ollama(state: tauri::State<'_, OllamaState>) -> Result<(), String> {
-    state.shutdown();
-    Ok(())
-}
