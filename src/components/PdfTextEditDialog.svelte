@@ -84,7 +84,17 @@
   // des octets. Sinon il viserait des lignes que l'utilisateur n'a jamais soumises.
   const runIci = $derived(run && pdfCorrectionMatches(run, path, pageIndex, revision) ? run : null)
   const propositions = $derived(runIci?.phase === 'ready' ? runIci.edits : [])
-  const acceptees = $derived(propositions.filter((e) => accepted[e.index] !== false))
+  // Une proposition dont la ligne porte DÉJÀ une saisie manuelle est écartée : les deux
+  // partent dans le même appel, la saisie passe en premier et gagne, et la proposition
+  // revient refusée « passage déjà modifié » avec la même identité — de quoi faire croire
+  // ensuite que la saisie, elle, a été perdue. Écarter le conflit vaut mieux que l'expliquer.
+  const acceptees = $derived(
+    propositions.filter((e) => {
+      if (accepted[e.index] === false) return false
+      const cible = runIci?.targets[e.index]
+      return !cible || !edits[key(cible)]
+    }),
+  )
   // `perime` verrouille aussi la navigation : `pdf` est nul, donc un changement de page
   // laisserait le canvas sur l'image de la page PRÉCÉDENTE, sous les champs de la nouvelle.
   const locked = $derived(streaming || applying || perime)
