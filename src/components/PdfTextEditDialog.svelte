@@ -45,6 +45,10 @@
   let bytes: Uint8Array | null = null
   let pdf: PdfDoc | null = null
   let destroyPdf: (() => Promise<void>) | null = null
+  // Le composant est-il toujours monté ? Une application en vol peut se terminer APRÈS le
+  // démontage : sans ce drapeau, le document rechargé n'aurait plus personne pour le
+  // détruire — un worker pdf.js et ses pages retenus jusqu'au redémarrage.
+  let vivant = true
 
   // --- Correction par consigne (spike) ---------------------------------------------------
   let instruction = $state('')
@@ -95,6 +99,7 @@
   $effect(() => {
     if (!path) return
     let cancelled = false
+    vivant = true
     void (async () => {
       status = 'loading'
       message = ''
@@ -134,6 +139,7 @@
     })()
     return () => {
       cancelled = true
+      vivant = false
       // L'état du run vit dans `copilot.svelte.ts`, pas ici : sans cet appel, une
       // proposition survivrait à la fermeture et s'appliquerait d'un clic à la
       // réouverture — éventuellement sur un autre document.
@@ -269,6 +275,12 @@
       try {
         const { loadPdf } = await import('../lib/pdf')
         const charge = await loadPdf(nouveaux.slice())
+        // Modale fermée pendant le chargement : on détruit CE document nous-mêmes, le
+        // démontage étant déjà passé.
+        if (!vivant) {
+          void charge.destroy()
+          return
+        }
         bytes = nouveaux.slice()
         pdf = charge.doc
         destroyPdf = charge.destroy
@@ -397,6 +409,9 @@
   const nonEnregistre = $derived(dirty || pending.length > 0)
 
   async function fermer() {
+    // Fermer au milieu d'une application laisserait la séquence écrire dans un composant
+    // démonté. Elle dure quelques secondes et verrouille déjà le reste de la modale.
+    if (applying) return
     if (!nonEnregistre) {
       closePdfTextEdit()
       return
@@ -420,7 +435,7 @@
   // qu'il faut intercepter. On annule TOUJOURS l'événement natif quand il reste du travail,
   // puis on pose la question de façon asynchrone.
   function surEchap(event: Event) {
-    if (!nonEnregistre) return
+    if (!applying && !nonEnregistre) return
     event.preventDefault()
     void fermer()
   }
@@ -435,7 +450,7 @@
         <p>{fileName}</p>
       </div>
       <span class="spacer"></span>
-      <button class="close" aria-label="Fermer" onclick={() => void fermer()}><span class="msr">close</span></button>
+      <button class="close" aria-label="Fermer" disabled={applying} onclick={() => void fermer()}><span class="msr">close</span></button>
     </header>
 
     <div class="tools">
@@ -580,7 +595,7 @@
     <footer>
       <small>Le document d’origine n’est jamais modifié.</small>
       <span class="spacer"></span>
-      <button onclick={() => void fermer()}>Annuler</button>
+      <button disabled={applying} onclick={() => void fermer()}>Annuler</button>
       <button class="primary" disabled={(!pending.length && !dirty) || saving || applying} onclick={() => void save()}>
         {saving ? 'Écriture…' : 'Enregistrer une copie…'}
       </button>
