@@ -1,10 +1,9 @@
 // UI en Inter Variable (un seul woff2 variable couvre 400-700 — Geist Sans jugée trop
-// massive à petite taille). Geist Mono reste pour le code. Source Serif et Material
-// Symbols sont déclarés dans app.css : latin seul pour l'un, sous-ensemble généré
-// (scripts/subset-icons.mjs) pour l'autre.
-import '@fontsource-variable/inter'
-import '@fontsource/geist-mono/400.css'
-import '@fontsource/geist-mono/500.css'
+// massive à petite taille). Geist Mono reste pour le code, en variantes LATINES.
+// Inter, Source Serif et Material Symbols sont déclarés dans app.css : latin seul pour
+// les deux premières, sous-ensemble généré (scripts/subset-icons.mjs) pour la dernière.
+import '@fontsource/geist-mono/latin-400.css'
+import '@fontsource/geist-mono/latin-500.css'
 import './app.css'
 import { mount } from 'svelte'
 import App from './App.svelte'

@@ -371,7 +371,7 @@ pub fn cancel_compat(request_id: String, state: State<'_, CompatState>) {
     if let Some(cancel) = state
         .cancellations
         .lock()
-        .expect("compat cancellations lock")
+        .unwrap_or_else(|e| e.into_inner())
         .remove(&request_id)
     {
         let _ = cancel.send(());
@@ -413,7 +413,7 @@ pub async fn stream_compat(
     if let Some(previous) = state
         .cancellations
         .lock()
-        .expect("compat cancellations lock")
+        .unwrap_or_else(|e| e.into_inner())
         .insert(request_id.clone(), cancel_tx)
     {
         let _ = previous.send(());
@@ -501,7 +501,7 @@ pub async fn stream_compat(
     state
         .cancellations
         .lock()
-        .expect("compat cancellations lock")
+        .unwrap_or_else(|e| e.into_inner())
         .remove(&request_id);
     if let Err(message) = &result {
         let _ = send_event(&on_event, "error", Some(message.clone()));

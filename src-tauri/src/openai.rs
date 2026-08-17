@@ -8,7 +8,7 @@ use std::{
     collections::HashMap,
     sync::{
         atomic::{AtomicU64, Ordering},
-        Mutex,
+        Mutex, OnceLock,
     },
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
@@ -17,6 +17,32 @@ use tokio::sync::{oneshot, Mutex as AsyncMutex};
 
 const OPENAI_DEVICE_CODE_URL: &str = "https://auth.openai.com/api/accounts/deviceauth/usercode";
 const OPENAI_DEVICE_TOKEN_URL: &str = "https://auth.openai.com/api/accounts/deviceauth/token";
+// Deux clients partagés, comme dans `compat.rs` juste à côté — qui portait déjà la
+// leçon, sans qu'elle soit reportée ici.
+//
+// Pourquoi partagés : `reqwest::Client::new()` reconstruit un pool de connexions ET une
+// configuration TLS à chaque appel. Ce module en construisait SIX, dont deux par tour de
+// `openai_auth_poll` — appelé toutes les ~5 secondes pendant toute l'authentification.
+//
+// Pourquoi DEUX : une requête courte (statut, modèles, jetons) doit rendre la main ;
+// sans délai d'expiration, une connexion aspirée par un portail captif laisse
+// « Vérification… » figé pour toujours. Le STREAMING, lui, garde un client sans délai
+// global : une génération peut légitimement durer des minutes.
+fn short_client() -> &'static reqwest::Client {
+    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+    CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .timeout(Duration::from_secs(15))
+            .build()
+            .unwrap_or_default()
+    })
+}
+
+fn stream_client() -> &'static reqwest::Client {
+    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+    CLIENT.get_or_init(reqwest::Client::new)
+}
+
 const OPENAI_TOKEN_URL: &str = "https://auth.openai.com/oauth/token";
 const OPENAI_CODEX_BASE_URL: &str = "https://chatgpt.com/backend-api/codex";
 const OPENAI_MODELS_URL: &str = "https://chatgpt.com/backend-api/codex/models?client_version=1.0.0";
@@ -134,7 +160,7 @@ fn chatgpt_account_id(token: &str) -> Option<String> {
 }
 
 async fn exchange_refresh_token(refresh_token: &str) -> Result<TokenResponse, String> {
-    let response = reqwest::Client::new()
+    let response = short_client()
         .post(OPENAI_TOKEN_URL)
         .form(&[
             ("grant_type", "refresh_token"),
@@ -175,7 +201,7 @@ async fn access_token(state: &OpenAiState, force_refresh: bool) -> Result<String
 }
 
 async fn fetch_models(token: &str) -> Result<Vec<String>, String> {
-    let response = reqwest::Client::new()
+    let response = short_client()
         .get(OPENAI_MODELS_URL)
         .bearer_auth(token)
         .send()
@@ -261,7 +287,7 @@ pub async fn openai_status(state: State<'_, OpenAiState>) -> Result<OpenAiStatus
 
 #[tauri::command]
 pub async fn openai_auth_start(state: State<'_, OpenAiState>) -> Result<OpenAiAuthStart, String> {
-    let response = reqwest::Client::new()
+    let response = short_client()
         .post(OPENAI_DEVICE_CODE_URL)
         .json(&serde_json::json!({ "client_id": OPENAI_CLIENT_ID }))
         .send()
@@ -302,7 +328,7 @@ pub async fn openai_auth_start(state: State<'_, OpenAiState>) -> Result<OpenAiAu
         .max(3);
     let counter = state.session_counter.fetch_add(1, Ordering::Relaxed);
     let session_id = format!("openai-{counter}");
-    *state.auth_session.lock().expect("openai auth session lock") = Some(DeviceAuthSession {
+    *state.auth_session.lock().unwrap_or_else(|e| e.into_inner()) = Some(DeviceAuthSession {
         id: session_id.clone(),
         device_auth_id,
         user_code: user_code.clone(),
@@ -324,7 +350,7 @@ pub async fn openai_auth_poll(
     state: State<'_, OpenAiState>,
 ) -> Result<OpenAiAuthPoll, String> {
     let (device_auth_id, user_code) = {
-        let mut session = state.auth_session.lock().expect("openai auth session lock");
+        let mut session = state.auth_session.lock().unwrap_or_else(|e| e.into_inner());
         let Some(current) = session.as_ref() else {
             return Ok(OpenAiAuthPoll { status: "expired" });
         };
@@ -338,7 +364,7 @@ pub async fn openai_auth_poll(
         (current.device_auth_id.clone(), current.user_code.clone())
     };
 
-    let response = reqwest::Client::new()
+    let response = short_client()
         .post(OPENAI_DEVICE_TOKEN_URL)
         .json(&serde_json::json!({
             "device_auth_id": device_auth_id,
@@ -367,7 +393,7 @@ pub async fn openai_auth_poll(
         .and_then(Value::as_str)
         .filter(|value| !value.is_empty())
         .ok_or_else(|| "Validation OpenAI incomplète.".to_string())?;
-    let token_response = reqwest::Client::new()
+    let token_response = short_client()
         .post(OPENAI_TOKEN_URL)
         .form(&[
             ("grant_type", "authorization_code"),
@@ -396,13 +422,13 @@ pub async fn openai_auth_poll(
     if !tokens.refresh_token.is_empty() {
         write_secret(REFRESH_TOKEN_TARGET, &tokens.refresh_token, SECRET_WHAT)?;
     }
-    *state.auth_session.lock().expect("openai auth session lock") = None;
+    *state.auth_session.lock().unwrap_or_else(|e| e.into_inner()) = None;
     Ok(OpenAiAuthPoll { status: "approved" })
 }
 
 #[tauri::command]
 pub fn openai_auth_cancel(session_id: String, state: State<'_, OpenAiState>) {
-    let mut session = state.auth_session.lock().expect("openai auth session lock");
+    let mut session = state.auth_session.lock().unwrap_or_else(|e| e.into_inner());
     if session
         .as_ref()
         .is_some_and(|current| current.id == session_id)
@@ -413,7 +439,7 @@ pub fn openai_auth_cancel(session_id: String, state: State<'_, OpenAiState>) {
 
 #[tauri::command]
 pub fn openai_disconnect(state: State<'_, OpenAiState>) -> Result<(), String> {
-    *state.auth_session.lock().expect("openai auth session lock") = None;
+    *state.auth_session.lock().unwrap_or_else(|e| e.into_inner()) = None;
     delete_secret(ACCESS_TOKEN_TARGET, SECRET_WHAT)?;
     delete_secret(REFRESH_TOKEN_TARGET, SECRET_WHAT)
 }
@@ -423,7 +449,7 @@ pub fn cancel_openai(request_id: String, state: State<'_, OpenAiState>) {
     if let Some(cancel) = state
         .cancellations
         .lock()
-        .expect("openai cancellations lock")
+        .unwrap_or_else(|e| e.into_inner())
         .remove(&request_id)
     {
         let _ = cancel.send(());
@@ -494,7 +520,7 @@ async fn send_codex_request(
     request_id: &str,
     body: &Value,
 ) -> Result<reqwest::Response, String> {
-    let mut request = reqwest::Client::new()
+    let mut request = stream_client()
         .post(format!("{OPENAI_CODEX_BASE_URL}/responses"))
         .bearer_auth(token)
         .header("User-Agent", "codex_cli_rs/0.0.0 (Doku)")
@@ -525,7 +551,7 @@ pub async fn stream_openai(
     if let Some(previous) = state
         .cancellations
         .lock()
-        .expect("openai cancellations lock")
+        .unwrap_or_else(|e| e.into_inner())
         .insert(request_id.clone(), cancel_tx)
     {
         let _ = previous.send(());
@@ -604,7 +630,7 @@ pub async fn stream_openai(
     state
         .cancellations
         .lock()
-        .expect("openai cancellations lock")
+        .unwrap_or_else(|e| e.into_inner())
         .remove(&request_id);
     if let Err(message) = &result {
         let _ = send_event(&on_event, "error", Some(message.clone()));
