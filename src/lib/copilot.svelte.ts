@@ -23,6 +23,7 @@ import {
   type CompatStatus,
 } from './compat'
 import { citedNumbers, locateOffset, locatePassage, type CitedPassage } from './citations'
+import { isBinaryKind } from './doc-kind'
 import { setRephrasePreview } from './editor/rephrase-preview'
 import { baseName, joinPath, parentPath } from './explorer'
 import { noteContent, noteFileName } from './notes'
@@ -710,6 +711,41 @@ async function resolvePdfText(
   return { ok: true, text: ex.text }
 }
 
+// Même contrat que `resolvePdfText`, pour le DOCX. Sans lui, un `.docx` partait au modèle
+// avec `tab.content === ''` — un document nommé mais vide, et RIEN ne le signalait : le
+// modèle répondait à côté ou inventait. Un échec doit se dire, comme pour le PDF scanné.
+async function resolveDocxText(
+  path: string | null | undefined,
+  signal: AbortSignal,
+  setStatus: (s: string) => void,
+): Promise<PdfResolution> {
+  if (!path) return { ok: false, message: "Ce document Word n'a pas de chemin lisible sur le disque." }
+  setStatus('Doku-San lit le document Word…')
+  const [{ extractDocxText, DocxTextError }, { readFileBytes }] = await Promise.all([
+    import('./docx-text'),
+    import('./tauri'),
+  ])
+  const bytes = await readFileBytes(path)
+  if (signal.aborted) return { ok: false, message: 'Lecture interrompue.' }
+  if (!bytes) return { ok: false, message: 'Lecture du document Word impossible (fichier illisible ou mode navigateur).' }
+  try {
+    const ex = await extractDocxText(bytes, (xml) => new DOMParser().parseFromString(xml, 'application/xml'))
+    if (ex.empty) {
+      return {
+        ok: false,
+        message:
+          "Ce document Word ne contient aucun texte que je sache lire — il est probablement fait d'images ou de tableaux. Je préfère te le dire plutôt que d'inventer un contenu.",
+      }
+    }
+    return { ok: true, text: ex.text }
+  } catch (error) {
+    return {
+      ok: false,
+      message: error instanceof DocxTextError ? error.message : "Ce document Word n'a pas pu être lu.",
+    }
+  }
+}
+
 export async function sendChat(
   question: string,
   doc: { name: string | null; text: string; kind: DocKind; path?: string | null },
@@ -774,7 +810,10 @@ export async function sendChat(
     if (automaticDocuments.length) {
       const automaticItems: CopilotContextItem[] = []
       for (const automatic of automaticDocuments) {
-        if (automatic.kind !== 'pdf') {
+        // Les kinds BINAIRES n'ont pas de `content` : leur texte se lit sur le disque.
+        // Tester `!== 'pdf'` laissait le DOCX passer par la branche texte, donc arriver
+        // vide au modèle.
+        if (!isBinaryKind(automatic.kind)) {
           automaticItems.push(automaticContextItem(automatic, automatic.text))
           continue
         }
@@ -782,7 +821,9 @@ export async function sendChat(
           const message = copilot.messages[idx]
           if (message) message.status = status
         }
-        const resolved = await resolvePdfText(automatic.path, signal, setStatus)
+        const resolved = automatic.kind === 'docx'
+          ? await resolveDocxText(automatic.path, signal, setStatus)
+          : await resolvePdfText(automatic.path, signal, setStatus)
         if (signal.aborted) return
         if (!resolved.ok) {
           const message = copilot.messages[idx]
@@ -795,11 +836,14 @@ export async function sendChat(
       contextItems = mergeAutomaticContextItems(automaticItems, contextItems)
     }
 
-    // PDF (18.2) : résoudre le texte AVANT le runtime — un PDF scanné/illisible poste sa
-    // notice honnête SANS démarrer le sidecar. Mode dossier : le doc n'est pas utilisé.
-    if (scope === 'doc' && doc.kind === 'pdf') {
+    // Documents BINAIRES (PDF 18.2, DOCX depuis) : résoudre le texte AVANT le runtime —
+    // un document illisible poste sa notice honnête SANS démarrer le sidecar. Mode
+    // dossier : le doc n'est pas utilisé.
+    if (scope === 'doc' && isBinaryKind(doc.kind)) {
       const setStatus = (s: string) => { const m = copilot.messages[idx]; if (m) m.status = s }
-      const res = await resolvePdfText(doc.path, signal, setStatus)
+      const res = doc.kind === 'docx'
+        ? await resolveDocxText(doc.path, signal, setStatus)
+        : await resolvePdfText(doc.path, signal, setStatus)
       if (signal.aborted) return // Stop pendant l'extraction → annulation propre (finally splice)
       if (!res.ok) {
         if (contextItems.length === 0) {
