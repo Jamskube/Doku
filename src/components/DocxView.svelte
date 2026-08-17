@@ -228,9 +228,31 @@
      « Enregistrer » / « Exporter en PDF » ont rejoint le menu, avec les autres exports. -->
 <div class="docx-view" data-tab={tabId} bind:this={vueEl}>
   {#if status === 'loading'}
-    <p class="docx-note">Ouverture du document…</p>
+    <!-- Squelette plutôt que rouage qui tourne : ce qui s'annonce, c'est une FEUILLE,
+         et elle apparaît d'abord vide puis se remplit. La règle du registre produit —
+         « skeleton states for loading, not spinners in the middle of content » — et le
+         principe « le document parle » disent la même chose ici. -->
+    <div class="docx-attente" role="status" aria-label="Ouverture du document">
+      <div class="feuille-vide">
+        <div class="trame">
+          <span class="ligne titre"></span>
+          <span class="ligne l1"></span>
+          <span class="ligne l2"></span>
+          <span class="ligne l3"></span>
+          <span class="ligne titre court"></span>
+          <span class="ligne l1"></span>
+          <span class="ligne l4"></span>
+        </div>
+      </div>
+      <p class="mention">Ouverture de {fileName}…</p>
+    </div>
   {:else if status === 'error'}
-    <p class="docx-note error">{message}</p>
+    <div class="docx-attente" role="alert">
+      <div class="feuille-vide vide">
+        <span class="msr" aria-hidden="true">description</span>
+        <p>{message}</p>
+      </div>
+    </div>
   {/if}
 
   <div class="docx-host" class:saisie={saisieActive} bind:this={host}></div>
@@ -248,8 +270,85 @@
     flex-direction: column;
     overflow: hidden;
   }
-  .docx-note { margin: 0; padding: 24px; text-align: center; opacity: 0.72; }
-  .docx-note.error { color: var(--err-text); }
+  /* L'attente occupe la même surface que le document à venir : la feuille ne saute pas
+     en place au moment du montage, elle se remplit. */
+  .docx-attente {
+    /* SURCOUCHE, pas un frère dans le flux : l'hôte de SuperDoc reste monté et gardé à
+       sa taille réelle — il le mesure au montage — pendant que l'attente le recouvre.
+       En frère, les deux se partageaient la hauteur et la feuille s'arrêtait au milieu. */
+    position: absolute;
+    inset: 0;
+    z-index: 2;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+    padding: 20px;
+    overflow: hidden;
+    background: var(--cream-tint);
+  }
+  .feuille-vide {
+    width: min(794px, 100%);
+    flex: 1 1 auto;
+    min-height: 0;
+    background: #fff;
+    box-shadow: 0 0 0 1px var(--elevation-ring), 0 12px 30px rgba(var(--shadow-rgb), 0.18);
+  }
+  .feuille-vide.vide {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    /* La feuille d'erreur reste BLANCHE — c'est une page, pas un panneau d'alerte : le
+       ton sémantique est porté par le texte, jamais par le papier. */
+    color: var(--err-text);
+  }
+  .feuille-vide.vide .msr { font-size: 30px; color: rgba(28, 26, 22, 0.28); }
+  .feuille-vide.vide p { margin: 0; max-width: 40ch; text-align: center; font-size: 12.5px; line-height: 1.5; }
+
+  .trame { padding: 84px 92px; display: flex; flex-direction: column; gap: 11px; }
+  /* Les barres imitent la mise en page d'un document Word : un titre, puis des lignes
+     de longueurs inégales. Une trame régulière ressemblerait à un tableau. */
+  .ligne {
+    height: 9px;
+    border-radius: 3px;
+    /* Gris de PAPIER, indépendant du thème : la feuille est blanche dans les deux, une
+       trame en `--ink` deviendrait blanche sur blanc en thème sombre. */
+    background: rgba(28, 26, 22, 0.09);
+  }
+  .ligne.titre { height: 15px; width: 46%; margin-bottom: 7px; background: rgba(28, 26, 22, 0.14); }
+  .ligne.titre.court { width: 32%; margin-top: 22px; }
+  .ligne.l1 { width: 100%; }
+  .ligne.l2 { width: 96%; }
+  .ligne.l3 { width: 72%; }
+  .ligne.l4 { width: 88%; }
+
+  /* Un balayage lent traverse la trame — il dit « ça travaille » sans rien faire
+     tourner. Le mouvement est porté par un dégradé, pas par une propriété de layout. */
+  .trame .ligne {
+    background-image: linear-gradient(
+      100deg,
+      transparent 20%,
+      rgba(28, 26, 22, 0.07) 42%,
+      transparent 64%
+    );
+    background-size: 260% 100%;
+    background-repeat: no-repeat;
+    animation: trame-balayage 1900ms ease-in-out infinite;
+  }
+  @keyframes trame-balayage {
+    from { background-position: 130% 0; }
+    to { background-position: -30% 0; }
+  }
+
+  .mention { margin: 0; font-size: 11.5px; color: var(--ink-5); }
+
+  @media (prefers-reduced-motion: reduce) {
+    /* La trame reste VISIBLE, seule son animation s'arrête : l'état d'attente ne doit
+       pas dépendre du mouvement pour exister. */
+    .trame .ligne { animation: none; background-image: none; }
+  }
 
   .docx-host {
     flex: 1 1 auto;

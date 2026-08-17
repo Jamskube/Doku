@@ -43,7 +43,13 @@ mount(DocxView, {
   props: {
     path: 'C:\\Doku-fixtures\\rapport.docx',
     tabId: 1,
-    readBytes: async () => bytes,
+    // `?lent=6000` retient l'état d'attente : sans quoi le squelette ne dure qu'un
+    // battement de cil et ne peut être ni regardé ni mesuré.
+    readBytes: async () => {
+      const lent = Number(new URLSearchParams(location.search).get('lent') ?? 0)
+      if (lent > 0) await new Promise((r) => setTimeout(r, lent))
+      return bytes
+    },
     writeFile: async (chemin: string, octets: Uint8Array) => {
       ecrits.push({ path: chemin, bytes: octets })
       return true
