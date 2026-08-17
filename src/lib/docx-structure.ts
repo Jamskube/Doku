@@ -1,15 +1,35 @@
-// Lecture de la structure d'un DOCX (ADR-0023) — la marche RETOUR de la boucle
-// PDF → DOCX → édition → PDF.
+// Lecture de la structure d'un DOCX (ADR-0023) : `word/document.xml`, le corps du
+// document OOXML, ramené à un modèle de paragraphes simple que le rendu PDF sait
+// imprimer (`export/docx-to-pdf.ts`).
 //
 // SuperDoc sait ouvrir et enregistrer du DOCX, mais **ne sait pas produire de PDF** :
 // son `export({ exportType: 'pdf' })` rend une archive vide (22 octets), sa
 // documentation n'en parle pas et son bundle ne contient aucun moteur PDF. Doku écrit
 // donc lui-même le PDF, à partir du DOCX, avec la bibliothèque qu'il a déjà.
 //
-// On relit `word/document.xml` — le corps du document OOXML — et on le ramène au MÊME
-// modèle de paragraphes que la conversion PDF → DOCX. Les deux sens partagent ainsi
-// une seule représentation, et le rendu PDF n'a qu'un format d'entrée.
-import type { PdfParagraph, PdfParagraphKind, PdfTextRun } from './pdf-structure'
+// Ce modèle venait de la conversion PDF → DOCX, retirée depuis que Doku modifie le
+// texte d'un PDF sur place. Il vit désormais ici, où il sert encore.
+
+export type PdfParagraphKind = 'paragraph' | 'heading1' | 'heading2' | 'heading3'
+
+// Un fragment de texte homogène : même graisse, même style, même taille.
+export interface PdfTextRun {
+  text: string
+  bold: boolean
+  italic: boolean
+  size: number
+  // La taille a-t-elle été ÉCRITE dans le document, ou déduite ? Un titre déjà
+  // dimensionné ne doit pas être remultiplié par l'échelle de titre au rendu : c'est
+  // ce qui faisait grossir un titre de 22 pt à 37 pt à chaque aller-retour.
+  sizeExplicit?: boolean
+}
+
+export interface PdfParagraph {
+  page: number
+  kind: PdfParagraphKind
+  align: 'left' | 'center' | 'right'
+  runs: PdfTextRun[]
+}
 
 const W = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'
 

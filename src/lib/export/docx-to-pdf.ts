@@ -10,7 +10,7 @@
 // Ce que ça ne garantit pas : images, tableaux, en-têtes/pieds, colonnes. L'appelant
 // doit le dire — jamais laisser croire à une reproduction fidèle.
 import { parseDocxDocument, type DocxStructuredDoc } from '../docx-structure'
-import type { PdfParagraph } from '../pdf-structure'
+import type { PdfParagraph } from '../docx-structure'
 
 export class DocxToPdfError extends Error {}
 

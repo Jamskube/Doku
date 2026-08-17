@@ -90,6 +90,18 @@ Doku écrit donc le PDF lui-même (`src/lib/export/docx-to-pdf.ts`) avec `@canto
 
 **Reste non prouvé** : que la frappe soit prise en compte dans SuperDoc. Il n'utilise pas `contenteditable` mais une surface `role="textbox"` avec pont clavier, que le pilotage synthétique n'atteint pas ; ses propres diagnostics annoncent pourtant `editableEnabled: true` et `text.insert` supporté. L'affichage, l'enregistrement et l'export sont, eux, prouvés.
 
+## Amendement — 2026-08-17 : le trajet PDF → DOCX est retiré, le DOCX reste
+
+La justification de cette décision reposait sur un raisonnement qui n'a pas survécu à la semaine : **pour éditer un PDF, il faut le convertir en DOCX**. Deux jours plus tard, Doku modifiait le texte directement dans le flux de contenu du PDF (amendement de l'ADR-0022), avec une fidélité que la conversion ne pouvait pas atteindre — images, tableaux, cadres et polices restent intacts *parce qu'on n'y touche pas*. La conversion n'avait plus d'usage : elle produisait un document réécrit là où l'utilisateur voulait son document corrigé.
+
+**Retiré** : `src/lib/export/pdf-to-docx.ts`, `src/lib/pdf-structure.ts` (reconstruction en paragraphes depuis MuPDF) et l'entrée « Document Word éditable » du menu Exporter.
+
+**Conservé, et c'est l'essentiel** : le `kind: 'docx'`, l'édition par SuperDoc, l'enregistrement, et le retour au PDF (`export/docx-to-pdf.ts`). Le DOCX n'était pas une étape vers le PDF — c'est un format que Doku sait ouvrir et éditer, ce qui reste vrai indépendamment. Le modèle de paragraphes partagé a été déplacé dans `docx-structure.ts`, son seul consommateur restant.
+
+**Ajouté le même jour** : la barre d'outils de SuperDoc, jamais montée jusque-là. SuperDoc la livre entière — graisse, style, souligné, barré, couleur, surlignage, police, taille, liens, images, tableaux, alignements, listes à puces et numérotées, retraits, interligne, reproduire la mise en forme, suivi des modifications, rechercher — mais **seulement si on lui désigne un conteneur**. Une ligne de configuration séparait un éditeur nu d'un traitement de texte. Aucune dépendance nouvelle : la bibliothèque était déjà là depuis le 15.
+
+**Limite connue** : les libellés de cette barre sont en anglais (« Format text », « Editing »). SuperDoc expose un dictionnaire `texts` ; la traduction reste à faire.
+
 ## Related
 
 - [ADR-0022](./0022-ecriture-pdf-pdf-lib.md) — avait écarté MuPDF.js **pour cause de licence** ; cette décision lève l'obstacle et ouvre le réexamen de l'extraction de structure PDF.

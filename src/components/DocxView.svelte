@@ -10,9 +10,27 @@
   import { app } from '../lib/stores.svelte'
   import { readFileBytes, savePdfDialog, writeFileAtomic } from '../lib/tauri'
 
-  let { path, tabId }: { path: string; tabId: number } = $props()
+  // Ports injectables, comme les modales PDF : c'est ce qui permet au banc de contrôle
+  // de monter la VRAIE vue sans hôte natif. Par défaut, ce sont les accès fichiers de
+  // Tauri — l'application ne passe rien.
+  let {
+    path,
+    tabId,
+    readBytes = readFileBytes,
+    writeFile = writeFileAtomic,
+    savePdf = savePdfDialog,
+  }: {
+    path: string
+    tabId: number
+    readBytes?: (path: string) => Promise<Uint8Array | null>
+    writeFile?: (path: string, bytes: Uint8Array) => Promise<unknown>
+    savePdf?: (name: string, bytes: Uint8Array) => Promise<boolean>
+  } = $props()
 
   let host: HTMLElement | undefined = $state()
+  // Conteneur de la barre d'outils de SuperDoc. Elle doit exister AVANT la construction
+  // de l'éditeur : SuperDoc la monte lui-même dans l'élément qu'on lui désigne.
+  let toolbarEl: HTMLElement | undefined = $state()
   let status: 'loading' | 'ready' | 'error' = $state('loading')
   let message = $state('')
   let busy = $state<'' | 'save' | 'pdf'>('')
@@ -26,14 +44,15 @@
 
   $effect(() => {
     const target = host
+    const barre = toolbarEl
     const source = path
-    if (!target || !source) return
+    if (!target || !barre || !source) return
     let cancelled = false
     void (async () => {
       status = 'loading'
       message = ''
       try {
-        const bytes = await readFileBytes(source)
+        const bytes = await readBytes(source)
         if (cancelled) return
         if (!bytes) {
           status = 'error'
@@ -58,6 +77,12 @@
           // de PRÉSENTATION, sans aucun `contenteditable` — le document s'affiche mais
           // ne se modifie pas. Constaté au banc.
           role: 'editor',
+          // Les outils habituels d'un traitement de texte — graisse, style, couleur,
+          // titres, listes, alignements, retraits, liens, images, tableaux, saut de
+          // page, reproduire la mise en forme, suivi des modifications — sont livrés
+          // par SuperDoc. Il ne les monte que si on lui désigne un conteneur : sans
+          // cette ligne, l'éditeur est nu et tout se fait au clavier.
+          toolbar: barre,
           onEditorUpdate: () => { dirty = true },
         }) as unknown as typeof editor
         status = 'ready'
@@ -93,7 +118,7 @@
     try {
       const bytes = await exportBlob('docx')
       if (!bytes) return
-      await writeFileAtomic(path, bytes)
+      await writeFile(path, bytes)
       dirty = false
       app.banner = { tone: 'success', title: 'Document enregistré', message: fileName }
     } catch {
@@ -122,7 +147,7 @@
       try {
         const report = await convertDocxToPdf(docx, (xml) => new DOMParser().parseFromString(xml, 'application/xml'))
         const base = fileName.replace(/\.docx$/i, '')
-        if (await savePdfDialog(`${base}.pdf`, report.bytes)) {
+        if (await savePdf(`${base}.pdf`, report.bytes)) {
           app.banner = {
             tone: 'success',
             title: 'PDF créé',
@@ -147,15 +172,21 @@
 </script>
 
 <div class="docx-view" data-tab={tabId}>
-  <div class="docx-actions">
-    <button disabled={status !== 'ready' || !!busy} onclick={() => void save()}>
-      <span class="msr">save</span>
-      <span>{busy === 'save' ? 'Enregistrement…' : dirty ? 'Enregistrer' : 'Enregistré'}</span>
-    </button>
-    <button disabled={status !== 'ready' || !!busy} onclick={() => void exportPdf()}>
-      <span class="msr">picture_as_pdf</span>
-      <span>{busy === 'pdf' ? 'Export…' : 'Exporter en PDF'}</span>
-    </button>
+  <!-- Une SEULE rangée d'outils : ceux de SuperDoc à gauche, les actions de Doku à
+       droite. Deux barres superposées auraient donné deux grammaires de boutons pour un
+       même document. -->
+  <div class="docx-bar" class:ready={status === 'ready'}>
+    <div class="docx-toolbar" bind:this={toolbarEl}></div>
+    <div class="docx-actions">
+      <button disabled={status !== 'ready' || !!busy} onclick={() => void save()}>
+        <span class="msr">save</span>
+        <span>{busy === 'save' ? 'Enregistrement…' : dirty ? 'Enregistrer' : 'Enregistré'}</span>
+      </button>
+      <button disabled={status !== 'ready' || !!busy} onclick={() => void exportPdf()}>
+        <span class="msr">picture_as_pdf</span>
+        <span>{busy === 'pdf' ? 'Export…' : 'Exporter en PDF'}</span>
+      </button>
+    </div>
   </div>
 
   {#if status === 'loading'}
@@ -175,31 +206,69 @@
     flex-direction: column;
     overflow: hidden;
   }
-  .docx-actions {
-    position: absolute;
-    top: 8px;
-    right: 12px;
-    z-index: 5;
+  .docx-bar {
+    flex: 0 0 auto;
     display: flex;
-    gap: 6px;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 12px;
+    background: var(--cream-base);
+    /* Tant que le document charge, la rangée reste en place — la barre d'outils de
+       SuperDoc s'y monte — mais elle ne s'annonce pas : des outils visibles au-dessus
+       d'un document absent seraient des affordances mortes. */
+    opacity: 0;
+    transition: opacity 160ms ease;
   }
+  .docx-bar.ready { opacity: 1; }
+  /* La barre de SuperDoc ne se replie pas (`nowrap`) : elle doit donc DÉFILER dans
+     l'espace qui lui reste, sinon ses derniers outils passent sous les actions de Doku —
+     ce que le banc a montré en fenêtre étroite. */
+  .docx-toolbar { flex: 1 1 0; min-width: 0; }
+  .docx-actions { flex: none; display: flex; gap: 6px; }
+  /* Même grammaire que les autres surfaces Doku : pilule sans contour permanent, qui ne
+     se révèle qu'au survol. */
   .docx-actions button {
     display: inline-flex;
     align-items: center;
     gap: 6px;
-    height: 30px;
-    padding: 0 11px;
-    border: 1px solid var(--line-1);
+    height: 32px;
+    padding: 0 12px;
+    border: 0;
     border-radius: 999px;
-    background: var(--cream-base);
-    color: inherit;
+    background: transparent;
+    color: var(--ink-3);
     font: inherit;
-    font-size: 13px;
+    font-size: 12.5px;
+    font-weight: 500;
     cursor: pointer;
+    transition: background-color 140ms ease, color 140ms ease, transform 100ms ease;
   }
-  .docx-actions button:hover:not(:disabled) { background: rgba(var(--ink-rgb), 0.06); }
-  .docx-actions button:disabled { opacity: 0.45; cursor: default; }
+  .docx-actions button:hover:not(:disabled) { background: var(--surface-hover); color: var(--ink); }
+  .docx-actions button:active:not(:disabled) { transform: scale(0.97); }
+  .docx-actions button:disabled { opacity: 0.4; cursor: default; }
   .docx-actions .msr { font-size: 17px; }
+
+  /* La barre est rendue par SuperDoc, avec ses propres classes : on ne la redessine pas
+     (un jour ou l'autre elles changeront), on l'assied seulement dans la typographie de
+     Doku pour qu'elle ne détonne pas à côté du reste. */
+  .docx-bar :global(.superdoc-toolbar) {
+    background: transparent;
+    border: 0;
+    box-shadow: none;
+    padding: 0;
+    /* SuperDoc pose `nowrap` : ses derniers outils passaient alors sous les actions de
+       Doku, ou obligeaient à une barre de défilement qui mangeait la rangée. On la
+       laisse se REPLIER, comme le fait un traitement de texte en fenêtre étroite. */
+    flex-wrap: wrap;
+    row-gap: 2px;
+  }
+  .docx-bar :global(.superdoc-toolbar *) { font-family: inherit; }
+
+  @media (prefers-reduced-motion: reduce) {
+    .docx-bar { transition: none; }
+    .docx-actions button { transition: none; }
+    .docx-actions button:active { transform: none; }
+  }
 
   .docx-note { margin: 0; padding: 24px; text-align: center; opacity: 0.72; }
   .docx-note.error { color: var(--err-text); }
