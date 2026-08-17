@@ -84,17 +84,26 @@ fn free_loopback_port() -> Result<u16, String> {
 
 pub struct OllamaState {
     child: Mutex<Option<(CommandChild, u16)>>,
+    // Le Job Object, ou la RAISON de son absence. Garder l'erreur plutôt qu'un simple `None`
+    // permet de la rendre à l'utilisateur au moment où elle compte — quand il essaie de
+    // démarrer l'IA — au lieu de la perdre au lancement de l'application.
     #[cfg(windows)]
-    job: Job,
+    job: Result<Job, String>,
 }
 
 impl OllamaState {
-    pub fn new() -> Result<Self, String> {
-        Ok(Self {
+    // INFAILLIBLE, volontairement. Auparavant cette fonction rendait un `Result` que `main.rs`
+    // dépliait avec `.expect(...)` : si la création du Job Object échouait, Doku PANIQUAIT AU
+    // DÉMARRAGE — un éditeur Markdown refusant de s'ouvrir parce que le bac à sable d'un
+    // sidecar d'IA optionnel n'a pas pu être créé. L'échec est désormais MÉMORISÉ au lieu
+    // d'être fatal : l'application démarre, et c'est le démarrage du sidecar qui refusera,
+    // avec sa raison. On ne lance jamais un process qu'on ne saurait pas tuer.
+    pub fn new() -> Self {
+        Self {
             child: Mutex::new(None),
             #[cfg(windows)]
-            job: create_kill_on_close_job()?,
-        })
+            job: create_kill_on_close_job(),
+        }
     }
 
     // Arrêt propre : tue l'arbre (ollama + llama-server) et oublie l'enfant. Le job reste
@@ -111,7 +120,9 @@ impl OllamaState {
         let mut guard = self.child.lock().unwrap_or_else(|e| e.into_inner());
         let taken = guard.take();
         #[cfg(windows)]
-        terminate_job(&self.job);
+        if let Ok(job) = &self.job {
+            terminate_job(job);
+        }
         if let Some((child, _)) = taken {
             let _ = child.kill();
         }
@@ -199,10 +210,23 @@ pub async fn start_ollama(
         let _ = child.kill();
         return Ok(*existing);
     }
+    // Sans Job Object, on REFUSE de démarrer : un sidecar qu'on ne peut pas garantir de tuer
+    // laisserait `ollama.exe` et `llama-server.exe` orphelins à la fermeture de Doku. Mieux
+    // vaut une IA indisponible, avec sa raison, que des process fantômes.
     #[cfg(windows)]
-    if let Err(e) = assign_to_job(&state.job, child.pid()) {
-        let _ = child.kill();
-        return Err(e);
+    match &state.job {
+        Ok(job) => {
+            if let Err(e) = assign_to_job(job, child.pid()) {
+                let _ = child.kill();
+                return Err(e);
+            }
+        }
+        Err(raison) => {
+            let _ = child.kill();
+            return Err(format!(
+                "L’assistant local ne peut pas démarrer : {raison}. Le reste de Doku fonctionne normalement."
+            ));
+        }
     }
     *guard = Some((child, port));
     Ok(port)
