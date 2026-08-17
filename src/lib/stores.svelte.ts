@@ -407,12 +407,7 @@ export function applyTheme() {
   void syncSystemBackdrop(app.theme).catch((err) => console.error('Activation de Mica échouée', err))
 }
 
-export function toggleTheme() {
-  setTheme(app.theme === 'dark' ? 'light' : 'dark')
-}
-
-// Réglage direct (modale Paramètres) : même chemin que la bascule de la barre de
-// titre, pour qu'un seul endroit applique réellement le thème.
+// Réglage du thème (modale Paramètres) : un seul endroit l'applique réellement.
 export function setTheme(theme: 'light' | 'dark') {
   app.theme = theme
   applyTheme()
@@ -648,13 +643,6 @@ export async function runSearch(query: string) {
   const results = searchDocs(searchIndex, q)
   if (req !== searchReq) return
   app.searchResults = results
-  app.searching = false
-}
-
-export function clearSearch() {
-  searchReq++ // annule toute recherche en vol
-  app.searchQuery = ''
-  app.searchResults = []
   app.searching = false
 }
 
@@ -989,12 +977,6 @@ export async function saveTabOrSaveAs(tab: DocTab): Promise<boolean> {
     reportSaveFailure(snapshot.name, result.error)
   }
   return false
-}
-
-// Compatibilité transitoire des appels historiques ; les nouveaux chemins doivent
-// nommer explicitement la primitive qui inclut Save As.
-export async function saveTab(tab: DocTab): Promise<boolean> {
-  return saveTabOrSaveAs(tab)
 }
 
 // --- Historique / versions (FR-12) ---

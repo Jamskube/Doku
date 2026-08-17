@@ -8,7 +8,7 @@ import { HighlightStyle, syntaxHighlighting, syntaxTree } from '@codemirror/lang
 import { tags } from '@lezer/highlight'
 import { formatKeymap } from './format-commands'
 import { livePreview } from './live-preview'
-import { revealScopeField, setRevealScope } from './reveal'
+import { revealScope, revealScopeField, setRevealScope } from './reveal'
 
 // Typographie du document — source : maquette W1 (article Source Serif 4).
 const dokuHighlight = HighlightStyle.define([
@@ -344,7 +344,7 @@ const revealKeymap = Prec.highest(
         // Dans un tableau, Tab appartient à la navigation de cellules (20.2) : ne pas
         // consommer l'event ici, sinon on casserait l'enchaînement de saisie.
         if (insideTable(view.state)) return false
-        const current = view.state.field(revealScopeField, false) ?? 'none'
+        const current = revealScope(view.state)
         view.dispatch({ effects: setRevealScope.of(current === 'none' ? 'block' : 'none') })
         return true
       },
@@ -352,7 +352,7 @@ const revealKeymap = Prec.highest(
     {
       key: 'Escape',
       run(view) {
-        if ((view.state.field(revealScopeField, false) ?? 'none') === 'none') return false
+        if (revealScope(view.state) === 'none') return false
         view.dispatch({ effects: setRevealScope.of('none') })
         return true
       },

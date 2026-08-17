@@ -20,7 +20,7 @@ import { applyTableOp, escapeCellText, parseTable, tableCellSpans, type CellAlig
 
 type CellAlignStyle = CellAlign
 import { rephrasePreviewRange, setRephrasePreview } from './rephrase-preview'
-import { revealScopeField, setRevealScope } from './reveal'
+import { revealScope, revealScopeField, setRevealScope } from './reveal'
 
 // Dossier du document courant (fourni par état, dans DocumentView) — sert à
 // résoudre les images relatives.
@@ -133,7 +133,7 @@ const HEADING_LINE = new Map([
 // l'ensemble est vide → on écrit dans le rendu, les marqueurs restent masqués.
 function activeLineSet(state: EditorState): Set<number> {
   const set = new Set<number>()
-  if ((state.field(revealScopeField, false) ?? 'none') === 'none') return set
+  if (revealScope(state) === 'none') return set
   for (const r of state.selection.ranges) {
     const a = state.doc.lineAt(r.from).number
     const b = state.doc.lineAt(r.to).number
@@ -629,7 +629,7 @@ const tableField = StateField.define<DecorationSet>({
     // qu'il chevauchait doivent re-rendre leur widget). Un mouvement de curseur seul ne
     // compte que si une révélation est active (ADR-0017 : sinon activeLineSet est vide,
     // le rendu serait identique — inutile de re-parcourir l'arbre à chaque flèche).
-    const revealActive = (tr.state.field(revealScopeField, false) ?? 'none') !== 'none'
+    const revealActive = revealScope(tr.state) !== 'none'
     if (
       tr.docChanged ||
       (tr.selection && revealActive) ||
