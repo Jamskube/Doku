@@ -273,6 +273,24 @@ describe('parsePdfCorrections', () => {
     expect(out.dropped[0].reason).toBe('au-delà du plafond de corrections')
   })
 
+  it('reconstruit la ligne par découpe, jamais par `replace` — les motifs spéciaux sont du texte', () => {
+    // `String.replace` interpréterait « $& », « $1 »… dans le remplacement, et un `find`
+    // contenant « $ » ou « \ » deviendrait une expression. Ici tout est littéral.
+    const l = [ligne('coût : 100$ HT (net)')]
+    const out = parsePdfCorrections(reponse([{ i: 'L1', find: '100$ HT', to: '120$ TTC' }]), l)
+    expect(out.edits[0].lineAfter).toBe('coût : 120$ TTC (net)')
+
+    const dollars = [ligne('total $& fin')]
+    const out2 = parsePdfCorrections(reponse([{ i: 'L1', find: '$&', to: '$$' }]), dollars)
+    expect(out2.edits[0].lineAfter).toBe('total $$ fin')
+  })
+
+  it('remplace la PREMIÈRE occurrence exacte, aux bonnes bornes', () => {
+    const l = [ligne('abcabX')]
+    const out = parsePdfCorrections(reponse([{ i: 'L1', find: 'abX', to: 'abY' }]), l)
+    expect(out.edits[0].lineAfter).toBe('abcabY')
+  })
+
   it('n’écarte JAMAIS en silence : chaque rejet porte son étiquette et sa raison', () => {
     const out = parsePdfCorrections(reponse([{ i: 'L7', find: 'a', to: 'b' }]), lignes)
     expect(out.dropped).toEqual([{ label: 'L7', reason: 'ligne inconnue' }])
