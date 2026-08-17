@@ -38,7 +38,7 @@
     "dompurify": "^3.4.11",
     "marked": "^18.0.6",
     "mupdf": "^1.28.0",
-    "pdfjs-dist": "^6.1.200",
+    "pdfjs-dist": "^6.2.108",
     "superdoc": "^2.6.0",
     "yjs": "^13.6.32"
   },

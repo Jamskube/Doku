@@ -34,6 +34,17 @@ export default defineConfig({
       { find: 'y-websocket', replacement: COLLAB_STUB },
     ],
   },
+  optimizeDeps: {
+    // Le pré-bundling de dev scanne par défaut TOUS les .html de la racine — `spike/`
+    // compris, qui a ses propres `node_modules`. Une même dépendance ne donne qu'UN
+    // chunk optimisé : si le scan la rencontre d'abord côté spike, c'est la version du
+    // spike que le serveur de dev sert à l'application. Vécu au passage de pdfjs-dist
+    // en 6.2.108 — l'app recevait l'API 6.1.200 du spike face à son propre worker
+    // 6.2.108, et pdf.js refusait de rendre. Le build de production n'a jamais été
+    // touché (il part de `index.html` seul) : c'est un piège de VÉRIFICATION, celui qui
+    // fait douter de la bonne version. On borne donc le scan à l'app et à ses bancs.
+    entries: ['index.html', '.agent/visual/**/harness.html'],
+  },
   build: {
     // Cible réelle = WebView2 (Chromium evergreen) : pas de transpilation des champs
     // de classe / ??= / etc., ni de polyfill modulepreload (support natif).
