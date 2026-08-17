@@ -1,5 +1,6 @@
 // Helpers purs de l'explorateur de dossier (FR-6). Aucune dépendance Tauri ici
 // pour rester testables en Node.
+import { OPENABLE_EXTENSIONS } from './doc-kind'
 
 // mtime : renseigné seulement quand le tri « Modifié le » est actif (un stat par
 // entrée coûte cher sur un gros dossier — on ne le paie pas si on ne trie pas dessus).
@@ -11,7 +12,10 @@ export type ExplorerSort = { key: SortKey; order: SortOrder }
 
 export const DEFAULT_SORT: ExplorerSort = { key: 'name', order: 'asc' }
 
-const SUPPORTED = ['md', 'markdown', 'txt', 'html', 'htm', 'pdf', 'docx']
+// Même liste que le dialogue d'ouverture, et pour cause : un fichier visible dans
+// l'explorateur mais absent du dialogue (ou l'inverse) est une incohérence que
+// l'utilisateur finit par rencontrer.
+const SUPPORTED = OPENABLE_EXTENSIONS
 
 export function isSupportedFile(name: string): boolean {
   const ext = name.split('.').pop()?.toLowerCase() ?? ''

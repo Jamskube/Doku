@@ -8,6 +8,7 @@
   import { activatePane, activeEditorView, app, activeTab, askSave, checkExternalChanges, cycleTab, dialog, dismissReloadPrompt, initApp, isDirty, openCopilot, openDropped, openPath, openTab, openWikilink, reloadPromptedTab, requestCloseTab, saveSession, saveSettings, saveTabOrSaveAs, toggleActiveSourceMode, togglePin, toggleSidebarView, workspace } from './lib/stores.svelte'
   import { onFileDrop, onOpenFile, onWindowCloseRequested, onWindowFocus, openFileDialog } from './lib/tauri'
   import { detectUnsupported } from './lib/encoding'
+  import { isBinaryDocumentName } from './lib/doc-kind'
   import { otherPane, type PaneId } from './lib/workspace'
   import { NOTICE_DELAY, autoDismiss } from './lib/auto-dismiss'
 
@@ -87,7 +88,10 @@
     try {
       const file = await openFileDialog()
       if (!file) return
-      const reason = detectUnsupported(file.content, file.name)
+      // Un document binaire n'a pas de contenu texte à examiner : le passer à
+      // `detectUnsupported` reviendrait à lui demander si une archive ZIP est du texte
+      // lisible — la réponse est non, et le fichier était rejeté à tort.
+      const reason = isBinaryDocumentName(file.name) ? null : detectUnsupported(file.content, file.name)
       if (reason) {
         app.banner = { tone: 'error', title: 'Fichier non pris en charge', message: reason }
         return

@@ -15,21 +15,11 @@ import { normalizeTarget, wikilinkCandidates, wikilinkFileName } from './wikilin
 import type { CopilotVerbosity } from './copilot-service'
 import { activateWorkspacePane, assignWorkspaceTab, closeWorkspaceTab, createWorkspaceState, openWorkspaceSplit, otherPane, reuniteWorkspace, selectWorkspaceTab, setWorkspaceRatio, swapWorkspacePanes, type PaneId, type WorkspaceState } from './workspace'
 
-export type DocKind = 'md' | 'html' | 'txt' | 'pdf' | 'docx'
-
-// Documents BINAIRES : leur onglet ne porte aucun contenu texte (`content` reste vide),
-// ils s'affichent par un composant dédié et ne passent jamais par l'écriture texte.
-// Le prédicat existe pour que ces trois règles ne se répètent pas en `kind === 'pdf'`
-// disséminés — un oubli signifierait un Ctrl+S écrivant `''` par-dessus le fichier.
-export type BinaryKind = 'pdf' | 'docx'
-const BINARY_KINDS: BinaryKind[] = ['pdf', 'docx']
-
-// Garde de TYPE, pas simple booléen : c'est ce qui permet au compilateur d'exclure les
-// kinds binaires du chemin d'écriture texte. Un booléen laisserait passer un `docx`
-// jusqu'à `runSaveAs` — et donc jusqu'à écrire `''` dans le fichier.
-export function isBinaryKind(kind: DocKind): kind is BinaryKind {
-  return BINARY_KINDS.includes(kind as BinaryKind)
-}
+// Le modèle de document vit dans `doc-kind.ts` (module pur) pour être partagé avec la
+// couche plateforme, qui ne peut pas dépendre des stores. Réexporté ici : les appelants
+// historiques n'ont pas à savoir qu'il a déménagé.
+export { isBinaryKind, kindFromName, type BinaryKind, type DocKind } from './doc-kind'
+import { isBinaryKind, kindFromName, type DocKind } from './doc-kind'
 export type SidebarView = 'files' | 'plan' | 'history' | 'search'
 // Vue interne du panneau copilote droit (14.0). Transitoire : boot toujours en
 // 'chat' (coquille statique, ne démarre PAS le moteur) ; 'models' déclenche
@@ -470,15 +460,6 @@ export function isDirty(tab: DocTab): boolean {
   const d = tab.content !== tab.savedContent
   dirtyMemo.set(tab, { c: tab.content, s: tab.savedContent, d })
   return d
-}
-
-export function kindFromName(name: string): DocKind {
-  const ext = name.split('.').pop()?.toLowerCase()
-  if (ext === 'html' || ext === 'htm') return 'html'
-  if (ext === 'md' || ext === 'markdown') return 'md'
-  if (ext === 'pdf') return 'pdf'
-  if (ext === 'docx') return 'docx'
-  return 'txt'
 }
 
 export function openTab(

@@ -1,3 +1,4 @@
+import { OPENABLE_EXTENSIONS, isBinaryDocumentName } from './doc-kind'
 import { detectUnsupported } from './encoding'
 import { isSupportedFile, joinPath, type FsEntry } from './explorer'
 import { bytesToDataUrl, mimeFromExt } from './export/img-data'
@@ -300,12 +301,15 @@ export async function openFileDialog(): Promise<{ path: string; name: string; co
   const { open } = await import('@tauri-apps/plugin-dialog')
   const path = await open({
     multiple: false,
-    filters: [{ name: 'Documents', extensions: ['md', 'markdown', 'txt', 'html', 'htm', 'pdf', 'docx'] }],
+    filters: [{ name: 'Documents', extensions: OPENABLE_EXTENSIONS }],
   })
   if (typeof path !== 'string') return null
   const name = path.split(/[\\/]/).pop() ?? path
-  // PDF : binaire lecture seule (11.1) — ne pas lire en texte ; content='' est ouvert en kind pdf.
-  if (/\.pdf$/i.test(path)) return { path, name, content: '' }
+  // Document BINAIRE (PDF, DOCX) : ne jamais le lire en texte — `readTextFile` rendrait
+  // du charabia que `detectUnsupported` rejetterait ensuite en « format non pris en
+  // charge ». Le test portait sur le seul `.pdf` : le DOCX, arrivé plus tard, tombait
+  // donc dans la lecture texte. La question est posée UNE fois, dans `doc-kind.ts`.
+  if (isBinaryDocumentName(name)) return { path, name, content: '' }
   const { readTextFile } = await import('@tauri-apps/plugin-fs')
   const content = await readTextFile(path)
   return { path, name, content }
