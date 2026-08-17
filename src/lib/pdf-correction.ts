@@ -248,7 +248,10 @@ export function freeSpace(line: CorrectableLine, others: CorrectableLine[] = [])
   let borne = 1 - MARGE_DROITE
   const bas = line.top + line.height
   for (const autre of others) {
-    if (autre === line) continue
+    // La ligne se reconnaît par sa POSITION, pas par son identité : l'appelant construit
+    // la liste soumise et la géométrie en deux passes, donc deux objets distincts décrivent
+    // la même ligne. Une comparaison par référence ne l'aurait jamais vue.
+    if (autre.left === line.left && autre.top === line.top && autre.width === line.width) continue
     // Bandes verticales disjointes : ce n'est pas un voisin de rangée.
     if (autre.top >= bas || autre.top + autre.height <= line.top) continue
     if (autre.left < line.left + line.width) continue // à gauche, ou chevauchant déjà

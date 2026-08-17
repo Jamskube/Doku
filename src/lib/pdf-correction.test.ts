@@ -162,6 +162,16 @@ describe('freeSpace', () => {
     expect(freeSpace(c1, [c1])).toBeGreaterThan(0.7) // sans voisine : jusqu'à la marge
   })
 
+  it('se reconnaît par sa POSITION, pas par son identité d’objet', () => {
+    // L'appelant construit la liste soumise et la géométrie en deux passes : deux objets
+    // DISTINCTS décrivent la même ligne. Une comparaison par référence ne l'aurait jamais
+    // vue, et la ligne se serait bornée elle-même.
+    const c1 = cellule('Matériel', 0.1, 0.15)
+    const jumelle = { ...c1 }
+    const c2 = cellule('voisine', 0.3, 0.25)
+    expect(freeSpace(c1, [jumelle, c2])).toBeCloseTo(0.05, 5)
+  })
+
   it('ignore les lignes d’autres rangées, même situées à droite', () => {
     const c1 = cellule('Matériel', 0.1, 0.15)
     const ailleurs: CorrectableLine = { text: 'x', left: 0.3, width: 0.2, top: 0.8, height: 0.02 }
