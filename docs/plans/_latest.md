@@ -113,6 +113,18 @@ Constantes exportées : `MAX_REPLACEMENTS = 12`, `MAX_GROWTH_RATIO = 1.15`, `MAX
 - L'ordre des lignes est celui des blocs MuPDF (ordre de **lecture**), sans tri géométrique. Sur une page à deux colonnes, la numérotation présentée au modèle peut ne pas suivre l'œil. Sans effet sur la correction (chaque ligne est indépendante), à surveiller si l'on ajoute un jour une consigne qui raisonne sur l'enchaînement.
 - Faut-il conserver la consigne d'une page à l'autre ? Défaut retenu : non — elle vise une page précise.
 
+## Ce que les deux revues ont changé au plan (2026-08-17, après écriture)
+
+Le plan ci-dessus est celui **soumis** aux revues. Ce qui a été exécuté en diffère sur cinq points, tous à leur demande :
+
+1. **Le contrat modèle est renversé.** Il ne rend plus la ligne réécrite mais un **patch ciblé à l'intérieur d'elle** (`{i, find, to}`). Motif : une « ligne » de PDF est souvent une rangée de tableau dont les colonnes ne tiennent que par leurs espaces — la faire réécrire les effondre, et rien ne l'aurait signalé.
+2. **`MAX_GROWTH_RATIO` est supprimé** au profit d'un budget de **place libre à droite**, calibré sur la boîte de la ligne. Un ratio en caractères se trompait aux deux bouts et ne voyait pas « resume » → « RÉSUMÉ ».
+3. **Une normalisation typographique** est ajoutée (apostrophes, guillemets, tirets, insécables alignés sur ceux du document) : le mode d'échec le plus fréquent, mesuré.
+4. **Deux fichiers du moteur entrent dans le périmètre**, que le plan s'interdisait de toucher : `rewriteTextRuns` écrivait **à moitié** la modification d'une ligne multi-passages quand son début était refusé — la fin de la ligne disparaissait du document et le rapport annonçait un succès. Corrigé et testé avant la fonctionnalité (`9e4382b`).
+5. **Le run porte son jeton** `{path, page, revision}` **et la liste soumise** : sans elle, un remontage de la modale faisait planter l'application.
+
+Le bug d'`occurrence` allégué par la revue a été **infirmé** après lecture : `shift()` attribue les groupes aux lignes JSON dans le même ordre que `memeTexte[occurrence]` les relit.
+
 ## Rollback
 
 `git revert` du commit : les quatre fichiers créés sont neufs, `copilot-memory.ts` retrouve sa fonction locale, et ni `pdf-edit-text.ts` ni le format des fichiers écrits ne changent. Aucune migration, aucun état persistant.
