@@ -331,7 +331,10 @@
       // modifié — `applyTextEdits` jette sur une liste vide.
       if (!pending.length) {
         const base = fileName.replace(/\.pdf$/i, '')
-        if (await writeCopy(`${base} — modifié.pdf`, bytes)) {
+        // `.slice()` : toute API qui reçoit un TypedArray et travaille hors du thread est
+        // suspecte de TRANSFERT — on garde nos octets si l'utilisateur annule le dialogue
+        // et enregistre à nouveau (leçon AGENTS du 2026-08-15, deux fois).
+        if (await writeCopy(`${base} — modifié.pdf`, bytes.slice())) {
           dirty = false
           closePdfTextEdit()
         }
