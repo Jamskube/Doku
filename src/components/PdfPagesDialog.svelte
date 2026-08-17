@@ -409,7 +409,7 @@
   .tools button:hover:not(:disabled), footer button:hover:not(:disabled) { background: rgba(var(--ink-rgb), 0.06); }
   .tools button:disabled, footer button:disabled, .card-tools button:disabled { opacity: 0.4; cursor: default; }
   .summary { font-size: 12px; opacity: 0.7; }
-  .message { margin: 0; padding: 8px 16px; font-size: 13px; color: var(--danger, #b3261e); }
+  .message { margin: 0; padding: 8px 16px; font-size: 12.5px; color: var(--err-text); }
 
   .grid {
     flex: 1 1 auto;
@@ -444,7 +444,9 @@
   .card :global(img) { -webkit-user-drag: none; pointer-events: none; }
   .card:active { cursor: grabbing; }
   .card.dragging { opacity: 0.45; }
-  .card.over { border-color: var(--accent, #6b5bd2); box-shadow: 0 0 0 2px rgba(107, 91, 210, 0.28); }
+  /* Cible de dépôt : en encre, jamais en reflet lavande — « The Quiet Accent Rule »
+     réserve le lavande à la profondeur du chrome, jamais à une sélection ou un état. */
+  .card.over { border-color: var(--line-3); box-shadow: 0 0 0 2px rgba(var(--ink-rgb), 0.22); }
   .thumb {
     position: relative;
     display: grid;
@@ -479,7 +481,9 @@
     cursor: pointer;
   }
   .card-tools button:hover:not(:disabled) { background: rgba(var(--ink-rgb), 0.08); }
-  .card-tools .danger:hover:not(:disabled) { color: var(--danger, #b3261e); }
+  /* Supprimer une page est une action destructive : c'est le rouge d'action du système,
+     pas un rouge d'erreur ni une couleur inventée. */
+  .card-tools .danger:hover:not(:disabled) { color: var(--danger-action-text); }
   .card-tools .msr { font-size: 17px; }
   .number { position: absolute; right: 10px; top: 10px; font-size: 11px; opacity: 0.55; }
 

@@ -842,7 +842,7 @@
     font-size: 13px;
   }
   .newname:focus { outline: 2px solid var(--line-3); outline-offset: 1px; }
-  .newerr { margin: 2px 6px 4px 30px; font-size: 11.5px; color: var(--danger, #b4442f); line-height: 1.35; }
+  .newerr { margin: 2px 6px 4px 30px; font-size: 11.5px; color: var(--err-text); line-height: 1.35; }
 
   .panel-body { flex: 1; overflow-y: auto; min-height: 0; padding: 5px 8px 16px; contain: layout paint; }
 

@@ -198,20 +198,20 @@
 <dialog class="pdftext" bind:this={dlg} onclose={closePdfTextEdit} aria-label="Modifier le texte du PDF">
   <div class="window">
     <header>
-      <span class="msr" aria-hidden="true">edit_document</span>
+      <span class="title-icon" aria-hidden="true"><span class="msr">edit_document</span></span>
       <div class="title">
-        <strong>Modifier le texte</strong>
-        <small>{fileName}</small>
+        <h2>Modifier le texte</h2>
+        <p>{fileName}</p>
       </div>
       <span class="spacer"></span>
-      <button class="icon-button" aria-label="Fermer" onclick={closePdfTextEdit}><span class="msr">close</span></button>
+      <button class="close" aria-label="Fermer" onclick={closePdfTextEdit}><span class="msr">close</span></button>
     </header>
 
     <div class="tools">
-      <button disabled={pageIndex <= 1} onclick={() => pageIndex--} aria-label="Page précédente"><span class="msr">chevron_left</span></button>
+      <button class="icon-button" disabled={pageIndex <= 1} onclick={() => pageIndex--} aria-label="Page précédente"><span class="msr">chevron_left</span></button>
       <span class="pageno">{pageIndex} / {pageCount || '…'}</span>
       {#if rendering}<span class="rendering" role="status">rendu…</span>{/if}
-      <button disabled={pageIndex >= pageCount} onclick={() => pageIndex++} aria-label="Page suivante"><span class="msr">chevron_right</span></button>
+      <button class="icon-button" disabled={pageIndex >= pageCount} onclick={() => pageIndex++} aria-label="Page suivante"><span class="msr">chevron_right</span></button>
       <span class="spacer"></span>
       <span class="summary">
         {#if pending.length}
@@ -258,7 +258,7 @@
     <footer>
       <small>Le document d’origine n’est jamais modifié.</small>
       <span class="spacer"></span>
-      <button class="ghost" onclick={closePdfTextEdit}>Annuler</button>
+      <button onclick={closePdfTextEdit}>Annuler</button>
       <button class="primary" disabled={!pending.length || saving} onclick={() => void save()}>
         {saving ? 'Écriture…' : 'Enregistrer une copie…'}
       </button>
@@ -278,8 +278,10 @@
     color: var(--ink);
     overflow: visible;
   }
+  /* Même voile que SettingsDialog : deux dialogues de la même app ne se posent pas sur
+     deux fonds différents. */
   .pdftext::backdrop {
-    background: rgb(0 0 0 / 0.42);
+    background: rgb(0 0 0 / 0.38);
     -webkit-backdrop-filter: blur(3px);
     backdrop-filter: blur(3px);
   }
@@ -289,32 +291,72 @@
     flex-direction: column;
     background: var(--cream-base);
     border-radius: 18px;
-    box-shadow: 0 0 0 1px var(--elevation-ring), 0 28px 76px rgba(var(--shadow-rgb), 0.34);
+    /* Vocabulaire « Fenêtre modale » du système d'élévation, les trois couches. */
+    box-shadow:
+      0 0 0 1px var(--elevation-ring),
+      0 28px 76px rgba(var(--shadow-rgb), 0.34),
+      0 6px 20px rgba(var(--shadow-rgb), 0.16);
     overflow: hidden;
+    animation: pdftext-in 190ms cubic-bezier(0.22, 1, 0.36, 1);
   }
-  header { flex: 0 0 auto; display: flex; align-items: center; gap: 11px; padding: 12px 14px 12px 18px; border-bottom: 1px solid var(--line-1); }
-  .title { display: flex; flex-direction: column; line-height: 1.25; }
-  .title small { opacity: 0.62; }
+  @keyframes pdftext-in {
+    from { opacity: 0; transform: translateY(6px) scale(0.985); }
+    to { opacity: 1; transform: translateY(0) scale(1); }
+  }
+
+  /* En-tête et barre d'outils forment UN seul bloc de chrome : le changement de ton
+     vers la scène suffit à les en séparer. Un filet en plus serait une redite. */
+  header { flex: 0 0 auto; display: flex; align-items: center; gap: 11px; padding: 12px 14px 12px 18px; }
+  .title-icon {
+    width: 36px; height: 36px; display: inline-flex; align-items: center; justify-content: center;
+    border-radius: 10px; background: var(--accent-soft); color: var(--ink-2);
+  }
+  .title-icon .msr { font-size: 20px; }
+  .title { min-width: 0; }
+  .title h2 { margin: 0; font-size: 15px; line-height: 1.3; font-weight: 650; }
+  .title p { margin: 2px 0 0; font-size: 11.5px; line-height: 1.3; color: var(--ink-4); }
   .spacer { flex: 1 1 auto; }
-
-  .tools { flex: 0 0 auto; display: flex; align-items: center; gap: 8px; padding: 9px 14px; border-bottom: 1px solid var(--line-1); }
-  .tools button, footer button {
-    display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 11px;
-    border: 1px solid var(--line-1); border-radius: 999px; background: transparent;
-    color: inherit; font: inherit; cursor: pointer;
+  .close {
+    width: 34px; height: 34px; display: inline-flex; align-items: center; justify-content: center;
+    border: 0; border-radius: 999px; background: transparent; color: var(--ink-4); cursor: pointer;
+    transition: background-color 140ms ease, color 140ms ease, transform 100ms ease;
   }
-  .tools button:hover:not(:disabled), footer button:hover:not(:disabled) { background: rgba(var(--ink-rgb), 0.06); }
-  .tools button:disabled, footer button:disabled { opacity: 0.4; cursor: default; }
-  .pageno { font-variant-numeric: tabular-nums; font-size: 13px; opacity: 0.75; }
-  .rendering { font-size: 12px; opacity: 0.55; }
-  .summary { font-size: 12px; opacity: 0.7; }
-  .message { margin: 0; padding: 8px 16px; font-size: 13px; color: var(--danger, #b3261e); }
+  .close:hover { background: var(--surface-hover); color: var(--ink); }
+  .close:active { transform: scale(0.96); }
 
-  .stage { flex: 1 1 auto; overflow: auto; scrollbar-gutter: stable; display: grid; place-items: start center; padding: 18px; }
-  .hint { opacity: 0.72; padding: 24px; }
-  .hint.error { color: var(--danger, #b3261e); }
+  /* Gouttière de 18px partagée avec l'en-tête et le pied : la pastille de titre, le
+     premier chevron et la mention du pied s'alignent sur une seule verticale. */
+  .tools { flex: 0 0 auto; display: flex; align-items: center; gap: 6px; padding: 0 18px 10px; }
+  .pageno { font-variant-numeric: tabular-nums; font-size: 12.5px; font-weight: 500; color: var(--ink-4); }
+  .rendering { font-size: 11.5px; color: var(--ink-5); }
+  .summary { font-size: 11.5px; color: var(--ink-4); }
+  /* Le rouge d'erreur du système EXISTE en variante textuelle par thème (`--err-text`) :
+     le fond `--err` calibré pour une pastille n'a pas le contraste d'un petit texte. */
+  .message { margin: 0; padding: 0 16px 10px; font-size: 12.5px; color: var(--err-text); }
 
-  .sheet { position: relative; line-height: 0; box-shadow: 0 2px 22px rgba(var(--shadow-rgb), 0.28); }
+  /* C'est le TON, pas un contour, qui détache la feuille du mobilier (« The Document
+     Contrast Rule »). Papier teinté plutôt que voile doux : la scène doit être plus
+     SOMBRE que la feuille pour l'asseoir — un fond plus clair que le papier la ferait
+     flotter dans le vide. */
+  .stage {
+    flex: 1 1 auto; overflow: auto; scrollbar-gutter: stable;
+    display: grid; place-items: start center; padding: 20px;
+    background: var(--cream-tint);
+  }
+  .hint { padding: 24px; font-size: 12.5px; color: var(--ink-4); }
+  .hint.error { color: var(--err-text); }
+
+  .sheet {
+    position: relative; line-height: 0;
+    /* Vocabulaire « Surface flottante » : la feuille flotte réellement au-dessus de la scène. */
+    box-shadow: 0 0 0 1px var(--elevation-ring), 0 12px 30px rgba(var(--shadow-rgb), 0.18);
+    /* La feuille est BLANCHE dans les deux thèmes : son encre ne peut donc pas suivre
+       `--ink`, qui vire au blanc en sombre. Ces trois valeurs sont l'encre brune du
+       système, figées ici parce qu'elles vivent sur du papier, pas sur du mobilier. */
+    --sheet-ink: #1C1A16;
+    --sheet-line: rgba(28, 26, 22, 0.24);
+    --sheet-focus: rgba(28, 26, 22, 0.55);
+  }
   .sheet canvas { display: block; max-width: 100%; height: auto; background: #fff; }
 
   /* Le champ se fond dans la page : on ne voit le texte du document qu'à travers lui,
@@ -349,8 +391,11 @@
    * qu'on vient de cliquer. Sans cette exclusion, le survol imposait son fond au champ
    * en cours de saisie — on ne lisait plus ni le document ni ce qu'on tapait.
    */
-  .line:hover:not(.locked):not(:focus) {
-    border-color: var(--accent, #6b5bd2);
+  /* `:not(.changed)` pour la même raison de spécificité : sans elle, le survol repeint
+     les quatre côtés et efface la marque d'encre d'une ligne déjà modifiée. Une ligne
+     modifiée porte déjà son état, elle n'a rien à gagner d'un survol. */
+  .line:hover:not(.locked):not(:focus):not(.changed) {
+    border-color: var(--sheet-line);
     background: transparent;
     cursor: text;
   }
@@ -361,32 +406,53 @@
      qu'on écrit plutôt que ce qui était écrit — les deux superposés ne se lisent pas. */
   .line:focus {
     outline: none;
-    border-color: var(--accent, #6b5bd2);
+    border-color: transparent;
     background: #fff;
     /* La couleur vient du DOCUMENT, transportée par une propriété personnalisée. */
     color: var(--doc-color, #1a1a1a);
-    box-shadow: 0 0 0 3px #fff, 0 0 0 4px var(--accent, #6b5bd2);
+    /* 3px de blanc pour déborder du texte d'origine, puis l'anneau de focus de 2px à
+       contraste moyen prescrit par le système — en encre, jamais en accent coloré. */
+    box-shadow: 0 0 0 3px #fff, 0 0 0 5px var(--sheet-focus);
     z-index: 3;
   }
   /* Une ligne modifiée reste VISIBLE sans focus : sinon l'utilisateur perd de vue ce
-     qu'il a déjà changé. */
+     qu'il a déjà changé. Le repère est une marque d'éditeur — un filet d'encre sous la
+     ligne — et non une couleur d'accent : rien ne doit rivaliser avec le document. */
   .line.changed {
     background: #fff;
     color: var(--doc-color, #1a1a1a);
-    border-color: var(--accent, #6b5bd2);
+    border-bottom-color: var(--sheet-ink);
     box-shadow: 0 0 0 3px #fff;
     z-index: 1;
   }
   .line.locked { cursor: not-allowed; }
-  /* Même précaution : une ligne verrouillée survolée ne doit pas voiler le document,
-     seulement dire qu'elle n'est pas modifiable. */
-  .line.locked:hover { border-color: rgba(179, 38, 30, 0.45); background: transparent; }
+  /* Une ligne verrouillée ne doit ni voiler le document ni sonner l'alarme : un filet
+     tireté dit « pas modifiable », l'infobulle dit pourquoi. */
+  .line.locked:hover { border-color: var(--sheet-line); border-style: dashed; background: transparent; }
 
-  footer { flex: 0 0 auto; display: flex; align-items: center; gap: 8px; padding: 12px 16px; border-top: 1px solid var(--line-1); }
-  footer small { opacity: 0.6; }
-  footer .primary { background: var(--ink); color: var(--cream-base); border-color: transparent; }
-  footer .primary:hover:not(:disabled) { opacity: 0.88; background: var(--ink); }
+  footer { flex: 0 0 auto; display: flex; align-items: center; gap: 8px; padding: 12px 18px; }
+  footer small { font-size: 11.5px; color: var(--ink-5); }
 
-  .icon-button { display: grid; place-items: center; width: 32px; height: 32px; border: 0; border-radius: 9px; background: transparent; color: inherit; cursor: pointer; }
-  .icon-button:hover { background: rgba(var(--ink-rgb), 0.08); }
+  /* Un SEUL vocabulaire de bouton dans la modale : pilule sans contour permanent, qui
+     ne se révèle qu'au survol. Le contour permanent d'avant faisait ressembler la
+     fenêtre à un dialogue générique posé dans Doku. */
+  .icon-button, footer button {
+    display: inline-flex; align-items: center; justify-content: center;
+    border: 0; background: transparent; color: var(--ink-3);
+    font: inherit; font-size: 12.5px; font-weight: 500; cursor: pointer;
+    transition: background-color 140ms ease, color 140ms ease, transform 100ms ease;
+  }
+  .icon-button { width: 30px; height: 30px; border-radius: 9px; color: var(--ink-4); }
+  footer button { height: 34px; padding: 0 16px; border-radius: 999px; }
+  .icon-button:hover:not(:disabled), footer button:hover:not(:disabled) { background: var(--surface-hover); color: var(--ink); }
+  .icon-button:active:not(:disabled), footer button:active:not(:disabled) { transform: scale(0.97); }
+  .icon-button:disabled, footer button:disabled { opacity: 0.4; cursor: default; }
+  footer .primary { background: var(--ink); color: var(--cream-content); }
+  footer .primary:hover:not(:disabled) { background: var(--ink-2); color: var(--cream-content); }
+
+  @media (prefers-reduced-motion: reduce) {
+    .window { animation: none; }
+    .line, .close, .icon-button, footer button { transition: none !important; }
+    .close:active, .icon-button:active, footer button:active { transform: none; }
+  }
 </style>

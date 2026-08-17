@@ -202,7 +202,7 @@
   .docx-actions .msr { font-size: 17px; }
 
   .docx-note { margin: 0; padding: 24px; text-align: center; opacity: 0.72; }
-  .docx-note.error { color: var(--danger, #b3261e); }
+  .docx-note.error { color: var(--err-text); }
 
   .docx-host {
     flex: 1 1 auto;
