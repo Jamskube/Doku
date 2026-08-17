@@ -2282,10 +2282,17 @@
     pointer-events: none;
     contain: layout paint;
     container-type: inline-size;
+    /* 340 ms, et non les 240 ms d'origine : la courbe sortante place ~80 % de la course
+       dans les 40 % premiers, si bien qu'à durée égale l'ouverture PARAÎT bien plus
+       rapide qu'avec l'ancienne courbe entrante — le panneau semblait surgir. On garde
+       la sortante (c'est la bonne pour une apparition ; l'entrante rendrait le début mou
+       et la fin sèche) et on lui donne le temps de se poser.
+       Le délai de `visibility` SUIT la durée du rideau : plus court, le panneau
+       disparaîtrait avant la fin de sa fermeture. */
     transition:
       flex-grow 300ms cubic-bezier(0.22, 1, 0.36, 1),
-      flex-basis 240ms cubic-bezier(0.22, 1, 0.36, 1),
-      visibility 0s linear 240ms;
+      flex-basis 340ms cubic-bezier(0.22, 1, 0.36, 1),
+      visibility 0s linear 340ms;
   }
   .cop-panel.open {
     flex-basis: var(--copilot-width);
@@ -2293,7 +2300,7 @@
     pointer-events: auto;
     transition:
       flex-grow 300ms cubic-bezier(0.22, 1, 0.36, 1),
-      flex-basis 240ms cubic-bezier(0.22, 1, 0.36, 1),
+      flex-basis 340ms cubic-bezier(0.22, 1, 0.36, 1),
       visibility 0s;
   }
   .cop-panel.open.expanded {
