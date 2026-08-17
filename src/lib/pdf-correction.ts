@@ -129,8 +129,14 @@ function labelIndex(label: unknown): number {
 // pour une différence invisible à l'œil. On aligne la sortie du modèle sur les caractères
 // que la LIGNE D'ORIGINE emploie réellement — la seule preuve locale et sûre que la police
 // sait les écrire.
+// Apostrophes : « ’ » et « ' » sont la MÊME marque, seule la fonte diffère — les échanger
+// ne change rien au sens.
 const APOSTROPHES = ['’', "'"]
-const TIRETS = ['—', '–', '-']
+
+// Il n'y a volontairement PAS de famille des tirets. Trait d'union, demi-cadratin et
+// cadratin ne sont pas interchangeables : les aligner comme les apostrophes transformait
+// « sous-ensemble » en « sous—ensemble » dès que la ligne d'origine contenait un cadratin
+// ailleurs. Un tiret absent de la police se refuse, comme « œ » — avec sa raison.
 
 function aligner(texte: string, source: string, famille: string[]): string {
   // Caractère de cette famille réellement présent dans la ligne d'origine.
@@ -189,7 +195,6 @@ function alignerGuillemets(texte: string, source: string): string {
 export function alignTypography(proposed: string, original: string): string {
   let sortie = aligner(proposed, original, APOSTROPHES)
   sortie = alignerGuillemets(sortie, original)
-  sortie = aligner(sortie, original, TIRETS)
   // Espaces insécables : MuPDF les extrait le plus souvent en espace ordinaire, donc le
   // modèle ne les VOIT pas mais les réintroduit en appliquant la typographie française
   // (« 1 240 000 », « ; »). Si la ligne d'origine n'en contient aucun, la police n'a

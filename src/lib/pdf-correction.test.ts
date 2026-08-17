@@ -105,8 +105,11 @@ describe('alignTypography', () => {
     expect(alignTypography('"citation"', '« mot »')).toBe('«citation»')
   })
 
-  it('aligne les tirets', () => {
-    expect(alignTypography('a — b', 'x - y')).toBe('a - b')
+  it('ne TOUCHE PAS aux tirets — ils ne sont pas interchangeables', () => {
+    // Vécu : la ligne d'origine contenant un cadratin ailleurs, tous les traits d'union du
+    // remplacement devenaient des cadratins — « sous-ensemble » → « sous—ensemble ».
+    expect(alignTypography('un sous-ensemble défini', 'le matériel — sinon rien')).toBe('un sous-ensemble défini')
+    expect(alignTypography('a — b', 'x - y')).toBe('a — b')
   })
 
   it('ne déplie JAMAIS œ ni ne désaccentue une majuscule', () => {
