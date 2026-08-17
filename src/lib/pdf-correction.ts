@@ -44,6 +44,8 @@ export interface CorrectableLine {
   /** Fractions de la page affichée (0..1) — servent à mesurer la place libre à droite. */
   left: number
   width: number
+  top: number
+  height: number
 }
 
 export interface PdfEdit {
@@ -55,6 +57,18 @@ export interface PdfEdit {
   lineAfter: string
   /** Le `to` a été normalisé sur la typographie du document. */
   normalized: boolean
+  /**
+   * Ce qui entoure le passage dans la ligne d'origine, tronqué.
+   *
+   * Sans lui, deux corrections identiques sur deux cellules différentes — « online » →
+   * « en ligne » en L12 et en L19 — s'affichent EXACTEMENT pareil, et l'utilisateur
+   * accepte sans pouvoir situer ce qu'il accepte. Or la relecture ligne à ligne est la
+   * seule vraie garantie de ce chemin.
+   */
+  before: string
+  after: string
+  /** Le remplacement élargit la ligne (sous le seuil, mais l'utilisateur doit le voir). */
+  widens: boolean
 }
 
 export interface DroppedEdit {
@@ -66,6 +80,17 @@ export interface ParsedCorrections {
   edits: PdfEdit[]
   /** Jamais silencieux : tout ce qui a été écarté, avec sa raison. */
   dropped: DroppedEdit[]
+}
+
+/** Caractères de contexte montrés de part et d'autre du passage corrigé. */
+export const CONTEXTE = 24
+
+function tronquerDebut(texte: string, max: number): string {
+  return texte.length <= max ? texte : `…${texte.slice(texte.length - max)}`
+}
+
+function tronquerFin(texte: string, max: number): string {
+  return texte.length <= max ? texte : `${texte.slice(0, max)}…`
 }
 
 /** Étiquette d'une ligne. Un entier nu invite le modèle à faire de l'arithmétique. */
@@ -183,9 +208,28 @@ function largeurRelativeDe(texte: string): number {
   return total
 }
 
-/** Place libre à droite de la ligne, en fraction de largeur de page. */
-export function freeSpace(line: CorrectableLine): number {
-  return 1 - (line.left + line.width) - MARGE_DROITE
+/**
+ * Place libre à droite de la ligne, en fraction de largeur de page.
+ *
+ * La marge de PAGE ne suffit pas : MuPDF émet souvent une cellule de tableau par ligne, et
+ * une cellule de première colonne a alors toute la page devant elle sur le papier — alors
+ * qu'elle a en réalité trois centimètres avant la colonne suivante. Mesurer jusqu'à la
+ * marge autoriserait donc précisément le recouvrement que tout ce contrat prétend fermer.
+ *
+ * On borne donc par le VOISIN de droite : la ligne la plus proche dont la bande verticale
+ * recoupe celle-ci. Les positions sont déjà là, il n'y a rien à mesurer de plus.
+ */
+export function freeSpace(line: CorrectableLine, others: CorrectableLine[] = []): number {
+  let borne = 1 - MARGE_DROITE
+  const bas = line.top + line.height
+  for (const autre of others) {
+    if (autre === line) continue
+    // Bandes verticales disjointes : ce n'est pas un voisin de rangée.
+    if (autre.top >= bas || autre.top + autre.height <= line.top) continue
+    if (autre.left < line.left + line.width) continue // à gauche, ou chevauchant déjà
+    if (autre.left < borne) borne = autre.left
+  }
+  return borne - (line.left + line.width)
 }
 
 /**
@@ -235,6 +279,9 @@ export function buildPdfCorrectionPrompt(lines: CorrectableLine[], instruction: 
     'ne pas recopier la ligne.\n' +
     "- Ne corrige QUE ce que la consigne demande. Si rien sur cette page ne la concerne, " +
     'réponds avec une liste vide — c’est une réponse juste, pas un échec.\n' +
+    '- UNE SEULE correction par ligne : si une ligne en demande deux, choisis la plus ' +
+    'importante et englobe-les dans un même `find` si elles sont proches.\n' +
+    '- Ne touche pas aux suites de plusieurs espaces : elles alignent des colonnes.\n' +
     `- Au plus ${MAX_EDITS} corrections.\n\n` +
     'Réponds uniquement en JSON valide, sans markdown :\n' +
     '{"edits":[{"i":"L12","find":"texte exact à remplacer","to":"texte de remplacement"}]}'
@@ -319,7 +366,7 @@ export function parsePdfCorrections(raw: string, lines: CorrectableLine[]): Pars
       continue
     }
     const delta = estimateWidthDelta(ligne, find, aligne)
-    if (delta > freeSpace(ligne)) {
+    if (delta > freeSpace(ligne, lines)) {
       rejeter('trop large pour la place disponible sur la ligne')
       continue
     }
@@ -331,12 +378,17 @@ export function parsePdfCorrections(raw: string, lines: CorrectableLine[]): Pars
     }
 
     prises.add(index)
+    const avant = ligne.text.slice(0, premier)
+    const apres = ligne.text.slice(premier + find.length)
     edits.push({
       index,
       find,
       to: aligne,
-      lineAfter: ligne.text.slice(0, premier) + aligne + ligne.text.slice(premier + find.length),
+      lineAfter: avant + aligne + apres,
       normalized: aligne !== it.to,
+      before: tronquerDebut(avant, CONTEXTE),
+      after: tronquerFin(apres, CONTEXTE),
+      widens: delta > 0,
     })
   }
   return { edits, dropped }

@@ -8,7 +8,7 @@
   // Y greffer une cinquième surface de saisie était le chemin le plus court vers une
   // collision.
   import { app, askSave, closePdfTextEdit, isCloudProvider } from '../lib/stores.svelte'
-  import { cancelPdfCorrection, copilot, correctPdfPage, pdfCorrection } from '../lib/copilot.svelte'
+  import { cancelPdfCorrection, copilot, correctPdfPage, pdfCorrection, pdfCorrectionMatches } from '../lib/copilot.svelte'
   import { diffWords } from '../lib/copilot-service'
   import { lineLabel, revealInvisibles } from '../lib/pdf-correction'
   import { baseName } from '../lib/paths'
@@ -21,7 +21,7 @@
     writeCopy = savePdfDialog,
   }: {
     readBytes?: (path: string) => Promise<Uint8Array | null>
-    writeCopy?: (name: string, bytes: Uint8Array) => Promise<boolean>
+    writeCopy?: (name: string, bytes: Uint8Array, protect?: string) => Promise<boolean>
   } = $props()
 
   let dlg = $state<HTMLDialogElement | null>(null)
@@ -72,9 +72,7 @@
   const streaming = $derived(run?.phase === 'streaming')
   // Le run ne s'affiche que s'il désigne encore CE document, CETTE page et CETTE révision
   // des octets. Sinon il viserait des lignes que l'utilisateur n'a jamais soumises.
-  const runIci = $derived(
-    run && run.path === path && run.page === pageIndex && run.revision === revision ? run : null,
-  )
+  const runIci = $derived(run && pdfCorrectionMatches(run, path, pageIndex, revision) ? run : null)
   const propositions = $derived(runIci?.phase === 'ready' ? runIci.edits : [])
   const acceptees = $derived(propositions.filter((e) => accepted[e.index] !== false))
   const locked = $derived(streaming || applying)
@@ -215,7 +213,7 @@
       page: pageIndex,
       revision,
       instruction,
-      lines: soumises.map((l) => ({ text: l.text, left: l.left, width: l.width })),
+      lines: soumises.map((l) => ({ text: l.text, left: l.left, width: l.width, top: l.top, height: l.height })),
       // L'identité voyage AVEC le run : un index n'a de sens que par rapport à la liste
       // qui l'a produit.
       targets: soumises.map((l) => ({ page: l.page, occurrence: l.occurrence, text: l.text })),
@@ -267,14 +265,27 @@
       destroyPdf = null
       pdf = null
 
-      const { loadPdf } = await import('../lib/pdf')
       const nouveaux = rapport.bytes
-      const charge = await loadPdf(nouveaux.slice())
-      bytes = nouveaux.slice()
-      pdf = charge.doc
-      destroyPdf = charge.destroy
-      pageCount = charge.doc.numPages
-      lines = await readEditableLines(nouveaux.slice())
+      try {
+        const { loadPdf } = await import('../lib/pdf')
+        const charge = await loadPdf(nouveaux.slice())
+        bytes = nouveaux.slice()
+        pdf = charge.doc
+        destroyPdf = charge.destroy
+        pageCount = charge.doc.numPages
+        lines = await readEditableLines(nouveaux.slice())
+      } catch (error) {
+        // Les corrections SONT dans `nouveaux` : les perdre ici serait perdre le travail
+        // pour un échec d'affichage. On les garde, on le dit, et on laisse
+        // « Enregistrer une copie » disponible — le canvas resterait sinon vide à jamais,
+        // sans un mot (`renderPage` sort sur un document nul).
+        bytes = nouveaux.slice()
+        dirty = true
+        console.error('[pdf] rechargement après correction', error)
+        message = 'Les corrections sont écrites, mais l’aperçu n’a pas pu être rechargé. Enregistrez une copie pour les conserver.'
+        cancelPdfCorrection()
+        return
+      }
       edits = {}
       accepted = {}
       submitted = []
@@ -325,16 +336,27 @@
     message = ''
     try {
       const { applyTextEdits, PdfEditError } = await import('../lib/export/pdf-edit-text')
+      const { SourceOverwriteError } = await import('../lib/tauri')
+      // « Le document d'origine n'est jamais modifié » est écrit dans le pied de cette
+      // modale : c'est au code de le tenir, pas à la retenue de qui clique.
+      const ecrire = async (octets: Uint8Array): Promise<boolean> => {
+        try {
+          return await writeCopy(`${fileName.replace(/\.pdf$/i, '')} — modifié.pdf`, octets, path)
+        } catch (error) {
+          if (!(error instanceof SourceOverwriteError)) throw error
+          message = error.message
+          return false
+        }
+      }
       // Corrections déjà écrites dans les octets en mémoire et rien en attente : il n'y a
       // plus rien à appliquer, seulement à enregistrer. Sans cette branche, le bouton
       // primaire répondait « Aucune modification à appliquer » sur un document pourtant
       // modifié — `applyTextEdits` jette sur une liste vide.
       if (!pending.length) {
-        const base = fileName.replace(/\.pdf$/i, '')
         // `.slice()` : toute API qui reçoit un TypedArray et travaille hors du thread est
         // suspecte de TRANSFERT — on garde nos octets si l'utilisateur annule le dialogue
         // et enregistre à nouveau (leçon AGENTS du 2026-08-15, deux fois).
-        if (await writeCopy(`${base} — modifié.pdf`, bytes.slice())) {
+        if (await ecrire(bytes.slice())) {
           dirty = false
           closePdfTextEdit()
         }
@@ -343,8 +365,7 @@
       const demandes = manualRequests()
       try {
         const rapport = await applyTextEdits(bytes.slice(), demandes)
-        const base = fileName.replace(/\.pdf$/i, '')
-        if (!await writeCopy(`${base} — modifié.pdf`, rapport.bytes)) return
+        if (!await ecrire(rapport.bytes)) return
         // On dit ce qui n'a PAS été écrit, avec les caractères en cause : un refus tu
         // ferait croire à une modification complète.
         const refus = rapport.refused.length
@@ -476,12 +497,18 @@
                     <input type="checkbox" checked={accepted[e.index] !== false} onchange={(ev) => (accepted = { ...accepted, [e.index]: ev.currentTarget.checked })} />
                     <span class="prop-ligne">{lineLabel(e.index)}</span>
                     <span class="prop-diff">
+                      <!-- Le contexte n'est pas décoratif : deux corrections identiques sur
+                           deux cellules différentes s'afficheraient sinon EXACTEMENT pareil,
+                           et l'on accepterait sans pouvoir situer ce qu'on accepte. -->
+                      <span class="prop-ctx">{revealInvisibles(e.before)}</span>
                       {#each diffWords(e.find, e.to) as seg}
                         {#if seg.kind === 'same'}<span>{revealInvisibles(seg.text)}</span>
                         {:else if seg.kind === 'del'}<del>{revealInvisibles(seg.text)}</del>
                         {:else}<ins>{revealInvisibles(seg.text)}</ins>{/if}
                       {/each}
+                      <span class="prop-ctx">{revealInvisibles(e.after)}</span>
                     </span>
+                    {#if e.widens}<span class="prop-tag warn" title="La ligne va s’élargir — elle reste dans la place disponible, mais vérifiez le rendu">s’élargit</span>{/if}
                     {#if e.normalized}<span class="prop-tag" title="Apostrophes, guillemets ou espaces alignés sur ceux du document">typographie alignée</span>{/if}
                   </label>
                 </li>
@@ -728,7 +755,10 @@
   .prop-diff del { text-decoration: line-through; color: var(--err-text); opacity: 0.75; }
   .prop-diff del { margin-right: 2px; }
   .prop-diff ins { text-decoration: none; padding: 0 2px; background: var(--accent-soft); border-radius: 3px; }
+  /* Le contexte est là pour SITUER, pas pour se lire : il s'efface derrière le changement. */
+  .prop-ctx { color: var(--ink-5); }
   .prop-tag { flex: none; font-size: 10px; color: var(--ink-5); }
+  .prop-tag.warn { color: var(--warn-text); }
   .propositions-actions { flex: none; display: flex; justify-content: flex-end; gap: 6px; margin-top: 8px; }
   .propositions-actions button {
     height: 30px; padding: 0 14px;

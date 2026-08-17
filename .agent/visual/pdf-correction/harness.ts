@@ -48,7 +48,13 @@ app.pdfTextEditPath = './doc.pdf'
 async function poser(page: number, reponse: string) {
   const octets = new Uint8Array(await (await fetch('./doc.pdf')).arrayBuffer())
   const lignes = (await readEditableLines(octets)).filter((l) => l.page === page && l.editable)
-  const fermees: CorrectableLine[] = lignes.map((l) => ({ text: l.text, left: l.left, width: l.width }))
+  const fermees: CorrectableLine[] = lignes.map((l) => ({
+    text: l.text,
+    left: l.left,
+    width: l.width,
+    top: l.top,
+    height: l.height,
+  }))
   const { edits, dropped } = parsePdfCorrections(reponse, fermees)
   pdfCorrection.current = {
     id: 1,

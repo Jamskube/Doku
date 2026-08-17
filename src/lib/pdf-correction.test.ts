@@ -12,9 +12,17 @@ import {
 } from './pdf-correction'
 
 // Une ligne de corps, occupant la moitié gauche de la page : de la place à droite.
-const ligne = (text: string, left = 0.1, width = 0.4): CorrectableLine => ({ text, left, width })
+// `top`/`height` distincts par défaut pour qu'aucune ligne ne soit voisine de rangée d'une
+// autre, sauf quand un test le veut explicitement.
+let bande = 0
+const ligne = (text: string, left = 0.1, width = 0.4): CorrectableLine =>
+  ({ text, left, width, top: (bande += 0.05), height: 0.02 })
 // Une ligne justifiée PLEINE : plus rien à droite.
-const pleine = (text: string): CorrectableLine => ({ text, left: 0.08, width: 0.86 })
+const pleine = (text: string): CorrectableLine =>
+  ({ text, left: 0.08, width: 0.86, top: (bande += 0.05), height: 0.02 })
+// Deux cellules d'une MÊME rangée de tableau : bandes verticales qui se recoupent.
+const cellule = (text: string, left: number, width: number): CorrectableLine =>
+  ({ text, left, width, top: 0.5, height: 0.02 })
 
 const reponse = (edits: unknown) => JSON.stringify({ edits })
 
@@ -133,6 +141,22 @@ describe('freeSpace', () => {
     // Il reste 2 % de largeur de page : de quoi gagner un caractère, pas une expression.
     expect(freeSpace(pleine('une ligne de corps justifiée jusqu’à la marge'))).toBeLessThan(0.03)
   })
+
+  it('s’arrête à la COLONNE VOISINE, pas à la marge de la page', () => {
+    // MuPDF émet une cellule par ligne : une cellule de première colonne a toute la page
+    // devant elle sur le papier, et trois centimètres dans la réalité. Mesurer jusqu'à la
+    // marge autoriserait précisément le recouvrement que ce contrat prétend fermer.
+    const c1 = cellule('Matériel', 0.1, 0.15)
+    const c2 = cellule('appareil, canal, flux ou site', 0.3, 0.25)
+    expect(freeSpace(c1, [c1, c2])).toBeCloseTo(0.05, 5)
+    expect(freeSpace(c1, [c1])).toBeGreaterThan(0.7) // sans voisine : jusqu'à la marge
+  })
+
+  it('ignore les lignes d’autres rangées, même situées à droite', () => {
+    const c1 = cellule('Matériel', 0.1, 0.15)
+    const ailleurs: CorrectableLine = { text: 'x', left: 0.3, width: 0.2, top: 0.8, height: 0.02 }
+    expect(freeSpace(c1, [c1, ailleurs])).toBeGreaterThan(0.7)
+  })
 })
 
 describe('parsePdfCorrections', () => {
@@ -151,6 +175,29 @@ describe('parsePdfCorrections', () => {
     expect(out.edits).toHaveLength(1)
     expect(out.edits[0].index).toBe(0)
     expect(out.edits[0].lineAfter).toBe("Le chiffre d'affaires du trimestre")
+  })
+
+  it('porte le CONTEXTE du passage — sans lui, deux corrections identiques sont indiscernables', () => {
+    // Vécu à la vérification visuelle : « online → en ligne » proposé sur deux cellules
+    // différentes s'affichait exactement pareil deux fois.
+    const out = parsePdfCorrections(reponse([{ i: 'L1', find: "d'affaire", to: "d'affaires" }]), lignes)
+    expect(out.edits[0].before).toBe('Le chiffre ')
+    expect(out.edits[0].after).toBe(' du trimestre')
+  })
+
+  it('signale un remplacement qui ÉLARGIT la ligne, même accepté', () => {
+    const out = parsePdfCorrections(reponse([{ i: 'L3', find: '2025', to: '2026 révisé' }]), lignes)
+    expect(out.edits[0].widens).toBe(true)
+    const neutre = parsePdfCorrections(reponse([{ i: 'L3', find: '2025', to: '2026' }]), lignes)
+    expect(neutre.edits[0].widens).toBe(false)
+  })
+
+  it('tronque le contexte plutôt que de recopier une ligne entière', () => {
+    const longue = [ligne(`${'a'.repeat(80)}CIBLE${'b'.repeat(80)}`)]
+    const out = parsePdfCorrections(reponse([{ i: 'L1', find: 'CIBLE', to: 'CIBLÉ' }]), longue)
+    expect(out.edits[0].before.startsWith('…')).toBe(true)
+    expect(out.edits[0].after.endsWith('…')).toBe(true)
+    expect(out.edits[0].before.length).toBeLessThan(30)
   })
 
   it('traverse les clôtures et le bavardage du modèle', () => {

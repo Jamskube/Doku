@@ -2,6 +2,7 @@ import { OPENABLE_EXTENSIONS, isBinaryDocumentName } from './doc-kind'
 import { detectUnsupported } from './encoding'
 import { isSupportedFile, type FsEntry } from './explorer'
 import { baseName, joinPath } from './paths'
+import { canonicalPathKey } from './save-as'
 import { bytesToDataUrl, mimeFromExt } from './export/img-data'
 import { nextFreeName } from './paste-image'
 import { makeSearchDoc, type SearchDoc } from './search'
@@ -798,11 +799,32 @@ export async function openPdfDialog(): Promise<string | null> {
 // Dialogue save + écriture BINAIRE d'un .pdf (ADR-0022 : gravure des annotations).
 // TOUJOURS par dialogue, jamais d'écrasement implicite du document source — un PDF
 // écrasé n'est pas récupérable, et le carnet reste la seule version éditable.
-export async function savePdfDialog(defaultName: string, bytes: Uint8Array): Promise<boolean> {
+/** L'utilisateur a désigné le document d'origine comme destination de la copie. */
+export class SourceOverwriteError extends Error {
+  constructor() {
+    super('Doku n’écrase pas le PDF d’origine. Choisissez un autre nom de fichier.')
+  }
+}
+
+/**
+ * Enregistre des octets PDF via le dialogue système.
+ *
+ * `protect` : chemin du document d'origine. L'interface promet « le document d'origine
+ * n'est jamais modifié » — jusqu'ici cette promesse ne tenait qu'à ce que l'utilisateur ne
+ * choisisse pas le même fichier dans le dialogue. Une promesse affichée doit être tenue par
+ * le code, pas par la retenue de celui qui clique.
+ */
+export async function savePdfDialog(defaultName: string, bytes: Uint8Array, protect?: string): Promise<boolean> {
   if (!isTauri) return false
   const { save } = await import('@tauri-apps/plugin-dialog')
   const path = await save({ defaultPath: defaultName, filters: [{ name: 'PDF', extensions: ['pdf'] }] })
   if (typeof path !== 'string') return false
+  if (protect && canonicalPathKey(path) === canonicalPathKey(protect)) {
+    // Jetée plutôt que rendue : `false` signifie déjà « l'utilisateur a annulé », et
+    // confondre les deux ferait disparaître la copie sans un mot. La couche plateforme ne
+    // peut pas poser de bandeau elle-même (les stores dépendent d'elle, pas l'inverse).
+    throw new SourceOverwriteError()
+  }
   await writeFileAtomic(path, bytes)
   return true
 }
