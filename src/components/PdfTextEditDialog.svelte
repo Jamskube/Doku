@@ -203,6 +203,10 @@
   function lancerConsigne(event: Event) {
     event.preventDefault()
     if (locked || raisonIndispo || !instruction.trim()) return
+    // Une proposition en attente — sur cette page ou sur une autre — bloquerait le run
+    // suivant, et le champ répondrait par le silence. Une nouvelle consigne remplace
+    // l'ancienne proposition : c'est le geste que l'utilisateur vient de faire.
+    cancelPdfCorrection()
     const soumises = pageLines.filter((l) => l.editable)
     submitted = soumises
     accepted = {}
