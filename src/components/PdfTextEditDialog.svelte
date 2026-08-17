@@ -7,10 +7,13 @@
   // gère déjà quatre modes de pointeur, la sélection de texte, le dessin et la gomme.
   // Y greffer une cinquième surface de saisie était le chemin le plus court vers une
   // collision.
-  import { app, closePdfTextEdit } from '../lib/stores.svelte'
+  import { app, askSave, closePdfTextEdit, isCloudProvider } from '../lib/stores.svelte'
+  import { cancelPdfCorrection, copilot, correctPdfPage, pdfCorrection } from '../lib/copilot.svelte'
+  import { diffWords } from '../lib/copilot-service'
+  import { lineLabel, revealInvisibles } from '../lib/pdf-correction'
   import { baseName } from '../lib/paths'
   import { readFileBytes, savePdfDialog } from '../lib/tauri'
-  import type { PdfEditableLine } from '../lib/export/pdf-edit-text'
+  import type { PdfEditableLine, PdfEditRequest } from '../lib/export/pdf-edit-text'
   import type { PdfDoc } from '../lib/pdf'
 
   let {
@@ -43,11 +46,46 @@
   let pdf: PdfDoc | null = null
   let destroyPdf: (() => Promise<void>) | null = null
 
+  // --- Correction par consigne (spike) ---------------------------------------------------
+  let instruction = $state('')
+  // Séquence d'application : verrouille les chevrons, le champ et l'acceptation. Sans elle,
+  // un double-clic lance deux `applyTextEdits` sur les mêmes octets d'origine — dernier
+  // écrit gagnant, la première correction disparaît.
+  let applying = $state(false)
+  // Octets réécrits en mémoire mais pas encore sur le disque. Le fichier source, lui, n'est
+  // JAMAIS touché : l'écriture passe toujours par le dialogue « Enregistrer une copie ».
+  let dirty = $state(false)
+  // Incrémentée à chaque application : une proposition calculée sur les octets d'avant ne
+  // vise plus les mêmes lignes.
+  let revision = $state(0)
+  let accepted = $state<Record<number, boolean>>({})
+  // Liste FERMÉE réellement soumise au modèle — c'est elle qui résout les index rendus.
+  let submitted = $state<PdfEditableLine[]>([])
+
   const path = $derived(app.pdfTextEditPath ?? '')
   const fileName = $derived(baseName(path) || 'document.pdf')
   const pageLines = $derived(lines.filter((l) => l.page === pageIndex))
   const pending = $derived(Object.entries(edits).filter(([, v]) => v.trim() !== ''))
   const key = (l: PdfEditableLine) => `${l.page}:${l.occurrence}:${l.text}`
+
+  const run = $derived(pdfCorrection.current)
+  const streaming = $derived(run?.phase === 'streaming')
+  // Le run ne s'affiche que s'il désigne encore CE document, CETTE page et CETTE révision
+  // des octets. Sinon il viserait des lignes que l'utilisateur n'a jamais soumises.
+  const runIci = $derived(
+    run && run.path === path && run.page === pageIndex && run.revision === revision ? run : null,
+  )
+  const propositions = $derived(runIci?.phase === 'ready' ? runIci.edits : [])
+  const acceptees = $derived(propositions.filter((e) => accepted[e.index] !== false))
+  const locked = $derived(streaming || applying)
+  // Jamais un bouton muet : quand la correction est indisponible, on dit pourquoi.
+  const raisonIndispo = $derived.by(() => {
+    if (!isCloudProvider(app.copilotProvider))
+      return 'La correction par consigne demande un fournisseur cloud (Modèles → OpenAI ou MiniMax).'
+    if (copilot.generating && !streaming) return 'Doku-San termine une autre réponse.'
+    if (!pageLines.some((l) => l.editable)) return 'Aucune ligne modifiable sur cette page.'
+    return ''
+  })
 
   $effect(() => {
     const el = dlg
@@ -98,12 +136,21 @@
     })()
     return () => {
       cancelled = true
+      // L'état du run vit dans `copilot.svelte.ts`, pas ici : sans cet appel, une
+      // proposition survivrait à la fermeture et s'appliquerait d'un clic à la
+      // réouverture — éventuellement sur un autre document.
+      cancelPdfCorrection()
       void destroyPdf?.()
       destroyPdf = null
       pdf = null
       bytes = null
       lines = []
       edits = {}
+      instruction = ''
+      accepted = {}
+      submitted = []
+      dirty = false
+      revision = 0
     }
   })
 
@@ -127,18 +174,22 @@
     rendering = true
     renderChain = renderChain.then(async () => {
       const canvas = canvasEl
-      if (!pdf || !canvas || abort.signal.aborted) return
+      // Le document est CAPTURÉ en tête d'étape : `pdf` est remplacé pendant une
+      // application, et le relire après l'`await` mesurerait l'échelle sur l'ancien
+      // document pour rendre sur le nouveau.
+      const doc = pdf
+      if (!doc || !canvas || abort.signal.aborted) return
       const { pageSize, renderPage: render } = await import('../lib/pdf')
       // On mesure la page par `pageSize`, qui fait son propre ménage. Appeler
       // `cleanup()` soi-même juste avant de rendre CETTE page libère les ressources dont
       // le rendu a besoin — et le canvas ressort vide.
-      const base = await pageSize(pdf, cible, 1)
+      const base = await pageSize(doc, cible, 1)
       // Largeur fixe : la modale n'a pas à suivre le zoom du lecteur, et les overlays
       // sont posés en pourcentage, donc indépendants de l'échelle choisie.
       const scale = Math.min(720 / base.width, 940 / base.height)
       if (abort.signal.aborted) return
       renderScale = scale
-      await render(pdf, cible, canvas, scale, abort.signal)
+      await render(doc, cible, canvas, scale, abort.signal)
     }).catch(() => {
       // Un rendu abandonné ne doit pas casser la chaîne des suivants.
     }).finally(() => {
@@ -149,6 +200,114 @@
     return renderChain
   }
 
+  function lancerConsigne(event: Event) {
+    event.preventDefault()
+    if (locked || raisonIndispo || !instruction.trim()) return
+    const soumises = pageLines.filter((l) => l.editable)
+    submitted = soumises
+    accepted = {}
+    void correctPdfPage({
+      path,
+      page: pageIndex,
+      revision,
+      instruction,
+      lines: soumises.map((l) => ({ text: l.text, left: l.left, width: l.width })),
+      // L'identité voyage AVEC le run : un index n'a de sens que par rapport à la liste
+      // qui l'a produit.
+      targets: soumises.map((l) => ({ page: l.page, occurrence: l.occurrence, text: l.text })),
+    })
+  }
+
+  /**
+   * Applique les corrections retenues AUX OCTETS EN MÉMOIRE, puis recharge le document
+   * depuis ces octets : c'est cela, le « rafraîchissement » — on regarde le résultat réel,
+   * substitutions de police comprises, pas un aperçu simulé.
+   *
+   * L'ordre n'est pas négociable : abandonner le rendu en vol, ATTENDRE qu'il ait fini,
+   * seulement ensuite détruire l'ancien document. Détruire pendant qu'un `render` tourne
+   * fait rejeter la promesse, le `.catch()` l'avale, et le canvas reste sur l'image
+   * d'avant — la promesse « ça se rafraîchit » tomberait en silence.
+   *
+   * Les modifications tapées à la main partent DANS LE MÊME appel : les écarter serait
+   * perdre le travail de l'utilisateur, et les garder après coup serait pire — les rangs
+   * `occurrence` se renumérotent dès qu'une ligne homonyme change.
+   */
+  async function appliquer() {
+    const cur = runIci
+    if (!cur || applying || !bytes || !acceptees.length) return
+    applying = true
+    message = ''
+    try {
+      const { applyTextEdits, PdfEditError, readEditableLines } = await import('../lib/export/pdf-edit-text')
+      const demandes: PdfEditRequest[] = [
+        ...manualRequests(),
+        ...acceptees.flatMap((e) => {
+          const cible = cur.targets[e.index]
+          // Une proposition dont la cible a disparu n'est pas écrite : elle viserait une
+          // ligne que l'utilisateur n'a jamais soumise.
+          return cible ? [{ page: cible.page, occurrence: cible.occurrence, from: cible.text, to: e.lineAfter }] : []
+        }),
+      ]
+      if (!demandes.length) return
+      let rapport: Awaited<ReturnType<typeof applyTextEdits>>
+      try {
+        rapport = await applyTextEdits(bytes.slice(), demandes)
+      } catch (error) {
+        message = error instanceof PdfEditError ? error.message : 'Doku n’a pas pu écrire ce PDF.'
+        return
+      }
+
+      renderAbort?.abort()
+      await renderChain
+      await destroyPdf?.()
+      destroyPdf = null
+      pdf = null
+
+      const { loadPdf } = await import('../lib/pdf')
+      const nouveaux = rapport.bytes
+      const charge = await loadPdf(nouveaux.slice())
+      bytes = nouveaux.slice()
+      pdf = charge.doc
+      destroyPdf = charge.destroy
+      pageCount = charge.doc.numPages
+      lines = await readEditableLines(nouveaux.slice())
+      edits = {}
+      accepted = {}
+      submitted = []
+      revision++
+      dirty = true
+      cancelPdfCorrection()
+      void renderPage()
+
+      // On compte les LIGNES demandées, jamais `rapport.applied` : le moteur compte des
+      // passages, et une ligne mixte en vaut plusieurs.
+      const refuses = rapport.refused.length
+      app.banner = {
+        tone: refuses ? 'warning' : 'success',
+        title: refuses ? 'Corrections partiellement appliquées' : 'Corrections appliquées',
+        message: `${demandes.length - refuses} ligne${demandes.length - refuses > 1 ? 's' : ''} sur ${demandes.length} réécrite${demandes.length - refuses > 1 ? 's' : ''} dans le document.` +
+          (refuses
+            ? ` ${refuses} refusée${refuses > 1 ? 's' : ''} : ${rapport.refused.map((r) => (r.chars?.length ? `« ${r.from.slice(0, 30)} » — caractères absents de la police (${r.chars.join(' ')})` : `« ${r.from.slice(0, 30)} » — ${r.reason}`)).join(' ; ')}.`
+            : ' Rien d’autre n’a bougé, et le fichier d’origine est intact.'),
+      }
+    } finally {
+      applying = false
+    }
+  }
+
+  function manualRequests(): PdfEditRequest[] {
+    return pending.map(([id, to]) => {
+      const premier = id.indexOf(':')
+      const second = id.indexOf(':', premier + 1)
+      return {
+        page: Number(id.slice(0, premier)),
+        occurrence: Number(id.slice(premier + 1, second)),
+        from: id.slice(second + 1),
+        to,
+      }
+    })
+  }
+
   function edit(line: PdfEditableLine, value: string) {
     const id = key(line)
     // Revenir au texte d'origine efface la modification plutôt que d'enregistrer une
@@ -157,21 +316,24 @@
   }
 
   async function save() {
-    if (!bytes || saving || !pending.length) return
+    if (!bytes || saving || (!pending.length && !dirty)) return
     saving = true
     message = ''
     try {
       const { applyTextEdits, PdfEditError } = await import('../lib/export/pdf-edit-text')
-      const demandes = pending.map(([id, to]) => {
-        const premier = id.indexOf(':')
-        const second = id.indexOf(':', premier + 1)
-        return {
-          page: Number(id.slice(0, premier)),
-          occurrence: Number(id.slice(premier + 1, second)),
-          from: id.slice(second + 1),
-          to,
+      // Corrections déjà écrites dans les octets en mémoire et rien en attente : il n'y a
+      // plus rien à appliquer, seulement à enregistrer. Sans cette branche, le bouton
+      // primaire répondait « Aucune modification à appliquer » sur un document pourtant
+      // modifié — `applyTextEdits` jette sur une liste vide.
+      if (!pending.length) {
+        const base = fileName.replace(/\.pdf$/i, '')
+        if (await writeCopy(`${base} — modifié.pdf`, bytes)) {
+          dirty = false
+          closePdfTextEdit()
         }
-      })
+        return
+      }
+      const demandes = manualRequests()
       try {
         const rapport = await applyTextEdits(bytes.slice(), demandes)
         const base = fileName.replace(/\.pdf$/i, '')
@@ -181,12 +343,18 @@
         const refus = rapport.refused.length
           ? ` ${rapport.refused.length} non appliquée${rapport.refused.length > 1 ? 's' : ''} : ${rapport.refused.map((r) => r.chars?.length ? `caractères absents (${r.chars.join(' ')})` : r.reason).join(' ; ')}.`
           : ''
+        // On compte les LIGNES demandées, jamais `rapport.applied` : le moteur compte des
+        // passages réécrits, et une ligne à styles mixtes en vaut plusieurs.
+        const ecrites = demandes.length - rapport.refused.length
         app.banner = {
           tone: rapport.refused.length ? 'warning' : 'success',
           title: 'PDF modifié enregistré',
-          message: `${rapport.applied} modification${rapport.applied > 1 ? 's' : ''} écrite${rapport.applied > 1 ? 's' : ''} dans le document, sans rien changer d’autre.${refus}`,
+          message: `${ecrites} ligne${ecrites > 1 ? 's' : ''} réécrite${ecrites > 1 ? 's' : ''} dans le document, sans rien changer d’autre.${refus}`,
         }
-        if (!rapport.refused.length) closePdfTextEdit()
+        if (!rapport.refused.length) {
+          dirty = false
+          closePdfTextEdit()
+        }
       } catch (error) {
         message = error instanceof PdfEditError ? error.message : 'Doku n’a pas pu écrire ce PDF.'
       }
@@ -194,9 +362,43 @@
       saving = false
     }
   }
+
+  // Fermeture alors que des octets réécrits ne sont pas enregistrés. `onclose` arrive APRÈS
+  // la fermeture et n'est pas annulable : c'est `oncancel` (Échap) qu'il faut intercepter,
+  // et les boutons qu'il faut garder séparément.
+  const nonEnregistre = $derived(dirty || pending.length > 0)
+
+  async function fermer() {
+    if (!nonEnregistre) {
+      closePdfTextEdit()
+      return
+    }
+    const choix = await askSave(
+      'Enregistrer une copie ?',
+      dirty
+        ? 'Des corrections ont été appliquées au document mais ne sont pas encore enregistrées. Le fichier d’origine, lui, est intact.'
+        : 'Des modifications sont en attente et n’ont pas été écrites.',
+    )
+    if (choix === 'cancel') return
+    if (choix === 'save') {
+      await save()
+      return
+    }
+    dirty = false
+    closePdfTextEdit()
+  }
+
+  // Échap : `onclose` arrive APRÈS la fermeture et n'est pas annulable — c'est `oncancel`
+  // qu'il faut intercepter. On annule TOUJOURS l'événement natif quand il reste du travail,
+  // puis on pose la question de façon asynchrone.
+  function surEchap(event: Event) {
+    if (!nonEnregistre) return
+    event.preventDefault()
+    void fermer()
+  }
 </script>
 
-<dialog class="pdftext" bind:this={dlg} onclose={closePdfTextEdit} aria-label="Modifier le texte du PDF">
+<dialog class="pdftext" bind:this={dlg} onclose={closePdfTextEdit} oncancel={surEchap} aria-label="Modifier le texte du PDF">
   <div class="window">
     <header>
       <span class="title-icon" aria-hidden="true"><span class="msr">edit_document</span></span>
@@ -205,23 +407,108 @@
         <p>{fileName}</p>
       </div>
       <span class="spacer"></span>
-      <button class="close" aria-label="Fermer" onclick={closePdfTextEdit}><span class="msr">close</span></button>
+      <button class="close" aria-label="Fermer" onclick={() => void fermer()}><span class="msr">close</span></button>
     </header>
 
     <div class="tools">
-      <button class="icon-button" disabled={pageIndex <= 1} onclick={() => pageIndex--} aria-label="Page précédente"><span class="msr">chevron_left</span></button>
+      <button class="icon-button" disabled={pageIndex <= 1 || locked} onclick={() => pageIndex--} aria-label="Page précédente"><span class="msr">chevron_left</span></button>
       <span class="pageno">{pageIndex} / {pageCount || '…'}</span>
       {#if rendering}<span class="rendering" role="status">rendu…</span>{/if}
-      <button class="icon-button" disabled={pageIndex >= pageCount} onclick={() => pageIndex++} aria-label="Page suivante"><span class="msr">chevron_right</span></button>
+      <button class="icon-button" disabled={pageIndex >= pageCount || locked} onclick={() => pageIndex++} aria-label="Page suivante"><span class="msr">chevron_right</span></button>
       <span class="spacer"></span>
       <span class="summary">
         {#if pending.length}
           {pending.length} modification{pending.length > 1 ? 's' : ''} en attente
+        {:else if dirty}
+          Corrections appliquées — pas encore enregistrées
         {:else}
           Cliquez sur une ligne pour la modifier
         {/if}
       </span>
     </div>
+
+    {#if status === 'ready'}
+      <form class="consigne" onsubmit={lancerConsigne}>
+        <span class="consigne-icon" aria-hidden="true"><span class="msr">auto_awesome</span></span>
+        <input
+          class="consigne-field"
+          bind:value={instruction}
+          disabled={locked || !!raisonIndispo}
+          type="text"
+          maxlength="400"
+          autocomplete="off"
+          placeholder={raisonIndispo || 'Corrige les fautes de cette page…'}
+          aria-label="Consigne de correction pour Doku-San"
+        />
+        {#if streaming}
+          <button class="consigne-stop" type="button" onclick={cancelPdfCorrection}>Arrêter</button>
+        {:else}
+          <button class="consigne-send" type="submit" disabled={locked || !!raisonIndispo || !instruction.trim()} aria-label="Envoyer la consigne">
+            <span class="msr">arrow_upward</span>
+          </button>
+        {/if}
+      </form>
+      {#if streaming}
+        <p class="consigne-note" role="status">Doku-San lit les {submitted.length} lignes de la page…</p>
+      {:else if !raisonIndispo}
+        <p class="consigne-note">La page part chez votre fournisseur cloud. Rien n’est écrit sans votre accord.</p>
+      {/if}
+    {/if}
+
+    {#if runIci && runIci.phase !== 'streaming'}
+      <div class="propositions" role="group" aria-label="Corrections proposées">
+        {#if runIci.phase === 'ready'}
+          {#if propositions.length}
+            <p class="propositions-head">
+              {propositions.length} correction{propositions.length > 1 ? 's' : ''} proposée{propositions.length > 1 ? 's' : ''} — décochez ce que vous refusez.
+            </p>
+            <ul class="propositions-list">
+              {#each propositions as e (e.index)}
+                <li>
+                  <label>
+                    <input type="checkbox" checked={accepted[e.index] !== false} onchange={(ev) => (accepted = { ...accepted, [e.index]: ev.currentTarget.checked })} />
+                    <span class="prop-ligne">{lineLabel(e.index)}</span>
+                    <span class="prop-diff">
+                      {#each diffWords(e.find, e.to) as seg}
+                        {#if seg.kind === 'same'}<span>{revealInvisibles(seg.text)}</span>
+                        {:else if seg.kind === 'del'}<del>{revealInvisibles(seg.text)}</del>
+                        {:else}<ins>{revealInvisibles(seg.text)}</ins>{/if}
+                      {/each}
+                    </span>
+                    {#if e.normalized}<span class="prop-tag" title="Apostrophes, guillemets ou espaces alignés sur ceux du document">typographie alignée</span>{/if}
+                  </label>
+                </li>
+              {/each}
+            </ul>
+          {:else}
+            <p class="propositions-head">Doku-San n’a rien trouvé à corriger sur cette page avec cette consigne.</p>
+          {/if}
+          {#if runIci.dropped.length}
+            <p class="propositions-drop">
+              {runIci.dropped.length} proposition{runIci.dropped.length > 1 ? 's' : ''} écartée{runIci.dropped.length > 1 ? 's' : ''} :
+              {runIci.dropped.map((d) => `${d.label} — ${d.reason}`).join(' ; ')}.
+            </p>
+          {/if}
+          {#if propositions.length}
+            <div class="propositions-actions">
+              <button onclick={cancelPdfCorrection} disabled={applying}>Tout refuser</button>
+              <button class="primary" onclick={() => void appliquer()} disabled={applying || !acceptees.length}>
+                {applying ? 'Application…' : `Appliquer ${acceptees.length} correction${acceptees.length > 1 ? 's' : ''}`}
+              </button>
+            </div>
+          {:else}
+            <div class="propositions-actions">
+              <button onclick={cancelPdfCorrection}>Fermer</button>
+            </div>
+          {/if}
+        {:else}
+          <p class="propositions-head error">{runIci.error}</p>
+          <div class="propositions-actions">
+            <button onclick={cancelPdfCorrection}>Fermer</button>
+          </div>
+        {/if}
+      </div>
+    {/if}
 
     {#if message}<p class="message" role="status">{message}</p>{/if}
 
@@ -259,8 +546,8 @@
     <footer>
       <small>Le document d’origine n’est jamais modifié.</small>
       <span class="spacer"></span>
-      <button onclick={closePdfTextEdit}>Annuler</button>
-      <button class="primary" disabled={!pending.length || saving} onclick={() => void save()}>
+      <button onclick={() => void fermer()}>Annuler</button>
+      <button class="primary" disabled={(!pending.length && !dirty) || saving || applying} onclick={() => void save()}>
         {saving ? 'Écriture…' : 'Enregistrer une copie…'}
       </button>
     </footer>
@@ -334,6 +621,118 @@
   /* Le rouge d'erreur du système EXISTE en variante textuelle par thème (`--err-text`) :
      le fond `--err` calibré pour une pastille n'a pas le contraste d'un petit texte. */
   .message { margin: 0; padding: 0 16px 10px; font-size: 12.5px; color: var(--err-text); }
+
+  /* Consigne : même gouttière de 18 px que l'en-tête, la barre d'outils et le pied. Le
+     champ emprunte la grammaire du composeur du copilote (surface posée, bouton d'envoi
+     rond à l'encre) — c'est le même geste ailleurs dans l'app. */
+  .consigne {
+    flex: 0 0 auto;
+    margin: 0 18px 6px;
+    padding: 3px 3px 3px 10px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    border-radius: 12px;
+    background: var(--composer-bg);
+    box-shadow: inset 0 0 0 1px var(--line-1);
+    transition: box-shadow 140ms ease;
+  }
+  .consigne:focus-within { box-shadow: inset 0 0 0 1px var(--line-3); }
+  .consigne-icon { display: inline-flex; color: var(--ink-4); }
+  .consigne-icon .msr { font-size: 16px; }
+  .consigne-field {
+    flex: 1;
+    min-width: 0;
+    height: 30px;
+    border: 0;
+    padding: 0;
+    background: none;
+    color: var(--ink);
+    font: inherit;
+    font-size: 12.5px;
+  }
+  .consigne-field:focus { outline: none; }
+  .consigne-field::placeholder { color: var(--ink-4); }
+  .consigne-field:disabled { color: var(--ink-4); cursor: default; }
+  .consigne-send {
+    flex: none;
+    width: 28px; height: 28px;
+    display: inline-flex; align-items: center; justify-content: center;
+    border: 0; border-radius: 50%;
+    background: var(--ink); color: var(--cream-content);
+    cursor: pointer;
+    transition: background-color 140ms ease, opacity 140ms ease, transform 100ms ease;
+  }
+  .consigne-send .msr { font-size: 17px; }
+  .consigne-send:hover:not(:disabled) { background: var(--ink-2); }
+  .consigne-send:active:not(:disabled) { transform: scale(0.92); }
+  .consigne-send:disabled { opacity: 0.35; cursor: default; }
+  .consigne-stop {
+    flex: none; height: 28px; padding: 0 12px;
+    border: 0; border-radius: 999px;
+    background: var(--accent-soft); color: var(--ink-2);
+    font: inherit; font-size: 12px; font-weight: 500; cursor: pointer;
+  }
+  .consigne-note { margin: 0; padding: 0 18px 8px; font-size: 11px; color: var(--ink-5); }
+
+  /* Propositions : une liste dense, jamais une carte par correction — douze cartes
+     empilées ne se relisent pas, et c'est la relecture qui est la vraie garantie ici. */
+  /* Seule LA LISTE défile. Les refus et les boutons restent visibles quoi qu'il arrive :
+     un refus caché sous la ligne de flottaison est un refus tu, et c'est précisément ce
+     que ce panneau existe pour empêcher. */
+  .propositions {
+    flex: 0 0 auto;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    margin: 0 18px 8px;
+    padding: 8px 10px;
+    border-radius: 12px;
+    background: var(--surface-2);
+  }
+  .propositions-head { flex: none; margin: 0 0 6px; font-size: 11.5px; color: var(--ink-3); }
+  .propositions-head.error { color: var(--err-text); }
+  .propositions-drop { flex: none; margin: 6px 0 0; font-size: 11px; line-height: 1.5; color: var(--ink-4); }
+  .propositions-list {
+    flex: 0 1 auto;
+    min-height: 0;
+    max-height: 30vh;
+    overflow-y: auto;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .propositions-list label {
+    display: flex; align-items: baseline; gap: 8px;
+    padding: 4px 6px; border-radius: 8px; cursor: pointer;
+  }
+  .propositions-list label:hover { background: var(--surface-hover); }
+  .prop-ligne {
+    flex: none;
+    font-family: var(--font-mono); font-size: 10.5px; color: var(--ink-5);
+    font-variant-numeric: tabular-nums;
+  }
+  .prop-diff { flex: 1; min-width: 0; font-size: 12.5px; line-height: 1.5; word-break: break-word; }
+  /* Barré/surligné empruntés à l'aperçu de reformulation : le même geste (proposer,
+     accepter, refuser) doit se lire de la même façon partout dans Doku. */
+  .prop-diff del { text-decoration: line-through; color: var(--err-text); opacity: 0.75; }
+  .prop-diff del { margin-right: 2px; }
+  .prop-diff ins { text-decoration: none; padding: 0 2px; background: var(--accent-soft); border-radius: 3px; }
+  .prop-tag { flex: none; font-size: 10px; color: var(--ink-5); }
+  .propositions-actions { flex: none; display: flex; justify-content: flex-end; gap: 6px; margin-top: 8px; }
+  .propositions-actions button {
+    height: 30px; padding: 0 14px;
+    border: 0; border-radius: 999px; background: transparent; color: var(--ink-3);
+    font: inherit; font-size: 12px; font-weight: 500; cursor: pointer;
+    transition: background-color 140ms ease, color 140ms ease;
+  }
+  .propositions-actions button:hover:not(:disabled) { background: var(--surface-hover); color: var(--ink); }
+  .propositions-actions .primary { background: var(--ink); color: var(--cream-content); }
+  .propositions-actions .primary:hover:not(:disabled) { background: var(--ink-2); color: var(--cream-content); }
+  .propositions-actions button:disabled { opacity: 0.4; cursor: default; }
 
   /* C'est le TON, pas un contour, qui détache la feuille du mobilier (« The Document
      Contrast Rule »). Papier teinté plutôt que voile doux : la scène doit être plus
@@ -453,7 +852,8 @@
 
   @media (prefers-reduced-motion: reduce) {
     .window { animation: none; }
-    .line, .close, .icon-button, footer button { transition: none !important; }
-    .close:active, .icon-button:active, footer button:active { transform: none; }
+    .line, .close, .icon-button, footer button,
+    .consigne, .consigne-send, .propositions-actions button { transition: none !important; }
+    .close:active, .icon-button:active, footer button:active, .consigne-send:active { transform: none; }
   }
 </style>

@@ -74,6 +74,13 @@ import {
   type SummaryMode,
 } from './copilot-service'
 import {
+  buildPdfCorrectionPrompt,
+  parsePdfCorrections,
+  type CorrectableLine,
+  type DroppedEdit,
+  type PdfEdit,
+} from './pdf-correction'
+import {
   buildContextBundle,
   mergeAutomaticContextItems,
   pathBelongsToFolder,
@@ -1646,6 +1653,143 @@ export function retryRephrase(): void {
   const { tabId, from, to, original, mode, instruction } = cur
   rephrase.current = null
   void runRephrase({ tabId, from, to, original, mode, instruction })
+}
+
+// --- Correction d'une page de PDF par consigne (spike) --------------------------------------
+// Le modèle reçoit la liste FERMÉE des lignes éditables d'une page et rend des patchs ciblés
+// à l'intérieur d'elles (`pdf-correction.ts` porte tout le contrat et ses gardes). Ici, la
+// mécanique de génération, calquée sur `runRephrase`.
+//
+// Le run porte un JETON `{path, page, revision}` : la modale peut changer de page, se fermer,
+// se rouvrir sur un AUTRE document, et ses octets changent à chaque application. Une
+// proposition dont le jeton ne correspond plus n'est pas appliquée — elle viserait des lignes
+// que l'utilisateur n'a jamais soumises.
+/** Identité d'une ligne soumise, telle que le moteur d'écriture l'exige. */
+export interface CorrectionTarget {
+  page: number
+  occurrence: number
+  text: string
+}
+
+export interface PdfCorrectionRun {
+  id: number
+  path: string
+  page: number
+  revision: number
+  instruction: string
+  /**
+   * La liste FERMÉE réellement soumise, portée PAR LE RUN.
+   *
+   * Les index rendus par le modèle se résolvaient d'abord contre une variable du composant.
+   * Un remontage de la modale — ou n'importe quel chemin où le run survit à son composant —
+   * la vidait, et l'application plantait sur un `undefined`. L'index n'a de sens que par
+   * rapport à la liste qui l'a produit : les deux voyagent donc ensemble.
+   */
+  targets: CorrectionTarget[]
+  edits: PdfEdit[]
+  dropped: DroppedEdit[]
+  phase: 'streaming' | 'ready' | 'error' | 'config'
+  error: string
+}
+
+export const pdfCorrection = $state({ current: null as PdfCorrectionRun | null })
+let pdfCorrectionSeq = 0
+
+/** Vrai si le jeton du run désigne encore ce que la modale affiche. */
+export function pdfCorrectionMatches(run: PdfCorrectionRun, path: string, page: number, revision: number): boolean {
+  return run.path === path && run.page === page && run.revision === revision
+}
+
+export async function correctPdfPage(params: {
+  path: string
+  page: number
+  revision: number
+  instruction: string
+  lines: CorrectableLine[]
+  targets: CorrectionTarget[]
+}): Promise<void> {
+  if (copilot.generating || pdfCorrection.current) return
+  const consigne = normalizeInstruction(params.instruction)
+  if (!consigne || !params.lines.length) return
+  const provider = app.copilotProvider
+  const id = ++pdfCorrectionSeq
+  copilot.generating = true
+  genController = new AbortController()
+  const signal = genController.signal
+  pdfCorrection.current = {
+    id,
+    path: params.path,
+    page: params.page,
+    revision: params.revision,
+    instruction: consigne,
+    targets: params.targets,
+    edits: [],
+    dropped: [],
+    phase: 'streaming',
+    error: '',
+  }
+
+  try {
+    // Cloud EXIGÉ : le modèle local retenu pour Doku (`qwen2.5:1.5b-instruct-q4_0`) est un
+    // « gadget discret », il ne tient pas une sortie structurée sur 100 lignes. Le dire
+    // plutôt que de laisser l'utilisateur découvrir une réponse illisible.
+    if (!isCloudProvider(provider)) {
+      const cur = pdfCorrection.current
+      if (cur?.id === id) {
+        cur.phase = 'config'
+        cur.error = 'La correction par consigne demande un fournisseur cloud — choisissez OpenAI ou MiniMax dans Modèles.'
+      }
+      return
+    }
+    const runtime = await resolveRuntime(provider, app.activeModel)
+    let cur = pdfCorrection.current
+    if (cur?.id !== id) return
+    if (runtime === null) {
+      cur.phase = 'config'
+      cur.error = providerSetupMessage(provider)
+      return
+    }
+    const raw = await streamGenerate(
+      runtime,
+      buildPdfCorrectionPrompt(params.lines, consigne),
+      () => {},
+      signal,
+      { map: true },
+    )
+    cur = pdfCorrection.current
+    if (cur?.id !== id) return
+    if (signal.aborted) {
+      pdfCorrection.current = null
+      return
+    }
+    const { edits, dropped } = parsePdfCorrections(raw, params.lines)
+    cur.edits = edits
+    cur.dropped = dropped
+    cur.phase = 'ready'
+  } catch (e) {
+    console.error('[copilot] correction pdf', e)
+    const cur = pdfCorrection.current
+    if (cur?.id !== id) return
+    if (signal.aborted) {
+      pdfCorrection.current = null
+      return
+    }
+    cur.phase = 'error'
+    cur.error = generationFailure(e, provider, 'La correction a échoué. Réessayez, ou changez de fournisseur.')
+  } finally {
+    copilot.generating = false
+    genController = null
+  }
+}
+
+// Écarte le run. Appelée au démontage de la modale : l'état vit dans CE module, pas dans le
+// composant — sans cet appel, une proposition périmée survivrait à la fermeture et
+// s'appliquerait d'un clic à la réouverture, sur un autre document.
+export function cancelPdfCorrection(): void {
+  const cur = pdfCorrection.current
+  if (!cur) return
+  if (cur.phase === 'streaming') genController?.abort()
+  pdfCorrection.current = null
 }
 
 // Rejoue une génération échouée (bouton « Réessayer » de la carte d'erreur). Retire la paire

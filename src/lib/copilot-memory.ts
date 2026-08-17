@@ -1,6 +1,7 @@
 // Mémoire durable du copilote cloud — cœur pur et testable. Le modèle propose des
 // mutations JSON ; Doku les valide puis écrit lui-même les fichiers Markdown. Le modèle
 // ne reçoit jamais un droit d'écriture sur le disque.
+import { extractJsonObject } from './json-reply'
 
 export const MEMORY_SCHEMA = 'doku-memory.v1'
 export const MEMORY_RECALL_LIMIT = 5
@@ -143,18 +144,6 @@ export function parseMemory(markdown: string): MemoryRecord | null {
     ...(lastUsedAt && Number.isFinite(Date.parse(lastUsedAt)) ? { lastUsedAt } : {}),
     sourceProvider,
     ...(sourceDocument ? { sourceDocument } : {}),
-  }
-}
-
-function extractJsonObject(raw: string): unknown {
-  const cleaned = raw.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '')
-  const start = cleaned.indexOf('{')
-  const end = cleaned.lastIndexOf('}')
-  if (start < 0 || end <= start) return null
-  try {
-    return JSON.parse(cleaned.slice(start, end + 1))
-  } catch {
-    return null
   }
 }
 
