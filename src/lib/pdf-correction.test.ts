@@ -7,6 +7,7 @@ import {
   lineLabel,
   MAX_EDITS,
   parsePdfCorrections,
+  pdfCorrectionMatches,
   revealInvisibles,
   type CorrectableLine,
 } from './pdf-correction'
@@ -341,6 +342,22 @@ describe('parsePdfCorrections', () => {
   it('n’écarte JAMAIS en silence : chaque rejet porte son étiquette et sa raison', () => {
     const out = parsePdfCorrections(reponse([{ i: 'L7', find: 'a', to: 'b' }]), lignes)
     expect(out.dropped).toEqual([{ label: 'L7', reason: 'ligne inconnue' }])
+  })
+})
+
+describe('pdfCorrectionMatches', () => {
+  const run = { path: 'C:\\doc.pdf', page: 5, revision: 2 }
+
+  it('reconnaît la vue exacte qui a soumis la consigne', () => {
+    expect(pdfCorrectionMatches(run, 'C:\\doc.pdf', 5, 2)).toBe(true)
+  })
+
+  it('rejette une autre page, un autre document, ou des octets déjà réécrits', () => {
+    // Une proposition calculée AVANT une application ne vise plus les mêmes lignes : la
+    // révision seule doit suffire à l'écarter.
+    expect(pdfCorrectionMatches(run, 'C:\\doc.pdf', 6, 2)).toBe(false)
+    expect(pdfCorrectionMatches(run, 'C:\\autre.pdf', 5, 2)).toBe(false)
+    expect(pdfCorrectionMatches(run, 'C:\\doc.pdf', 5, 3)).toBe(false)
   })
 })
 

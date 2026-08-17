@@ -82,6 +82,22 @@ export interface ParsedCorrections {
   dropped: DroppedEdit[]
 }
 
+/**
+ * Jeton d'une proposition : ce qu'elle vise.
+ *
+ * Une correction calculée sur la page 5 avant application ne vise plus les mêmes lignes
+ * après. Le jeton vit ici, pur et testé, plutôt que dans le composant qui le comparait
+ * champ par champ — une comparaison recopiée est une comparaison qui dérive.
+ */
+export function pdfCorrectionMatches(
+  run: { path: string; page: number; revision: number },
+  path: string,
+  page: number,
+  revision: number,
+): boolean {
+  return run.path === path && run.page === page && run.revision === revision
+}
+
 /** Caractères de contexte montrés de part et d'autre du passage corrigé. */
 export const CONTEXTE = 24
 

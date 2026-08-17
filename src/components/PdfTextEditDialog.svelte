@@ -8,9 +8,9 @@
   // Y greffer une cinquième surface de saisie était le chemin le plus court vers une
   // collision.
   import { app, askSave, closePdfTextEdit, isCloudProvider } from '../lib/stores.svelte'
-  import { cancelPdfCorrection, copilot, correctPdfPage, pdfCorrection, pdfCorrectionMatches } from '../lib/copilot.svelte'
+  import { cancelPdfCorrection, copilot, correctPdfPage, pdfCorrection } from '../lib/copilot.svelte'
   import { diffWords } from '../lib/copilot-service'
-  import { lineLabel, revealInvisibles } from '../lib/pdf-correction'
+  import { lineLabel, pdfCorrectionMatches, revealInvisibles } from '../lib/pdf-correction'
   import { baseName } from '../lib/paths'
   import { readFileBytes, savePdfDialog } from '../lib/tauri'
   import type { PdfEditableLine, PdfEditRequest } from '../lib/export/pdf-edit-text'

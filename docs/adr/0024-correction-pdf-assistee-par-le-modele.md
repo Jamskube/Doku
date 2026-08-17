@@ -58,7 +58,14 @@ S'en tenir à la saisie manuelle. · **Pros** : zéro risque nouveau. · **Cons*
 
 **Négatives** : le contrat est plus exigeant pour le modèle (`find` au caractère près), donc une part des propositions sera écartée avant même d'être montrée — c'est assumé, et compté. Le budget de largeur est une approximation, pas une mesure en métriques de police.
 
+**Ce que le contrat rétrécit, et qu'il faut savoir** :
+- **une seule correction par ligne** — si une ligne porte deux fautes, la seconde est écartée (« ligne déjà corrigée ») et demande une relance. Le prompt le dit au modèle, qui peut englober deux fautes proches dans un même `find` ;
+- **`find` est borné à 60 caractères** : au-delà, le modèle recopierait la ligne ;
+- **aucun patch ne peut toucher ni introduire une suite de deux espaces**, donc aucune correction n'est possible *dans* une gouttière de tableau. C'est le prix de la charpente préservée.
+
 **Ce que ce palier ne couvre pas** (règle projet : un spike énumère sa zone d'ombre) :
+- **la boucle avec un vrai modèle cloud n'a pas été jouée de bout en bout.** Le banc versionné exerce le parseur, le diff, l'application et le rechargement sur un vrai PDF, mais injecte la réponse. Rien ne prouve encore qu'un modèle de 2026 rende un `find` exact au caractère près sur des lignes de 6 à 16 caractères — c'est le pari central, et il reste à mesurer en natif ;
+- **le budget de largeur ne borne qu'à droite** : il ignore ce qui se trouve en dessous, donc un texte qui grandirait en hauteur (il ne le peut pas ici) ou une colonne dont la cellule voisine est vide sur cette rangée mais pleine sur la suivante ;
 - la largeur en métriques réelles (`/Widths`) — un « W » et un « l » pèsent pareil au compteur de caractères, et le budget ne les distingue que par une table grossière ;
 - le crénage : `rewriteTextRuns` réécrit en `TJ` à une seule chaîne et abandonne les décalages d'origine, donc même un remplacement de longueur identique peut changer la largeur rendue sur une ligne justifiée ;
 - une seule page à la fois ;

@@ -1695,16 +1695,6 @@ export interface PdfCorrectionRun {
 export const pdfCorrection = $state({ current: null as PdfCorrectionRun | null })
 let pdfCorrectionSeq = 0
 
-/** Vrai si le jeton du run désigne encore ce que la modale affiche. */
-export function pdfCorrectionMatches(
-  run: { path: string; page: number; revision: number },
-  path: string,
-  page: number,
-  revision: number,
-): boolean {
-  return run.path === path && run.page === page && run.revision === revision
-}
-
 export async function correctPdfPage(params: {
   path: string
   page: number
