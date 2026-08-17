@@ -86,14 +86,24 @@
           // de PRÉSENTATION, sans aucun `contenteditable` — le document s'affiche mais
           // ne se modifie pas. Constaté au banc.
           role: 'editor',
+          // La carte de chargement de SuperDoc — « Loading document / Almost ready »,
+          // en anglais, avec sa barre de progression bleue — est coupée : Doku a la
+          // sienne. Sa documentation pose la contrepartie noir sur blanc : « turning it
+          // off hands that responsibility to your UI: keep yours up until `onReady` ».
+          // D'où le `status` qui ne bascule qu'à `onReady` plus bas, et non au retour du
+          // constructeur : c'est ce décalage qui laissait sa carte apparaître après la
+          // nôtre.
+          ui: { loading: false },
           // AUCUNE barre d'outils SuperDoc : ses 21 outils permanents contredisent la
           // D.A. (« le document est le composant signature, sans barre d'outils
           // persistante »). Les outils vivent dans `DocxFormatBubble`, qui pilote les
           // MÊMES commandes via `superdoc.ui` — la surface publique que la barre
           // intégrée consomme elle aussi, donc aucun risque de désynchronisation.
           onEditorUpdate: () => { dirty = true },
+          // Le document n'est réellement affichable qu'ici. Le constructeur, lui, rend
+          // la main bien avant.
+          onReady: () => { if (!cancelled) status = 'ready' },
         }) as unknown as typeof editor
-        status = 'ready'
         instance = editor as unknown as { ui?: unknown }
         // Le signal vient du POINTEUR, pas de SuperDoc : sa tranche `selection` ne
         // remonte une cible que pour une sélection ÉTENDUE — un simple curseur posé
