@@ -31,5 +31,14 @@ Deux réparations comptent plus que les autres et n'étaient dans aucun plan : *
 - `WikilinkPrompt` n'est toujours pas un `<dialog>` : pas de confinement du focus, Tab sort derrière.
 - Une trentaine de fonctions restent exportées sans appelant — invisibles à la prochaine détection de code mort.
 
+## Chantier en pause — correction de PDF par consigne
+**Construit, testé, et MASQUÉ le 2026-08-17** : `PDF_CORRECTION_ENABLED = false` dans `src/lib/pdf-correction.ts`. Le raisonnement complet est dans l'[ADR-0024](../adr/0024-correction-pdf-assistee-par-le-modele.md), en tête de fichier.
+
+En un mot : ça ne sait faire que de la microcorrection. « Ajoute une section », « réarrange cette page », « reformule ce passage » sont hors de portée — le PDF n'a ni paragraphes ni recomposition, la ligne est l'atome. Testé avec un vrai modèle cloud, verdict de l'utilisateur : « il ne peut casiment rien faire ».
+
+**Ne pas reprendre ce chemin tel quel.** La suite naturelle de cette fonction est le **DOCX**, qui a un vrai modèle de document (ProseMirror via SuperDoc) : y ajouter une section ou réarranger sont des opérations ordinaires, et le copilote lit déjà les `.docx`. Tout le contrat de validation écrit pour le PDF (liste fermée, patch ciblé, refus nommés, diff relu ligne à ligne) se transpose ; ce qui disparaît, c'est le budget de largeur et l'alphabet contraint.
+
+Ce qui reste acquis quoi qu'il arrive : deux corruptions de document corrigées dans le moteur d'édition PDF (une ligne perdait sa fin en silence ; une saisie refusée revenait sur la mauvaise cellule), toutes deux actives dans la saisie manuelle avant ce travail.
+
 ## Next concrete step
-Lancer Doku en natif sur la Surface et faire le parcours DOCX de bout en bout — ouvrir un `.docx` par le dialogue, sélectionner du texte pour voir la bulle, changer un style, poser une question au copilote sur le document, enregistrer, exporter en PDF. C'est le seul maillon qui n'a jamais tourné hors du navigateur, et c'est celui qui a le plus changé aujourd'hui.
+Lancer Doku en natif sur la Surface et faire le parcours DOCX de bout en bout — ouvrir un `.docx` par le dialogue, sélectionner du texte pour voir la bulle, changer un style, poser une question au copilote sur le document, enregistrer, exporter en PDF. C'est le seul maillon qui n'a jamais tourné hors du navigateur, et c'est celui qui a le plus changé.

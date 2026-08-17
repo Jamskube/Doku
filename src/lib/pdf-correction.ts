@@ -26,6 +26,22 @@
 import { normalizeInstruction } from './copilot-service'
 import { extractJsonObject } from './json-reply'
 
+/**
+ * **Chantier non livré — l'interface est masquée (2026-08-17).**
+ *
+ * Tout ce module fonctionne et est testé, mais l'essai sur documents réels a montré que la
+ * fonction refuse la plupart de ce qu'on a naturellement envie de lui demander : ajouter
+ * une section, réarranger une page, réécrire un passage sont hors de portée du format, et
+ * il ne reste que la microcorrection. Une fonction qui dit non aux trois quarts des
+ * demandes irrite plus qu'elle n'aide, donc elle ne s'affiche pas.
+ *
+ * Le raisonnement complet, ce qu'elle sait faire, pourquoi le reste est impossible et ce
+ * qui le débloquerait : `docs/adr/0024-correction-pdf-assistee-par-le-modele.md`.
+ *
+ * Repasser à `true` rallume la barre de consigne dans « Modifier le texte ».
+ */
+export const PDF_CORRECTION_ENABLED = false
+
 /** Au-delà, le diff n'est plus relu — il est « tout accepter ». */
 export const MAX_EDITS = 12
 

@@ -1,6 +1,41 @@
 # 0024. Correction de PDF assistée par le modèle : patch ciblé, jamais réécriture de ligne
 
-Date : 2026-08-17 · Status : accepted · Deciders : Kubo · Tags : pdf, copilote, cloud, édition, spike
+Date : 2026-08-17 · Status : **accepted, mise en œuvre SUSPENDUE** · Deciders : Kubo · Tags : pdf, copilote, cloud, édition, spike
+
+> ## ⛔ État : chantier non livré, interface masquée
+>
+> Le contrat décrit ci-dessous est **construit, testé et correct**. Il est **masqué dans
+> l'interface** depuis le 2026-08-17 : `PDF_CORRECTION_ENABLED = false`
+> (`src/lib/pdf-correction.ts`). La saisie manuelle de « Modifier le texte », elle, reste
+> entière et n'est pas concernée.
+>
+> **Pourquoi.** À l'essai sur des documents réels avec un vrai modèle cloud, la fonction
+> refuse la plupart de ce qu'on a naturellement envie de lui demander :
+>
+> | Demande | Résultat |
+> |---|---|
+> | « corrige les fautes d'accord », « remplace 2025 par 2026 » | ✅ fonctionne |
+> | « ajoute une section » | ❌ impossible — il n'y a pas de place à créer |
+> | « réarrange cette page pour la rendre plus chaleureuse » | ❌ le modèle est perdu |
+> | « reformule ce paragraphe » | ❌ refusé par le budget de largeur |
+>
+> Il ne reste que la **microcorrection** : des changements qui n'allongent presque pas la
+> ligne et n'emploient que des caractères déjà présents dans le document. Une fonction qui
+> dit non aux trois quarts des demandes irrite plus qu'elle n'aide, et « correcteur
+> orthographique piloté par consigne » n'est pas ce que la barre laissait espérer.
+>
+> **La leçon de méthode, et elle coûte cher.** Six passages de portail ont vérifié « est-ce
+> conforme à la spécification » — une spécification écrite par l'agent lui-même — et
+> **aucun n'a demandé « est-ce que le résultat sert à quelque chose »**. Les critics ont
+> trouvé de vrais défauts, dont deux corruptions de document ; aucun ne pouvait poser la
+> seule question qui décidait du sort de la fonction. L'utilisateur l'a tranchée en trois
+> essais. Une conformité validée n'est pas une utilité démontrée.
+>
+> **Ce qu'il faudrait pour la reprendre** — et ce n'est pas une question d'effort sur ce
+> chemin-ci : un **modèle de document qui recompose**. Le PDF n'en a pas ; le DOCX, que
+> Doku édite depuis le 2026-08-17 (ProseMirror via SuperDoc), en a un. « Ajouter une
+> section », « réarranger », « réécrire » y sont des opérations ordinaires. La suite
+> naturelle de cette fonction n'est donc pas dans le PDF, elle est dans le **DOCX**.
 
 ## Context
 

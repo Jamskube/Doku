@@ -10,7 +10,7 @@
   import { app, askSave, closePdfTextEdit, isCloudProvider } from '../lib/stores.svelte'
   import { cancelPdfCorrection, copilot, correctPdfPage, pdfCorrection } from '../lib/copilot.svelte'
   import { diffWords } from '../lib/copilot-service'
-  import { lineLabel, pdfCorrectionMatches, repinRefusedEdits, revealInvisibles } from '../lib/pdf-correction'
+  import { lineLabel, PDF_CORRECTION_ENABLED, pdfCorrectionMatches, repinRefusedEdits, revealInvisibles } from '../lib/pdf-correction'
   import { baseName } from '../lib/paths'
   import { readFileBytes, savePdfDialog, SourceOverwriteError } from '../lib/tauri'
   import type { PdfEditableLine, PdfEditRequest } from '../lib/export/pdf-edit-text'
@@ -564,7 +564,9 @@
       </span>
     </div>
 
-    {#if status === 'ready'}
+    <!-- Masqué tant que `PDF_CORRECTION_ENABLED` est faux : chantier non livré, voir
+         l'ADR-0024. La saisie manuelle ci-dessous, elle, reste entière. -->
+    {#if status === 'ready' && PDF_CORRECTION_ENABLED}
       <form class="consigne" onsubmit={lancerConsigne}>
         <span class="consigne-icon" aria-hidden="true"><span class="msr">auto_awesome</span></span>
         <input
@@ -592,7 +594,7 @@
       {/if}
     {/if}
 
-    {#if runIci && runIci.phase !== 'streaming'}
+    {#if PDF_CORRECTION_ENABLED && runIci && runIci.phase !== 'streaming'}
       <div class="propositions" role="group" aria-label="Corrections proposées">
         {#if runIci.phase === 'ready'}
           {#if propositions.length}
