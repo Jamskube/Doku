@@ -20,6 +20,18 @@ import { activateWorkspacePane, assignWorkspaceTab, closeWorkspaceTab, createWor
 // historiques n'ont pas à savoir qu'il a déménagé.
 export { isBinaryKind, kindFromName, type BinaryKind, type DocKind } from './doc-kind'
 import { isBinaryKind, kindFromName, type DocKind } from './doc-kind'
+// Actions du document Word actif, publiées par `DocxView` au montage. Sans ce relais,
+// « Enregistrer » et « Exporter en PDF » ne pouvaient vivre que dans des boutons collés
+// à la vue : ni le menu, ni Ctrl+S ne les atteignaient. Un `.docx` n'était donc pas
+// enregistrable au clavier, contrairement à tous les autres documents.
+export const docxActions = $state({
+  tabId: null as number | null,
+  save: null as null | (() => Promise<void>),
+  exportPdf: null as null | (() => Promise<void>),
+  busy: '' as '' | 'save' | 'pdf',
+  dirty: false,
+})
+
 export type SidebarView = 'files' | 'plan' | 'history' | 'search'
 // Vue interne du panneau copilote droit (14.0). Transitoire : boot toujours en
 // 'chat' (coquille statique, ne démarre PAS le moteur) ; 'models' déclenche

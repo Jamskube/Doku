@@ -6,7 +6,13 @@
 // un manqué coûterait un glyphe absent à l'écran) :
 //   (a) texte statique d'un élément portant la classe `msr`
 //   (b) littéraux entre quotes dans l'expression d'un tel élément (ternaires)
-//   (c) propriétés `icon: 'nom'` (tableaux de conf, ex. SettingsDialog)
+//   (c) propriétés `icon:` / `icone:` / `icône:` (tableaux de conf, ex. SettingsDialog)
+//
+// La variante française de (c) n'est pas une coquetterie : le code du projet nomme ses
+// identifiants en anglais, mais la règle ne regardait QUE `icon:`. Une barre d'outils
+// dont les noms d'icônes vivaient dans un tableau `{ icone: '…' }` est passée entre les
+// mailles — six glyphes absents à l'écran, et le garde-fou muet. Le filtre par la table
+// officielle des codepoints rend une règle large sans danger.
 
 import { readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
@@ -25,7 +31,7 @@ export function collectIconNames(srcDir) {
   walk(srcDir)
   const SPAN = /class=(?:"[^"]*\bmsr\b[^"]*"|'[^']*\bmsr\b[^']*')[^>]*>([\s\S]*?)</g
   const QUOTED = /'([a-z][a-z0-9_]{1,40})'|"([a-z][a-z0-9_]{1,40})"/g
-  const ICON_PROP = /\bicon:\s*'([a-z][a-z0-9_]{1,40})'/g
+  const ICON_PROP = /\bic[oô]ne?:\s*'([a-z][a-z0-9_]{1,40})'/gi
   for (const file of files) {
     const text = readFileSync(file, 'utf8')
     for (const m of text.matchAll(SPAN)) {

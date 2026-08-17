@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount, tick } from 'svelte'
-  import { app, activeTab, isBinaryKind, openPath, openPdfPages, openPdfTextEdit, requestCloseTab, isDirty, saveTabOrSaveAs, selectTab, setColumnWidth, toggleActiveSourceMode, togglePin, toggleWorkspaceSplit, workspace, workspaceLayout, type ColumnWidth, type DocKind } from '../lib/stores.svelte'
+  import { app, activeTab, docxActions, isBinaryKind, openPath, openPdfPages, openPdfTextEdit, requestCloseTab, isDirty, saveTabOrSaveAs, selectTab, setColumnWidth, toggleActiveSourceMode, togglePin, toggleWorkspaceSplit, workspace, workspaceLayout, type ColumnWidth, type DocKind } from '../lib/stores.svelte'
   import type { PaneId } from '../lib/workspace'
   import { tabDiscriminator } from '../lib/tabs'
   import { parentPath } from '../lib/explorer'
@@ -25,6 +25,7 @@
   // Un onglet PDF n'exporte pas vers les autres formats, mais il exporte sa propre
   // copie annotée (ADR-0022) — le menu change donc de contenu au lieu d'être grisé.
   const activeIsPdf = $derived(activeTab()?.kind === 'pdf')
+  const activeIsDocx = $derived(activeTab()?.kind === 'docx')
   const canExport = $derived(!!activeTab())
   // Les deux actions PDF travaillent depuis le CHEMIN du fichier : sans chemin, elles
   // ne peuvent rien faire. On les désactive plutôt que de les laisser cliquables et
@@ -109,7 +110,21 @@
 
   async function saveActive() {
     const tab = activeTab()
-    if (tab && !isBinaryKind(tab.kind)) await saveTabOrSaveAs(tab)
+    if (!tab) return
+    // Un `.docx` s'enregistre par SuperDoc, pas par le chemin texte : ses actions sont
+    // publiées dans `docxActions` par la vue montée.
+    if (tab.kind === 'docx') {
+      if (docxActions.tabId === tab.id) await docxActions.save?.()
+      return
+    }
+    if (!isBinaryKind(tab.kind)) await saveTabOrSaveAs(tab)
+  }
+
+  async function exportDocxToPdf() {
+    const tab = activeTab()
+    if (!tab || tab.kind !== 'docx' || docxActions.tabId !== tab.id) return
+    closeMenus()
+    await docxActions.exportPdf?.()
   }
 
   // Exports HTML/print en import() dynamique (motif DOCX ci-dessous) : ils tirent
@@ -454,11 +469,14 @@
         <button
           class="app-menu-item"
           role="menuitem"
-          disabled={!activeTab() || isBinaryKind(activeTab()!.kind) || !isDirty(activeTab()!)}
+          disabled={!activeTab()
+            || (activeIsDocx ? (!docxActions.dirty || docxActions.busy !== '') : (isBinaryKind(activeTab()!.kind) || !isDirty(activeTab()!)))}
           onmouseenter={() => (submenu = null)}
           onclick={() => runMenuAction(saveActive)}
         >
-          <span class="msr">save</span><span class="menu-label">Enregistrer</span><kbd>Ctrl+S</kbd>
+          <span class="msr">save</span>
+          <span class="menu-label">{activeIsDocx && docxActions.busy === 'save' ? 'Enregistrement…' : 'Enregistrer'}</span>
+          <kbd>Ctrl+S</kbd>
         </button>
 
         <div class="submenu-root" role="none" onmouseenter={() => { if (canExport) submenu = 'export' }}>
@@ -486,6 +504,19 @@
                 </button>
                 <button class="app-menu-item" role="menuitem" disabled={!pdfPath} onclick={organizePagesActive}>
                   <span class="msr">auto_stories</span><span class="menu-label">Organiser les pages…</span>
+                </button>
+              {:else if activeIsDocx}
+                <!-- Un document Word s'exporte en PDF par le même menu que les autres
+                     formats, plutôt que par des boutons collés au-dessus du document. -->
+                <button
+                  class="app-menu-item"
+                  role="menuitem"
+                  disabled={docxActions.busy !== '' || !docxActions.exportPdf}
+                  onclick={() => void exportDocxToPdf()}
+                >
+                  <span class="msr">picture_as_pdf</span>
+                  <span class="menu-label">{docxActions.busy === 'pdf' ? 'Export en cours…' : 'Document PDF'}</span>
+                  <span class="menu-format">.pdf</span>
                 </button>
               {:else}
                 <button class="app-menu-item" role="menuitem" onclick={() => exportActive('docx')}>

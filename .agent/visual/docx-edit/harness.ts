@@ -49,6 +49,11 @@ mount(DocxView, {
       return true
     },
     savePdf: async () => true,
+    onEditorReady: (instance: unknown) => {
+      ;(globalThis as unknown as { __superdoc: unknown }).__superdoc = instance
+      etapes['2-superdoc-pret'] = true
+      document.body.dataset.ready = 'true'
+    },
   },
 })
 

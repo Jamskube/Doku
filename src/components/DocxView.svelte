@@ -7,8 +7,9 @@
   // reporte pas ici : un `.docx` n'a pas de source texte à préserver au caractère près,
   // c'est un format structuré qu'on relit et réécrit tel quel. Doku a donc deux moteurs
   // d'édition — CM6 pour le texte, ProseMirror pour le DOCX — et c'est assumé.
-  import { app } from '../lib/stores.svelte'
+  import { app, docxActions } from '../lib/stores.svelte'
   import { readFileBytes, savePdfDialog, writeFileAtomic } from '../lib/tauri'
+  import DocxFormatBubble from './DocxFormatBubble.svelte'
 
   // Ports injectables, comme les modales PDF : c'est ce qui permet au banc de contrôle
   // de monter la VRAIE vue sans hôte natif. Par défaut, ce sont les accès fichiers de
@@ -19,18 +20,26 @@
     readBytes = readFileBytes,
     writeFile = writeFileAtomic,
     savePdf = savePdfDialog,
+    onEditorReady,
   }: {
     path: string
     tabId: number
     readBytes?: (path: string) => Promise<Uint8Array | null>
     writeFile?: (path: string, bytes: Uint8Array) => Promise<unknown>
     savePdf?: (name: string, bytes: Uint8Array) => Promise<boolean>
+    // Le banc de contrôle en a besoin pour interroger la surface de commandes.
+    onEditorReady?: (instance: unknown) => void
   } = $props()
 
   let host: HTMLElement | undefined = $state()
-  // Conteneur de la barre d'outils de SuperDoc. Elle doit exister AVANT la construction
-  // de l'éditeur : SuperDoc la monte lui-même dans l'élément qu'on lui désigne.
-  let toolbarEl: HTMLElement | undefined = $state()
+  // Cadre de référence de la bulle de mise en forme (enfant absolu, jamais `fixed`).
+  let vueEl: HTMLElement | undefined = $state()
+  // Instance vivante, donnée à la bulle pour qu'elle pilote les commandes de SuperDoc.
+  let instance = $state.raw<{ ui?: unknown } | null>(null)
+  // Le curseur est-il DANS le document ? `:focus-within` ne peut pas répondre : la
+  // surface de SuperDoc est un `role="textbox"` à pont clavier, jamais un nœud focusable
+  // ordinaire, donc le CSS ne voit rien. C'est SuperDoc lui-même qui doit le dire.
+  let saisieActive = $state(false)
   let status: 'loading' | 'ready' | 'error' = $state('loading')
   let message = $state('')
   let busy = $state<'' | 'save' | 'pdf'>('')
@@ -39,14 +48,14 @@
   // L'instance SuperDoc n'est pas un état réactif : c'est un objet impératif lourd qui
   // gère son propre DOM. Un proxy Svelte autour ne servirait qu'à le casser.
   let editor: { export: (o: unknown) => Promise<Blob>; destroy?: () => void } | null = null
+  let arreterSelection: (() => void) | null = null
 
   const fileName = $derived(path.split(/[\\/]/).pop() ?? 'document.docx')
 
   $effect(() => {
     const target = host
-    const barre = toolbarEl
     const source = path
-    if (!target || !barre || !source) return
+    if (!target || !source) return
     let cancelled = false
     void (async () => {
       status = 'loading'
@@ -77,15 +86,36 @@
           // de PRÉSENTATION, sans aucun `contenteditable` — le document s'affiche mais
           // ne se modifie pas. Constaté au banc.
           role: 'editor',
-          // Les outils habituels d'un traitement de texte — graisse, style, couleur,
-          // titres, listes, alignements, retraits, liens, images, tableaux, saut de
-          // page, reproduire la mise en forme, suivi des modifications — sont livrés
-          // par SuperDoc. Il ne les monte que si on lui désigne un conteneur : sans
-          // cette ligne, l'éditeur est nu et tout se fait au clavier.
-          toolbar: barre,
+          // AUCUNE barre d'outils SuperDoc : ses 21 outils permanents contredisent la
+          // D.A. (« le document est le composant signature, sans barre d'outils
+          // persistante »). Les outils vivent dans `DocxFormatBubble`, qui pilote les
+          // MÊMES commandes via `superdoc.ui` — la surface publique que la barre
+          // intégrée consomme elle aussi, donc aucun risque de désynchronisation.
           onEditorUpdate: () => { dirty = true },
         }) as unknown as typeof editor
         status = 'ready'
+        instance = editor as unknown as { ui?: unknown }
+        // Le signal vient du POINTEUR, pas de SuperDoc : sa tranche `selection` ne
+        // remonte une cible que pour une sélection ÉTENDUE — un simple curseur posé
+        // dans le texte n'y apparaît pas, et c'est justement ce cas qu'il faut montrer.
+        // Un clic dans le document ouvre la saisie, un clic ailleurs la referme.
+        // EN CAPTURE, et un seul écouteur : SuperDoc appelle `stopPropagation()` sur le
+        // `pointerdown` de sa surface, donc un écouteur en phase de bulle ne voit jamais
+        // les clics DANS le texte — exactement ceux qui comptent. Mesuré au banc :
+        // l'état ressortait inversé.
+        // La cible est la FEUILLE, pas le volet : cliquer la marge grise autour de la
+        // page n'est pas se mettre à écrire dedans.
+        const surClic = (event: PointerEvent) => {
+          const cible = event.target as Element | null
+          saisieActive = !!cible?.closest?.('.v2-super-editor__stage')
+        }
+        window.addEventListener('pointerdown', surClic, true)
+        arreterSelection = () => {
+          // Le drapeau de capture fait partie de l'IDENTITÉ de l'écouteur : sans lui,
+          // `removeEventListener` ne retire rien (piège déjà payé sur `PdfView`).
+          window.removeEventListener('pointerdown', surClic, true)
+        }
+        onEditorReady?.(editor)
       } catch (error) {
         status = 'error'
         message = error instanceof Error ? error.message : 'Ce document n’a pas pu être ouvert.'
@@ -98,7 +128,11 @@
       } catch {
         // Un éditeur déjà démonté ne doit pas empêcher de changer d'onglet.
       }
+      arreterSelection?.()
+      arreterSelection = null
       editor = null
+      instance = null
+      saisieActive = false
       dirty = false
     }
   })
@@ -166,36 +200,44 @@
     }
   }
 
-  export function saveDocx() {
-    return save()
-  }
+  // Publication des actions vers le menu et le clavier. Le `tabId` sert de garde : si un
+  // autre onglet devient actif, le menu ne doit pas appeler l'enregistrement d'un
+  // document qui n'est plus à l'écran.
+  $effect(() => {
+    docxActions.tabId = tabId
+    docxActions.save = () => save()
+    docxActions.exportPdf = () => exportPdf()
+    return () => {
+      if (docxActions.tabId !== tabId) return
+      docxActions.tabId = null
+      docxActions.save = null
+      docxActions.exportPdf = null
+      docxActions.busy = ''
+      docxActions.dirty = false
+    }
+  })
+
+  $effect(() => {
+    if (docxActions.tabId !== tabId) return
+    docxActions.busy = busy
+    docxActions.dirty = dirty
+  })
 </script>
 
-<div class="docx-view" data-tab={tabId}>
-  <!-- Une SEULE rangée d'outils : ceux de SuperDoc à gauche, les actions de Doku à
-       droite. Deux barres superposées auraient donné deux grammaires de boutons pour un
-       même document. -->
-  <div class="docx-bar" class:ready={status === 'ready'}>
-    <div class="docx-toolbar" bind:this={toolbarEl}></div>
-    <div class="docx-actions">
-      <button disabled={status !== 'ready' || !!busy} onclick={() => void save()}>
-        <span class="msr">save</span>
-        <span>{busy === 'save' ? 'Enregistrement…' : dirty ? 'Enregistrer' : 'Enregistré'}</span>
-      </button>
-      <button disabled={status !== 'ready' || !!busy} onclick={() => void exportPdf()}>
-        <span class="msr">picture_as_pdf</span>
-        <span>{busy === 'pdf' ? 'Export…' : 'Exporter en PDF'}</span>
-      </button>
-    </div>
-  </div>
-
+<!-- Rien au-dessus du document : les outils n'apparaissent qu'à la sélection, et
+     « Enregistrer » / « Exporter en PDF » ont rejoint le menu, avec les autres exports. -->
+<div class="docx-view" data-tab={tabId} bind:this={vueEl}>
   {#if status === 'loading'}
     <p class="docx-note">Ouverture du document…</p>
   {:else if status === 'error'}
     <p class="docx-note error">{message}</p>
   {/if}
 
-  <div class="docx-host" bind:this={host}></div>
+  <div class="docx-host" class:saisie={saisieActive} bind:this={host}></div>
+
+  {#if status === 'ready' && instance}
+    <DocxFormatBubble superdoc={instance as never} container={vueEl} />
+  {/if}
 </div>
 
 <style>
@@ -206,70 +248,6 @@
     flex-direction: column;
     overflow: hidden;
   }
-  .docx-bar {
-    flex: 0 0 auto;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 6px 12px;
-    background: var(--cream-base);
-    /* Tant que le document charge, la rangée reste en place — la barre d'outils de
-       SuperDoc s'y monte — mais elle ne s'annonce pas : des outils visibles au-dessus
-       d'un document absent seraient des affordances mortes. */
-    opacity: 0;
-    transition: opacity 160ms ease;
-  }
-  .docx-bar.ready { opacity: 1; }
-  /* La barre de SuperDoc ne se replie pas (`nowrap`) : elle doit donc DÉFILER dans
-     l'espace qui lui reste, sinon ses derniers outils passent sous les actions de Doku —
-     ce que le banc a montré en fenêtre étroite. */
-  .docx-toolbar { flex: 1 1 0; min-width: 0; }
-  .docx-actions { flex: none; display: flex; gap: 6px; }
-  /* Même grammaire que les autres surfaces Doku : pilule sans contour permanent, qui ne
-     se révèle qu'au survol. */
-  .docx-actions button {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    height: 32px;
-    padding: 0 12px;
-    border: 0;
-    border-radius: 999px;
-    background: transparent;
-    color: var(--ink-3);
-    font: inherit;
-    font-size: 12.5px;
-    font-weight: 500;
-    cursor: pointer;
-    transition: background-color 140ms ease, color 140ms ease, transform 100ms ease;
-  }
-  .docx-actions button:hover:not(:disabled) { background: var(--surface-hover); color: var(--ink); }
-  .docx-actions button:active:not(:disabled) { transform: scale(0.97); }
-  .docx-actions button:disabled { opacity: 0.4; cursor: default; }
-  .docx-actions .msr { font-size: 17px; }
-
-  /* La barre est rendue par SuperDoc, avec ses propres classes : on ne la redessine pas
-     (un jour ou l'autre elles changeront), on l'assied seulement dans la typographie de
-     Doku pour qu'elle ne détonne pas à côté du reste. */
-  .docx-bar :global(.superdoc-toolbar) {
-    background: transparent;
-    border: 0;
-    box-shadow: none;
-    padding: 0;
-    /* SuperDoc pose `nowrap` : ses derniers outils passaient alors sous les actions de
-       Doku, ou obligeaient à une barre de défilement qui mangeait la rangée. On la
-       laisse se REPLIER, comme le fait un traitement de texte en fenêtre étroite. */
-    flex-wrap: wrap;
-    row-gap: 2px;
-  }
-  .docx-bar :global(.superdoc-toolbar *) { font-family: inherit; }
-
-  @media (prefers-reduced-motion: reduce) {
-    .docx-bar { transition: none; }
-    .docx-actions button { transition: none; }
-    .docx-actions button:active { transform: none; }
-  }
-
   .docx-note { margin: 0; padding: 24px; text-align: center; opacity: 0.72; }
   .docx-note.error { color: var(--err-text); }
 
@@ -277,5 +255,45 @@
     flex: 1 1 auto;
     overflow: auto;
     scrollbar-gutter: stable;
+    /* La page Word a une largeur FIXE (794 px en A4 à 100 %). Dans un conteneur bloc,
+       elle se colle à gauche et laisse un vide sur toute la droite du volet. On la
+       centre — et `safe` est indispensable : à un zoom qui rend la page plus large que
+       le volet, un centrage ordinaire rend le bord GAUCHE inatteignable au défilement. */
+    display: flex;
+    justify-content: safe center;
+    align-items: flex-start;
+    /* Le pourtour est une surface de travail, pas un trou : même papier teinté que la
+       scène de la modale d'édition PDF, pour que la feuille soit posée sur quelque
+       chose plutôt que suspendue devant le mobilier sombre. */
+    background: var(--cream-tint);
+  }
+
+  /* « Je peux écrire ici » : SuperDoc laisse le curseur en `auto` sur sa surface de
+     saisie — aucun I-beam au survol du texte, donc rien qui dise que le document
+     s'édite. C'est l'affordance la plus standard qui soit, et elle manquait. */
+  .docx-host :global([role='textbox']) { cursor: text; }
+
+  /* Et « j'écris ici EN CE MOMENT » : la feuille prend une élévation quand la saisie a
+     le focus. Anneau et ombre ambiante, jamais de halo coloré — le système réserve la
+     couleur aux statuts sémantiques. */
+  .docx-host :global(.v2-super-editor__stage) {
+    /* État de repos de MÊME STRUCTURE que l'état de focus (trois couches) : une
+       transition qui part de `none` n'a rien à interpoler et laisse l'ombre bloquée en
+       transparent. */
+    box-shadow:
+      0 0 0 1px transparent,
+      0 0 0 3px transparent,
+      0 0 0 0 transparent;
+    transition: box-shadow 160ms ease;
+  }
+  .docx-host.saisie :global(.v2-super-editor__stage) {
+    box-shadow:
+      0 0 0 1px var(--elevation-ring),
+      0 0 0 3px rgba(var(--ink-rgb), 0.10),
+      0 12px 30px rgba(var(--shadow-rgb), 0.18);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .docx-host :global(.v2-super-editor__stage) { transition: none; }
   }
 </style>
