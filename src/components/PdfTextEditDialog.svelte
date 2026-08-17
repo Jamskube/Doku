@@ -336,12 +336,16 @@
       // plutôt que perdues en silence.
       const rescapes: Record<string, string> = {}
       const orphelins: string[] = []
-      for (const [id, to] of pending) {
-        const from = id.slice(id.indexOf(':', id.indexOf(':') + 1) + 1)
-        if (!rapport.refused.some((r) => r.from === from)) continue
-        const ligne = lines.find((l) => l.text === from)
-        if (ligne) rescapes[key(ligne)] = to
-        else orphelins.push(from.slice(0, 30))
+      for (const demande of manualRequests()) {
+        // Apparier sur `from` ET `to` : une demande du modèle peut porter le MÊME `from`
+        // qu'une saisie manuelle (même ligne) et être refusée « passage déjà modifié »
+        // alors que la saisie, elle, a bien été écrite. Le `to` les distingue.
+        if (!rapport.refused.some((r) => r.from === demande.from && r.to === demande.to)) continue
+        // La PAGE fait partie de l'identité : le même libellé existe souvent sur plusieurs
+        // pages, et sans elle on reposerait la saisie sur la ligne d'une autre page.
+        const ligne = lines.find((l) => l.page === demande.page && l.text === demande.from)
+        if (ligne) rescapes[key(ligne)] = demande.to
+        else orphelins.push(demande.from.slice(0, 30))
       }
       edits = rescapes
       accepted = {}
