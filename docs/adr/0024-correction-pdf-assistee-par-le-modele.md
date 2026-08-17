@@ -54,7 +54,9 @@ S'en tenir à la saisie manuelle. · **Pros** : zéro risque nouveau. · **Cons*
 
 ## Consequences
 
-**Positives** : une page se corrige en un geste, avec une relecture ligne à ligne ; les refus sont explicites et portent leur raison ; la classe de défauts « le modèle écrit au mauvais endroit » est fermée par construction, pas par vigilance.
+**Positives** : une page se corrige en un geste, avec une relecture ligne à ligne ; les refus sont explicites et portent leur raison ; la classe de défauts « le modèle écrit au mauvais endroit » est fermée par construction, pas par vigilance — le modèle ne produit jamais de `from`, son index se résout contre la liste qu'il a reçue, et cette liste voyage avec le run.
+
+**Un corollaire qu'il a fallu apprendre** : cette fermeture vaut pour le modèle, pas automatiquement pour les **saisies manuelles**. Une saisie refusée doit être reposée sur sa ligne après le rechargement, et l'apparier par son texte confondait deux cellules homonymes — le texte de l'utilisateur repartait alors sur la voisine. La ligne se retrouve donc par sa **position** (une ligne refusée n'a pas été réécrite, elle n'a pas bougé), jamais par son rang, qui se renumérote dès qu'une homonyme en amont change de texte.
 
 **Négatives** : le contrat est plus exigeant pour le modèle (`find` au caractère près), donc une part des propositions sera écartée avant même d'être montrée — c'est assumé, et compté. Le budget de largeur est une approximation, pas une mesure en métriques de police.
 

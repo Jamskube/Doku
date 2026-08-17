@@ -341,7 +341,12 @@
         dirty = true
         perime = true
         console.error('[pdf] rechargement après correction', error)
-        message = 'Les corrections sont écrites, mais l’aperçu n’a pas pu être rechargé. Enregistrez une copie pour les conserver.'
+        // Ne pas dire « les corrections sont écrites » quand une partie ne l'est pas : sur
+        // ce chemin les lignes ne sont plus relues, donc les saisies refusées ne peuvent
+        // pas être reposées — elles sont perdues, et ça se dit.
+        message = rapport.refused.length
+          ? `L’aperçu n’a pas pu être rechargé. Les modifications écrites sont conservées — enregistrez une copie. ${rapport.refused.length} n’ont pas pu l’être et sont perdues.`
+          : 'Les corrections sont écrites, mais l’aperçu n’a pas pu être rechargé. Enregistrez une copie pour les conserver.'
         cancelPdfCorrection()
         return
       }
