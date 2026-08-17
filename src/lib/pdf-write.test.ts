@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   PDF_BURN_MIN_STROKE,
+  PDF_BURN_NOTE_SIZE,
   PdfBurnError,
   applyPdfPagePlan,
   burnPdfAnnotations,
@@ -10,6 +11,7 @@ import {
   pdfBurnPoint,
   pdfBurnRect,
   pdfBurnStrokeWidth,
+  pdfNoteMarkerRect,
   pdfRgbFromHex,
   type PdfBurnPage,
 } from './pdf-write'
@@ -20,6 +22,7 @@ import {
   createPdfRectangleDrawing,
   createPdfTextHighlightDrawing,
   type PdfDrawing,
+  type PdfDrawingRect,
 } from './pdf-drawing'
 import {
   dropPdfPagePlan,
@@ -321,5 +324,140 @@ describe('applyPdfPagePlan', () => {
   it('refuse une page qui n’existe pas dans sa source', async () => {
     const source = await blankPdf([{ width: 600, height: 800 }])
     await expect(applyPdfPagePlan([source], [{ from: 0, source: 9, turn: 0 }])).rejects.toBeInstanceOf(PdfBurnError)
+  })
+})
+
+describe('pdfNoteMarkerRect', () => {
+  const page = { x: 0, y: 0, width: 600, height: 800, rotation: 0 }
+  // Un passage surligné au milieu d'une colonne de texte : le cas de la capture qui a
+  // motivé ce changement — le repère se posait sur les premiers mots.
+  const passage = { left: 0.12, top: 0.2, width: 0.76, height: 0.03 }
+
+  it('pose le repère DANS LA MARGE, jamais sur le passage annoté', () => {
+    const m = pdfNoteMarkerRect(passage, page)
+    expect(m.left + m.width).toBeLessThanOrEqual(passage.left)
+  })
+
+  // Le cas que le rendu de contrôle a révélé : surligner en MILIEU de ligne laissait le
+  // repère sur les mots qui précèdent, parce qu'il se calait sur l'annotation et non sur
+  // la page.
+  it('reste au bord de la PAGE, même pour un passage surligné en milieu de ligne', () => {
+    const milieu = { left: 0.55, top: 0.3, width: 0.3, height: 0.02 }
+    const m = pdfNoteMarkerRect(milieu, page)
+    // Assez près du bord pour être dans la marge, très loin du début du passage.
+    expect(m.left + m.width).toBeLessThan(0.06)
+    expect(m.left).toBeGreaterThan(0)
+  })
+
+  it('reste dans la page', () => {
+    for (const rotation of [0, 90, 180, 270]) {
+      const m = pdfNoteMarkerRect(passage, { ...page, rotation })
+      expect(m.left).toBeGreaterThanOrEqual(0)
+      expect(m.top).toBeGreaterThanOrEqual(0)
+      expect(m.left + m.width).toBeLessThanOrEqual(1)
+      expect(m.top + m.height).toBeLessThanOrEqual(1)
+    }
+  })
+
+  it('mesure 18 pt de côté quelle que soit la rotation', () => {
+    for (const rotation of [0, 90, 180, 270]) {
+      const p = { ...page, rotation }
+      const m = pdfNoteMarkerRect(passage, p)
+      const zone = pdfBurnRect(m, p)
+      expect(zone.width).toBeCloseTo(PDF_BURN_NOTE_SIZE, 6)
+      expect(zone.height).toBeCloseTo(PDF_BURN_NOTE_SIZE, 6)
+    }
+  })
+
+  it('bascule à DROITE quand la marge gauche est trop étroite', () => {
+    const colle = { left: 0.002, top: 0.4, width: 0.5, height: 0.03 }
+    const m = pdfNoteMarkerRect(colle, page)
+    expect(m.left).toBeGreaterThanOrEqual(colle.left + colle.width)
+  })
+
+  it('passe AU-DESSUS quand l’annotation prend toute la largeur', () => {
+    const pleine = { left: 0, top: 0.5, width: 1, height: 0.03 }
+    const m = pdfNoteMarkerRect(pleine, page)
+    expect(m.top + m.height).toBeLessThanOrEqual(pleine.top)
+  })
+
+  it('ne superpose pas deux commentaires voisins', () => {
+    const poses: PdfDrawingRect[] = []
+    for (let i = 0; i < 4; i++) {
+      poses.push(pdfNoteMarkerRect(passage, page, poses))
+    }
+    for (let a = 0; a < poses.length; a++) {
+      for (let b = a + 1; b < poses.length; b++) {
+        const x = poses[a], y = poses[b]
+        const seTouchent = x.left < y.left + y.width && y.left < x.left + x.width &&
+          x.top < y.top + y.height && y.top < x.top + x.height
+        expect(seTouchent).toBe(false)
+      }
+    }
+  })
+
+  it('reste aligné sur la LIGNE annotée, pas renvoyé en haut de page', () => {
+    const m = pdfNoteMarkerRect(passage, page)
+    expect(Math.abs(m.top - passage.top)).toBeLessThan(0.02)
+  })
+})
+
+describe('repère de commentaire dans le PDF gravé', () => {
+  // Preuve en boucle fermée : on relit le `/Rect` réellement écrit dans le fichier, et
+  // on vérifie qu'il ne recouvre pas le passage surligné. Un test qui n'inspecterait que
+  // la fonction de placement ne dirait rien de ce qui atterrit dans le document.
+  it('n’écrit pas le repère par-dessus le passage surligné', async () => {
+    const source = await blankPdf([{ width: 600, height: 800 }])
+    const passage = { left: 0.12, top: 0.2, width: 0.76, height: 0.03 }
+    const surlignage = createPdfTextHighlightDrawing(1, [passage], { color: '#ffd400' })
+    const result = await burnPdfAnnotations(source, [{ ...surlignage, comment: 'Une remarque' }])
+    expect(result.notes).toBe(1)
+
+    const mupdf = await import('mupdf')
+    const doc = mupdf.Document.openDocument(result.bytes.slice(), 'application/pdf') as never as {
+      loadPage: (n: number) => { getAnnotations: () => { getBounds: () => number[] }[] }
+    }
+    const bornes = doc.loadPage(0).getAnnotations().map((a) => a.getBounds())
+    expect(bornes.length).toBe(1)
+
+    // Le passage surligné, dans le repère PDF (page droite, origine en bas à gauche).
+    const page = { x: 0, y: 0, width: 600, height: 800, rotation: 0 }
+    const zonePassage = pdfBurnRect(passage, page)
+    const [x0, y0, x1, y1] = bornes[0]
+    // MuPDF rend ses bornes en y DESCENDANT depuis le haut : on repasse en repère PDF.
+    const hautPdf = 800 - Math.min(y0, y1)
+    const basPdf = 800 - Math.max(y0, y1)
+    const chevauche =
+      Math.min(x0, x1) < zonePassage.x + zonePassage.width && zonePassage.x < Math.max(x0, x1) &&
+      basPdf < zonePassage.y + zonePassage.height && zonePassage.y < hautPdf
+    expect(chevauche).toBe(false)
+  })
+
+  it('empile les repères de plusieurs commentaires sans les superposer', async () => {
+    const source = await blankPdf([{ width: 600, height: 800 }])
+    const passage = { left: 0.12, top: 0.2, width: 0.76, height: 0.03 }
+    const notes = [1, 2, 3].map((n) => ({
+      ...createPdfTextHighlightDrawing(1, [passage], { color: '#ffd400' }),
+      comment: `Remarque ${n}`,
+    }))
+    const result = await burnPdfAnnotations(source, notes)
+    expect(result.notes).toBe(3)
+
+    const mupdf = await import('mupdf')
+    const doc = mupdf.Document.openDocument(result.bytes.slice(), 'application/pdf') as never as {
+      loadPage: (n: number) => { getAnnotations: () => { getBounds: () => number[] }[] }
+    }
+    const bornes = doc.loadPage(0).getAnnotations().map((a) => a.getBounds())
+    expect(bornes.length).toBe(3)
+    for (let a = 0; a < bornes.length; a++) {
+      for (let b = a + 1; b < bornes.length; b++) {
+        const [ax0, ay0, ax1, ay1] = bornes[a]
+        const [bx0, by0, bx1, by1] = bornes[b]
+        const seTouchent =
+          Math.min(ax0, ax1) < Math.max(bx0, bx1) && Math.min(bx0, bx1) < Math.max(ax0, ax1) &&
+          Math.min(ay0, ay1) < Math.max(by0, by1) && Math.min(by0, by1) < Math.max(ay0, ay1)
+        expect(seTouchent).toBe(false)
+      }
+    }
   })
 })

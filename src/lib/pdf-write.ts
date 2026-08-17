@@ -27,6 +27,10 @@ export const PDF_BURN_TEXT_OPACITY = 0.6
 // Plancher d'épaisseur en points. L'écran plafonne à 1,6 px CSS ; en points un trait
 // plus fin qu'un demi-point disparaît à l'impression.
 export const PDF_BURN_MIN_STROKE = 0.5
+// Côté et écart du repère de commentaire, en points. 18 pt est la taille à laquelle les
+// lecteurs PDF dessinent l'icône « pense-bête ».
+export const PDF_BURN_NOTE_SIZE = 18
+export const PDF_BURN_NOTE_GAP = 5
 
 export interface PdfBurnPage {
   // Boîte de RECADRAGE, pas la MediaBox : c'est elle que pdf.js prend pour viewport,
@@ -97,6 +101,70 @@ export function pdfBurnRect(rect: PdfDrawingRect, page: PdfBurnPage): PdfBurnBox
   }
 }
 
+// Place le repère d'un commentaire DANS LA MARGE, jamais sur le passage annoté.
+//
+// Posé au coin haut-gauche de l'annotation, il recouvrait les premiers caractères de la
+// ligne surlignée — le texte que le commentaire est censé éclairer devenait illisible.
+// C'est aussi la convention des lecteurs PDF : le pense-bête vit à côté du texte, comme
+// une note de marge.
+//
+// Le calcul se fait en fractions de la page AFFICHÉE, puis se projette comme le reste :
+// « à gauche » doit vouloir dire à gauche POUR L'ŒIL, y compris sur une page tournée
+// d'un quart de tour, où les axes du PDF sont échangés.
+export function pdfNoteMarkerRect(
+  box: PdfDrawingRect,
+  page: PdfBurnPage,
+  taken: PdfDrawingRect[] = [],
+): PdfDrawingRect {
+  const quart = normalizePdfRotation(page.rotation) % 180 !== 0
+  // Une page tournée d'un quart de tour présente sa hauteur comme largeur.
+  const largeurPt = quart ? page.height : page.width
+  const hauteurPt = quart ? page.width : page.height
+  const w = PDF_BURN_NOTE_SIZE / Math.max(1, largeurPt)
+  const h = PDF_BURN_NOTE_SIZE / Math.max(1, hauteurPt)
+  const gx = PDF_BURN_NOTE_GAP / Math.max(1, largeurPt)
+  const gy = PDF_BURN_NOTE_GAP / Math.max(1, hauteurPt)
+
+  // Le repère va contre le BORD DE LA PAGE, pas à gauche de l'annotation. Se caler sur
+  // l'annotation ne met dans la marge que les surlignages commençant en début de ligne ;
+  // pour un passage surligné en milieu de phrase, la place « à gauche » est occupée par
+  // les mots précédents — c'est ce que le rendu de contrôle a montré. La marge de page,
+  // elle, est vide sur tout document composé.
+  let left = gx
+  let top = box.top
+  if (box.left < left + w + gx) {
+    // L'annotation mord déjà dans la marge gauche : on tente la marge droite.
+    const droite = 1 - gx - w
+    if (box.left + box.width < droite - gx) {
+      left = droite
+    } else if (box.top - gy - h >= 0) {
+      // Annotation pleine largeur : aucune marge latérale libre, mais l'interligne
+      // au-dessus l'est presque toujours.
+      left = box.left
+      top = box.top - gy - h
+    }
+  }
+
+  // Deux commentaires sur le même paragraphe se superposeraient en un seul repère
+  // illisible : on décale vers le bas jusqu'à trouver une place, dans la même marge.
+  const chevauche = (a: PdfDrawingRect, b: PdfDrawingRect) =>
+    a.left < b.left + b.width && b.left < a.left + a.width &&
+    a.top < b.top + b.height && b.top < a.top + a.height
+  for (let essai = 0; essai < 16; essai++) {
+    const candidat = { left, top, width: w, height: h }
+    if (!taken.some((autre) => chevauche(candidat, autre))) break
+    top += h * 1.15
+    if (top + h > 1) break
+  }
+
+  return {
+    left: Math.min(Math.max(left, 0), Math.max(0, 1 - w)),
+    top: Math.min(Math.max(top, 0), Math.max(0, 1 - h)),
+    width: w,
+    height: h,
+  }
+}
+
 // Même loi qu'à l'écran (`strokePixels`) : l'épaisseur est relative à la plus petite
 // dimension de la page. Elle est donc insensible à la rotation, qui ne fait qu'échanger
 // les deux dimensions.
@@ -155,8 +223,12 @@ export async function burnPdfAnnotations(source: Uint8Array, drawings: PdfDrawin
   let burned = 0
   let notes = 0
   let skipped = 0
+  // Repères déjà posés, PAR PAGE : c'est ce qui permet à deux commentaires voisins de ne
+  // pas se recouvrir.
+  const placed = new Map<number, PdfDrawingRect[]>()
 
   for (const drawing of wanted) {
+    const pageIndex = drawing.page - 1
     const page = pages[drawing.page - 1]
     if (!page) {
       skipped++
@@ -224,16 +296,16 @@ export async function burnPdfAnnotations(source: Uint8Array, drawings: PdfDrawin
     // décor illisible. Texte en hexadécimal UTF-16 — un PDFString latin-1 mutilerait
     // les accents.
     if (drawing.comment) {
-      const box = pdfDrawingBox(drawing)
-      const corner = pdfBurnPoint({ x: box.left, y: box.top }, target)
-      const size = 18
-      const top = Math.min(Math.max(corner.y, target.y + size), target.y + target.height)
-      const left = Math.min(Math.max(corner.x, target.x), target.x + target.width - size)
+      const marqueurs = placed.get(pageIndex) ?? []
+      const marqueur = pdfNoteMarkerRect(pdfDrawingBox(drawing), target, marqueurs)
+      marqueurs.push(marqueur)
+      placed.set(pageIndex, marqueurs)
+      const zone = pdfBurnRect(marqueur, target)
       const ref = doc.context.register(doc.context.obj({
         Type: 'Annot',
         Subtype: 'Text',
         Name: 'Comment',
-        Rect: [left, top - size, left + size, top],
+        Rect: [zone.x, zone.y, zone.x + zone.width, zone.y + zone.height],
         Contents: PDFHexString.fromText(drawing.comment),
         T: PDFHexString.fromText('Doku'),
         C: [r, g, b],
