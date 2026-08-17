@@ -451,6 +451,75 @@ export function parsePdfCorrections(
   return { edits, dropped }
 }
 
+// --- Saisies manuelles rescapées ---------------------------------------------------------
+
+/** Une modification tapée à la main, telle qu'elle part au moteur. */
+export interface ManualEdit {
+  page: number
+  occurrence: number
+  from: string
+  to: string
+}
+
+/** Identité d'une ligne, après relecture du document réécrit. */
+export interface RepinLine {
+  page: number
+  occurrence: number
+  text: string
+}
+
+export interface Repinned {
+  /** Saisies à remettre en attente, sur la ligne qu'elles visent VRAIMENT. */
+  keep: { line: RepinLine; to: string }[]
+  /** Saisies dont la ligne n'a pas été retrouvée — à NOMMER, jamais à perdre en silence. */
+  orphans: string[]
+}
+
+/**
+ * Repose les saisies manuelles REFUSÉES sur les lignes du document rechargé.
+ *
+ * Une saisie refusée n'a pas été écrite : l'effacer perdrait du texte tapé, sans recours.
+ * Mais la reposer naïvement est pire — trois pièges, tous vus en revue :
+ *
+ *   1. **La page fait partie de l'identité.** Le même libellé (un en-tête, « Néant »,
+ *      « Total ») existe sur plusieurs pages ; chercher par le texte seul repose la saisie
+ *      sur la ligne d'une autre page.
+ *   2. **L'occurrence aussi.** Deux cellules « Néant » sur la même page : une saisie faite
+ *      sur la seconde reviendrait sur la première, et `save()` écrirait le texte de
+ *      l'utilisateur AU MAUVAIS ENDROIT, en silence. Les rangs se renumérotent après une
+ *      écriture, mais leur ORDRE RELATIF tient — c'est la seule propriété exploitable, et
+ *      c'est pourquoi les candidates se consomment dans l'ordre du document.
+ *   3. **Le refus doit être LE SIEN.** Une demande du modèle peut porter le même `from`
+ *      qu'une saisie manuelle et être refusée « passage déjà modifié » alors que la saisie,
+ *      elle, a bien été écrite. Le `to` les distingue.
+ */
+export function repinRefusedEdits(
+  manual: ManualEdit[],
+  refused: { from: string; to: string }[],
+  lines: RepinLine[],
+): Repinned {
+  const keep: Repinned['keep'] = []
+  const orphans: string[] = []
+  // Candidates par page et par texte, dans l'ordre du document, consommées une à une.
+  const pool = new Map<string, RepinLine[]>()
+  for (const l of lines) {
+    const cle = `${l.page} ${l.text}`
+    const liste = pool.get(cle) ?? []
+    liste.push(l)
+    pool.set(cle, liste)
+  }
+  const aReposer = manual
+    .filter((m) => refused.some((r) => r.from === m.from && r.to === m.to))
+    .sort((a, b) => a.page - b.page || a.occurrence - b.occurrence)
+
+  for (const m of aReposer) {
+    const ligne = pool.get(`${m.page} ${m.from}`)?.shift()
+    if (ligne) keep.push({ line: ligne, to: m.to })
+    else orphans.push(m.from)
+  }
+  return { keep, orphans }
+}
+
 /**
  * Rend visibles les caractères qui ne le sont pas.
  *

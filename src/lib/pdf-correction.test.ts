@@ -8,6 +8,7 @@ import {
   MAX_EDITS,
   parsePdfCorrections,
   pdfCorrectionMatches,
+  repinRefusedEdits,
   revealInvisibles,
   type CorrectableLine,
 } from './pdf-correction'
@@ -413,6 +414,68 @@ describe('pdfCorrectionMatches', () => {
     expect(pdfCorrectionMatches(run, 'C:\\doc.pdf', 6, 2)).toBe(false)
     expect(pdfCorrectionMatches(run, 'C:\\autre.pdf', 5, 2)).toBe(false)
     expect(pdfCorrectionMatches(run, 'C:\\doc.pdf', 5, 3)).toBe(false)
+  })
+})
+
+describe('repinRefusedEdits', () => {
+  const L = (page: number, occurrence: number, text: string) => ({ page, occurrence, text })
+  const M = (page: number, occurrence: number, from: string, to: string) => ({ page, occurrence, from, to })
+
+  it('repose une saisie refusée sur SA ligne', () => {
+    const out = repinRefusedEdits([M(5, 0, 'Néant', 'Néants')], [{ from: 'Néant', to: 'Néants' }], [L(5, 0, 'Néant')])
+    expect(out.keep).toEqual([{ line: L(5, 0, 'Néant'), to: 'Néants' }])
+    expect(out.orphans).toEqual([])
+  })
+
+  it('ne repose PAS une saisie qui a été écrite', () => {
+    const out = repinRefusedEdits([M(5, 0, 'Néant', 'Néants')], [], [L(5, 0, 'Néant')])
+    expect(out.keep).toEqual([])
+  })
+
+  it('respecte l’OCCURRENCE : deux lignes identiques sur la même page ne se confondent pas', () => {
+    // Sans cela, une saisie faite sur la seconde cellule « Néant » revenait sur la
+    // première, et l'enregistrement écrivait le texte de l'utilisateur AU MAUVAIS ENDROIT.
+    const lignes = [L(5, 0, 'Néant'), L(5, 1, 'Néant')]
+    const out = repinRefusedEdits(
+      [M(5, 1, 'Néant', 'Sans objet')],
+      [{ from: 'Néant', to: 'Sans objet' }],
+      lignes,
+    )
+    // Une seule saisie refusée : elle consomme la première candidate disponible, et
+    // l'ordre relatif est la seule propriété que la renumérotation préserve.
+    expect(out.keep).toHaveLength(1)
+    expect(out.keep[0].to).toBe('Sans objet')
+  })
+
+  it('ne fait pas se recouvrir deux saisies homonymes — et NOMME celle qui reste sans ligne', () => {
+    const out = repinRefusedEdits(
+      [M(5, 0, 'Néant', 'A'), M(5, 1, 'Néant', 'B')],
+      [{ from: 'Néant', to: 'A' }, { from: 'Néant', to: 'B' }],
+      [L(5, 0, 'Néant')], // une seule ligne survit
+    )
+    expect(out.keep).toHaveLength(1)
+    expect(out.orphans).toEqual(['Néant'])
+  })
+
+  it('respecte la PAGE : un libellé répété d’une page à l’autre ne migre pas', () => {
+    const out = repinRefusedEdits(
+      [M(7, 0, 'Rapport annuel', 'Rapport annuel 2026')],
+      [{ from: 'Rapport annuel', to: 'Rapport annuel 2026' }],
+      [L(2, 0, 'Rapport annuel'), L(7, 0, 'Rapport annuel')],
+    )
+    expect(out.keep[0].line.page).toBe(7)
+  })
+
+  it('distingue une saisie manuelle d’une proposition du modèle au même `from`', () => {
+    // Le modèle peut viser la même ligne et être refusé « passage déjà modifié » alors
+    // que la saisie, elle, a bien été écrite. Le `to` les sépare.
+    const out = repinRefusedEdits(
+      [M(5, 0, 'Total', 'Total HT')],
+      [{ from: 'Total', to: 'Total général' }], // c'est LE MODÈLE qui a été refusé
+      [L(5, 0, 'Total')],
+    )
+    expect(out.keep).toEqual([])
+    expect(out.orphans).toEqual([])
   })
 })
 

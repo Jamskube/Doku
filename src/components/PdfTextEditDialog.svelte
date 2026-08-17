@@ -10,7 +10,7 @@
   import { app, askSave, closePdfTextEdit, isCloudProvider } from '../lib/stores.svelte'
   import { cancelPdfCorrection, copilot, correctPdfPage, pdfCorrection } from '../lib/copilot.svelte'
   import { diffWords } from '../lib/copilot-service'
-  import { lineLabel, pdfCorrectionMatches, revealInvisibles } from '../lib/pdf-correction'
+  import { lineLabel, pdfCorrectionMatches, repinRefusedEdits, revealInvisibles } from '../lib/pdf-correction'
   import { baseName } from '../lib/paths'
   import { readFileBytes, savePdfDialog, SourceOverwriteError } from '../lib/tauri'
   import type { PdfEditableLine, PdfEditRequest } from '../lib/export/pdf-edit-text'
@@ -74,7 +74,9 @@
   const fileName = $derived(baseName(path) || 'document.pdf')
   const pageLines = $derived(lines.filter((l) => l.page === pageIndex))
   const pending = $derived(Object.entries(edits).filter(([, v]) => v.trim() !== ''))
-  const key = (l: PdfEditableLine) => `${l.page}:${l.occurrence}:${l.text}`
+  // Typé au MINIMUM structurel : la clé ne lit que ces trois champs, et elle doit se
+  // calculer aussi bien sur une ligne complète que sur l'identité rendue par `repinRefusedEdits`.
+  const key = (l: { page: number; occurrence: number; text: string }) => `${l.page}:${l.occurrence}:${l.text}`
 
   const run = $derived(pdfCorrection.current)
   const streaming = $derived(run?.phase === 'streaming')
@@ -83,13 +85,24 @@
   const runIci = $derived(run && pdfCorrectionMatches(run, path, pageIndex, revision) ? run : null)
   const propositions = $derived(runIci?.phase === 'ready' ? runIci.edits : [])
   const acceptees = $derived(propositions.filter((e) => accepted[e.index] !== false))
-  const locked = $derived(streaming || applying)
+  // `perime` verrouille aussi la navigation : `pdf` est nul, donc un changement de page
+  // laisserait le canvas sur l'image de la page PRÉCÉDENTE, sous les champs de la nouvelle.
+  const locked = $derived(streaming || applying || perime)
   // Jamais un bouton muet : quand la correction est indisponible, on dit pourquoi.
   const raisonIndispo = $derived.by(() => {
+    // Les lignes affichées ne correspondent plus aux octets : une proposition serait
+    // calculée sur du texte d'avant, s'afficherait comme valide, et serait refusée à
+    // l'écriture. Un diff qui ment est pire qu'une fonction indisponible.
+    if (perime) return 'L’aperçu n’a pas pu être rechargé — enregistrez une copie pour conserver les corrections.'
     if (!isCloudProvider(app.copilotProvider))
       return 'La correction par consigne demande un fournisseur cloud (Modèles → OpenAI ou MiniMax).'
     if (copilot.generating && !streaming) return 'Doku-San termine une autre réponse.'
-    if (!pageLines.some((l) => l.editable)) return 'Aucune ligne modifiable sur cette page.'
+    // La garde doit refléter le FILTRE réel : sans le `!edits[...]`, une page dont toutes
+    // les lignes portent déjà une saisie laissait le champ actif et muet.
+    if (!pageLines.some((l) => l.editable && !edits[key(l)]))
+      return pageLines.some((l) => l.editable)
+        ? 'Toutes les lignes modifiables de cette page ont déjà une saisie en attente.'
+        : 'Aucune ligne modifiable sur cette page.'
     return ''
   })
 
@@ -334,19 +347,14 @@
       // rangs `occurrence` ayant pu se renuméroter, la clé se reconstruit, elle ne se
       // recopie pas. Celles qui ne retrouvent pas leur ligne sont nommées dans le bandeau
       // plutôt que perdues en silence.
+      const { keep, orphans } = repinRefusedEdits(
+        manualRequests().map((d) => ({ page: d.page, occurrence: d.occurrence ?? 0, from: d.from, to: d.to })),
+        rapport.refused,
+        lines,
+      )
       const rescapes: Record<string, string> = {}
-      const orphelins: string[] = []
-      for (const demande of manualRequests()) {
-        // Apparier sur `from` ET `to` : une demande du modèle peut porter le MÊME `from`
-        // qu'une saisie manuelle (même ligne) et être refusée « passage déjà modifié »
-        // alors que la saisie, elle, a bien été écrite. Le `to` les distingue.
-        if (!rapport.refused.some((r) => r.from === demande.from && r.to === demande.to)) continue
-        // La PAGE fait partie de l'identité : le même libellé existe souvent sur plusieurs
-        // pages, et sans elle on reposerait la saisie sur la ligne d'une autre page.
-        const ligne = lines.find((l) => l.page === demande.page && l.text === demande.from)
-        if (ligne) rescapes[key(ligne)] = demande.to
-        else orphelins.push(demande.from.slice(0, 30))
-      }
+      for (const { line, to } of keep) rescapes[key(line)] = to
+      const orphelins = orphans.map((o) => o.slice(0, 30))
       edits = rescapes
       accepted = {}
       submitted = []
@@ -442,10 +450,11 @@
           title: 'PDF modifié enregistré',
           message: `${ecrites} ligne${ecrites > 1 ? 's' : ''} réécrite${ecrites > 1 ? 's' : ''} dans le document, sans rien changer d’autre.${refus}`,
         }
-        if (!rapport.refused.length) {
-          dirty = false
-          closePdfTextEdit()
-        }
+        // La copie EST écrite, refus ou pas : `dirty` retombe dans les deux cas, sinon un
+        // second clic en écrirait une deuxième pour rien. La modale reste ouverte quand
+        // il y a des refus, pour qu'ils se lisent.
+        dirty = false
+        if (!rapport.refused.length) closePdfTextEdit()
       } catch (error) {
         // `applyTextEdits` JETTE quand rien n'a pu être écrit — par exemple une seule
         // saisie manuelle dont un caractère manque à la police. Sans ce repli, des
@@ -645,8 +654,8 @@
           <input
             class="line"
             class:changed={!!edits[key(line)]}
-            class:locked={!line.editable || perime}
-            readonly={!line.editable || perime}
+            class:locked={!line.editable || perime || applying}
+            readonly={!line.editable || perime || applying}
             title={line.editable ? line.text : (line.reason ?? 'Cette ligne ne peut pas être modifiée.')}
             value={edits[key(line)] || line.text}
             oninput={(event) => edit(line, event.currentTarget.value)}
