@@ -150,6 +150,30 @@ describe('joinPath', () => {
 describe('baseName', () => {
   it('Windows', () => expect(baseName('G:\\Notes\\a.md')).toBe('a.md'))
   it('POSIX', () => expect(baseName('/home/x/a.md')).toBe('a.md'))
+  it('gère un séparateur final', () => expect(baseName('G:\\Notes\\')).toBe('Notes'))
+  it('sans dossier', () => expect(baseName('a.md')).toBe('a.md'))
+})
+
+// Chemins MIXTES : Tauri rend parfois des slashs sur Windows, et le mélange des deux
+// séparateurs faisait échouer les quatre fonctions de la même façon — elles n'en
+// regardaient qu'un seul. C'est la raison pour laquelle neuf endroits du code avaient
+// recopié leur propre découpe.
+describe('chemins mixtes (antislash ET slash)', () => {
+  it('baseName rend le dernier segment', () => {
+    expect(baseName('C:\\Docs/note.md')).toBe('note.md')
+    expect(baseName('/home/u\\note.md')).toBe('note.md')
+  })
+  it('parentPath rend le vrai parent', () => {
+    expect(parentPath('C:\\Docs/note.md')).toBe('C:\\Docs')
+    expect(parentPath('/home/u\\note.md')).toBe('/home/u')
+  })
+  it('joinPath n’ajoute pas un séparateur en trop', () => {
+    expect(joinPath('C:\\Docs/', 'note.md')).toBe('C:\\Docs/note.md')
+  })
+  it('baseName et parentPath restent d’accord', () => {
+    const chemin = 'C:\\Docs/sous/note.md'
+    expect(joinPath(parentPath(chemin)!, baseName(chemin))).toBe(chemin)
+  })
 })
 
 describe('pathCrumbs', () => {

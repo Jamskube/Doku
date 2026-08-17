@@ -11,6 +11,12 @@ describe('parentFolder', () => {
   it('chemin POSIX', () => expect(parentFolder('/home/x/a.md')).toBe('x'))
   it('fichier sans dossier', () => expect(parentFolder('a.md')).toBe(''))
   it('null', () => expect(parentFolder(null)).toBe(''))
+  // Chemin mixte : c'est le différenciateur d'onglets homonymes (FR-4) qui s'affiche.
+  // Rendre « C: » au lieu de « Docs » serait invisible en test comme à la relecture.
+  it('chemin mixte', () => expect(parentFolder('C:\\Docs/note.md')).toBe('Docs'))
+  // « C: » plutôt que rien : entre deux onglets homonymes sur deux lecteurs, la lettre
+  // est justement l'information qui les distingue.
+  it('racine de lecteur', () => expect(parentFolder('C:\\a.md')).toBe('C:'))
 })
 
 describe('tabDiscriminator', () => {

@@ -9,6 +9,8 @@
 // l'archive ZIP comme du texte et la déclarait « format non pris en charge ». Un seul
 // endroit décide désormais.
 
+import { extensionOf } from './paths'
+
 export type DocKind = 'md' | 'html' | 'txt' | 'pdf' | 'docx'
 
 // Documents BINAIRES : leur onglet ne porte aucun contenu texte (`content` reste vide),
@@ -26,7 +28,11 @@ export function isBinaryKind(kind: DocKind): kind is BinaryKind {
 }
 
 export function kindFromName(name: string): DocKind {
-  const ext = name.split('.').pop()?.toLowerCase()
+  // `extensionOf` et non `split('.').pop()` : celui-ci rend le nom ENTIER quand il n'y a
+  // pas de point, donc un fichier nommé exactement `pdf` était classé `kind: 'pdf'` —
+  // traité comme un binaire et envoyé au lecteur PDF, alors que c'est probablement du
+  // texte. Même piège pour un fichier nommé `docx`.
+  const ext = extensionOf(name)
   if (ext === 'html' || ext === 'htm') return 'html'
   if (ext === 'md' || ext === 'markdown') return 'md'
   if (ext === 'pdf') return 'pdf'

@@ -3,6 +3,7 @@
   // insérer un autre PDF. Rien n'est écrit tant que l'utilisateur n'enregistre pas, et
   // ce qu'il enregistre est TOUJOURS une copie — le document ouvert reste intact.
   import { app, closePdfPages } from '../lib/stores.svelte'
+  import { baseName } from '../lib/paths'
   import { openPdfDialog, readFileBytes, savePdfDialog } from '../lib/tauri'
   import {
     dropPdfPagePlan,
@@ -50,7 +51,7 @@
   const pending = new Set<string>()
 
   const path = $derived(app.pdfPagesPath ?? '')
-  const fileName = $derived((path.split(/[\\/]/).pop() ?? 'document.pdf'))
+  const fileName = $derived(baseName(path) || 'document.pdf')
   const summary = $derived(summarizePdfPagePlan(plan, sourceCount))
   const untouched = $derived(isPdfPagePlanUnchanged(plan, sourceCount))
   const key = (entry: { from: number; source: number }) => `${entry.from}:${entry.source}`
@@ -153,7 +154,7 @@
         bytes,
         doc: loaded.doc,
         destroy: loaded.destroy,
-        name: picked.split(/[\\/]/).pop() ?? 'document.pdf',
+        name: baseName(picked) || 'document.pdf',
       }]
       plan = insertPdfPagePlan(plan, plan.length, sources.length - 1, loaded.doc.numPages)
       message = ''

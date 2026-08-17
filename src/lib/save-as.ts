@@ -1,3 +1,5 @@
+import { baseName } from './paths'
+
 export type SaveableTextKind = 'md' | 'txt' | 'html'
 
 export interface TextSaveSnapshot {
@@ -46,7 +48,7 @@ export function canonicalPathKey(path: string): string {
 }
 
 export function ensureTextExtension(path: string, kind: SaveableTextKind): string {
-  const name = path.split(/[\\/]/).pop() ?? path
+  const name = baseName(path)
   const match = /\.[^.\\/]+$/.exec(name)
   if (!match) return `${path}${EXTENSION[kind]}`
   if (COMPATIBLE_EXTENSIONS[kind].has(match[0].toLocaleLowerCase('en-US'))) return path
@@ -61,7 +63,7 @@ export function defaultTextFileName(name: string, kind: SaveableTextKind): strin
 }
 
 export function fileNameFromPath(path: string): string {
-  return path.split(/[\\/]/).pop() ?? path
+  return baseName(path)
 }
 
 export async function runSaveAs(

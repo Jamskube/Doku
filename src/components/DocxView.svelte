@@ -8,6 +8,7 @@
   // c'est un format structuré qu'on relit et réécrit tel quel. Doku a donc deux moteurs
   // d'édition — CM6 pour le texte, ProseMirror pour le DOCX — et c'est assumé.
   import { app, docxActions } from '../lib/stores.svelte'
+  import { baseName } from '../lib/paths'
   import { readFileBytes, savePdfDialog, writeFileAtomic } from '../lib/tauri'
   import DocxFormatBubble from './DocxFormatBubble.svelte'
 
@@ -50,7 +51,7 @@
   let editor: { export: (o: unknown) => Promise<Blob>; destroy?: () => void } | null = null
   let arreterSelection: (() => void) | null = null
 
-  const fileName = $derived(path.split(/[\\/]/).pop() ?? 'document.docx')
+  const fileName = $derived(baseName(path) || 'document.docx')
 
   $effect(() => {
     const target = host

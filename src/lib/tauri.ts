@@ -1,6 +1,7 @@
 import { OPENABLE_EXTENSIONS, isBinaryDocumentName } from './doc-kind'
 import { detectUnsupported } from './encoding'
-import { isSupportedFile, joinPath, type FsEntry } from './explorer'
+import { isSupportedFile, type FsEntry } from './explorer'
+import { baseName, joinPath } from './paths'
 import { bytesToDataUrl, mimeFromExt } from './export/img-data'
 import { nextFreeName } from './paste-image'
 import { makeSearchDoc, type SearchDoc } from './search'
@@ -304,7 +305,7 @@ export async function openFileDialog(): Promise<{ path: string; name: string; co
     filters: [{ name: 'Documents', extensions: OPENABLE_EXTENSIONS }],
   })
   if (typeof path !== 'string') return null
-  const name = path.split(/[\\/]/).pop() ?? path
+  const name = baseName(path)
   // Document BINAIRE (PDF, DOCX) : ne jamais le lire en texte — `readTextFile` rendrait
   // du charabia que `detectUnsupported` rejetterait ensuite en « format non pris en
   // charge ». Le test portait sur le seul `.pdf` : le DOCX, arrivé plus tard, tombait
@@ -340,7 +341,7 @@ export async function pathExistsAt(path: string): Promise<boolean> {
 export async function confirmReplacePath(path: string): Promise<boolean> {
   if (!isTauri) return false
   const { confirm } = await import('@tauri-apps/plugin-dialog')
-  const name = path.split(/[\\/]/).pop() ?? path
+  const name = baseName(path)
   return confirm(`« ${name} » existe déjà. Voulez-vous le remplacer ?`, {
     title: 'Remplacer le fichier ?',
     kind: 'warning',

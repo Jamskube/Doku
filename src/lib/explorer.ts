@@ -1,6 +1,7 @@
 // Helpers purs de l'explorateur de dossier (FR-6). Aucune dépendance Tauri ici
 // pour rester testables en Node.
 import { OPENABLE_EXTENSIONS } from './doc-kind'
+import { extensionOf, joinPath, sepOf } from './paths'
 
 // mtime : renseigné seulement quand le tri « Modifié le » est actif (un stat par
 // entrée coûte cher sur un gros dossier — on ne le paie pas si on ne trie pas dessus).
@@ -20,11 +21,6 @@ const SUPPORTED = OPENABLE_EXTENSIONS
 export function isSupportedFile(name: string): boolean {
   const ext = name.split('.').pop()?.toLowerCase() ?? ''
   return SUPPORTED.includes(ext)
-}
-
-export function extensionOf(name: string): string {
-  const idx = name.lastIndexOf('.')
-  return idx <= 0 ? '' : name.slice(idx + 1).toLowerCase()
 }
 
 // Collators réutilisés : localeCompare avec options reconstruit un collateur ICU à
@@ -103,34 +99,9 @@ export function nameExists(name: string, entries: FsEntry[]): boolean {
   return entries.some((e) => e.name.toLowerCase() === lower)
 }
 
-function sepOf(path: string): '\\' | '/' {
-  return path.includes('\\') ? '\\' : '/'
-}
-
-// Dossier parent d'un chemin, ou null à la racine.
-export function parentPath(path: string | null): string | null {
-  if (!path) return null
-  const sep = sepOf(path)
-  const trimmed = path.endsWith(sep) ? path.slice(0, -1) : path
-  const idx = trimmed.lastIndexOf(sep)
-  if (idx <= 0) return null
-  const parent = trimmed.slice(0, idx)
-  // Racine de lecteur Windows : « C:\file » → parent « C: » est malformé
-  // (joinPath mé-détecterait le séparateur) → renvoyer la racine « C:\ ».
-  if (/^[A-Za-z]:$/.test(parent)) return parent + sep
-  return parent
-}
-
-export function joinPath(dir: string, name: string): string {
-  const sep = sepOf(dir)
-  return dir.endsWith(sep) ? dir + name : dir + sep + name
-}
-
-export function baseName(path: string): string {
-  const sep = sepOf(path)
-  const trimmed = path.endsWith(sep) ? path.slice(0, -1) : path
-  return trimmed.slice(trimmed.lastIndexOf(sep) + 1)
-}
+// Les helpers de chemin vivent dans `paths.ts` (module pur, sans dépendance). Réexportés
+// ici pour que les appelants historiques n'aient pas à savoir qu'ils ont déménagé.
+export { baseName, extensionOf, joinPath, parentPath } from './paths'
 
 // --- Arborescence dépliable ---
 

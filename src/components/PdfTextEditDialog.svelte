@@ -8,6 +8,7 @@
   // Y greffer une cinquième surface de saisie était le chemin le plus court vers une
   // collision.
   import { app, closePdfTextEdit } from '../lib/stores.svelte'
+  import { baseName } from '../lib/paths'
   import { readFileBytes, savePdfDialog } from '../lib/tauri'
   import type { PdfEditableLine } from '../lib/export/pdf-edit-text'
   import type { PdfDoc } from '../lib/pdf'
@@ -43,7 +44,7 @@
   let destroyPdf: (() => Promise<void>) | null = null
 
   const path = $derived(app.pdfTextEditPath ?? '')
-  const fileName = $derived(path.split(/[\\/]/).pop() ?? 'document.pdf')
+  const fileName = $derived(baseName(path) || 'document.pdf')
   const pageLines = $derived(lines.filter((l) => l.page === pageIndex))
   const pending = $derived(Object.entries(edits).filter(([, v]) => v.trim() !== ''))
   const key = (l: PdfEditableLine) => `${l.page}:${l.occurrence}:${l.text}`

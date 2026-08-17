@@ -35,6 +35,20 @@ describe('kindFromName', () => {
   it('lit l’extension du NOM, pas du chemin', () => {
     expect(kindFromName('C:\\Mes.docx.notes\\rapport.md')).toBe('md')
   })
+
+  // `split('.').pop()` rendait le nom ENTIER quand il n'y a pas de point : un fichier
+  // nommé exactement `pdf` était classé binaire et envoyé au lecteur PDF.
+  it('un fichier SANS extension n’est jamais un binaire, même s’il s’appelle « pdf »', () => {
+    expect(kindFromName('pdf')).toBe('txt')
+    expect(kindFromName('docx')).toBe('txt')
+    expect(isBinaryDocumentName('pdf')).toBe(false)
+    expect(isBinaryDocumentName('docx')).toBe(false)
+  })
+
+  it('un nom caché n’est pas une extension', () => {
+    expect(kindFromName('.md')).toBe('txt')
+    expect(kindFromName('.gitignore')).toBe('txt')
+  })
 })
 
 describe('isBinaryDocumentName', () => {

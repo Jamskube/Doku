@@ -6,6 +6,7 @@
 //
 // Les entrées/sorties sont injectées (motif des exports HTML et DOCX) : la logique se
 // teste avec de faux ports, sans Tauri ni navigateur.
+import { baseName } from '../paths'
 import { parsePdfAnnotationManifest, pdfAnnotationIdentity } from '../pdf-annotations'
 import { PdfBurnError, burnPdfAnnotations } from '../pdf-write'
 
@@ -24,7 +25,7 @@ export interface AnnotatedPdfReport {
 }
 
 export function annotatedPdfName(path: string): string {
-  const base = (path.split(/[\\/]/).pop() ?? 'document.pdf').replace(/\.pdf$/i, '')
+  const base = (baseName(path) || 'document.pdf').replace(/\.pdf$/i, '')
   return `${base} — annoté.pdf`
 }
 
