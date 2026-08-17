@@ -35,7 +35,7 @@
     "@tauri-apps/plugin-opener": "^2.5.4",
     "codemirror": "^6.0.1",
     "docx": "^9.7.1",
-    "dompurify": "^3.4.11",
+    "dompurify": "^3.4.13",
     "marked": "^18.0.6",
     "mupdf": "^1.28.0",
     "pdfjs-dist": "^6.2.108",
@@ -52,5 +52,8 @@
     "typescript": "~6.0.2",
     "vite": "^8.0.0",
     "vitest": "^4.1.10"
+  },
+  "overrides": {
+    "pdfjs-dist": "$pdfjs-dist"
   }
 }
