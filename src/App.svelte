@@ -9,6 +9,7 @@
   import { onFileDrop, onOpenFile, onWindowCloseRequested, onWindowFocus, openFileDialog } from './lib/tauri'
   import { detectUnsupported } from './lib/encoding'
   import { otherPane, type PaneId } from './lib/workspace'
+  import { NOTICE_DELAY, autoDismiss } from './lib/auto-dismiss'
 
   // Persiste les préférences (thème, état sidebar) à chaque changement — les lectures
   // de app.* dans saveSettings sont suivies par l'effet.
@@ -240,6 +241,11 @@
             class:warning={app.banner.tone === 'warning'}
             class:success={app.banner.tone === 'success'}
             role={app.banner.tone === 'error' ? 'alert' : 'status'}
+            use:autoDismiss={{
+              delay: NOTICE_DELAY[app.banner.tone],
+              key: app.banner,
+              onDismiss: () => (app.banner = null),
+            }}
           >
             <span class="notice-icon msr" aria-hidden="true">
               {app.banner.tone === 'success' ? 'check' : app.banner.tone === 'warning' ? 'warning' : 'priority_high'}
@@ -251,6 +257,7 @@
             <button class="notice-close" onclick={() => (app.banner = null)} aria-label="Fermer la notification">
               <span class="msr" aria-hidden="true">close</span>
             </button>
+            <span class="notice-life" aria-hidden="true" style:animation-duration="{NOTICE_DELAY[app.banner.tone]}ms"></span>
           </div>
         {/if}
         {#if app.reloadPrompt}
@@ -375,6 +382,8 @@
   }
   .notice {
     pointer-events: auto;
+    position: relative;
+    overflow: hidden;
     display: flex;
     align-items: center;
     gap: 12px;
@@ -446,12 +455,35 @@
   .notice-close:active { transform: scale(0.94); }
   .notice-action:focus-visible,
   .notice-close:focus-visible { outline: 2px solid var(--line-3); outline-offset: 2px; }
+  /* Filet de vie : dit que la notification est TRANSITOIRE, et combien de temps il
+     reste. Sans lui, l'effacement automatique surprend au lieu d'être attendu. Il se
+     fige avec le compte à rebours JS — même déclencheur (survol, focus), donc jamais de
+     barre qui court sur une minuterie suspendue. */
+  .notice-life {
+    position: absolute;
+    left: 0; right: 0; bottom: 0;
+    height: 2px;
+    background: var(--line-2);
+    transform-origin: left center;
+    animation: notice-life linear forwards;
+  }
+  .notice.error .notice-life { background: color-mix(in srgb, var(--err) 45%, transparent); }
+  .notice.warning .notice-life { background: color-mix(in srgb, var(--warn) 45%, transparent); }
+  .notice.success .notice-life { background: color-mix(in srgb, var(--ok) 45%, transparent); }
+  .notice:hover .notice-life,
+  .notice:focus-within .notice-life { animation-play-state: paused; }
+  @keyframes notice-life {
+    from { transform: scaleX(1); }
+    to { transform: scaleX(0); }
+  }
   @keyframes notice-in {
     from { opacity: 0; transform: translateY(-7px) scale(0.98); }
     to { opacity: 1; transform: translateY(0) scale(1); }
   }
   @media (prefers-reduced-motion: reduce) {
     .notice { animation: none; }
+    /* La notification part toujours seule ; seule l'ANIMATION du filet disparaît. */
+    .notice-life { animation: none; transform: scaleX(1); opacity: 0.5; }
     .main { transition-duration: 0.01ms; }
   }
   .stage { flex: 1; min-height: 0; display: flex; background: transparent; }

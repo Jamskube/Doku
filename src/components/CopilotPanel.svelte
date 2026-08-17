@@ -14,6 +14,7 @@
   import { annotateCitations, type CitedPassage } from '../lib/citations'
   import { cleanContextLabel, contextItemId, MAX_CONTEXT_ITEMS, MAX_CONTEXT_LOAD_CONCURRENCY, MAX_CONTEXT_PDF_BYTES, MAX_CONTEXT_TEXT_BYTES, pathBelongsToFolder, truncateContextItem, type CopilotContextItem } from '../lib/copilot-context'
   import { cloudMemory, deleteCloudMemoryRecord, loadCloudMemory, memoryWorkspace, undoCloudMemory, updateCloudMemoryRecord, type MemoryWorkspace } from '../lib/copilot-memory.svelte'
+  import { NOTICE_DELAY, autoDismiss } from '../lib/auto-dismiss'
   import type { CloudMemoryProvider, MemoryRecord, MemoryType } from '../lib/copilot-memory'
 
   // Rendu d'une réponse : Markdown assaini PUIS puces de citation (l'annotation opère
@@ -1103,21 +1104,35 @@
   <div class="cop-card">
     <div class="cop-scroll" bind:this={scroller} onscroll={onScroll}>
       {#if app.copilotView === 'chat' && cloudMemory.lastBatch}
-        <div class="cop-memory-toast" role="status">
+        <!-- L'auto-effacement referme aussi la fenêtre d'annulation : c'est voulu et
+             c'est la convention (l'« Annuler » d'un envoi de mail vit le temps du
+             bandeau). Le survol suspend le compte à rebours, donc viser le bouton ne
+             fait jamais disparaître la cible. -->
+        <div
+          class="cop-memory-toast"
+          role="status"
+          use:autoDismiss={{ delay: NOTICE_DELAY.success, key: cloudMemory.lastBatch, onDismiss: () => (cloudMemory.lastBatch = null) }}
+        >
           <span class="msr" aria-hidden="true">database</span>
           <span><strong>Mémoire mise à jour</strong><small>{memoryBatchLabel()}</small></span>
           {#if shownMemoryWorkspace ?? cloudMemory.workspace}
             <button onclick={() => void undoCloudMemory((shownMemoryWorkspace ?? cloudMemory.workspace)!)}>Annuler</button>
           {/if}
           <button class="icon" title="Masquer" aria-label="Masquer la notification" onclick={() => (cloudMemory.lastBatch = null)}><span class="msr">close</span></button>
+          <span class="toast-life" aria-hidden="true" style:animation-duration="{NOTICE_DELAY.success}ms"></span>
         </div>
       {/if}
       {#if app.copilotView === 'chat' && cloudMemory.error}
-        <div class="cop-memory-toast error" role="alert">
+        <div
+          class="cop-memory-toast error"
+          role="alert"
+          use:autoDismiss={{ delay: NOTICE_DELAY.error, key: cloudMemory.error, onDismiss: () => (cloudMemory.error = '') }}
+        >
           <span class="msr" aria-hidden="true">warning</span>
           <span><strong>Mémoire indisponible</strong><small>{cloudMemory.error}</small></span>
           <button onclick={openMemoryView}>Vérifier</button>
           <button class="icon" title="Masquer" aria-label="Masquer l’erreur mémoire" onclick={() => (cloudMemory.error = '')}><span class="msr">close</span></button>
+          <span class="toast-life" aria-hidden="true" style:animation-duration="{NOTICE_DELAY.error}ms"></span>
         </div>
       {/if}
       {#if app.copilotView === 'models'}
@@ -2475,6 +2490,7 @@
   .cop-memory-toast {
     position: sticky; top: 8px; z-index: 6; margin: 8px 12px 0; min-height: 48px; padding: 7px 7px 7px 11px;
     display: flex; align-items: center; gap: 9px; border-radius: 14px;
+    overflow: hidden;
     background: var(--cream-tint); color: var(--ink-2);
     box-shadow: 0 0 0 1px var(--elevation-ring-soft), 0 12px 30px rgba(var(--shadow-rgb), 0.14);
   }
@@ -2487,6 +2503,23 @@
   .cop-memory-toast button:focus-visible { outline: 2px solid var(--line-3); outline-offset: 1px; }
   .cop-memory-toast button.icon { width: 28px; padding: 0; display: inline-flex; align-items: center; justify-content: center; background: transparent; }
   .cop-memory-toast button.icon .msr { font-size: 15px; }
+  /* Même filet de vie que le bandeau de l'app : deux notifications de la même app ne
+     s'effacent pas selon deux grammaires différentes. */
+  .toast-life {
+    position: absolute; left: 0; right: 0; bottom: 0; height: 2px;
+    background: var(--line-2); transform-origin: left center;
+    animation: toast-life linear forwards;
+  }
+  .cop-memory-toast.error .toast-life { background: color-mix(in srgb, var(--err) 45%, transparent); }
+  .cop-memory-toast:hover .toast-life,
+  .cop-memory-toast:focus-within .toast-life { animation-play-state: paused; }
+  @keyframes toast-life {
+    from { transform: scaleX(1); }
+    to { transform: scaleX(0); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .toast-life { animation: none; transform: scaleX(1); opacity: 0.5; }
+  }
 
   .cop-memory-view {
     width: min(760px, 100%); margin-inline: auto;
