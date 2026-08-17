@@ -125,6 +125,16 @@ Le plan ci-dessus est celui **soumis** aux revues. Ce qui a été exécuté en d
 
 Le bug d'`occurrence` allégué par la revue a été **infirmé** après lecture : `shift()` attribue les groupes aux lignes JSON dans le même ordre que `memeTexte[occurrence]` les relit.
 
+**Puis deux passages du portail d'achèvement ont encore changé le résultat** (détail dans `docs/autopilot/run-2026-08-17-2.md`) :
+
+6. Le budget de largeur, d'abord borné à la marge de page, l'est ensuite au **voisin de rangée** — puis à **toutes** les lignes de la page, éditables ou non : ne compter que les éditables rouvrait le trou qu'on venait de fermer, `editable: false` étant fréquent dans un tableau.
+7. Chaque proposition porte son **contexte** : deux corrections identiques sur deux cellules différentes s'affichaient à l'identique, et l'on acceptait sans pouvoir situer.
+8. L'alignement typographique ne touche plus **ni les tirets** (il transformait « sous-ensemble » en « sous—ensemble ») **ni les variantes déjà présentes** dans la ligne.
+9. Le rechargement gagne un `catch` — un échec laissait le canvas vide définitivement — et sa branche de repli vide `edits`, sans quoi l'enregistrement de secours échouait en promettant l'inverse.
+10. Le code hors module pur est enfin testé : `src/lib/copilot-pdf-correction.test.ts`, 10 cas.
+
+**Ce que le plan avait prévu et qui n'a PAS été fait** : rien. Ce qui manque est parqué (la boucle avec un vrai modèle cloud, qui demande des identifiants) ou inscrit en « hors périmètre » dans l'ADR-0024.
+
 ## Rollback
 
 `git revert` du commit : les quatre fichiers créés sont neufs, `copilot-memory.ts` retrouve sa fonction locale, et ni `pdf-edit-text.ts` ni le format des fichiers écrits ne changent. Aucune migration, aucun état persistant.
