@@ -218,6 +218,35 @@ describe('rewriteTextRuns', () => {
     const flux = '/f0 12 Tf [(\\000\\003)] TJ'
     expect(rewriteTextRuns(flux, codecs, []).flux).toBe(flux)
   })
+
+  // Régression : la modification d'UNE ligne s'écrivait à moitié. `planLineEdit` porte le
+  // texte neuf par le premier passage touché et VIDE les suivants ; quand le premier était
+  // refusé faute de glyphe, les passages vides — qui s'encodent parfaitement — partaient
+  // quand même à l'écriture. La correction n'était pas écrite, la FIN DE LA LIGNE
+  // disparaissait du document, et `applied` valant 1, le rapport annonçait un succès.
+  it('ne vide PAS la fin d’une ligne dont le début est refusé (atomicité du groupe)', () => {
+    const flux = '/f0 12 Tf [(\\000\\003)] TJ [(\\000\\004)] TJ [(\\000\\005)] TJ'
+    const runs = findTextRuns(flux, codecs)
+    // « abc » → « aZZZ » : `Z` manque à la police, et le plan vide le dernier passage.
+    const edits = planLineEdit({ text: 'abc', runs }, 'aZZZ').map((e) => ({ ...e, group: 0 }))
+    expect(edits.some((e) => e.text === '')).toBe(true) // le piège est bien armé
+    const out = rewriteTextRuns(flux, codecs, edits)
+    expect(out.applied).toBe(0)
+    expect(out.flux).toBe(flux)
+    expect(findTextRuns(out.flux, codecs).map((r) => r.text)).toEqual(['a', 'b', 'c'])
+    expect(out.rejected[0].group).toBe(0)
+  })
+
+  it('deux lignes restent indépendantes : le refus de l’une n’annule pas l’autre', () => {
+    const flux = '/f0 12 Tf [(\\000\\003)] TJ [(\\000\\004)] TJ'
+    const runs = findTextRuns(flux, codecs)
+    const out = rewriteTextRuns(flux, codecs, [
+      { run: runs[0], text: 'c', group: 0 },
+      { run: runs[1], text: 'Z', group: 1 },
+    ])
+    expect(out.applied).toBe(1)
+    expect(findTextRuns(out.flux, codecs).map((r) => r.text)).toEqual(['c', 'b'])
+  })
 })
 
 describe('groupRunsIntoLines', () => {

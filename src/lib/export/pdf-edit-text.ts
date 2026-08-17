@@ -338,8 +338,12 @@ export async function applyTextEdits(bytes: Uint8Array, edits: PdfEditRequest[])
     }
     const lignes = groupRunsIntoLines(runs, textesDeLignes)
 
-    const aEcrire: { run: PdfTextRunRef; text: string }[] = []
-    for (const demande of demandes) {
+    // `groupe` = rang de la demande. Il rend la ligne ATOMIQUE à la réécriture (un passage
+    // refusé condamne toute la ligne au lieu d'en vider la fin) ET permet de renvoyer le
+    // refus à SA demande — l'appariement par le texte échouait sur les lignes
+    // multi-passages, où le texte refusé est un fragment recomposé, jamais le `to` reçu.
+    const aEcrire: { run: PdfTextRunRef; text: string; group: number }[] = []
+    for (const [rang, demande] of demandes.entries()) {
       const memeTexte = lignes.filter((ligne) => ligne.text === demande.from)
       const cible = memeTexte[demande.occurrence ?? 0]
         ?? (runs.filter((r) => r.text === demande.from)[demande.occurrence ?? 0]
@@ -355,15 +359,22 @@ export async function applyTextEdits(bytes: Uint8Array, edits: PdfEditRequest[])
       }
       // Seul le passage réellement touché est réécrit : une correction au milieu d'une
       // ligne laisse intacts les mots en gras et les extraits de code qui l'entourent.
-      aEcrire.push(...planLineEdit(cible, demande.to))
+      aEcrire.push(...planLineEdit(cible, demande.to).map((e) => ({ ...e, group: rang })))
     }
 
     const sortie = rewriteTextRuns(contents.text, codecs, aEcrire)
+    // Une ligne condamnée peut remonter plusieurs rejets (un par passage) : on n'en garde
+    // qu'un par demande, sinon la même ligne serait annoncée refusée trois fois.
+    const vus = new Set<number>()
     for (const rejet of sortie.rejected) {
-      const demande = demandes.find((d) => d.to === rejet.text)
+      const demande = rejet.group !== undefined ? demandes[rejet.group] : undefined
+      if (rejet.group !== undefined) {
+        if (vus.has(rejet.group)) continue
+        vus.add(rejet.group)
+      }
       refused.push({
         from: demande?.from ?? '',
-        to: rejet.text,
+        to: demande?.to ?? rejet.text,
         reason: 'caractères absents de la police du document',
         chars: rejet.manquants,
       })

@@ -180,7 +180,7 @@ export interface RewriteOutcome {
   flux: string
   applied: number
   /** Remplacements refusés faute de glyphe, avec les caractères en cause. */
-  rejected: { text: string; manquants: string[] }[]
+  rejected: { text: string; manquants: string[]; group?: number }[]
 }
 
 /**
@@ -189,30 +189,50 @@ export interface RewriteOutcome {
  *
  * Un remplacement dont un caractère manque à la police est REFUSÉ et remonté — jamais
  * écrit partiellement, jamais tu.
+ *
+ * **`group` rend la modification d'UNE ligne atomique.** Sans lui, chaque passage était
+ * jugé seul, et la modification d'une ligne multi-passages pouvait s'écrire À MOITIÉ :
+ * `planLineEdit` porte le texte neuf par le premier passage touché et VIDE les suivants
+ * (`text: ''`) ; si le premier était refusé faute de glyphe — une apostrophe courbe, un
+ * accent absent du sous-ensemble — les passages vides, eux, s'encodaient parfaitement et
+ * partaient à l'écriture. Résultat : la correction n'était pas écrite, la FIN DE LA LIGNE
+ * disparaissait du document, et `applied` valant 1 le rapport annonçait un succès.
+ * Les passages d'un même groupe partagent donc leur sort ; deux lignes différentes
+ * restent indépendantes.
  */
 export function rewriteTextRuns(
   flux: string,
   codecs: Map<string, PdfGlyphCodec>,
-  edits: { run: PdfTextRunRef; text: string }[],
+  edits: RunEdit[],
 ): RewriteOutcome {
   const rejected: RewriteOutcome['rejected'] = []
-  const retenus: { run: PdfTextRunRef; remplacement: string }[] = []
+  const candidats: { run: PdfTextRunRef; remplacement: string; groupe: number }[] = []
+  // Sans `group`, chaque édition est son propre groupe — les appelants qui ne visent
+  // qu'un passage isolé gardent exactement l'ancien comportement.
+  const groupeDe = (edit: RunEdit, rang: number) => edit.group ?? -1 - rang
+  const condamnes = new Set<number>()
 
-  for (const { run, text } of edits) {
+  edits.forEach((edit, rang) => {
+    const { run, text } = edit
+    const groupe = groupeDe(edit, rang)
     const codec = codecs.get(run.font)
     if (!codec) {
-      rejected.push({ text, manquants: [] })
-      continue
+      rejected.push({ text, manquants: [], group: edit.group })
+      condamnes.add(groupe)
+      return
     }
     const { octets, manquants } = encodeGlyphs(text, codec)
     if (manquants.length) {
-      rejected.push({ text, manquants })
-      continue
+      rejected.push({ text, manquants, group: edit.group })
+      condamnes.add(groupe)
+      return
     }
     // On réécrit toujours en `TJ` à une seule chaîne : le crénage d'origine ne
     // s'appliquerait plus au texte neuf, et un tableau à une chaîne reste valide.
-    retenus.push({ run, remplacement: `[(${encodePdfString(octets)})]TJ` })
-  }
+    candidats.push({ run, remplacement: `[(${encodePdfString(octets)})]TJ`, groupe })
+  })
+
+  const retenus = candidats.filter((c) => !condamnes.has(c.groupe))
 
   let sortie = flux
   for (const { run, remplacement } of [...retenus].sort((a, b) => b.run.start - a.run.start)) {
@@ -271,6 +291,8 @@ export function groupRunsIntoLines(runs: PdfTextRunRef[], lineTexts: string[]): 
 export interface RunEdit {
   run: PdfTextRunRef
   text: string
+  /** Passages solidaires : la modification d'UNE ligne réussit ou échoue en entier. */
+  group?: number
 }
 
 /**
