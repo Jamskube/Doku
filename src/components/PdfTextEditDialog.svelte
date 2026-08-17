@@ -306,6 +306,9 @@
       pdf = null
 
       const nouveaux = rapport.bytes
+      // Les lignes d'AVANT : c'est leur position qui permettra de retrouver, après
+      // rechargement, la ligne exacte d'une saisie refusée — le rang, lui, se renumérote.
+      const avant = lines
       try {
         const { loadPdf } = await import('../lib/pdf')
         const charge = await loadPdf(nouveaux.slice())
@@ -350,11 +353,12 @@
       const { keep, orphans } = repinRefusedEdits(
         manualRequests().map((d) => ({ page: d.page, occurrence: d.occurrence ?? 0, from: d.from, to: d.to })),
         rapport.refused,
+        avant,
         lines,
       )
       const rescapes: Record<string, string> = {}
       for (const { line, to } of keep) rescapes[key(line)] = to
-      const orphelins = orphans.map((o) => o.slice(0, 30))
+      const orphelins = orphans.map((o) => `« ${o.from.slice(0, 24)} » → « ${o.to.slice(0, 24)} »`)
       edits = rescapes
       accepted = {}
       submitted = []
@@ -374,7 +378,7 @@
             ? ` ${refuses} refusée${refuses > 1 ? 's' : ''} : ${rapport.refused.map((r) => (r.chars?.length ? `« ${r.from.slice(0, 30)} » — caractères absents de la police (${r.chars.join(' ')})` : `« ${r.from.slice(0, 30)} » — ${r.reason}`)).join(' ; ')}.`
             : ' Rien d’autre n’a bougé, et le fichier d’origine est intact.') +
           (orphelins.length
-            ? ` Vos saisies sur ${orphelins.map((o) => `« ${o} »`).join(', ')} n’ont pas pu être retrouvées et ont été abandonnées.`
+            ? ` Vos saisies ${orphelins.join(', ')} n’ont pas pu être retrouvées après le rechargement — elles sont perdues, les voici pour les retaper.`
             : ''),
       }
     } finally {

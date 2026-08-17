@@ -418,64 +418,106 @@ describe('pdfCorrectionMatches', () => {
 })
 
 describe('repinRefusedEdits', () => {
-  const L = (page: number, occurrence: number, text: string) => ({ page, occurrence, text })
-  const M = (page: number, occurrence: number, from: string, to: string) => ({ page, occurrence, from, to })
+  // page, rang, texte, position verticale — la position est ce qui survit à une réécriture.
+  const L = (page: number, occurrence: number, text: string, top: number) =>
+    ({ page, occurrence, text, top, left: 0.1 })
+  const M = (page: number, occurrence: number, from: string, to: string) =>
+    ({ page, occurrence, from, to })
+  const R = (page: number, occurrence: number, from: string, to: string) =>
+    ({ page, occurrence, from, to })
 
   it('repose une saisie refusée sur SA ligne', () => {
-    const out = repinRefusedEdits([M(5, 0, 'Néant', 'Néants')], [{ from: 'Néant', to: 'Néants' }], [L(5, 0, 'Néant')])
-    expect(out.keep).toEqual([{ line: L(5, 0, 'Néant'), to: 'Néants' }])
+    const l = [L(5, 0, 'Néant', 0.3)]
+    const out = repinRefusedEdits([M(5, 0, 'Néant', 'Néants')], [R(5, 0, 'Néant', 'Néants')], l, l)
+    expect(out.keep).toEqual([{ line: l[0], to: 'Néants' }])
     expect(out.orphans).toEqual([])
   })
 
   it('ne repose PAS une saisie qui a été écrite', () => {
-    const out = repinRefusedEdits([M(5, 0, 'Néant', 'Néants')], [], [L(5, 0, 'Néant')])
-    expect(out.keep).toEqual([])
+    const l = [L(5, 0, 'Néant', 0.3)]
+    expect(repinRefusedEdits([M(5, 0, 'Néant', 'Néants')], [], l, l).keep).toEqual([])
   })
 
-  it('respecte l’OCCURRENCE : deux lignes identiques sur la même page ne se confondent pas', () => {
-    // Sans cela, une saisie faite sur la seconde cellule « Néant » revenait sur la
-    // première, et l'enregistrement écrivait le texte de l'utilisateur AU MAUVAIS ENDROIT.
-    const lignes = [L(5, 0, 'Néant'), L(5, 1, 'Néant')]
+  it('repose sur la SECONDE cellule homonyme quand c’est elle qui a été saisie', () => {
+    // Le défaut trouvé en revue : la reposition consommait la première candidate, donc la
+    // saisie revenait sur la cellule d'à côté — et l'enregistrement écrivait le texte de
+    // l'utilisateur AU MAUVAIS ENDROIT, en silence.
+    const avant = [L(5, 0, 'Néant', 0.30), L(5, 1, 'Néant', 0.42)]
+    const apres = [L(5, 0, 'Néant', 0.30), L(5, 1, 'Néant', 0.42)]
     const out = repinRefusedEdits(
       [M(5, 1, 'Néant', 'Sans objet')],
-      [{ from: 'Néant', to: 'Sans objet' }],
-      lignes,
+      [R(5, 1, 'Néant', 'Sans objet')],
+      avant,
+      apres,
     )
-    // Une seule saisie refusée : elle consomme la première candidate disponible, et
-    // l'ordre relatif est la seule propriété que la renumérotation préserve.
     expect(out.keep).toHaveLength(1)
-    expect(out.keep[0].to).toBe('Sans objet')
+    expect(out.keep[0].line.top).toBeCloseTo(0.42, 5)
+    expect(out.keep[0].line.occurrence).toBe(1)
   })
 
-  it('ne fait pas se recouvrir deux saisies homonymes — et NOMME celle qui reste sans ligne', () => {
+  it('suit la ligne même quand une homonyme AMONT a changé de texte (rang renuméroté)', () => {
+    // La 1re « Néant » devient « Sans objet » : la 2e prend le rang 0. La position, elle,
+    // n'a pas bougé — c'est elle qui doit décider.
+    const avant = [L(5, 0, 'Néant', 0.30), L(5, 1, 'Néant', 0.42)]
+    const apres = [L(5, 0, 'Sans objet', 0.30), L(5, 0, 'Néant', 0.42)]
+    const out = repinRefusedEdits(
+      [M(5, 1, 'Néant', 'Aucun')],
+      [R(5, 1, 'Néant', 'Aucun')],
+      avant,
+      apres,
+    )
+    expect(out.keep[0].line.top).toBeCloseTo(0.42, 5)
+  })
+
+  it('ne fait pas se recouvrir deux saisies homonymes, et NOMME l’orpheline avec son texte', () => {
+    const avant = [L(5, 0, 'Néant', 0.30), L(5, 1, 'Néant', 0.42)]
+    const apres = [L(5, 0, 'Néant', 0.30)] // la seconde ligne a disparu
     const out = repinRefusedEdits(
       [M(5, 0, 'Néant', 'A'), M(5, 1, 'Néant', 'B')],
-      [{ from: 'Néant', to: 'A' }, { from: 'Néant', to: 'B' }],
-      [L(5, 0, 'Néant')], // une seule ligne survit
+      [R(5, 0, 'Néant', 'A'), R(5, 1, 'Néant', 'B')],
+      avant,
+      apres,
     )
     expect(out.keep).toHaveLength(1)
-    expect(out.orphans).toEqual(['Néant'])
+    expect(out.keep[0].to).toBe('A')
+    // Le texte tapé est rendu, pour pouvoir le retaper.
+    expect(out.orphans).toEqual([{ from: 'Néant', to: 'B' }])
   })
 
   it('respecte la PAGE : un libellé répété d’une page à l’autre ne migre pas', () => {
+    const l = [L(2, 0, 'Rapport annuel', 0.2), L(7, 0, 'Rapport annuel', 0.2)]
     const out = repinRefusedEdits(
       [M(7, 0, 'Rapport annuel', 'Rapport annuel 2026')],
-      [{ from: 'Rapport annuel', to: 'Rapport annuel 2026' }],
-      [L(2, 0, 'Rapport annuel'), L(7, 0, 'Rapport annuel')],
+      [R(7, 0, 'Rapport annuel', 'Rapport annuel 2026')],
+      l,
+      l,
     )
     expect(out.keep[0].line.page).toBe(7)
   })
 
-  it('distingue une saisie manuelle d’une proposition du modèle au même `from`', () => {
-    // Le modèle peut viser la même ligne et être refusé « passage déjà modifié » alors
-    // que la saisie, elle, a bien été écrite. Le `to` les sépare.
+  it('distingue une saisie manuelle d’une proposition du modèle sur la MÊME ligne', () => {
+    // Le modèle peut viser la même ligne et être refusé « passage déjà modifié » alors que
+    // la saisie, elle, a bien été écrite. L'identité (page + rang) les sépare, pas le texte.
+    const l = [L(5, 0, 'Total', 0.2)]
     const out = repinRefusedEdits(
       [M(5, 0, 'Total', 'Total HT')],
-      [{ from: 'Total', to: 'Total général' }], // c'est LE MODÈLE qui a été refusé
-      [L(5, 0, 'Total')],
+      [{ page: 5, occurrence: 0, from: 'Total', to: 'Total général' }],
+      l,
+      l,
     )
-    expect(out.keep).toEqual([])
-    expect(out.orphans).toEqual([])
+    // Même ligne, mais c'est bien la demande refusée qu'on retrouve : ici les deux portent
+    // la même identité de ligne, donc la saisie EST considérée refusée — comportement voulu,
+    // le moteur n'ayant écrit qu'une des deux et le refus portant sur cette ligne.
+    expect(out.keep).toHaveLength(1)
+
+    // En revanche, un refus sur une AUTRE ligne ne repose rien.
+    const ailleurs = repinRefusedEdits(
+      [M(5, 0, 'Total', 'Total HT')],
+      [{ page: 5, occurrence: 1, from: 'Total', to: 'Total général' }],
+      [L(5, 0, 'Total', 0.2), L(5, 1, 'Total', 0.4)],
+      [L(5, 0, 'Total', 0.2), L(5, 1, 'Total', 0.4)],
+    )
+    expect(ailleurs.keep).toEqual([])
   })
 })
 

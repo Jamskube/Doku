@@ -47,8 +47,15 @@ export interface PdfEditReport {
   bytes: Uint8Array
   /** Remplacements écrits dans le flux, en fidélité parfaite. */
   applied: number
-  /** Demandes non satisfaites, avec la raison — jamais silencieuses. */
-  refused: { from: string; to: string; reason: string; chars?: string[] }[]
+  /**
+   * Demandes non satisfaites, avec la raison — jamais silencieuses.
+   *
+   * `page` et `occurrence` sont l'IDENTITÉ de la demande, pas une décoration : sans eux,
+   * un appelant qui veut retrouver la ligne refusée doit l'apparier par son seul texte, et
+   * deux lignes homonymes sur une page se confondent. Le spread `{ ...demande }` les
+   * transportait déjà à l'exécution ; le type les effaçait.
+   */
+  refused: { page?: number; occurrence?: number; from: string; to: string; reason: string; chars?: string[] }[]
 }
 
 type MuPdf = typeof import('mupdf')
@@ -375,6 +382,8 @@ export async function applyTextEdits(bytes: Uint8Array, edits: PdfEditRequest[])
         vus.add(rejet.group)
       }
       refused.push({
+        page: demande?.page,
+        occurrence: demande?.occurrence,
         from: demande?.from ?? '',
         to: demande?.to ?? rejet.text,
         reason: 'caractères absents de la police du document',

@@ -453,7 +453,7 @@ export function parsePdfCorrections(
 
 // --- Saisies manuelles rescapées ---------------------------------------------------------
 
-/** Une modification tapée à la main, telle qu'elle part au moteur. */
+/** Une modification demandée au moteur, avec son identité complète. */
 export interface ManualEdit {
   page: number
   occurrence: number
@@ -461,19 +461,24 @@ export interface ManualEdit {
   to: string
 }
 
-/** Identité d'une ligne, après relecture du document réécrit. */
+/** Identité et POSITION d'une ligne. La position est ce qui survit à une réécriture. */
 export interface RepinLine {
   page: number
   occurrence: number
   text: string
+  top: number
+  left: number
 }
 
 export interface Repinned {
   /** Saisies à remettre en attente, sur la ligne qu'elles visent VRAIMENT. */
   keep: { line: RepinLine; to: string }[]
-  /** Saisies dont la ligne n'a pas été retrouvée — à NOMMER, jamais à perdre en silence. */
-  orphans: string[]
+  /** Saisies dont la ligne n'a pas été retrouvée — à NOMMER avec ce qui avait été tapé. */
+  orphans: { from: string; to: string }[]
 }
+
+/** Deux positions se valent à ce près (fraction de page) — une ligne réécrite ne bouge pas. */
+const TOLERANCE_POSITION = 0.004
 
 /**
  * Repose les saisies manuelles REFUSÉES sur les lignes du document rechargé.
@@ -495,27 +500,47 @@ export interface Repinned {
  */
 export function repinRefusedEdits(
   manual: ManualEdit[],
-  refused: { from: string; to: string }[],
-  lines: RepinLine[],
+  refused: { page?: number; occurrence?: number; from: string; to: string }[],
+  before: RepinLine[],
+  after: RepinLine[],
 ): Repinned {
   const keep: Repinned['keep'] = []
-  const orphans: string[] = []
-  // Candidates par page et par texte, dans l'ordre du document, consommées une à une.
-  const pool = new Map<string, RepinLine[]>()
-  for (const l of lines) {
-    const cle = `${l.page} ${l.text}`
-    const liste = pool.get(cle) ?? []
-    liste.push(l)
-    pool.set(cle, liste)
-  }
-  const aReposer = manual
-    .filter((m) => refused.some((r) => r.from === m.from && r.to === m.to))
-    .sort((a, b) => a.page - b.page || a.occurrence - b.occurrence)
+  const orphans: Repinned['orphans'] = []
+  const pris = new Set<RepinLine>()
 
-  for (const m of aReposer) {
-    const ligne = pool.get(`${m.page} ${m.from}`)?.shift()
-    if (ligne) keep.push({ line: ligne, to: m.to })
-    else orphans.push(m.from)
+  for (const m of manual) {
+    // Refus reconnu à l'IDENTITÉ de la demande, jamais à son texte : deux saisies
+    // homonymes portant le même remplacement se confondaient, et une proposition du modèle
+    // sur la même ligne passait pour la saisie de l'utilisateur.
+    const refuse = refused.some(
+      (r) => r.from === m.from && r.page === m.page && (r.occurrence ?? 0) === m.occurrence,
+    )
+    if (!refuse) continue
+
+    const avant = before.find(
+      (l) => l.page === m.page && l.occurrence === m.occurrence && l.text === m.from,
+    )
+    if (!avant) {
+      orphans.push({ from: m.from, to: m.to })
+      continue
+    }
+    // La ligne refusée n'a PAS été réécrite : elle porte le même texte à la même place.
+    // Son RANG, lui, se renumérote dès qu'une homonyme en amont change de texte — le
+    // calculer demanderait de deviner ce que le moteur a fait ; la position, elle, se lit.
+    const cible = after.find(
+      (l) =>
+        !pris.has(l) &&
+        l.page === avant.page &&
+        l.text === avant.text &&
+        Math.abs(l.top - avant.top) < TOLERANCE_POSITION &&
+        Math.abs(l.left - avant.left) < TOLERANCE_POSITION,
+    )
+    if (!cible) {
+      orphans.push({ from: m.from, to: m.to })
+      continue
+    }
+    pris.add(cible)
+    keep.push({ line: cible, to: m.to })
   }
   return { keep, orphans }
 }
