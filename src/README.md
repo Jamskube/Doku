@@ -26,6 +26,10 @@ Frontend Svelte 5 de Doku (lecteur/éditeur de documents — shell W1 + éditeur
 | `lib/session.ts` | Session v2, migration v1 et restauration des chemins par volet |
 | `lib/editor-registry.svelte.ts` | Registre runtime des EditorView et sélections propres à chaque volet |
 | `lib/save-as.ts` | Transaction pure « Enregistrer sous » avec extension, collision et rollback |
+| `lib/paths.ts` | Découpe de chemins, sans dépendance : `baseName`, `parentPath`, `joinPath`, `extensionOf` — corrects sur les chemins mixtes |
+| `lib/doc-kind.ts` | Modèle pur des types de document : kinds, kinds binaires, extensions ouvrables — partagé entre les stores et la couche plateforme |
+| `lib/auto-dismiss.ts` | Minuterie d'effacement des notifications : suspension au survol, reprise sur le temps restant |
+| `lib/docx-text.ts` | Texte d'un `.docx` pour le copilote : titres préfixés en Markdown, document sans texte SIGNALÉ |
 | `lib/pdf-annotations.ts` | Identité, migration et manifeste local des annotations PDF non destructives ; carnet unifié (notes) et regroupement des épingles |
 | `lib/pdf-drawing.ts` | Primitives pures des tracés PDF (crayon, surligneur, rectangle, ellipse) : épaisseur, normalisation, simplification et déplacement borné |
 | `lib/pdf-write.ts` | Écriture PDF (ADR-0022) : gravure des annotations et application d'un plan de pages ; changement de repère affichage → PDF, rotation `/Rotate` comprise |
@@ -33,6 +37,8 @@ Frontend Svelte 5 de Doku (lecteur/éditeur de documents — shell W1 + éditeur
 | `lib/export/pdf-annotated.ts` | Orchestration de l'export « PDF annoté » (ports injectés) |
 | `components/PdfPagesDialog.svelte` | Modale « Organiser les pages » : vignettes paresseuses, glisser-déposer, insertion d'un autre PDF |
 | `lib/pdf-highlight-text.ts` | Géométrie pure de la citation d'un surlignage : quelles lignes de texte le trait balaie, et sur quelle plage |
+| `lib/pdf-correction.ts` | Correction d'une page de PDF par consigne (ADR-0024), pur : prompt sur liste fermée, validation des patchs ciblés, budget de largeur borné au voisin de rangée, alignement typographique |
+| `lib/json-reply.ts` | Extraction tolérante d'un objet JSON dans une réponse de modèle (clôtures, bavardage) — partagé par la mémoire cloud et la correction PDF |
 | `lib/editor/editor.ts` | Extensions CM6 : thème typographique du design, coloration, Compartment preview/source |
 | `lib/editor/live-preview.ts` | Décorations live preview (ADR-0002) : masquage syntaxe, checkboxes, wikilinks |
 | `lib/tauri.ts` | Garde Tauri : Mica Windows 11, fenêtre, dialogues et écriture atomique — no-op en navigateur |
