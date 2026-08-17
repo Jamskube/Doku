@@ -336,8 +336,11 @@ export function parsePdfCorrections(
    * autant : l'ignorer faisait repartir le budget jusqu'à la marge de page, c'est-à-dire
    * rouvrait le trou que ce budget existe pour fermer. Or `editable: false` est fréquent
    * dans un tableau (une cellule à styles mixtes suffit).
+   *
+   * OBLIGATOIRE : une valeur par défaut à `lines` rouvrirait exactement le défaut qu'on
+   * vient de fermer, en silence, pour le prochain appelant.
    */
-  geometry: CorrectableLine[] = lines,
+  geometry: CorrectableLine[],
 ): ParsedCorrections {
   const edits: PdfEdit[] = []
   const dropped: DroppedEdit[] = []
@@ -351,7 +354,9 @@ export function parsePdfCorrections(
 
   for (const item of brut) {
     const it = item as { i?: unknown; find?: unknown; to?: unknown }
-    const label = typeof it?.i === 'string' ? it.i : String(it?.i ?? '?')
+    // Étiquette BORNÉE : c'est du texte de modèle, affiché tel quel dans le panneau. Un
+    // `i` de dix mille caractères en casserait la mise en page.
+    const label = (typeof it?.i === 'string' ? it.i : String(it?.i ?? '?')).slice(0, 12)
     const rejeter = (reason: string) => dropped.push({ label, reason })
 
     const index = labelIndex(it?.i)
@@ -364,14 +369,6 @@ export function parsePdfCorrections(
       rejeter('proposition mal formée')
       continue
     }
-    if (edits.length >= MAX_EDITS) {
-      rejeter('au-delà du plafond de corrections')
-      continue
-    }
-    if (prises.has(index)) {
-      rejeter('ligne déjà corrigée')
-      continue
-    }
     const find = it.find
     if (!find) {
       rejeter('passage à remplacer vide')
@@ -379,6 +376,17 @@ export function parsePdfCorrections(
     }
     if (find.length > MAX_FIND) {
       rejeter('passage à remplacer trop long')
+      continue
+    }
+    // Le plafond et le doublon viennent APRÈS les contrôles de forme : sinon une
+    // proposition malformée arrivée en treizième position ressortait « au-delà du
+    // plafond », et la vraie raison — la seule information utile du panneau — se perdait.
+    if (prises.has(index)) {
+      rejeter('ligne déjà corrigée')
+      continue
+    }
+    if (edits.length >= MAX_EDITS) {
+      rejeter('au-delà du plafond de corrections')
       continue
     }
     // Espaces multiples dans `find` : ce sont les gouttières d'un tableau. Les laisser
@@ -406,17 +414,17 @@ export function parsePdfCorrections(
       rejeter('le remplacement introduit un alignement de colonnes')
       continue
     }
+    // Caractères de contrôle : `\n` ou `\t` glissés dans le remplacement casseraient le
+    // flux de contenu, et rien plus haut ne les voit — `/\s\s/` ne les attrape pas seuls.
+    if (/[\u0000-\u001F\u007F]/.test(aligne)) {
+      rejeter('le remplacement contient un caractère de contrôle')
+      continue
+    }
     // `delta > 0` d'abord : sur une ligne qui déborde déjà, `freeSpace` est négative et
     // refuserait même un raccourcissement, avec une raison absurde.
     const delta = estimateWidthDelta(ligne, find, aligne)
     if (delta > 0 && delta > freeSpace(ligne, geometry)) {
       rejeter('trop large pour la place disponible sur la ligne')
-      continue
-    }
-    // Caractères de contrôle : `\n` ou `\t` glissés dans le remplacement casseraient le
-    // flux de contenu, et rien plus haut ne les voit — `/\s\s/` ne les attrape pas seuls.
-    if (/[\u0000-\u001F\u007F]/.test(aligne)) {
-      rejeter('le remplacement contient un caractère de contrôle')
       continue
     }
     // Raccourcissement massif : le modèle a « résumé » au lieu de corriger. Un PDF ne

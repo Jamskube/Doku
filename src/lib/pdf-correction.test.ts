@@ -27,6 +27,11 @@ const cellule = (text: string, left: number, width: number): CorrectableLine =>
 
 const reponse = (edits: unknown) => JSON.stringify({ edits })
 
+// La géométrie est OBLIGATOIRE en production (un défaut à `lines` rouvrirait le défaut de
+// budget). Les tests qui ne l'éprouvent pas la font suivre les lignes soumises.
+const parse = (raw: string, lignes: CorrectableLine[], geo: CorrectableLine[] = lignes) =>
+  parsePdfCorrections(raw, lignes, geo)
+
 describe('lineLabel', () => {
   it('étiquette en L1 à partir de l’index 0 — le modèle ne doit pas faire d’arithmétique', () => {
     expect(lineLabel(0)).toBe('L1')
@@ -187,7 +192,7 @@ describe('parsePdfCorrections', () => {
   ]
 
   it('accepte un patch ciblé et rend la ligne complète telle qu’elle deviendra', () => {
-    const out = parsePdfCorrections(
+    const out = parse(
       reponse([{ i: 'L1', find: "d'affaire", to: "d'affaires" }]),
       lignes,
     )
@@ -200,21 +205,21 @@ describe('parsePdfCorrections', () => {
   it('porte le CONTEXTE du passage — sans lui, deux corrections identiques sont indiscernables', () => {
     // Vécu à la vérification visuelle : « online → en ligne » proposé sur deux cellules
     // différentes s'affichait exactement pareil deux fois.
-    const out = parsePdfCorrections(reponse([{ i: 'L1', find: "d'affaire", to: "d'affaires" }]), lignes)
+    const out = parse(reponse([{ i: 'L1', find: "d'affaire", to: "d'affaires" }]), lignes)
     expect(out.edits[0].before).toBe('Le chiffre ')
     expect(out.edits[0].after).toBe(' du trimestre')
   })
 
   it('signale un remplacement qui ÉLARGIT la ligne, même accepté', () => {
-    const out = parsePdfCorrections(reponse([{ i: 'L3', find: '2025', to: '2026 révisé' }]), lignes)
+    const out = parse(reponse([{ i: 'L3', find: '2025', to: '2026 révisé' }]), lignes)
     expect(out.edits[0].widens).toBe(true)
-    const neutre = parsePdfCorrections(reponse([{ i: 'L3', find: '2025', to: '2026' }]), lignes)
+    const neutre = parse(reponse([{ i: 'L3', find: '2025', to: '2026' }]), lignes)
     expect(neutre.edits[0].widens).toBe(false)
   })
 
   it('tronque le contexte plutôt que de recopier une ligne entière', () => {
     const longue = [ligne(`${'a'.repeat(80)}CIBLE${'b'.repeat(80)}`)]
-    const out = parsePdfCorrections(reponse([{ i: 'L1', find: 'CIBLE', to: 'CIBLÉ' }]), longue)
+    const out = parse(reponse([{ i: 'L1', find: 'CIBLE', to: 'CIBLÉ' }]), longue)
     expect(out.edits[0].before.startsWith('…')).toBe(true)
     expect(out.edits[0].after.endsWith('…')).toBe(true)
     expect(out.edits[0].before.length).toBeLessThan(30)
@@ -222,37 +227,37 @@ describe('parsePdfCorrections', () => {
 
   it('traverse les clôtures et le bavardage du modèle', () => {
     const brut = '```json\n' + reponse([{ i: 'L3', find: '2025', to: '2026' }]) + '\n```'
-    expect(parsePdfCorrections(brut, lignes).edits[0].lineAfter).toBe('Rapport 2026')
+    expect(parse(brut, lignes).edits[0].lineAfter).toBe('Rapport 2026')
   })
 
   it('rend une liste VIDE sans rien jeter, sur une réponse illisible', () => {
     // Aucun chemin de génération ne doit casser sur une réponse malformée.
-    expect(parsePdfCorrections('désolé, je ne peux pas', lignes)).toEqual({ edits: [], dropped: [] })
-    expect(parsePdfCorrections('{"edits":"oui"}', lignes)).toEqual({ edits: [], dropped: [] })
+    expect(parse('désolé, je ne peux pas', lignes)).toEqual({ edits: [], dropped: [] })
+    expect(parse('{"edits":"oui"}', lignes)).toEqual({ edits: [], dropped: [] })
   })
 
   it('accepte {"edits":[]} — « rien à corriger » est une réponse JUSTE', () => {
-    expect(parsePdfCorrections(reponse([]), lignes)).toEqual({ edits: [], dropped: [] })
+    expect(parse(reponse([]), lignes)).toEqual({ edits: [], dropped: [] })
   })
 
   it('écarte une étiquette hors de la liste fermée — le moteur a un repli permissif', () => {
     // `applyTextEdits` retombe sur un passage isolé quand la ligne exacte est introuvable :
     // une ligne inventée pourrait s'écrire quand même.
     for (const i of ['L9', 'L0', 2, 'ligne 1', null]) {
-      const out = parsePdfCorrections(reponse([{ i, find: 'a', to: 'b' }]), lignes)
+      const out = parse(reponse([{ i, find: 'a', to: 'b' }]), lignes)
       expect(out.edits).toEqual([])
       expect(out.dropped[0].reason).toBe('ligne inconnue')
     }
   })
 
   it('écarte un passage absent de la ligne', () => {
-    const out = parsePdfCorrections(reponse([{ i: 'L1', find: 'introuvable', to: 'x' }]), lignes)
+    const out = parse(reponse([{ i: 'L1', find: 'introuvable', to: 'x' }]), lignes)
     expect(out.edits).toEqual([])
     expect(out.dropped[0].reason).toBe('passage absent de la ligne')
   })
 
   it('écarte un passage AMBIGU plutôt que d’écrire dans la mauvaise occurrence', () => {
-    const out = parsePdfCorrections(
+    const out = parse(
       reponse([{ i: 'L1', find: 'e', to: 'é' }]),
       [ligne('le texte')],
     )
@@ -262,21 +267,21 @@ describe('parsePdfCorrections', () => {
   it('refuse de toucher un alignement de colonnes — c’est la charpente du tableau', () => {
     // Une « ligne » de PDF est souvent une rangée de tableau dont les colonnes ne
     // tiennent que par leurs espaces.
-    const avecEspaces = parsePdfCorrections(reponse([{ i: 'L2', find: 'Total  HT', to: 'Total HT' }]), lignes)
+    const avecEspaces = parse(reponse([{ i: 'L2', find: 'Total  HT', to: 'Total HT' }]), lignes)
     expect(avecEspaces.dropped[0].reason).toBe('le passage recouvre un alignement de colonnes')
-    const introduit = parsePdfCorrections(reponse([{ i: 'L2', find: 'Total', to: 'To  tal' }]), lignes)
+    const introduit = parse(reponse([{ i: 'L2', find: 'Total', to: 'To  tal' }]), lignes)
     expect(introduit.dropped[0].reason).toBe('le remplacement introduit un alignement de colonnes')
   })
 
   it('écarte un remplacement identique — le moteur JETTE quand rien n’est écrit', () => {
-    const out = parsePdfCorrections(reponse([{ i: 'L3', find: '2025', to: '2025' }]), lignes)
+    const out = parse(reponse([{ i: 'L3', find: '2025', to: '2025' }]), lignes)
     expect(out.dropped[0].reason).toBe('aucun changement')
   })
 
   it('écarte un vidage déguisé — un `to` vide EFFACE la ligne dans le PDF', () => {
-    const vide = parsePdfCorrections(reponse([{ i: 'L1', find: "d'affaire", to: '' }]), lignes)
+    const vide = parse(reponse([{ i: 'L1', find: "d'affaire", to: '' }]), lignes)
     expect(vide.dropped[0].reason).toBe('remplacement beaucoup trop court')
-    const resume = parsePdfCorrections(
+    const resume = parse(
       reponse([{ i: 'L1', find: "Le chiffre d'affaire du trimestre", to: '.' }]),
       lignes,
     )
@@ -285,7 +290,7 @@ describe('parsePdfCorrections', () => {
 
   it('écarte un `find` qui recopie toute la ligne', () => {
     const longue = ligne('a'.repeat(200))
-    const out = parsePdfCorrections(reponse([{ i: 'L1', find: 'a'.repeat(80), to: 'b' }]), [longue])
+    const out = parse(reponse([{ i: 'L1', find: 'a'.repeat(80), to: 'b' }]), [longue])
     expect(out.dropped[0].reason).toBe('passage à remplacer trop long')
   })
 
@@ -297,23 +302,23 @@ describe('parsePdfCorrections', () => {
     const voisineNonEditable = cellule('Total HT', 0.3, 0.25)
     const trop = reponse([{ i: 'L1', find: 'Matériel', to: 'Matériel informatique complet' }])
     // Soumise seule (la voisine n'est pas éditable), mais la géométrie la connaît.
-    expect(parsePdfCorrections(trop, [c1], [c1, voisineNonEditable]).dropped[0].reason)
+    expect(parse(trop, [c1], [c1, voisineNonEditable]).dropped[0].reason)
       .toBe('trop large pour la place disponible sur la ligne')
     // Sans la géométrie complète, la même proposition passerait.
-    expect(parsePdfCorrections(trop, [c1]).edits).toHaveLength(1)
+    expect(parse(trop, [c1]).edits).toHaveLength(1)
   })
 
   it('n’oppose PAS le budget de largeur à un raccourcissement', () => {
     // Sur une ligne qui déborde déjà, la place libre est négative : comparer sans garder
     // le signe refusait un remplacement plus court, avec une raison absurde.
     const debordante: CorrectableLine = { text: 'une ligne qui va jusqu’au bord', left: 0.05, width: 0.95, top: 0.2, height: 0.02 }
-    const out = parsePdfCorrections(reponse([{ i: 'L1', find: 'jusqu’au bord', to: 'au bord' }]), [debordante])
+    const out = parse(reponse([{ i: 'L1', find: 'jusqu’au bord', to: 'au bord' }]), [debordante])
     expect(out.dropped).toEqual([])
     expect(out.edits).toHaveLength(1)
   })
 
   it('écarte un remplacement porteur d’un caractère de contrôle', () => {
-    const out = parsePdfCorrections(
+    const out = parse(
       reponse([{ i: 'L3', find: '2025', to: `2026${String.fromCharCode(10)}` }]),
       lignes,
     )
@@ -322,9 +327,9 @@ describe('parsePdfCorrections', () => {
 
   it('écarte ce qui déborde de la place disponible, et l’accepte quand la place existe', () => {
     const court = [ligne('2025', 0.1, 0.05)]
-    expect(parsePdfCorrections(reponse([{ i: 'L1', find: '2025', to: '2026 révisé' }]), court).edits).toHaveLength(1)
+    expect(parse(reponse([{ i: 'L1', find: '2025', to: '2026 révisé' }]), court).edits).toHaveLength(1)
     const remplie = [pleine('le total du trimestre precedent est de 1240000')]
-    const out = parsePdfCorrections(
+    const out = parse(
       reponse([{ i: 'L1', find: '1240000', to: '1 240 000 euros environ' }]),
       remplie,
     )
@@ -332,7 +337,7 @@ describe('parsePdfCorrections', () => {
   })
 
   it('normalise la typographie AVANT de valider, et le signale', () => {
-    const out = parsePdfCorrections(
+    const out = parse(
       reponse([{ i: 'L1', find: "d'affaire", to: "d'affaires" }]),
       [ligne('Le chiffre d’affaire du trimestre')],
     )
@@ -340,7 +345,7 @@ describe('parsePdfCorrections', () => {
     // c'est bien un refus, et c'est ce que le prompt cherche à éviter en amont.
     expect(out.dropped[0].reason).toBe('passage absent de la ligne')
 
-    const bon = parsePdfCorrections(
+    const bon = parse(
       reponse([{ i: 'L1', find: 'd’affaire', to: "d'affaires" }]),
       [ligne('Le chiffre d’affaire du trimestre')],
     )
@@ -349,7 +354,7 @@ describe('parsePdfCorrections', () => {
   })
 
   it('n’accepte pas deux corrections sur la même ligne', () => {
-    const out = parsePdfCorrections(
+    const out = parse(
       reponse([
         { i: 'L3', find: '2025', to: '2026' },
         { i: 'L3', find: 'Rapport', to: 'Bilan' },
@@ -362,7 +367,7 @@ describe('parsePdfCorrections', () => {
 
   it('plafonne le nombre de corrections — au-delà, le diff n’est plus relu', () => {
     const beaucoup = Array.from({ length: MAX_EDITS + 3 }, (_, i) => ligne(`ligne ${i} avec du texte`))
-    const out = parsePdfCorrections(
+    const out = parse(
       reponse(beaucoup.map((_, i) => ({ i: lineLabel(i), find: 'texte', to: 'texto' }))),
       beaucoup,
     )
@@ -375,22 +380,22 @@ describe('parsePdfCorrections', () => {
     // `String.replace` interpréterait « $& », « $1 »… dans le remplacement, et un `find`
     // contenant « $ » ou « \ » deviendrait une expression. Ici tout est littéral.
     const l = [ligne('coût : 100$ HT (net)')]
-    const out = parsePdfCorrections(reponse([{ i: 'L1', find: '100$ HT', to: '120$ TTC' }]), l)
+    const out = parse(reponse([{ i: 'L1', find: '100$ HT', to: '120$ TTC' }]), l)
     expect(out.edits[0].lineAfter).toBe('coût : 120$ TTC (net)')
 
     const dollars = [ligne('total $& fin')]
-    const out2 = parsePdfCorrections(reponse([{ i: 'L1', find: '$&', to: '$$' }]), dollars)
+    const out2 = parse(reponse([{ i: 'L1', find: '$&', to: '$$' }]), dollars)
     expect(out2.edits[0].lineAfter).toBe('total $$ fin')
   })
 
   it('remplace la PREMIÈRE occurrence exacte, aux bonnes bornes', () => {
     const l = [ligne('abcabX')]
-    const out = parsePdfCorrections(reponse([{ i: 'L1', find: 'abX', to: 'abY' }]), l)
+    const out = parse(reponse([{ i: 'L1', find: 'abX', to: 'abY' }]), l)
     expect(out.edits[0].lineAfter).toBe('abcabY')
   })
 
   it('n’écarte JAMAIS en silence : chaque rejet porte son étiquette et sa raison', () => {
-    const out = parsePdfCorrections(reponse([{ i: 'L7', find: 'a', to: 'b' }]), lignes)
+    const out = parse(reponse([{ i: 'L7', find: 'a', to: 'b' }]), lignes)
     expect(out.dropped).toEqual([{ label: 'L7', reason: 'ligne inconnue' }])
   })
 })

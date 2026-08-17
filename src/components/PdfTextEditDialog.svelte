@@ -65,6 +65,10 @@
   let accepted = $state<Record<number, boolean>>({})
   // Liste FERMÉE réellement soumise au modèle — c'est elle qui résout les index rendus.
   let submitted = $state<PdfEditableLine[]>([])
+  // Rechargement échoué : les octets en mémoire ne correspondent plus à ce qui est affiché.
+  // Continuer à taper dessus ne produirait que des refus, et bloquerait l'enregistrement de
+  // secours. Les champs deviennent donc en lecture seule jusqu'à la fermeture.
+  let perime = $state(false)
 
   const path = $derived(app.pdfTextEditPath ?? '')
   const fileName = $derived(baseName(path) || 'document.pdf')
@@ -154,6 +158,7 @@
       accepted = {}
       submitted = []
       dirty = false
+      perime = false
       revision = 0
     }
   })
@@ -219,7 +224,11 @@
     // suivant, et le champ répondrait par le silence. Une nouvelle consigne remplace
     // l'ancienne proposition : c'est le geste que l'utilisateur vient de faire.
     cancelPdfCorrection()
-    const soumises = pageLines.filter((l) => l.editable)
+    // Les lignes que l'utilisateur vient de retoucher à la main sont ÉCARTÉES : le modèle
+    // les verrait dans leur ancien texte, proposerait dessus, et sa proposition serait
+    // refusée à l'application (« passage déjà modifié ») après avoir été affichée comme
+    // valide. Un diff qui ment est pire qu'une proposition en moins.
+    const soumises = pageLines.filter((l) => l.editable && !edits[key(l)])
     submitted = soumises
     accepted = {}
     void correctPdfPage({
@@ -314,12 +323,27 @@
         submitted = []
         revision++
         dirty = true
+        perime = true
         console.error('[pdf] rechargement après correction', error)
         message = 'Les corrections sont écrites, mais l’aperçu n’a pas pu être rechargé. Enregistrez une copie pour les conserver.'
         cancelPdfCorrection()
         return
       }
-      edits = {}
+      // Les saisies manuelles REFUSÉES n'ont pas été écrites : les effacer perdrait du
+      // texte tapé, sans recours. On les repose sur les lignes fraîchement relues — les
+      // rangs `occurrence` ayant pu se renuméroter, la clé se reconstruit, elle ne se
+      // recopie pas. Celles qui ne retrouvent pas leur ligne sont nommées dans le bandeau
+      // plutôt que perdues en silence.
+      const rescapes: Record<string, string> = {}
+      const orphelins: string[] = []
+      for (const [id, to] of pending) {
+        const from = id.slice(id.indexOf(':', id.indexOf(':') + 1) + 1)
+        if (!rapport.refused.some((r) => r.from === from)) continue
+        const ligne = lines.find((l) => l.text === from)
+        if (ligne) rescapes[key(ligne)] = to
+        else orphelins.push(from.slice(0, 30))
+      }
+      edits = rescapes
       accepted = {}
       submitted = []
       revision++
@@ -336,7 +360,10 @@
         message: `${demandes.length - refuses} ligne${demandes.length - refuses > 1 ? 's' : ''} sur ${demandes.length} réécrite${demandes.length - refuses > 1 ? 's' : ''} dans le document.` +
           (refuses
             ? ` ${refuses} refusée${refuses > 1 ? 's' : ''} : ${rapport.refused.map((r) => (r.chars?.length ? `« ${r.from.slice(0, 30)} » — caractères absents de la police (${r.chars.join(' ')})` : `« ${r.from.slice(0, 30)} » — ${r.reason}`)).join(' ; ')}.`
-            : ' Rien d’autre n’a bougé, et le fichier d’origine est intact.'),
+            : ' Rien d’autre n’a bougé, et le fichier d’origine est intact.') +
+          (orphelins.length
+            ? ` Vos saisies sur ${orphelins.map((o) => `« ${o} »`).join(', ')} n’ont pas pu être retrouvées et ont été abandonnées.`
+            : ''),
       }
     } finally {
       applying = false
@@ -416,6 +443,21 @@
           closePdfTextEdit()
         }
       } catch (error) {
+        // `applyTextEdits` JETTE quand rien n'a pu être écrit — par exemple une seule
+        // saisie manuelle dont un caractère manque à la police. Sans ce repli, des
+        // corrections déjà appliquées en mémoire se retrouvaient prises en otage par cette
+        // saisie : plus aucune copie n'était écrite, et le seul moyen de les sauver était
+        // de retaper à l'identique le texte d'origine pour vider la ligne en attente.
+        if (dirty && error instanceof PdfEditError) {
+          if (!(await ecrire(bytes.slice()))) return
+          app.banner = {
+            tone: 'warning',
+            title: 'PDF modifié enregistré',
+            message: `Les corrections déjà appliquées ont été enregistrées. Vos ${pending.length} saisie${pending.length > 1 ? 's' : ''} en attente n’ont pas pu être écrite${pending.length > 1 ? 's' : ''} : ${error.message}`,
+          }
+          dirty = false
+          return
+        }
         message = error instanceof PdfEditError ? error.message : 'Doku n’a pas pu écrire ce PDF.'
       }
     } finally {
@@ -563,8 +605,12 @@
           {#if propositions.length}
             <div class="propositions-actions">
               <button onclick={cancelPdfCorrection} disabled={applying}>Tout refuser</button>
+              <!-- Le libellé dit ce qui sera RÉELLEMENT écrit : les saisies manuelles en
+                   attente partent dans le même appel, sur toutes les pages. -->
               <button class="primary" onclick={() => void appliquer()} disabled={applying || !acceptees.length}>
-                {applying ? 'Application…' : `Appliquer ${acceptees.length} correction${acceptees.length > 1 ? 's' : ''}`}
+                {#if applying}Application…
+                {:else if pending.length}Appliquer {acceptees.length} correction{acceptees.length > 1 ? 's' : ''} + {pending.length} saisie{pending.length > 1 ? 's' : ''}
+                {:else}Appliquer {acceptees.length} correction{acceptees.length > 1 ? 's' : ''}{/if}
               </button>
             </div>
           {:else}
@@ -595,8 +641,8 @@
           <input
             class="line"
             class:changed={!!edits[key(line)]}
-            class:locked={!line.editable}
-            readonly={!line.editable}
+            class:locked={!line.editable || perime}
+            readonly={!line.editable || perime}
             title={line.editable ? line.text : (line.reason ?? 'Cette ligne ne peut pas être modifiée.')}
             value={edits[key(line)] || line.text}
             oninput={(event) => edit(line, event.currentTarget.value)}

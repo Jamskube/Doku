@@ -77,7 +77,10 @@ const demande = (instruction = 'corrige les fautes') => ({
   revision: 0,
   instruction,
   lines: LIGNES,
-  geometry: LIGNES,
+  // Tableau DISTINCT, comme le composant le construit : passer la même référence des deux
+  // côtés rendrait ce câblage indétectable — on pourrait supprimer `geometry` de l'appel
+  // sans qu'aucun test ne bronche.
+  geometry: LIGNES.map((l) => ({ ...l })),
   targets: CIBLES,
 })
 
@@ -138,6 +141,37 @@ describe('correctPdfPage', () => {
     expect(pdfCorrection.current?.edits[0].lineAfter).toBe('Rapport 2026')
     // Sans cela, le chat et la reformulation resteraient bloqués pour toute la session.
     expect(copilot.generating).toBe(false)
+  })
+
+  it('TRANSMET la géométrie complète au parseur — une voisine non soumise borne quand même', async () => {
+    // Le correctif central de la deuxième revue : la place libre se mesure contre TOUTES
+    // les lignes de la page, y compris celles qu'on ne peut pas modifier et qui ne sont
+    // donc jamais soumises au modèle. Sans ce câblage, la borne repart à la marge de page
+    // et l'élargissement passe.
+    const cellule = ligne('Matériel', 0.1, 0.15)
+    const voisineNonSoumise = ligne('Total HT', 0.32, 0.2)
+    const reponse = '{"edits":[{"i":"L1","find":"Matériel","to":"Matériel informatique complet"}]}'
+
+    moteur.reponse = reponse
+    await correctPdfPage({
+      ...demande(),
+      lines: [cellule],
+      geometry: [{ ...cellule }, voisineNonSoumise],
+      targets: [{ page: 5, occurrence: 0, text: cellule.text }],
+    })
+    expect(pdfCorrection.current?.edits).toEqual([])
+    expect(pdfCorrection.current?.dropped[0].reason).toBe('trop large pour la place disponible sur la ligne')
+
+    // Sans la voisine, la même proposition passe — c'est bien la géométrie qui décide.
+    cancelPdfCorrection()
+    moteur.reponse = reponse
+    await correctPdfPage({
+      ...demande(),
+      lines: [cellule],
+      geometry: [{ ...cellule }],
+      targets: [{ page: 5, occurrence: 0, text: cellule.text }],
+    })
+    expect(pdfCorrection.current?.edits).toHaveLength(1)
   })
 
   it('envoie la consigne NORMALISÉE et les lignes numérotées au modèle', async () => {
