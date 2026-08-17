@@ -101,8 +101,14 @@ impl OllamaState {
     // réutilisable pour un prochain start. Idempotent. Le verrou est TENU pendant le terminate
     // pour sérialiser avec l'assign+store de `start_ollama` (sinon on pourrait tuer un sidecar
     // qui vient d'être démarré et rapporté vivant).
+    // `unwrap_or_else(|e| e.into_inner())` plutôt que `.unwrap()` sur les quatre prises de ce
+    // verrou : si un thread panique en le tenant, le mutex est EMPOISONNÉ et tout `.unwrap()`
+    // ultérieur fait paniquer à son tour. Le sidecar est un service secondaire — sa défaillance
+    // ne doit pas emporter l'hôte, et surtout pas empêcher `shutdown()` de tuer l'arbre de
+    // process. L'état protégé est un `Option<(child, port)>` : une panique ne peut pas le
+    // laisser à moitié écrit, donc le récupérer est sûr.
     pub fn shutdown(&self) {
-        let mut guard = self.child.lock().unwrap();
+        let mut guard = self.child.lock().unwrap_or_else(|e| e.into_inner());
         let taken = guard.take();
         #[cfg(windows)]
         terminate_job(&self.job);
@@ -119,7 +125,7 @@ pub async fn start_ollama(
     app: tauri::AppHandle,
     state: tauri::State<'_, OllamaState>,
 ) -> Result<u16, String> {
-    if let Some((_, port)) = state.child.lock().unwrap().as_ref() {
+    if let Some((_, port)) = state.child.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
         return Ok(*port);
     }
     let port = free_loopback_port()?;
@@ -170,7 +176,7 @@ pub async fn start_ollama(
                 CommandEvent::Terminated(p) => {
                     eprintln!("[ollama] terminé (code {:?})", p.code);
                     if let Some(state) = drain_app.try_state::<OllamaState>() {
-                        let mut g = state.child.lock().unwrap();
+                        let mut g = state.child.lock().unwrap_or_else(|e| e.into_inner());
                         if matches!(g.as_ref(), Some((_, stored)) if *stored == port) {
                             *g = None;
                         }
@@ -186,7 +192,7 @@ pub async fn start_ollama(
     // NB : cette fonction async ne contient AUCUN `.await` (spawn shell synchrone) → les gardes
     // du `std::sync::Mutex` ne traversent jamais un point de suspension. Ne pas ajouter d'await
     // entre les prises de verrou sans repasser en Mutex async.
-    let mut guard = state.child.lock().unwrap();
+    let mut guard = state.child.lock().unwrap_or_else(|e| e.into_inner());
     if let Some((_, existing)) = guard.as_ref() {
         // Course perdue : ce process n'a pas encore d'enfant llama-server (spawné paresseusement
         // au 1er modèle), donc child.kill() suffit — dépendant du timing, pas une garantie.
