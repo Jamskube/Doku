@@ -63,6 +63,7 @@ import {
   buildWholeSummaryPrompt,
   COPILOT_NUM_CTX,
   COPILOT_TEMPERATURE,
+  normalizeInstruction,
   SEGMENT_CHARS,
   segmentDoc,
   SUMMARY_MAP_MAX_TOKENS,
@@ -1478,6 +1479,9 @@ export interface RephraseRun {
   to: number
   original: string
   mode: RephraseMode
+  // Consigne libre (mode `custom`), déjà normalisée — vide pour les six verbes. Portée par le
+  // run parce que « Réessayer » doit rejouer LA MÊME consigne, même si le champ a été vidé.
+  instruction: string
   text: string
   phase: 'streaming' | 'ready' | 'error' | 'config'
   error: string
@@ -1490,8 +1494,12 @@ let rephraseSeq = 0
 // dans le document ; l'aperçu en place la rend avec un diff, l'utilisateur accepte (remplace,
 // une transaction → Ctrl+Z restaure) ou refuse. Anti-TOCTOU et boot-safety identiques à
 // sendChat ; le tabId fige l'onglet cible (éditeur CM6 PARTAGÉ entre onglets).
-export async function rephraseSelection(mode: RephraseMode): Promise<void> {
+export async function rephraseSelection(mode: RephraseMode, instruction = ''): Promise<void> {
   if (copilot.generating || rephrase.current) return
+  // Consigne libre vide = pas de tâche : ne jamais partir en génération avec un prompt qui ne
+  // demande rien (le modèle rendrait le passage tel quel, ou broderait).
+  const consigne = mode === 'custom' ? normalizeInstruction(instruction) : ''
+  if (mode === 'custom' && !consigne) return
   const view = activeEditorView()
   if (!view) return
   const sel = view.state.selection.main
@@ -1500,14 +1508,30 @@ export async function rephraseSelection(mode: RephraseMode): Promise<void> {
   let to = sel.to
   // Modes structurels : étendre aux frontières de ligne — une liste « - [ ] … » insérée
   // en milieu de ligne casserait le Markdown (le reste de la ligne collerait à la puce).
+  // PAS pour une consigne libre : on ne sait pas ce qu'elle produit, et avaler la fin d'une
+  // ligne que l'utilisateur n'avait pas sélectionnée serait une surprise, fût-elle annulable.
   if (mode === 'bullets' || mode === 'tasks') {
     from = view.state.doc.lineAt(from).from
     to = view.state.doc.lineAt(to).to
   }
-  await runRephrase({ tabId: app.activeId, from, to, original: view.state.sliceDoc(from, to), mode })
+  await runRephrase({
+    tabId: app.activeId,
+    from,
+    to,
+    original: view.state.sliceDoc(from, to),
+    mode,
+    instruction: consigne,
+  })
 }
 
-async function runRephrase(params: { tabId: number; from: number; to: number; original: string; mode: RephraseMode }): Promise<void> {
+async function runRephrase(params: {
+  tabId: number
+  from: number
+  to: number
+  original: string
+  mode: RephraseMode
+  instruction: string
+}): Promise<void> {
   const provider = app.copilotProvider
   const localModel = app.activeModel
   const id = ++rephraseSeq
@@ -1541,7 +1565,7 @@ async function runRephrase(params: { tabId: number; from: number; to: number; or
     }
     const text = await streamGenerate(
       runtime,
-      buildRephrasePrompt(params.original, params.mode, personaFor(runtime)),
+      buildRephrasePrompt(params.original, params.mode, personaFor(runtime), params.instruction),
       (t) => {
         const c = rephrase.current
         if (c?.id === id) c.text += t
@@ -1619,9 +1643,9 @@ export function cancelRephrase(): void {
 export function retryRephrase(): void {
   const cur = rephrase.current
   if (!cur || cur.phase !== 'error' || copilot.generating) return
-  const { tabId, from, to, original, mode } = cur
+  const { tabId, from, to, original, mode, instruction } = cur
   rephrase.current = null
-  void runRephrase({ tabId, from, to, original, mode })
+  void runRephrase({ tabId, from, to, original, mode, instruction })
 }
 
 // Rejoue une génération échouée (bouton « Réessayer » de la carte d'erreur). Retire la paire

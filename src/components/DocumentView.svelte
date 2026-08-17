@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from 'svelte'
+  import { onMount, tick } from 'svelte'
   import { EditorView } from '@codemirror/view'
   import { EditorState, type Extension } from '@codemirror/state'
   import { app, COLUMN_PX, docHeadings, forcePreview, isDirty, openCopilot, workspace } from '../lib/stores.svelte'
@@ -26,7 +26,7 @@
     toggleStrike,
     wrapCodeBlock,
   } from '../lib/editor/format-commands'
-  import { diffWords, type RephraseMode } from '../lib/copilot-service'
+  import { diffWords, MAX_INSTRUCTION, normalizeInstruction, type RephraseMode } from '../lib/copilot-service'
   import DokuMark from '../lib/DokuMark.svelte'
   import PdfView from './PdfView.svelte'
   import DocxView from './DocxView.svelte'
@@ -153,17 +153,11 @@
   let selectionMenuConfig = $state(false)
   let selectionMenuEl: HTMLElement | undefined = $state()
   let selectionMenuTimer: ReturnType<typeof setTimeout> | undefined
-
-  // Longueur « utile » de la sélection (compteur du menu), sans la copie qu'un .trim()
-  // ferait à chaque rendu sur une sélection potentiellement multi-Mo.
-  const selCount = $derived.by(() => {
-    const t = paneSelection.text
-    let a = 0
-    let b = t.length
-    while (a < b && t.charCodeAt(a) <= 32) a++
-    while (b > a && t.charCodeAt(b - 1) <= 32) b--
-    return b - a
-  })
+  // Consigne libre (21.x) : le champ REMPLACE sa propre entrée de menu au lieu de s'ajouter
+  // dessous — le tiroir garde sa hauteur et l'attention va au seul endroit où l'on écrit.
+  let selectionMenuCustomOpen = $state(false)
+  let customInstruction = $state('')
+  let customInputEl: HTMLInputElement | undefined = $state()
 
   // Copilote non configuré : le clic sur un verbe affiche une note dans le popover au lieu de
   // lancer une génération vouée à l'échec (brief w3 « Aucun modèle actif »). Chaque
@@ -189,6 +183,14 @@
     selectionMenuExpanded = false
     selectionMenuConfig = false
     selectionMenuInsertOpen = false
+    closeCustomInstruction()
+  }
+
+  // La consigne n'est PAS conservée d'une ouverture à l'autre : elle vise un passage précis
+  // (« traduis ce paragraphe »), et la ressortir sur une autre sélection serait un piège.
+  function closeCustomInstruction() {
+    selectionMenuCustomOpen = false
+    customInstruction = ''
   }
 
   function positionSelectionMenu(currentView: EditorView) {
@@ -261,6 +263,7 @@
     selectionMenuExpanded = !selectionMenuExpanded
     selectionMenuInsertOpen = false
     selectionMenuConfig = selectionMenuExpanded && copilotNeedsSetup
+    closeCustomInstruction()
     if (view) positionSelectionMenu(view)
   }
 
@@ -268,7 +271,44 @@
     selectionMenuInsertOpen = !selectionMenuInsertOpen
     selectionMenuExpanded = false
     selectionMenuConfig = false
+    closeCustomInstruction()
     if (view) positionSelectionMenu(view)
+  }
+
+  // Ouvre le champ de consigne libre. Le focus part dans l'input : la sélection CM6 SURVIT au
+  // blur (elle vit dans l'état, pas dans le DOM), c'est elle que `rephraseSelection` relira.
+  // Repositionnement APRÈS le rendu — la hauteur du tiroir a changé.
+  async function openCustomInstruction() {
+    if (copilotNeedsSetup) {
+      selectionMenuConfig = true
+      if (view) positionSelectionMenu(view)
+      return
+    }
+    selectionMenuCustomOpen = true
+    await tick()
+    if (view) positionSelectionMenu(view)
+    customInputEl?.focus()
+  }
+
+  function submitCustomInstruction(event: Event) {
+    event.preventDefault()
+    const consigne = normalizeInstruction(customInstruction)
+    if (!consigne) return
+    hideSelectionMenu()
+    void rephraseSelection('custom', consigne)
+  }
+
+  // Échap dans le champ referme le champ, PAS tout le menu : le geste « je me suis trompé de
+  // consigne » ne doit pas coûter la sélection. Le preventDefault protège du handler document,
+  // qui écarterait le menu entier ; un second Échap l'atteindra.
+  async function onCustomKeyDown(event: KeyboardEvent) {
+    if (event.key !== 'Escape') return
+    event.preventDefault()
+    closeCustomInstruction()
+    await tick()
+    if (!view) return
+    positionSelectionMenu(view)
+    view.focus()
   }
 
   // mousedown : preventDefault SEUL — ne pas voler focus/sélection à l'éditeur
@@ -545,6 +585,20 @@
   // ensuite ici que la plage porte toujours l'original. Indispensable pour le rechargement
   // externe (bump de rev) : setState ne passe par AUCUNE transaction, ni l'auto-dismiss du
   // champ ni l'updateListener ne le voient.
+  // En-tête de l'aperçu pendant le streaming. Une consigne libre RÉPÈTE la consigne : c'est la
+  // seule trace de ce qui a été demandé (le champ est refermé), et elle rend l'aperçu lisible
+  // quand plusieurs essais s'enchaînent. Tronquée — l'en-tête partage sa ligne avec « Échap ».
+  const LABEL_INSTRUCTION_MAX = 38
+  function rephraseLabel(cur: { mode: RephraseMode; instruction: string }): string {
+    if (cur.mode === 'correct') return 'Doku-San corrige…'
+    if (cur.mode !== 'custom') return 'Doku-San reformule…'
+    const consigne =
+      cur.instruction.length > LABEL_INSTRUCTION_MAX
+        ? `${cur.instruction.slice(0, LABEL_INSTRUCTION_MAX - 1).trimEnd()}…`
+        : cur.instruction
+    return `Doku-San : « ${consigne} »`
+  }
+
   const rephraseDiff = $derived(
     rephrase.current?.phase === 'ready' ? diffWords(rephrase.current.original, rephrase.current.text) : [],
   )
@@ -574,7 +628,7 @@
             to: cur.to,
             snapshot: {
               phase: cur.phase,
-              label: cur.mode === 'correct' ? 'Doku-San corrige…' : 'Doku-San reformule…',
+              label: rephraseLabel(cur),
               text: cur.text,
               diff: rephraseDiff,
               message: cur.error,
@@ -731,7 +785,6 @@
       >
         <span class="selection-menu-spark"><span class="msr">auto_awesome</span></span>
         <span class="selection-menu-label">Réécrire avec Doku-San</span>
-        <span class="selection-menu-count">{selCount} car.</span>
         <span class="msr selection-menu-chevron">chevron_right</span>
       </button>
       <div
@@ -767,6 +820,30 @@
             <button class="selection-menu-action selection-menu-subaction" role="menuitem" onclick={() => runSelectionAction('tasks')}>
               <span class="msr">checklist</span><span>En cases à cocher</span>
             </button>
+            <div class="selection-menu-sep"></div>
+            {#if selectionMenuCustomOpen}
+              <form class="selection-custom" onsubmit={submitCustomInstruction}>
+                <input
+                  class="selection-custom-field"
+                  bind:this={customInputEl}
+                  bind:value={customInstruction}
+                  onkeydown={onCustomKeyDown}
+                  type="text"
+                  maxlength={MAX_INSTRUCTION}
+                  autocomplete="off"
+                  spellcheck="false"
+                  placeholder="Traduis en anglais…"
+                  aria-label="Votre consigne pour Doku-San"
+                />
+                <button class="selection-custom-send" type="submit" disabled={!customInstruction.trim()} aria-label="Appliquer la consigne">
+                  <span class="msr">arrow_upward</span>
+                </button>
+              </form>
+            {:else}
+              <button class="selection-menu-action selection-menu-subaction" role="menuitem" onclick={openCustomInstruction}>
+                <span class="msr">edit_note</span><span>Demander autre chose…</span>
+              </button>
+            {/if}
           {/if}
         </div>
       </div>
@@ -913,13 +990,6 @@
     user-select: none;
     animation: selection-menu-in 160ms cubic-bezier(0.22, 1, 0.36, 1);
   }
-  .selection-menu-count {
-    margin-left: auto;
-    font-size: 10px;
-    font-weight: 400;
-    color: var(--ink-5);
-    font-variant-numeric: tabular-nums;
-  }
   .selection-menu-sep { height: 1px; margin: 5px 7px; background: var(--line-1); }
   .selection-format-row { display: flex; gap: 2px; padding: 1px 2px; }
   .selection-format-btn {
@@ -956,7 +1026,10 @@
     transition: background 140ms ease, color 140ms ease, scale 100ms ease;
   }
   .selection-menu-action .msr { width: 19px; font-size: 17px; color: var(--ink-4); }
-  .selection-menu-label { flex: 1; min-width: 0; white-space: nowrap; }
+  /* `overflow: hidden` n'est PAS décoratif : sans lui, un libellé trop long pour la largeur
+     du menu ne rétrécit pas — il déborde et se superpose à ce qui suit (vécu : « Réécrire avec
+     Doku-San » passait par-dessus le compteur de caractères, depuis retiré). */
+  .selection-menu-label { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
   .selection-menu-action kbd {
     margin-left: auto;
     color: var(--ink-5);
@@ -1010,6 +1083,56 @@
     color: var(--ink-3);
   }
 
+  /* Consigne libre : la rangée emprunte la grammaire du composeur du copilote — champ posé
+     sur --composer-bg, bouton d'envoi rond à l'encre. Même geste ailleurs dans l'app, donc
+     même vocabulaire ici, en format menu. */
+  .selection-custom {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    margin: 2px 3px 2px;
+    padding: 3px 3px 3px 10px;
+    border-radius: 11px;
+    background: var(--composer-bg);
+    box-shadow: inset 0 0 0 1px var(--line-1);
+    transition: box-shadow 140ms ease;
+  }
+  .selection-custom:focus-within { box-shadow: inset 0 0 0 1px var(--line-3); }
+  .selection-custom-field {
+    flex: 1;
+    min-width: 0;
+    height: 28px;
+    border: 0;
+    padding: 0;
+    background: none;
+    color: var(--ink);
+    font-family: var(--font-sans);
+    font-size: 12px;
+  }
+  /* L'anneau de focus vit sur la rangée entière (:focus-within) — un second liseré autour du
+     seul champ ferait deux cadres concentriques. */
+  .selection-custom-field:focus { outline: none; }
+  .selection-custom-field::placeholder { color: var(--ink-4); }
+  .selection-custom-send {
+    flex: none;
+    width: 26px;
+    height: 26px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: 0;
+    border-radius: 50%;
+    background: var(--ink);
+    color: var(--cream-content);
+    cursor: pointer;
+    transition: background 140ms ease, opacity 140ms ease, scale 100ms ease;
+  }
+  .selection-custom-send .msr { width: auto; font-size: 16px; }
+  .selection-custom-send:hover { background: var(--ink-2); }
+  .selection-custom-send:focus-visible { outline: 2px solid var(--line-3); outline-offset: 2px; }
+  .selection-custom-send:not(:disabled):active { scale: 0.92; }
+  .selection-custom-send:disabled { opacity: 0.35; cursor: default; }
+
   @keyframes selection-menu-in {
     from { opacity: 0; transform: translateY(4px) scale(0.98); }
     to { opacity: 1; transform: translateY(0) scale(1); }
@@ -1017,6 +1140,8 @@
   @media (prefers-reduced-motion: reduce) {
     .selection-menu { animation: none; }
     .selection-rewrite-options,
+    .selection-custom,
+    .selection-custom-send,
     .selection-menu-chevron { transition: none; }
   }
   .editor-host.source-mode :global(.cm-content),
