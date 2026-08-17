@@ -16,8 +16,9 @@ import { readEditableLines } from '../../../src/lib/export/pdf-edit-text'
 document.documentElement.dataset.theme = new URLSearchParams(location.search).get('theme') ?? 'light'
 
 // Fournisseur cloud : sans lui la barre de consigne affiche sa raison d'indisponibilité,
-// et le chemin qu'on veut voir n'existe pas.
-app.copilotProvider = 'openai'
+// et le chemin qu'on veut voir n'existe pas. `?local=1` montre justement cet état-là.
+app.copilotProvider = new URLSearchParams(location.search).has('local') ? 'ollama' : 'openai'
+app.activeModel = 'qwen2.5:1.5b-instruct-q4_0'
 
 const written: { name: string; bytes: Uint8Array }[] = []
 ;(globalThis as unknown as { __written: typeof written }).__written = written
