@@ -12,7 +12,7 @@
   import { diffWords } from '../lib/copilot-service'
   import { lineLabel, pdfCorrectionMatches, revealInvisibles } from '../lib/pdf-correction'
   import { baseName } from '../lib/paths'
-  import { readFileBytes, savePdfDialog } from '../lib/tauri'
+  import { readFileBytes, savePdfDialog, SourceOverwriteError } from '../lib/tauri'
   import type { PdfEditableLine, PdfEditRequest } from '../lib/export/pdf-edit-text'
   import type { PdfDoc } from '../lib/pdf'
 
@@ -204,6 +204,14 @@
     return renderChain
   }
 
+  const geometrie = (l: PdfEditableLine) => ({
+    text: l.text,
+    left: l.left,
+    width: l.width,
+    top: l.top,
+    height: l.height,
+  })
+
   function lancerConsigne(event: Event) {
     event.preventDefault()
     if (locked || raisonIndispo || !instruction.trim()) return
@@ -219,7 +227,11 @@
       page: pageIndex,
       revision,
       instruction,
-      lines: soumises.map((l) => ({ text: l.text, left: l.left, width: l.width, top: l.top, height: l.height })),
+      lines: soumises.map(geometrie),
+      // TOUTES les lignes de la page, y compris celles qu'on ne peut pas modifier : une
+      // cellule voisine non éditable occupe l'espace tout autant, et l'oublier fait
+      // repartir le budget de largeur jusqu'à la marge de page.
+      geometry: pageLines.map(geometrie),
       // L'identité voyage AVEC le run : un index n'a de sens que par rapport à la liste
       // qui l'a produit.
       targets: soumises.map((l) => ({ page: l.page, occurrence: l.occurrence, text: l.text })),
@@ -292,6 +304,15 @@
         // « Enregistrer une copie » disponible — le canvas resterait sinon vide à jamais,
         // sans un mot (`renderPage` sort sur un document nul).
         bytes = nouveaux.slice()
+        // `edits` DOIT être vidé : les modifications tapées à la main sont déjà cuites
+        // dans `nouveaux`. Les laisser en attente enverrait `save()` les réappliquer, sur
+        // des `from` qui n'existent plus — tout serait refusé, `applyTextEdits` jetterait,
+        // et AUCUNE copie ne serait écrite. Le message promettrait alors l'inverse de ce
+        // qui se passe.
+        edits = {}
+        accepted = {}
+        submitted = []
+        revision++
         dirty = true
         console.error('[pdf] rechargement après correction', error)
         message = 'Les corrections sont écrites, mais l’aperçu n’a pas pu être rechargé. Enregistrez une copie pour les conserver.'
@@ -348,7 +369,6 @@
     message = ''
     try {
       const { applyTextEdits, PdfEditError } = await import('../lib/export/pdf-edit-text')
-      const { SourceOverwriteError } = await import('../lib/tauri')
       // « Le document d'origine n'est jamais modifié » est écrit dans le pied de cette
       // modale : c'est au code de le tenir, pas à la retenue de qui clique.
       const ecrire = async (octets: Uint8Array): Promise<boolean> => {
@@ -533,9 +553,11 @@
             <p class="propositions-head">Doku-San n’a rien trouvé à corriger sur cette page avec cette consigne.</p>
           {/if}
           {#if runIci.dropped.length}
+            <!-- Plafonné : une réponse aberrante avec deux cents entrées pousserait la
+                 feuille hors de l'écran. Le nombre total reste dit. -->
             <p class="propositions-drop">
               {runIci.dropped.length} proposition{runIci.dropped.length > 1 ? 's' : ''} écartée{runIci.dropped.length > 1 ? 's' : ''} :
-              {runIci.dropped.map((d) => `${d.label} — ${d.reason}`).join(' ; ')}.
+              {runIci.dropped.slice(0, 8).map((d) => `${d.label} — ${d.reason}`).join(' ; ')}{runIci.dropped.length > 8 ? `, et ${runIci.dropped.length - 8} autre${runIci.dropped.length - 8 > 1 ? 's' : ''}` : ''}.
             </p>
           {/if}
           {#if propositions.length}

@@ -56,7 +56,12 @@ async function poser(page: number, reponse: string) {
     top: l.top,
     height: l.height,
   }))
-  const { edits, dropped } = parsePdfCorrections(reponse, fermees)
+  // Géométrie de TOUTES les lignes de la page, éditables ou non : c'est elle qui borne le
+  // budget de largeur au voisin de rangée.
+  const toutes = (await readEditableLines(new Uint8Array(await (await fetch('./doc.pdf')).arrayBuffer())))
+    .filter((l) => l.page === page)
+    .map((l) => ({ text: l.text, left: l.left, width: l.width, top: l.top, height: l.height }))
+  const { edits, dropped } = parsePdfCorrections(reponse, fermees, toutes)
   pdfCorrection.current = {
     id: 1,
     path: './doc.pdf',

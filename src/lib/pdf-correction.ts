@@ -139,11 +139,15 @@ const APOSTROPHES = ['’', "'"]
 // ailleurs. Un tiret absent de la police se refuse, comme « œ » — avec sa raison.
 
 function aligner(texte: string, source: string, famille: string[]): string {
-  // Caractère de cette famille réellement présent dans la ligne d'origine.
-  const cible = famille.find((c) => source.includes(c))
+  const presents = famille.filter((c) => source.includes(c))
+  const cible = presents[0]
   if (!cible) return texte
   let sortie = texte
-  for (const c of famille) if (c !== cible) sortie = sortie.split(c).join(cible)
+  // On ne remplace QUE les variantes absentes de la ligne d'origine. Remplacer aussi
+  // celles qui y sont réécrirait un choix que le document a déjà fait : sur une ligne
+  // typographiquement mixte, l'apostrophe droite deviendrait courbe alors que la police
+  // sait écrire les deux — une modification que personne n'a demandée.
+  for (const c of famille) if (!presents.includes(c)) sortie = sortie.split(c).join(cible)
   return sortie
 }
 
@@ -296,12 +300,14 @@ export function buildPdfCorrectionPrompt(lines: CorrectableLine[], instruction: 
     '- Tu ne réécris jamais une ligne entière. Tu indiques, pour la ligne concernée, un court ' +
     'passage à remplacer (`find`) et son remplacement (`to`).\n' +
     '- `find` doit apparaître EXACTEMENT UNE FOIS dans la ligne, tel qu’écrit ci-dessus, ' +
-    'accents et apostrophes compris. Prends-le assez long pour être unique, assez court pour ' +
-    'ne pas recopier la ligne.\n' +
+    `accents et apostrophes compris. Assez long pour être unique, au plus ${MAX_FIND} caractères.\n` +
+    '- Les lignes te sont données entre guillemets JSON ; `find` et `to`, eux, s’écrivent ' +
+    'en texte ordinaire — ne recopie pas les échappements.\n' +
     "- Ne corrige QUE ce que la consigne demande. Si rien sur cette page ne la concerne, " +
     'réponds avec une liste vide — c’est une réponse juste, pas un échec.\n' +
-    '- UNE SEULE correction par ligne : si une ligne en demande deux, choisis la plus ' +
-    'importante et englobe-les dans un même `find` si elles sont proches.\n' +
+    '- UNE SEULE correction par ligne : si une ligne en demande deux, englobe-les dans un ' +
+    'même `find` quand elles sont proches ; si elles sont séparées par plusieurs espaces ' +
+    '(donc par une colonne), ce n’est pas possible — choisis la plus importante.\n' +
     '- Ne touche pas aux suites de plusieurs espaces : elles alignent des colonnes.\n' +
     `- Au plus ${MAX_EDITS} corrections.\n\n` +
     'Réponds uniquement en JSON valide, sans markdown :\n' +
@@ -318,7 +324,18 @@ export function buildPdfCorrectionPrompt(lines: CorrectableLine[], instruction: 
  * proposition perdue en silence serait pire qu'une proposition refusée — l'utilisateur
  * croirait que le modèle n'a rien vu.
  */
-export function parsePdfCorrections(raw: string, lines: CorrectableLine[]): ParsedCorrections {
+export function parsePdfCorrections(
+  raw: string,
+  lines: CorrectableLine[],
+  /**
+   * TOUTES les lignes de la page, éditables ou non — elles ne servent qu'à mesurer la
+   * place libre. Une cellule voisine qu'on ne peut pas modifier occupe l'espace tout
+   * autant : l'ignorer faisait repartir le budget jusqu'à la marge de page, c'est-à-dire
+   * rouvrait le trou que ce budget existe pour fermer. Or `editable: false` est fréquent
+   * dans un tableau (une cellule à styles mixtes suffit).
+   */
+  geometry: CorrectableLine[] = lines,
+): ParsedCorrections {
   const edits: PdfEdit[] = []
   const dropped: DroppedEdit[] = []
   const parsed = extractJsonObject(raw)
@@ -386,9 +403,17 @@ export function parsePdfCorrections(raw: string, lines: CorrectableLine[]): Pars
       rejeter('le remplacement introduit un alignement de colonnes')
       continue
     }
+    // `delta > 0` d'abord : sur une ligne qui déborde déjà, `freeSpace` est négative et
+    // refuserait même un raccourcissement, avec une raison absurde.
     const delta = estimateWidthDelta(ligne, find, aligne)
-    if (delta > freeSpace(ligne, lines)) {
+    if (delta > 0 && delta > freeSpace(ligne, geometry)) {
       rejeter('trop large pour la place disponible sur la ligne')
+      continue
+    }
+    // Caractères de contrôle : `\n` ou `\t` glissés dans le remplacement casseraient le
+    // flux de contenu, et rien plus haut ne les voit — `/\s\s/` ne les attrape pas seuls.
+    if (/[\u0000-\u001F\u007F]/.test(aligne)) {
+      rejeter('le remplacement contient un caractère de contrôle')
       continue
     }
     // Raccourcissement massif : le modèle a « résumé » au lieu de corriger. Un PDF ne

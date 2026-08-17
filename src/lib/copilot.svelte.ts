@@ -1701,6 +1701,8 @@ export async function correctPdfPage(params: {
   revision: number
   instruction: string
   lines: CorrectableLine[]
+  /** Géométrie de TOUTES les lignes de la page, éditables ou non — mesure de la place. */
+  geometry: CorrectableLine[]
   targets: CorrectionTarget[]
 }): Promise<void> {
   if (copilot.generating || pdfCorrection.current) return
@@ -1756,7 +1758,7 @@ export async function correctPdfPage(params: {
       pdfCorrection.current = null
       return
     }
-    const { edits, dropped } = parsePdfCorrections(raw, params.lines)
+    const { edits, dropped } = parsePdfCorrections(raw, params.lines, params.geometry)
     cur.edits = edits
     cur.dropped = dropped
     cur.phase = 'ready'

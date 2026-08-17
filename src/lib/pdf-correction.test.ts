@@ -74,6 +74,12 @@ describe('buildPdfCorrectionPrompt', () => {
 })
 
 describe('alignTypography', () => {
+  it('ne réécrit PAS une variante que la ligne d’origine emploie déjà', () => {
+    // Si la ligne contient les DEUX apostrophes, la police sait écrire les deux : les
+    // uniformiser réécrirait un choix que le document a déjà fait, sans qu'on le demande.
+    expect(alignTypography("l'élève", 'l’an dernier, l\'autre jour')).toBe("l'élève")
+  })
+
   it('aligne l’apostrophe sur celle QU’EMPLOIE la ligne d’origine', () => {
     // Le mode d'échec numéro un, mesuré : une police sous-ensemblée qui contient « ’ »
     // ne contient pas « ' ». Un modèle qui rend l'apostrophe droite se ferait refuser
@@ -271,6 +277,37 @@ describe('parsePdfCorrections', () => {
     const longue = ligne('a'.repeat(200))
     const out = parsePdfCorrections(reponse([{ i: 'L1', find: 'a'.repeat(80), to: 'b' }]), [longue])
     expect(out.dropped[0].reason).toBe('passage à remplacer trop long')
+  })
+
+  it('borne aussi par une voisine NON éditable — elle occupe l’espace tout autant', () => {
+    // C'est le cas dominant d'un tableau : une cellule à styles mixtes bascule
+    // `editable: false` et disparaîtrait du calcul, faisant repartir le budget jusqu'à la
+    // marge de page — précisément le trou que ce budget existe pour fermer.
+    const c1 = cellule('Matériel', 0.1, 0.15)
+    const voisineNonEditable = cellule('Total HT', 0.3, 0.25)
+    const trop = reponse([{ i: 'L1', find: 'Matériel', to: 'Matériel informatique complet' }])
+    // Soumise seule (la voisine n'est pas éditable), mais la géométrie la connaît.
+    expect(parsePdfCorrections(trop, [c1], [c1, voisineNonEditable]).dropped[0].reason)
+      .toBe('trop large pour la place disponible sur la ligne')
+    // Sans la géométrie complète, la même proposition passerait.
+    expect(parsePdfCorrections(trop, [c1]).edits).toHaveLength(1)
+  })
+
+  it('n’oppose PAS le budget de largeur à un raccourcissement', () => {
+    // Sur une ligne qui déborde déjà, la place libre est négative : comparer sans garder
+    // le signe refusait un remplacement plus court, avec une raison absurde.
+    const debordante: CorrectableLine = { text: 'une ligne qui va jusqu’au bord', left: 0.05, width: 0.95, top: 0.2, height: 0.02 }
+    const out = parsePdfCorrections(reponse([{ i: 'L1', find: 'jusqu’au bord', to: 'au bord' }]), [debordante])
+    expect(out.dropped).toEqual([])
+    expect(out.edits).toHaveLength(1)
+  })
+
+  it('écarte un remplacement porteur d’un caractère de contrôle', () => {
+    const out = parsePdfCorrections(
+      reponse([{ i: 'L3', find: '2025', to: `2026${String.fromCharCode(10)}` }]),
+      lignes,
+    )
+    expect(out.dropped[0].reason).toBe('le remplacement contient un caractère de contrôle')
   })
 
   it('écarte ce qui déborde de la place disponible, et l’accepte quand la place existe', () => {
