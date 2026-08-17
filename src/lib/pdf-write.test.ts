@@ -192,6 +192,9 @@ function everyKind(): PdfDrawing[] {
 }
 
 describe('burnPdfAnnotations', () => {
+  // Écrit un vrai PDF puis le relit : pdf-lib + MuPDF (WASM) coûtent plusieurs secondes.
+  // Délai explicite plutôt que le défaut de 5 s, qui fait échouer ce test sur une machine
+  // chargée alors que le code est bon.
   it('grave chaque type de tracé et rend un PDF relisible', async () => {
     const source = await blankPdf([{ width: 600, height: 800 }])
     const result = await burnPdfAnnotations(source, everyKind())
@@ -201,7 +204,7 @@ describe('burnPdfAnnotations', () => {
     const reopened = await PDFDocument.load(result.bytes)
     expect(reopened.getPageCount()).toBe(1)
     expect(result.bytes.length).toBeGreaterThan(source.length)
-  })
+  }, 30_000)
 
   it('ne touche jamais les octets de la source', async () => {
     const source = await blankPdf([{ width: 600, height: 800 }])

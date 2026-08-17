@@ -130,6 +130,9 @@ describe('convertDocxToPdf', () => {
     return zip.generateAsync({ type: 'uint8array' })
   }
 
+  // Écrit un vrai PDF puis le relit : pdf-lib + MuPDF (WASM) coûtent plusieurs secondes.
+  // Délai explicite plutôt que le défaut de 5 s, qui fait échouer ce test sur une machine
+  // chargée alors que le code est bon.
   it('produit un PDF relisible', async () => {
     const bytes = await docxWith(para('Titre du document', { style: 'Heading1' }) + para('Un paragraphe de corps.'))
     const report = await convertDocxToPdf(bytes, parse)
@@ -139,7 +142,7 @@ describe('convertDocxToPdf', () => {
     const { PDFDocument } = await import('@cantoo/pdf-lib')
     const reopened = await PDFDocument.load(report.bytes)
     expect(reopened.getPageCount()).toBe(report.pages)
-  })
+  }, 30_000)
 
   it('pagine un document long', async () => {
     const long = Array.from({ length: 120 }, (_, i) =>

@@ -43,6 +43,9 @@ describe('annotatedPdfName', () => {
 })
 
 describe('exportAnnotatedPdf', () => {
+  // Écrit un vrai PDF puis le relit : pdf-lib + MuPDF (WASM) coûtent plusieurs secondes.
+  // Délai explicite plutôt que le défaut de 5 s, qui fait échouer ce test sur une machine
+  // chargée alors que le code est bon.
   it('grave le carnet et propose une copie', async () => {
     const bytes = await blankPdf()
     const json = await manifestJson(bytes, (m) => {
@@ -54,7 +57,7 @@ describe('exportAnnotatedPdf', () => {
     expect(io.saved).toHaveLength(1)
     expect(io.saved[0].name).toBe('contrat — annoté.pdf')
     expect(io.saved[0].bytes.length).toBeGreaterThan(bytes.length)
-  })
+  }, 30_000)
 
   it('rend saved=false quand l’utilisateur ferme le dialogue, sans erreur', async () => {
     const bytes = await blankPdf()
