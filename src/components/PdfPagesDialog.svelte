@@ -400,16 +400,29 @@
     gap: 6px;
     height: 32px;
     padding: 0 12px;
-    border: 1px solid var(--line-1);
+    /* Pilule SANS contour permanent, révélée au survol : même grammaire que « Modifier
+       le texte » et que le reste de Doku. Le contour de 1px faisait de cette modale la
+       seule surface cerclée de l'application. */
+    border: 0;
     border-radius: 999px;
     background: transparent;
-    color: inherit;
+    color: var(--ink-3);
     cursor: pointer;
     font: inherit;
+    font-size: 12.5px;
+    font-weight: 500;
+    transition: background-color 140ms ease, color 140ms ease, transform 100ms ease;
   }
-  .tools button:hover:not(:disabled), footer button:hover:not(:disabled) { background: rgba(var(--ink-rgb), 0.06); }
+  .tools button:hover:not(:disabled), footer button:hover:not(:disabled) { background: var(--surface-hover); color: var(--ink); }
+  .tools button:active:not(:disabled), footer button:active:not(:disabled) { transform: scale(0.97); }
   .tools button:disabled, footer button:disabled, .card-tools button:disabled { opacity: 0.4; cursor: default; }
-  .summary { font-size: 12px; opacity: 0.7; }
+  /* Focus CLAVIER : sans lui, on ne sait pas où l'on est en tabulant — la modale se
+     pilote entièrement au clavier (pivoter, supprimer, réordonner). */
+  .tools button:focus-visible,
+  footer button:focus-visible,
+  .card-tools button:focus-visible,
+  .icon-button:focus-visible { outline: 2px solid var(--line-3); outline-offset: 2px; }
+  .summary { font-size: 11.5px; color: var(--ink-4); }
   .message { margin: 0; padding: 8px 16px; font-size: 12.5px; color: var(--err-text); }
 
   .grid {
@@ -481,7 +494,7 @@
     color: inherit;
     cursor: pointer;
   }
-  .card-tools button:hover:not(:disabled) { background: rgba(var(--ink-rgb), 0.08); }
+  .card-tools button:hover:not(:disabled) { background: var(--surface-hover); color: var(--ink); }
   /* Supprimer une page est une action destructive : c'est le rouge d'action du système,
      pas un rouge d'erreur ni une couleur inventée. */
   .card-tools .danger:hover:not(:disabled) { color: var(--danger-action-text); }
@@ -497,8 +510,8 @@
     border-top: 1px solid var(--line-1);
   }
   footer small { opacity: 0.6; }
-  footer .primary { background: var(--ink); color: var(--cream-base); border-color: transparent; }
-  footer .primary:hover:not(:disabled) { opacity: 0.88; background: var(--ink); }
+  footer .primary { background: var(--ink); color: var(--cream-content); }
+  footer .primary:hover:not(:disabled) { background: var(--ink-2); color: var(--cream-content); }
 
   .icon-button {
     display: grid;
@@ -511,5 +524,13 @@
     color: inherit;
     cursor: pointer;
   }
-  .icon-button:hover { background: rgba(var(--ink-rgb), 0.08); }
+  .icon-button:hover { background: var(--surface-hover); color: var(--ink); }
+  .icon-button:active { transform: scale(0.96); }
+
+  @media (prefers-reduced-motion: reduce) {
+    /* La modale animait ses vignettes et ses boutons sans alternative : le mouvement
+       réduit est une préférence système, pas une option. */
+    .tools button, footer button, .icon-button, .thumb img { transition: none !important; }
+    .tools button:active, footer button:active, .icon-button:active { transform: none; }
+  }
 </style>
