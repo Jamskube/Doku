@@ -1,4 +1,6 @@
-// Édition du texte d'un PDF EN PLACE (ADR-0023).
+// Édition du texte d'un PDF EN PLACE — rendue possible par le passage en AGPL, qui a
+// débloqué MuPDF (ADR-0023). La correction assistée par le modèle qui appelle ce module
+// est cadrée par l'ADR-0024.
 //
 // Stratégie à deux étages, pour ne jamais refuser une modification :
 //
