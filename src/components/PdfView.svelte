@@ -68,7 +68,7 @@
   // les modes d'annotation, donc il ne peut rien casser quand il est éteint.
   let areaMode = $state(false)
   let areaRect = $state<{ left: number; top: number; width: number; height: number } | null>(null)
-  let areaResult = $state<{ text: string; page: number } | null>(null)
+  let areaResult = $state<{ text: string; page: number; rects: PdfDrawingRect[] } | null>(null)
   // Origine du glisser — hors `$state` : elle ne pilote aucun rendu, seulement le calcul
   // du rectangle. La mettre réactive ferait un rendu de plus à chaque mouvement.
   let areaAnchor: { x: number; y: number } | null = null
@@ -1002,6 +1002,60 @@
   // lecteurs PDF (ou un lecteur et un éditeur) les reçoivent tous. Ce volet ne répond
   // que s'il est le volet actif ET que le focus est chez lui ou nulle part (une
   // sélection de texte à la souris laisse le focus sur `body`).
+  // --- Sélection de lecture : recadrage sur le pointeur ------------------------------
+  //
+  // Symptôme observé : glisser en dépassant la marge droite, ou sur plusieurs lignes,
+  // avale des bouts de lignes voisines. À l'intérieur d'une ligne, la précision est
+  // BONNE — donc la géométrie des spans est juste, et seul le comportement du navigateur
+  // AUX BORDS de ligne dérape : passé la fin d'une ligne, il étend à la ligne entière.
+  //
+  // Correctif : au relâchement, ramener la fin de sélection là où le pointeur se trouve
+  // vraiment. La garde est ce qui rend l'opération sûre — on n'agit QUE si le pointeur
+  // est déjà À L'INTÉRIEUR de la sélection, ce qui est précisément la signature d'un
+  // débordement. On ne peut donc que RÉTRÉCIR, jamais étendre ni déplacer.
+
+  function caretAt(x: number, y: number): { node: Node; offset: number } | null {
+    const doc = document as Document & {
+      caretRangeFromPoint?: (x: number, y: number) => Range | null
+    }
+    const position = doc.caretPositionFromPoint?.(x, y)
+    if (position?.offsetNode) return { node: position.offsetNode, offset: position.offset }
+    // WebKit historique n'a que la forme `Range`. Sans ce repli, le correctif ne
+    // s'appliquerait pas sous Linux, précisément là où on vient de porter l'application.
+    const range = doc.caretRangeFromPoint?.(x, y)
+    return range ? { node: range.startContainer, offset: range.startOffset } : null
+  }
+
+  function tightenReadSelection(x: number, y: number) {
+    if (annotationMode || areaMode) return
+    const selection = window.getSelection()
+    if (!selection || selection.isCollapsed || selection.rangeCount === 0) return
+    const caret = caretAt(x, y)
+    if (!caret || caret.node.nodeType !== Node.TEXT_NODE) return
+    // Le point doit appartenir à la couche texte de CE lecteur : une sélection qui
+    // déborde ailleurs dans l'application ne nous regarde pas.
+    const layer = caret.node.parentElement?.closest('.textLayer')
+    if (!layer || !container?.contains(layer)) return
+    const current = selection.getRangeAt(0)
+    // `comparePoint` rend 0 quand le point est DANS la plage. Ailleurs (-1 ou 1), la
+    // sélection ne déborde pas jusqu'au pointeur : on ne touche à rien.
+    let dedans = false
+    try {
+      dedans = current.comparePoint(caret.node, caret.offset) === 0
+    } catch {
+      return // nœuds de documents différents : hors sujet
+    }
+    if (!dedans) return
+    // `extend` déplace le FOCUS en gardant l'ancre : correct que le glisser aille vers
+    // le bas ou vers le haut.
+    try {
+      selection.extend(caret.node, caret.offset)
+    } catch {
+      // Certaines configurations refusent `extend` : mieux vaut la sélection large que
+      // pas de sélection du tout.
+    }
+  }
+
   // --- Sélection de zone -----------------------------------------------------------
 
   /** Page dont le wrapper contient le point donné (coordonnées écran). */
@@ -1046,16 +1100,64 @@
       width: screen.width / wrapRect.width,
       height: screen.height / wrapRect.height,
     }
-    const lignes = areaHits(spans, zone).map((ligne) =>
+    const groupes = areaHits(spans, zone)
+    const lignes = groupes.map((ligne) =>
       ligne.map((hit) => sliceSpanText(elements[hit.index], wrapRect, zone.left, zone.left + zone.width)),
     )
     const text = joinAreaText(lignes)
-    areaResult = text ? { text, page } : null
+    // Un rectangle PAR LIGNE, borné à la zone : un surlignage épouse le texte, il ne
+    // pose pas un pavé sur la page. C'est aussi ce que produit le surligneur au geste,
+    // donc les deux chemins rendent la même chose.
+    const rects = groupes
+      .map((ligne) => {
+        const gauche = Math.max(zone.left, Math.min(...ligne.map((h) => h.span.left)))
+        const droite = Math.min(
+          zone.left + zone.width,
+          Math.max(...ligne.map((h) => h.span.left + h.span.width)),
+        )
+        const haut = Math.min(...ligne.map((h) => h.span.top))
+        const bas = Math.max(...ligne.map((h) => h.span.top + h.span.height))
+        return { left: gauche, top: haut, width: droite - gauche, height: bas - haut }
+      })
+      .filter((r) => r.width > 0 && r.height > 0)
+    areaResult = text ? { text, page, rects } : null
     if (!text) {
       app.banner = {
         tone: 'warning',
         title: 'Zone vide',
         message: 'Aucun texte sélectionnable dans cette zone — page scannée, ou image.',
+      }
+    }
+  }
+
+  /**
+   * Surligne la zone — même chemin que le surligneur au geste : mêmes rectangles par
+   * ligne, même fusion en bloc, même carnet. Le surlignage n'est donc pas un objet d'un
+   * second type qu'il faudrait ensuite gérer partout ailleurs.
+   */
+  async function highlightArea() {
+    if (!areaResult || !annotationManifest || savingAnnotation) return
+    const { page, rects, text } = areaResult
+    if (rects.length === 0) return
+    try {
+      const block = mergeableHighlight(page, 'text')
+      const next = block?.kind === 'text'
+        ? appendPdfTextHighlightRects(block, rects, text)
+        // La couleur du SURLIGNEUR (jaune par défaut), pas `drawingColor` : celle-ci
+        // suit l'outil actif, et hors mode annoter l'outil actif est le crayon — un
+        // surlignage noir, donc, alors qu'on demandait un surlignage. `toolStyles.text`
+        // porte en plus le choix de couleur déjà fait par l'utilisateur.
+        : createPdfTextHighlightDrawing(page, rects, { quote: text, color: toolStyles.text.color })
+      if (await commitAnnotationManifest(upsertPdfDrawing(annotationManifest, next))) {
+        rememberHighlightBlock(next.id, page)
+        areaResult = null
+        app.banner = { tone: 'success', title: 'Zone surlignée', message: `Page ${page}.` }
+      }
+    } catch {
+      app.banner = {
+        tone: 'warning',
+        title: 'Carnet d’annotations rempli',
+        message: 'Supprimez une annotation avant d’en ajouter une nouvelle.',
       }
     }
   }
@@ -1428,6 +1530,23 @@
       if (annotationListOpen && !target?.closest('.annotation-list') && !target?.closest('.annotation-toggle')) {
         annotationListOpen = false
       }
+      // La sélection de zone est un mode EXCLUSIF : le premier geste qui va ailleurs —
+      // annoter, replier la barre latérale, écrire au copilote — doit l'éteindre. Un
+      // mode qu'on garde sans le vouloir change le sens de tous les clics suivants.
+      // Trois exceptions, et seulement trois : le calque lui-même (on y trace), le
+      // panneau de résultat (on y agit) et le bouton qui l'allume (sinon il ne pourrait
+      // jamais s'allumer, le pointerdown précédant le click).
+      if (
+        areaMode
+        && !target?.closest('.pdf-area-capture')
+        && !target?.closest('.pdf-area-result')
+        && !target?.closest('.area-toggle')
+      ) {
+        areaMode = false
+        areaResult = null
+        areaRect = null
+        areaAnchor = null
+      }
       // En mode « désigner », la couche de dessin ne reçoit pas les clics du fond de
       // page : sans ceci, une sélection ne se défaisait JAMAIS au clic ailleurs.
       if (selectedDrawingId && !drawingIdFromTarget(event.target) && !target?.closest('.drawing-toolbar') && !target?.closest('.note-bubble')) {
@@ -1499,6 +1618,14 @@
           return
         }
       }
+      // Échap quitte la sélection de zone — une porte de sortie au clavier, en plus du
+      // bouton : un mode dans lequel on entre doit toujours pouvoir se quitter.
+      if (areaMode && event.key === 'Escape') {
+        event.preventDefault()
+        if (areaResult) areaResult = null
+        else areaMode = false
+        return
+      }
       // F5 entre en présentation (touche d'Okular et des suites bureautiques). En
       // présentation, la navigation prend la main sur tout le reste.
       if (event.key === 'F5' && status === 'ready') {
@@ -1561,6 +1688,10 @@
     // composant traversé en chemin peut couper la propagation avant le document. La
     // géométrie est de toute façon revérifiée (la sélection doit être dans CE lecteur).
     document.addEventListener('mouseup', finishTextHighlight, true)
+    // En phase de BULLE, après le surligneur : celui-ci lit la sélection en capture,
+    // et la recadrer avant lui changerait ce qu'il enregistre.
+    const tightenOnRelease = (event: MouseEvent) => tightenReadSelection(event.clientX, event.clientY)
+    document.addEventListener('mouseup', tightenOnRelease)
     document.addEventListener('pointerdown', closeTransientUi)
     document.addEventListener('keydown', closeOnEscape)
     document.addEventListener('keydown', handleShortcuts)
@@ -1924,6 +2055,7 @@
       // ne retirait rien. L'instance morte continuait alors d'effacer la sélection de
       // texte à chaque clic, partout dans l'application.
       document.removeEventListener('mouseup', finishTextHighlight, true)
+      document.removeEventListener('mouseup', tightenOnRelease)
       document.removeEventListener('pointerdown', closeTransientUi)
       document.removeEventListener('keydown', closeOnEscape)
       document.removeEventListener('keydown', handleShortcuts)
@@ -2044,7 +2176,7 @@
       <span class="annotate-toggle-label">Annoter</span>
     </button>
     <button
-      class="present-toggle"
+      class="area-toggle"
       class:active={areaMode}
       aria-label="Sélectionner une zone"
       aria-pressed={areaMode}
@@ -2054,15 +2186,21 @@
     >
       <span class="msr">highlight_alt</span>
     </button>
+
+  {#if notes.length || orphanedDrawings}
     <button
-      class="present-toggle"
-      aria-label="Mode présentation (F5)"
-      title="Mode présentation (F5)"
-      disabled={status !== 'ready'}
-      onclick={() => void togglePresenting()}
+      class="annotation-toggle"
+      class:active={annotationListOpen}
+      aria-label="Afficher les annotations"
+      aria-expanded={annotationListOpen}
+      title="Annotations du PDF"
+      onclick={() => annotationListOpen = !annotationListOpen}
     >
-      <span class="msr">slideshow</span>
+      <span class="msr">edit_note</span>
+      <span>{notes.length + hiddenOrphanDrawings}</span>
     </button>
+  {/if}
+  </div>
 
   <!-- Mention de signature : discrète, informative, jamais un verdict. Le libellé
        porte lui-même la réserve — voir `pdf-signatures.ts`. -->
@@ -2072,6 +2210,16 @@
     <div
       class="pdf-area-capture"
       role="presentation"
+      onwheel={(event) => {
+        // Le calque est un FRÈRE de la zone défilante, pas un enfant : la molette
+        // remonte donc au shell sans jamais atteindre le défilement, et l'outil bloquait
+        // la lecture. On relaie explicitement — molette seule = défiler, avec Ctrl =
+        // zoomer, exactement comme sans l'outil.
+        if (!container) return
+        event.preventDefault()
+        if (event.ctrlKey || event.metaKey) zoomBy(event.deltaY < 0 ? 1 : -1)
+        else container.scrollBy({ top: event.deltaY, left: event.deltaX })
+      }}
       onpointerdown={(event) => {
         if (event.button !== 0) return
         ;(event.currentTarget as HTMLElement).setPointerCapture(event.pointerId)
@@ -2109,9 +2257,18 @@
   {/if}
   {#if areaResult}
     <div class="pdf-area-result" role="dialog" aria-label="Texte de la zone">
-      <p class="pdf-area-preview">{areaResult.text.slice(0, 220)}{areaResult.text.length > 220 ? '…' : ''}</p>
+      <!-- Coupe généreuse : c'est `line-clamp` qui décide visuellement, on évite juste
+           de poser un pavé de plusieurs milliers de caractères dans le DOM. -->
+      <p class="pdf-area-preview" title={areaResult.text}>{areaResult.text.slice(0, 600)}</p>
       <div class="pdf-area-actions">
-        <span class="pdf-area-count">{areaResult.text.length} caractères · page {areaResult.page}</span>
+        <span class="pdf-area-count">
+          {areaResult.text.length} caractère{areaResult.text.length > 1 ? 's' : ''}
+          · {areaResult.rects.length} ligne{areaResult.rects.length > 1 ? 's' : ''}
+          · page {areaResult.page}
+        </span>
+        <button onclick={() => void highlightArea()} disabled={areaResult.rects.length === 0}>
+          <span class="msr">ink_highlighter</span>Surligner
+        </button>
         <button onclick={() => void copyArea()}><span class="msr">content_copy</span>Copier</button>
         <button onclick={() => void sendAreaToCopilot()}><span class="msr">auto_awesome</span>Doku-San</button>
         <button class="pdf-area-close" aria-label="Fermer" onclick={() => { areaResult = null }}>
@@ -2134,20 +2291,6 @@
     </p>
   {/if}
 
-  {#if notes.length || orphanedDrawings}
-    <button
-      class="annotation-toggle"
-      class:active={annotationListOpen}
-      aria-label="Afficher les annotations"
-      aria-expanded={annotationListOpen}
-      title="Annotations du PDF"
-      onclick={() => annotationListOpen = !annotationListOpen}
-    >
-      <span class="msr">edit_note</span>
-      <span>{notes.length + hiddenOrphanDrawings}</span>
-    </button>
-  {/if}
-  </div>
 
   {#if annotationMode}
     <div class="drawing-toolbar" role="toolbar" aria-label="Outils d’annotation PDF">
@@ -2875,7 +3018,7 @@
   @media (prefers-reduced-motion: reduce) {
     [data-presenting='true'] .present-hint { animation: none; opacity: 0.85; }
   }
-  .present-toggle {
+  .area-toggle {
     width: 32px;
     height: 32px;
     display: inline-grid;
@@ -2886,15 +3029,18 @@
     box-shadow: 0 5px 16px rgba(var(--shadow-rgb), 0.14);
     color: var(--ink-2);
   }
-  .present-toggle:disabled { opacity: 0.45; }
-  .present-toggle.active { background: var(--ink); color: var(--surface); }
+  .area-toggle:disabled { opacity: 0.45; }
+  .area-toggle.active { background: var(--ink); color: var(--surface); }
 
   /* Sélection de zone. Le calque couvre le lecteur et prend le pointeur — c'est
      précisément son rôle : encadrer une région plutôt que viser des caractères. */
   .pdf-area-capture {
     position: absolute;
     inset: 0;
-    z-index: 25;
+    /* AU-DESSUS des pages (couches 1 à 3), mais SOUS la barre d'outils (8) : sinon le
+       calque recouvrait le bouton qui l'a allumé, et l'outil devenait impossible à
+       éteindre autrement qu'au clavier. */
+    z-index: 5;
     cursor: crosshair;
     touch-action: none;
   }
@@ -2919,9 +3065,17 @@
     box-shadow: 0 0 0 1px var(--elevation-ring-soft), 0 12px 30px rgba(var(--shadow-rgb), 0.16);
     font-family: var(--font-sans);
   }
+  /* Troncature HONNÊTE. La version d'avant coupait de deux façons à la fois : un « … »
+     ajouté au-delà de 220 caractères, ET un `max-height` + `overflow: hidden` qui
+     rognait silencieusement — en emportant justement le « … », resté hors cadre. On ne
+     voyait donc pas qu'il manquait du texte. `line-clamp` coupe au nombre de LIGNES
+     affichées et pose lui-même son ellipse, à l'endroit exact où la coupe a lieu. */
   .pdf-area-preview {
     margin: 0 0 8px;
-    max-height: 4.5em;
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 3;
+    line-clamp: 3;
     overflow: hidden;
     color: var(--ink);
     font-size: 12.5px;
