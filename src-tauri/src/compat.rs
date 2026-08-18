@@ -143,6 +143,32 @@ pub struct CompatStreamEvent {
     text: Option<String>,
 }
 
+// Pourquoi ce détail : chaque appel réseau faisait `map_err(|_| …)`, donc la cause était
+// JETÉE à l'endroit précis où elle compte. Un utilisateur voyait « Le service est
+// inaccessible » sans jamais savoir si c'était le DNS, le pare-feu, un certificat ou un
+// délai — et nous non plus, donc impossible de l'aider à distance. Vécu sur Arch, où la
+// même phrase pouvait couvrir quatre pannes différentes.
+//
+// La clé API ne peut pas fuir ici : reqwest ne met pas les en-têtes dans ses erreurs.
+fn transport_reason(error: &reqwest::Error) -> String {
+    let genre = if error.is_timeout() {
+        "délai dépassé"
+    } else if error.is_connect() {
+        "connexion impossible"
+    } else if error.is_request() {
+        "requête invalide"
+    } else {
+        "erreur réseau"
+    };
+    // La cause la plus PROFONDE est la plus parlante : « dns error … », « certificate
+    // verify failed », « connection refused »…
+    let mut cause: &dyn std::error::Error = error;
+    while let Some(source) = cause.source() {
+        cause = source;
+    }
+    format!("{genre} : {cause}")
+}
+
 fn api_error(def: &ProviderDef, status: reqwest::StatusCode, body: &str) -> String {
     let detail = serde_json::from_str::<Value>(body).ok().and_then(|json| {
         json.pointer("/error/message")
@@ -176,7 +202,7 @@ async fn fetch_models(def: &ProviderDef, key: &str) -> Result<Vec<String>, Model
         .bearer_auth(key)
         .send()
         .await
-        .map_err(|_| ModelsFailure::Transport)?;
+        .map_err(|error| ModelsFailure::Transport(transport_reason(&error)))?;
     match response.status().as_u16() {
         401 | 403 => return Err(ModelsFailure::Rejected),
         200 => {}
@@ -203,7 +229,8 @@ async fn fetch_models(def: &ProviderDef, key: &str) -> Result<Vec<String>, Model
 
 enum ModelsFailure {
     Rejected,
-    Transport,
+    /// Porte la RAISON, pas seulement le fait : c'est elle qui permet d'aider à distance.
+    Transport(String),
     Unsupported,
 }
 
@@ -243,12 +270,12 @@ async fn build_status(def: &'static ProviderDef, key: String) -> CompatStatus {
                 capitalize(def.what)
             )),
         },
-        Err(ModelsFailure::Transport) => CompatStatus {
+        Err(ModelsFailure::Transport(raison)) => CompatStatus {
             key_present: true,
             connected: true,
             key_rejected: false,
             models: def.default_models.iter().map(|m| m.to_string()).collect(),
-            error: Some("Le service est inaccessible pour le moment.".to_string()),
+            error: Some(format!("Le service est inaccessible pour le moment ({raison}).")),
         },
     }
 }
@@ -283,9 +310,11 @@ async fn probe_chat(def: &ProviderDef, key: &str, model: &str) -> Result<ProbeOu
         }))
         .send()
         .await
-        .map_err(|_| {
-            "Le service est inaccessible — rien n'a été stocké. Vérifiez votre connexion."
-                .to_string()
+        .map_err(|error| {
+            format!(
+                "Le service est inaccessible — rien n'a été stocké ({}).",
+                transport_reason(&error)
+            )
         })?;
     let status = response.status().as_u16();
     if matches!(status, 401 | 403) {
@@ -351,11 +380,10 @@ pub async fn compat_set_key(provider_id: String, key: String) -> Result<CompatSt
                 def.what
             ))
         }
-        Err(ModelsFailure::Transport) => {
-            return Err(
-                "Le service est inaccessible — rien n'a été stocké. Vérifiez votre connexion."
-                    .to_string(),
-            )
+        Err(ModelsFailure::Transport(raison)) => {
+            return Err(format!(
+                "Le service est inaccessible — rien n'a été stocké ({raison})."
+            ))
         }
         Err(ModelsFailure::Unsupported) => {} // pas de /models sur cette surface : sonde chat
     }
@@ -465,7 +493,9 @@ pub async fn stream_compat(
             .json(&body)
             .send()
             .await
-            .map_err(|_| "Connexion au fournisseur cloud impossible.".to_string())?;
+            .map_err(|error| {
+                format!("Connexion au fournisseur cloud impossible ({}).", transport_reason(&error))
+            })?;
         let status = response.status();
         if !status.is_success() {
             let text = response.text().await.unwrap_or_default();
