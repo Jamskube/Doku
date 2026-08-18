@@ -45,6 +45,7 @@
     type PdfStrokeKind,
   } from '../lib/pdf-drawing'
   import { coveredPdfTextBoxes, joinPdfHighlightQuote } from '../lib/pdf-highlight-text'
+  import { baseName } from '../lib/paths'
   import type { PdfDoc } from '../lib/pdf'
   import type { TextLayer } from 'pdfjs-dist'
   import { PDF_MAX_ZOOM, PDF_MIN_ZOOM, clampPdfZoom, fitPdfPage, stepPdfZoom } from '../lib/pdf-layout'
@@ -62,6 +63,16 @@
   let staleAnnotations = $state(false)
   // Mention de signature — vide tant qu'il n'y en a pas, ce qui est le cas courant.
   let signatureNotice = $state('')
+  // Sélection de ZONE : un calque dédié, qui n'existe QUE lorsque l'outil est actif.
+  // C'est délibéré — il ne partage rien avec la couche texte, les couches de dessin ni
+  // les modes d'annotation, donc il ne peut rien casser quand il est éteint.
+  let areaMode = $state(false)
+  let areaRect = $state<{ left: number; top: number; width: number; height: number } | null>(null)
+  let areaResult = $state<{ text: string; page: number } | null>(null)
+  // Origine du glisser — hors `$state` : elle ne pilote aucun rendu, seulement le calcul
+  // du rectangle. La mettre réactive ferait un rendu de plus à chaque mouvement.
+  let areaAnchor: { x: number; y: number } | null = null
+
   // Mode présentation : plein écran, chrome effacé, une page à la fois.
   let presenting = $state(false)
   let presentPage = $state(1)
@@ -991,6 +1002,87 @@
   // lecteurs PDF (ou un lecteur et un éditeur) les reçoivent tous. Ce volet ne répond
   // que s'il est le volet actif ET que le focus est chez lui ou nulle part (une
   // sélection de texte à la souris laisse le focus sur `body`).
+  // --- Sélection de zone -----------------------------------------------------------
+
+  /** Page dont le wrapper contient le point donné (coordonnées écran). */
+  function pageAtPoint(x: number, y: number): number | null {
+    for (const [n, wrap] of pageWraps) {
+      const r = wrap.getBoundingClientRect()
+      if (x >= r.left && x <= r.right && y >= r.top && y <= r.bottom) return n
+    }
+    return null
+  }
+
+  /**
+   * Texte contenu dans un rectangle écran. Le cœur du calcul est PUR (`pdf-area-text`) ;
+   * ici on ne fait que traduire le DOM en boîtes normalisées, puis découper chaque
+   * fragment retenu — seul le DOM connaît la géométrie des caractères.
+   */
+  async function extractArea(screen: { left: number; top: number; width: number; height: number }) {
+    const page = pageAtPoint(screen.left + screen.width / 2, screen.top + screen.height / 2)
+    const wrap = page === null ? null : pageWraps.get(page)
+    const layer = wrap?.querySelector<HTMLElement>('.textLayer')
+    if (page === null || !wrap || !layer) return
+    const wrapRect = wrap.getBoundingClientRect()
+    if (!wrapRect.width || !wrapRect.height) return
+
+    const { areaHits, joinAreaText } = await import('../lib/pdf-area-text')
+    const elements = [...layer.querySelectorAll<HTMLElement>('span')].filter(
+      (el) => el.firstChild?.nodeType === Node.TEXT_NODE && (el.textContent ?? '').length > 0,
+    )
+    const spans = elements.map((el) => {
+      const b = el.getBoundingClientRect()
+      return {
+        text: el.textContent ?? '',
+        left: (b.left - wrapRect.left) / wrapRect.width,
+        top: (b.top - wrapRect.top) / wrapRect.height,
+        width: b.width / wrapRect.width,
+        height: b.height / wrapRect.height,
+      }
+    })
+    const zone = {
+      left: (screen.left - wrapRect.left) / wrapRect.width,
+      top: (screen.top - wrapRect.top) / wrapRect.height,
+      width: screen.width / wrapRect.width,
+      height: screen.height / wrapRect.height,
+    }
+    const lignes = areaHits(spans, zone).map((ligne) =>
+      ligne.map((hit) => sliceSpanText(elements[hit.index], wrapRect, zone.left, zone.left + zone.width)),
+    )
+    const text = joinAreaText(lignes)
+    areaResult = text ? { text, page } : null
+    if (!text) {
+      app.banner = {
+        tone: 'warning',
+        title: 'Zone vide',
+        message: 'Aucun texte sélectionnable dans cette zone — page scannée, ou image.',
+      }
+    }
+  }
+
+  async function copyArea() {
+    if (!areaResult) return
+    await navigator.clipboard.writeText(areaResult.text).catch(() => {})
+    areaResult = null
+    app.banner = { tone: 'success', title: 'Zone copiée', message: 'Le texte est dans le presse-papiers.' }
+  }
+
+  async function sendAreaToCopilot() {
+    if (!areaResult) return
+    const { addCopilotContext } = await import('../lib/copilot.svelte')
+    addCopilotContext([{
+      id: `pdf-area:${path}:${areaResult.page}:${areaResult.text.length}`,
+      kind: 'selection',
+      label: `${baseName(path)} — page ${areaResult.page}`,
+      text: areaResult.text,
+      charCount: areaResult.text.length,
+      path,
+      truncatedAtLoad: false,
+    }])
+    areaResult = null
+    app.banner = { tone: 'success', title: 'Zone envoyée', message: 'Doku-San a la zone en contexte.' }
+  }
+
   // --- Mode présentation ---------------------------------------------------------
   // Il ne rend RIEN de neuf : il réutilise le défilement, l'ajustement et les pages
   // déjà en place. Seuls changent le plein écran, l'effacement du chrome, et une
@@ -1953,6 +2045,17 @@
     </button>
     <button
       class="present-toggle"
+      class:active={areaMode}
+      aria-label="Sélectionner une zone"
+      aria-pressed={areaMode}
+      title="Sélectionner une zone — encadrer plutôt que viser des mots"
+      disabled={status !== 'ready'}
+      onclick={() => { areaMode = !areaMode; areaResult = null; areaRect = null }}
+    >
+      <span class="msr">highlight_alt</span>
+    </button>
+    <button
+      class="present-toggle"
       aria-label="Mode présentation (F5)"
       title="Mode présentation (F5)"
       disabled={status !== 'ready'}
@@ -1963,6 +2066,61 @@
 
   <!-- Mention de signature : discrète, informative, jamais un verdict. Le libellé
        porte lui-même la réserve — voir `pdf-signatures.ts`. -->
+  <!-- Calque de zone : présent UNIQUEMENT quand l'outil est actif. Éteint, il n'existe
+       pas dans le DOM, donc il ne peut intercepter ni gêner quoi que ce soit. -->
+  {#if areaMode && status === 'ready'}
+    <div
+      class="pdf-area-capture"
+      role="presentation"
+      onpointerdown={(event) => {
+        if (event.button !== 0) return
+        ;(event.currentTarget as HTMLElement).setPointerCapture(event.pointerId)
+        areaResult = null
+        areaAnchor = { x: event.clientX, y: event.clientY }
+        areaRect = { left: event.clientX, top: event.clientY, width: 0, height: 0 }
+      }}
+      onpointermove={(event) => {
+        if (!areaRect) return
+        const start = areaAnchor
+        if (!start) return
+        areaRect = {
+          left: Math.min(start.x, event.clientX),
+          top: Math.min(start.y, event.clientY),
+          width: Math.abs(event.clientX - start.x),
+          height: Math.abs(event.clientY - start.y),
+        }
+      }}
+      onpointerup={() => {
+        const drawn = areaRect
+        areaRect = null
+        areaAnchor = null
+        // Un clic simple n'est pas une zone : sans ce seuil, chaque clic déclencherait
+        // une extraction vide et une bannière.
+        if (drawn && drawn.width > 8 && drawn.height > 8) void extractArea(drawn)
+      }}
+    ></div>
+  {/if}
+  {#if areaRect && areaRect.width > 0}
+    <div
+      class="pdf-area-marquee"
+      style="left:{areaRect.left}px; top:{areaRect.top}px; width:{areaRect.width}px; height:{areaRect.height}px"
+      aria-hidden="true"
+    ></div>
+  {/if}
+  {#if areaResult}
+    <div class="pdf-area-result" role="dialog" aria-label="Texte de la zone">
+      <p class="pdf-area-preview">{areaResult.text.slice(0, 220)}{areaResult.text.length > 220 ? '…' : ''}</p>
+      <div class="pdf-area-actions">
+        <span class="pdf-area-count">{areaResult.text.length} caractères · page {areaResult.page}</span>
+        <button onclick={() => void copyArea()}><span class="msr">content_copy</span>Copier</button>
+        <button onclick={() => void sendAreaToCopilot()}><span class="msr">auto_awesome</span>Doku-San</button>
+        <button class="pdf-area-close" aria-label="Fermer" onclick={() => { areaResult = null }}>
+          <span class="msr">close</span>
+        </button>
+      </div>
+    </div>
+  {/if}
+
   {#if presenting}
     <p class="present-hint" role="status">
       Page {presentPage} / {pageTotal} · ← → pour naviguer · Échap pour quitter
@@ -2729,6 +2887,63 @@
     color: var(--ink-2);
   }
   .present-toggle:disabled { opacity: 0.45; }
+  .present-toggle.active { background: var(--ink); color: var(--surface); }
+
+  /* Sélection de zone. Le calque couvre le lecteur et prend le pointeur — c'est
+     précisément son rôle : encadrer une région plutôt que viser des caractères. */
+  .pdf-area-capture {
+    position: absolute;
+    inset: 0;
+    z-index: 25;
+    cursor: crosshair;
+    touch-action: none;
+  }
+  .pdf-area-marquee {
+    position: fixed;
+    z-index: 26;
+    pointer-events: none;
+    border: 1px solid var(--ink);
+    background: rgba(var(--shadow-rgb), 0.10);
+    border-radius: 2px;
+  }
+  .pdf-area-result {
+    position: absolute;
+    left: 50%;
+    bottom: 18px;
+    transform: translateX(-50%);
+    z-index: 27;
+    max-width: min(560px, calc(100% - 32px));
+    padding: 10px 12px;
+    border-radius: 14px;
+    background: var(--cream-tint);
+    box-shadow: 0 0 0 1px var(--elevation-ring-soft), 0 12px 30px rgba(var(--shadow-rgb), 0.16);
+    font-family: var(--font-sans);
+  }
+  .pdf-area-preview {
+    margin: 0 0 8px;
+    max-height: 4.5em;
+    overflow: hidden;
+    color: var(--ink);
+    font-size: 12.5px;
+    line-height: 1.45;
+    white-space: pre-wrap;
+  }
+  .pdf-area-actions { display: flex; align-items: center; gap: 6px; }
+  .pdf-area-count { flex: 1; color: var(--ink-2); font-size: 11.5px; }
+  .pdf-area-actions button {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    height: 28px;
+    padding: 0 10px;
+    border: 0;
+    border-radius: 999px;
+    background: var(--surface);
+    color: var(--ink);
+    font-size: 12px;
+  }
+  .pdf-area-actions .msr { font-size: 16px; }
+  .pdf-area-close { padding: 0 6px !important; }
 
   /* Mention informative, pas une alerte : ton neutre, jamais de vert « validé ».
      Elle s'efface derrière le document et se tronque plutôt que de pousser la barre —
