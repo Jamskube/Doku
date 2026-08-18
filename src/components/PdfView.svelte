@@ -60,6 +60,8 @@
   let annotationListOpen = $state(false)
   let savingAnnotation = $state(false)
   let staleAnnotations = $state(false)
+  // Mention de signature — vide tant qu'il n'y en a pas, ce qui est le cas courant.
+  let signatureNotice = $state('')
   // Carnet présent mais incompréhensible : il faudra le mettre à l'abri avant d'écrire.
   let unreadableManifest = false
   let activeNoteIds = $state<string[]>([])
@@ -1637,6 +1639,20 @@
           || parsed.manifest.drawings.some((drawing) => drawing.status === 'orphaned')
         status = 'ready'
 
+        // Signatures : métadonnées SEULEMENT, et jamais bloquantes. Un document non
+        // signé — le cas courant — ne doit rien coûter ni rien afficher ; un échec de
+        // lecture n'empêche pas d'ouvrir le PDF, il laisse simplement la mention vide.
+        void (async () => {
+          try {
+            const raw = await loaded.doc.getSignatures()
+            if (cancelled) return
+            const { describeSignatures } = await import('../lib/pdf-signatures')
+            signatureNotice = describeSignatures(raw as never).summary
+          } catch {
+            signatureNotice = ''
+          }
+        })()
+
         observer = new IntersectionObserver(
           (entries) => {
             for (const e of entries) {
@@ -1738,6 +1754,7 @@
       for (const page of pages.values()) page.textLayerInstance?.cancel()
       pageWraps.clear()
       visibleAnnotationPages.clear()
+      signatureNotice = ''
       pdf = null
       void destroyPdf?.()
     }
@@ -1847,6 +1864,15 @@
       <span class="msr">stylus</span>
       <span class="annotate-toggle-label">Annoter</span>
     </button>
+
+  <!-- Mention de signature : discrète, informative, jamais un verdict. Le libellé
+       porte lui-même la réserve — voir `pdf-signatures.ts`. -->
+  {#if signatureNotice}
+    <p class="pdf-signature-notice" role="note" title={signatureNotice}>
+      <span class="msr" aria-hidden="true">verified</span>
+      <span>{signatureNotice}</span>
+    </p>
+  {/if}
 
   {#if notes.length || orphanedDrawings}
     <button
@@ -2560,6 +2586,31 @@
     font-variant-numeric: tabular-nums;
   }
   .annotation-toggle,
+  /* Mention informative, pas une alerte : ton neutre, jamais de vert « validé ».
+     Elle s'efface derrière le document et se tronque plutôt que de pousser la barre —
+     l'infobulle porte le texte entier. */
+  .pdf-signature-notice {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    max-width: 42ch;
+    height: 32px;
+    margin: 0;
+    padding: 0 12px;
+    border-radius: 999px;
+    background: var(--surface);
+    box-shadow: 0 5px 16px rgba(var(--shadow-rgb), 0.14);
+    color: var(--ink-2);
+    font-size: 12px;
+    line-height: 1.2;
+  }
+  .pdf-signature-notice > span:last-child {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .pdf-signature-notice .msr { font-size: 17px; opacity: 0.7; }
+
   .annotate-toggle {
     height: 32px;
     display: inline-flex;
