@@ -19,7 +19,8 @@ Doku — petite application pour **ouvrir, lire et éditer des fichiers Markdown
 - Install : `npm install`
 - Dev (UI navigateur, APIs Tauri neutralisées) : `npm run dev` → http://localhost:1420
 - Dev (app native) : `npm run tauri dev` (première compile Rust longue)
-- Build : `npm run build` · installateurs : `npm run build:installer:arm64` / `npm run build:installer:x64`
+- Build : `npm run build` · installateurs Windows : `npm run build:installer:arm64` / `npm run build:installer:x64`
+- AppImage Linux : **CI uniquement** (WebKitGTK ne se cross-compile pas depuis Windows) — workflow `Build Linux x64`, `gh workflow run "Build Linux x64" --ref main`
 - Typecheck : `npm run check`
 - Tests : `npm test` (vitest)
 - Icônes : `npm run subset:icons` (réseau requis) — à relancer quand `icons.test.ts` échoue (icône ajoutée hors subset), puis committer `src/assets/material-symbols-*`
@@ -36,8 +37,9 @@ Doku — petite application pour **ouvrir, lire et éditer des fichiers Markdown
 | `src-tauri/` | Hôte Rust minimal — plugins officiels uniquement (ADR-0004) |
 | `spike/` | Bancs d'essai conservés (WYSIWYG S0, RAG 15.1, NPU 17.1) |
 | `scripts/` | Outillage de build manuel (subset d'icônes) — sorties committées |
-| `docs/` | Documentation (planning, adr, design, sprints, journal, archives) |
+| `docs/` | Documentation (planning, adr, design, sprints, journal, plans, autopilot, archives) |
 | `public/` | Assets statiques servis tels quels par Vite |
+| `.github/workflows/` | Chaînes de construction CI : `Build Windows x64`, `Build Linux x64` (AppImage) |
 
 ## Patterns
 - ALWAYS: garder le cœur « lecture/édition de documents » extensible — le Markdown est le premier format, pas le seul (PDF et autres suivront)
