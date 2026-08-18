@@ -363,6 +363,7 @@ pub async fn compat_set_key(provider_id: String, key: String) -> Result<CompatSt
     if key.is_empty() {
         return Err("Collez une clé API.".to_string());
     }
+    let mut models_transport: Option<String> = None;
     match fetch_models(def, &key).await {
         Ok(models) => {
             write_secret(def.key_target, &key, def.what)?;
@@ -380,11 +381,17 @@ pub async fn compat_set_key(provider_id: String, key: String) -> Result<CompatSt
                 def.what
             ))
         }
-        Err(ModelsFailure::Transport(raison)) => {
-            return Err(format!(
-                "Le service est inaccessible — rien n'a été stocké ({raison})."
-            ))
-        }
+        // `GET /models` est FACULTATIF — le commentaire de `fetch_models` le dit :
+        // MiniMax ne le documente pas. Son échec de TRANSPORT ne prouve donc rien, ni sur
+        // la clé ni sur le service : certaines surfaces coupent la connexion au lieu de
+        // rendre un 404 propre, et abandonner ici revient à refuser une clé parfaitement
+        // valide à cause d'un point d'entrée dont on sait déjà se passer. Vécu : le même
+        // abonnement MiniMax fonctionnait dans un autre outil sur la MÊME machine.
+        //
+        // Règle : seul l'échec de la sonde AUTORITAIRE (l'appel de chat) peut conclure.
+        // On garde la raison au cas où celle-ci échouerait aussi — elle dira alors si les
+        // deux points d'entrée butent sur la même cause.
+        Err(ModelsFailure::Transport(raison)) => models_transport = Some(raison),
         Err(ModelsFailure::Unsupported) => {} // pas de /models sur cette surface : sonde chat
     }
     let mut candidates = vec![def.probe_model];
@@ -400,9 +407,14 @@ pub async fn compat_set_key(provider_id: String, key: String) -> Result<CompatSt
             ProbeOutcome::ModelFailed(detail) => last_failure = detail,
         }
     }
-    Err(format!(
-        "La validation de la clé a échoué ({last_failure}) — rien n'a été stocké."
-    ))
+    // Les DEUX points d'entrée ont échoué : la raison réseau du premier redevient utile,
+    // elle situe la panne au lieu de la nommer une seconde fois.
+    Err(match models_transport {
+        Some(raison) => format!(
+            "La validation de la clé a échoué ({last_failure}) — rien n'a été stocké. Le catalogue des modèles était lui aussi injoignable ({raison})."
+        ),
+        None => format!("La validation de la clé a échoué ({last_failure}) — rien n'a été stocké."),
+    })
 }
 
 #[tauri::command]
