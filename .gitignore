@@ -19,3 +19,6 @@ src-tauri/binaries/*
 
 # Artefacts Linux téléchargés depuis la CI (jamais versionnés)
 dist-linux/
+
+# Paquet Arch téléchargé depuis la CI
+dist-arch/
