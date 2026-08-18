@@ -16,3 +16,6 @@ src-tauri/binaries/*
 
 # Fixture locale du banc de modification de texte (document de l utilisateur)
 .agent/visual/pdf-text-edit/doc.pdf
+
+# Artefacts Linux téléchargés depuis la CI (jamais versionnés)
+dist-linux/
