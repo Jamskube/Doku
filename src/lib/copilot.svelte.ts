@@ -588,16 +588,23 @@ function streamGenerate(
   signal: AbortSignal,
   options: { map?: boolean; onThinking?: () => void } = {},
 ): Promise<string> {
+  // `map` = appel INTERNE court (sélection mémoire, map d'un résumé) : la sortie utile
+  // tient en quelques lignes. Le plafond ne partait qu'à Ollama — les deux nuages le
+  // perdaient en route et déroulaient sans borne, alors que ces appels-là ne sont
+  // jamais lus par l'utilisateur.
+  const cap = options.map ? SUMMARY_MAP_MAX_TOKENS : undefined
   if (runtime.provider === 'openai') {
-    return openAiGenerate(prompt, onToken, signal, options.onThinking)
+    return openAiGenerate(prompt, onToken, signal, options.onThinking, cap)
   }
   if (runtime.provider === 'minimax') {
-    return compatGenerate('minimax', runtime.model, prompt, onToken, signal, options.onThinking)
+    return compatGenerate('minimax', runtime.model, prompt, onToken, signal, options.onThinking, {
+      maxOutputTokens: cap,
+    })
   }
   return generate(runtime.port, runtime.model, prompt, onToken, signal, {
     num_ctx: COPILOT_NUM_CTX,
     temperature: COPILOT_TEMPERATURE,
-    ...(options.map ? { num_predict: SUMMARY_MAP_MAX_TOKENS } : {}),
+    ...(cap ? { num_predict: cap } : {}),
   })
 }
 

@@ -118,6 +118,8 @@ pub struct OpenAiRequest {
     model: String,
     input: Vec<OpenAiMessage>,
     reasoning_effort: Option<String>,
+    /// Même rôle que côté compatible : borner les appels internes courts.
+    max_output_tokens: Option<u32>,
 }
 
 #[derive(Serialize, Clone)]
@@ -506,6 +508,9 @@ fn response_body(request: &OpenAiRequest) -> Value {
         "stream": true,
         "store": false,
     });
+    if let Some(max) = request.max_output_tokens {
+        body["max_output_tokens"] = serde_json::json!(max);
+    }
     if let Some(effort) = request.reasoning_effort.as_deref() {
         body["reasoning"] = serde_json::json!({ "effort": effort, "summary": "auto" });
         body["include"] = serde_json::json!(["reasoning.encrypted_content"]);
@@ -698,6 +703,7 @@ mod tests {
                 },
             ],
             reasoning_effort: Some("low".into()),
+            max_output_tokens: None,
         });
         assert_eq!(body["instructions"], "Cadre");
         assert_eq!(body["input"][0]["role"], "user");

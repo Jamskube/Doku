@@ -29,6 +29,15 @@ fn short_client() -> &'static reqwest::Client {
     })
 }
 
+// Client de STREAMING, sans timeout global (une génération peut durer des minutes) mais
+// PARTAGÉ : `reqwest::Client::new()` par requête reconstruit pool de connexions ET
+// configuration TLS, donc une poignée de main neuve à chaque message. Le rappel mémoire
+// et la question de l'utilisateur en font trois par tour.
+fn stream_client() -> &'static reqwest::Client {
+    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+    CLIENT.get_or_init(reqwest::Client::new)
+}
+
 // MiniMax signale ses erreurs applicatives en HTTP 200 avec `base_resp.status_code != 0`
 // (`1004` = clé invalide…) : le statut HTTP seul ne prouve RIEN. Renvoie l'erreur
 // applicative d'un corps JSON, ou None si le corps est sain.
@@ -61,6 +70,10 @@ struct ProviderDef {
     default_models: &'static [&'static str],
     /// Modèle employé pour la validation de clé (1 token) — le moins cher du catalogue.
     probe_model: &'static str,
+    /// Le fournisseur comprend `thinking: {"type": …}`. Chez MiniMax, seul **M3** le
+    /// respecte : les M2.x ignorent `"disabled"` et réfléchissent quand même (documenté
+    /// chez eux). L'envoyer reste donc sans effet, jamais une erreur.
+    thinking_param: bool,
 }
 
 const PROVIDERS: &[ProviderDef] = &[ProviderDef {
@@ -78,6 +91,7 @@ const PROVIDERS: &[ProviderDef] = &[ProviderDef {
         "MiniMax-M2",
     ],
     probe_model: "MiniMax-M2.5-highspeed",
+    thinking_param: true,
 }];
 
 fn provider(id: &str) -> Result<&'static ProviderDef, String> {
@@ -117,6 +131,9 @@ pub struct CompatRequest {
     provider: String,
     model: String,
     messages: Vec<CompatMessage>,
+    /// Plafond de tokens de sortie pour les appels INTERNES (sélection mémoire, map de
+    /// résumé) dont la sortie utile tient en quelques lignes. Absent = conversation.
+    max_output_tokens: Option<u32>,
 }
 
 #[derive(Serialize, Clone)]
@@ -388,15 +405,36 @@ fn send_event(
         .map_err(|error| error.to_string())
 }
 
-fn chat_body(_def: &ProviderDef, request: &CompatRequest) -> Value {
-    serde_json::json!({
+// Seuls les M3 honorent `thinking`. La doc MiniMax dit que les M2.x l'IGNORENT, mais
+// « ignoré d’après la doc » ne vaut pas « accepté par le service » : le paramètre ne
+// leur servirait à rien de toute façon, donc on ne l’envoie qu’aux modèles où il agit.
+// Le risque de casser un M2.x passe ainsi de faible à nul.
+fn honors_thinking(model: &str) -> bool {
+    model.contains("M3")
+}
+
+fn chat_body(def: &ProviderDef, request: &CompatRequest) -> Value {
+    let mut body = serde_json::json!({
         "model": request.model,
         "messages": request.messages,
         "stream": true,
         // MiniMax M-series : isole la « pensée » dans reasoning_content (qu'on ignore)
         // au lieu de blocs <think> dans le contenu. Ceinture : le scrubber côté front.
+        // ⚠ `reasoning_split` ne COUPE rien — il ne fait que déplacer la pensée hors du
+        // contenu. Le modèle réfléchit autant ; on ne le voit simplement plus.
         "reasoning_split": true,
-    })
+    });
+    if def.thinking_param && honors_thinking(&request.model) {
+        // Le pendant du `reasoning: {effort: "low"}` envoyé à OpenAI : sans lui, la
+        // surface compatible réfléchissait à pleine profondeur pendant que l'autre
+        // fournisseur était bridé — d'où « MiniMax est lent, OpenAI est rapide », qui
+        // était une asymétrie de Doku, pas des fournisseurs.
+        body["thinking"] = serde_json::json!({ "type": "disabled" });
+    }
+    if let Some(max) = request.max_output_tokens {
+        body["max_completion_tokens"] = serde_json::json!(max);
+    }
+    body
 }
 
 #[tauri::command]
@@ -421,7 +459,7 @@ pub async fn stream_compat(
     let body = chat_body(def, &request);
 
     let result = async {
-        let response = reqwest::Client::new()
+        let response = stream_client()
             .post(format!("{}/chat/completions", def.base_url))
             .bearer_auth(&key)
             .json(&body)
@@ -534,11 +572,56 @@ mod tests {
                     role: "user".into(),
                     content: "Question".into(),
                 }],
+                max_output_tokens: None,
             },
         );
         assert_eq!(body["stream"], true);
         assert_eq!(body["reasoning_split"], true);
         assert_eq!(body["messages"][0]["role"], "user");
         assert_eq!(body["model"], "MiniMax-M2.5");
+        // Un M2.x ne reçoit PAS `thinking` : il ne l'honore pas, on ne le lui envoie pas.
+        assert!(body.get("thinking").is_none());
+        // Conversation = pas de plafond : le champ ne doit pas apparaître.
+        assert!(body.get("max_completion_tokens").is_none());
+    }
+
+    #[test]
+    fn chat_body_disables_thinking_on_m3() {
+        let def = provider("minimax").unwrap();
+        let body = chat_body(
+            def,
+            &CompatRequest {
+                request_id: "r".into(),
+                provider: "minimax".into(),
+                model: "MiniMax-M3".into(),
+                messages: vec![CompatMessage {
+                    role: "user".into(),
+                    content: "Question".into(),
+                }],
+                max_output_tokens: None,
+            },
+        );
+        // Le pendant du `reasoning: {effort: "low"}` d'OpenAI. Sans lui, M3 réfléchissait
+        // à pleine profondeur sur CHACUN des appels d'un tour.
+        assert_eq!(body["thinking"]["type"], "disabled");
+    }
+
+    #[test]
+    fn chat_body_caps_internal_calls() {
+        let def = provider("minimax").unwrap();
+        let body = chat_body(
+            def,
+            &CompatRequest {
+                request_id: "r".into(),
+                provider: "minimax".into(),
+                model: "MiniMax-M3".into(),
+                messages: vec![CompatMessage {
+                    role: "user".into(),
+                    content: "Choisis les souvenirs utiles".into(),
+                }],
+                max_output_tokens: Some(512),
+            },
+        );
+        assert_eq!(body["max_completion_tokens"], 512);
     }
 }

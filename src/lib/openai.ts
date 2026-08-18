@@ -35,6 +35,9 @@ interface OpenAiStreamEvent {
 
 interface OpenAiStreamOptions {
   reasoningEffort?: 'none' | 'low' | 'medium' | 'high'
+  /** Plafond de tokens de sortie — même rôle que `num_predict` côté Ollama et
+   *  `maxOutputTokens` côté compatible : borner les appels internes courts. */
+  maxOutputTokens?: number
   onThinking?: () => void
 }
 
@@ -119,6 +122,7 @@ async function streamOpenAi(
         model: OPENAI_MODEL,
         input,
         reasoningEffort: options.reasoningEffort ?? 'low',
+        maxOutputTokens: options.maxOutputTokens,
       },
       onEvent,
     })
@@ -146,6 +150,11 @@ export function openAiGenerate(
   onToken: (token: string) => void,
   signal?: AbortSignal,
   onThinking?: () => void,
+  maxOutputTokens?: number,
 ): Promise<string> {
-  return streamOpenAi([{ role: 'user', content: prompt }], onToken, signal, { reasoningEffort: 'low', onThinking })
+  return streamOpenAi([{ role: 'user', content: prompt }], onToken, signal, {
+    reasoningEffort: 'low',
+    onThinking,
+    maxOutputTokens,
+  })
 }

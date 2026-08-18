@@ -59,6 +59,12 @@ export async function disconnectCompat(provider: CompatProvider): Promise<void> 
   await invoke('compat_disconnect', { providerId: provider })
 }
 
+export interface CompatOptions {
+  /** Plafond de tokens de sortie — les appels internes (sélection mémoire, map de résumé)
+   *  produisent quelques lignes ; sans plafond le modèle peut dérouler indéfiniment. */
+  maxOutputTokens?: number
+}
+
 export async function compatChat(
   provider: CompatProvider,
   model: string,
@@ -66,6 +72,7 @@ export async function compatChat(
   onToken: (token: string) => void,
   signal?: AbortSignal,
   onThinking?: () => void,
+  options: CompatOptions = {},
 ): Promise<string> {
   if (!isTauri) throw nativeOnly()
   const { Channel, invoke } = await import('@tauri-apps/api/core')
@@ -98,7 +105,7 @@ export async function compatChat(
   const payload = messages.map((m) => (m.role === 'developer' ? { role: 'system', content: m.content } : m))
   try {
     await invoke('stream_compat', {
-      request: { requestId, provider, model, messages: payload },
+      request: { requestId, provider, model, messages: payload, maxOutputTokens: options.maxOutputTokens },
       onEvent,
     })
     if (streamError && !signal?.aborted) throw new Error(streamError)
@@ -131,6 +138,7 @@ export function compatGenerate(
   onToken: (token: string) => void,
   signal?: AbortSignal,
   onThinking?: () => void,
+  options: CompatOptions = {},
 ): Promise<string> {
-  return compatChat(provider, model, [{ role: 'user', content: prompt }], onToken, signal, onThinking)
+  return compatChat(provider, model, [{ role: 'user', content: prompt }], onToken, signal, onThinking, options)
 }
