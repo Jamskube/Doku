@@ -233,9 +233,25 @@
     const maxLeft = editorMaxLeft >= editorMinLeft ? editorMaxLeft : viewportMaxLeft
     const left = Math.min(Math.max(anchorX - menuWidth / 2, minLeft), maxLeft)
     const above = selectionTop - menuHeight - gap
-    const top = above >= 48 ? above : Math.min(selectionBottom + gap, window.innerHeight - menuHeight - viewportMargin)
+    // Sous la sélection : plafonné par le bas de la fenêtre, MAIS aussi borné par le haut.
+    // Sans cette borne basse, un menu plus haut que la fenêtre (tiroir ouvert, fenêtre
+    // courte) se voyait remonter au-dessus du bord supérieur et clippé de l'autre côté.
+    const below = Math.max(viewportMargin, Math.min(selectionBottom + gap, window.innerHeight - menuHeight - viewportMargin))
+    const top = above >= 48 ? above : below
     selectionMenu = { left, top }
     selectionMenuTimer = undefined
+
+    // Le menu est RETIRÉ du DOM à chaque fermeture : `selectionMenuEl` est donc undefined
+    // à CHAQUE ouverture, et `menuHeight` n'est alors qu'une estimation de repli. Quand
+    // elle sous-estime, le plafond calculé plus haut ne plafonne rien et le menu déborde
+    // sous le bas de la fenêtre — précisément là où l'on se rabat dessous, faute de place
+    // au-dessus. Une seconde passe, une fois l'élément monté, mesure pour de vrai.
+    // Pas de récursion : à ce moment `chromeH` est défini, donc rien n'est reprogrammé.
+    if (chromeH === undefined) {
+      void tick().then(() => {
+        if (selectionMenu && selectionMenuEl) positionSelectionMenu(currentView)
+      })
+    }
   }
 
   function publishSelection(currentView: EditorView, publishedTabId = renderedId) {
@@ -989,6 +1005,11 @@
     font-family: var(--font-sans);
     user-select: none;
     animation: selection-menu-in 160ms cubic-bezier(0.22, 1, 0.36, 1);
+    /* Filet : même si la mesure se trompe, le menu reste entièrement atteignable —
+       il défile au lieu d'avoir ses derniers boutons coupés hors écran. */
+    max-height: calc(100vh - 24px);
+    overflow-y: auto;
+    overscroll-behavior: contain;
   }
   .selection-menu-sep { height: 1px; margin: 5px 7px; background: var(--line-1); }
   .selection-format-row { display: flex; gap: 2px; padding: 1px 2px; }
