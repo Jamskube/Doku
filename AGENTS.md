@@ -8,11 +8,11 @@ Doku — petite application pour **ouvrir, lire et éditer des fichiers Markdown
 ## Stack
 - Language: TypeScript (frontend) + Rust minimal (hôte Tauri, zéro logique métier — ADR-0004)
 - Framework: Tauri 2 + Svelte 5 + Vite — décidé, ADR-0001 accepted (`docs/adr/`)
-- Machine de développement principale : **Windows ARM64** — Surface Pro 11, Snapdragon X Elite. Distribution prise en charge : installateurs Windows ARM64 et x64, chacun avec son sidecar Ollama CPU natif
+- Machine de développement principale : **Windows ARM64** — Surface Pro 11, Snapdragon X Elite. Distribution prise en charge : installateurs Windows ARM64 et x64, chacun avec son sidecar Ollama CPU natif ; **AppImage Linux x64** construite en CI, sur l'Ollama du système (ADR-0025)
 - Référence : `G:\KUDE` (mode lecture/édition Markdown + design system AIR) ; maquettes officielles dans `docs/design/w1/`
 - Éditeur : CodeMirror 6 « live preview » (ADR-0002) — `src/lib/editor/`
 - Database / ORM: aucune (fichiers locaux)
-- IA : Ollama local par défaut ; OpenAI optionnel via connexion du compte ChatGPT/Codex (ADR-0014, jamais de clé API pour OpenAI) ; MiniMax optionnel via clé API validée avant stockage (ADR-0018 — seule voie d'auth existante chez eux). Tous les secrets au coffre d'identifiants Windows (`secrets.rs`), aucune base URL configurable côté frontend
+- IA : Ollama local par défaut ; OpenAI optionnel via connexion du compte ChatGPT/Codex (ADR-0014, jamais de clé API pour OpenAI) ; MiniMax optionnel via clé API validée avant stockage (ADR-0018 — seule voie d'auth existante chez eux). Tous les secrets au coffre du système (`secrets.rs`) — Gestionnaire d'identifiants sous Windows, Secret Service via `keyring` ailleurs (ADR-0026) ; aucune base URL configurable côté frontend
 - Package manager: npm
 
 ## Setup commands
@@ -42,7 +42,7 @@ Doku — petite application pour **ouvrir, lire et éditer des fichiers Markdown
 ## Patterns
 - ALWAYS: garder le cœur « lecture/édition de documents » extensible — le Markdown est le premier format, pas le seul (PDF et autres suivront)
 - ALWAYS: décider la stack via PRD + architecture avant d'écrire du code
-- ALWAYS: préférer une connexion de compte type OAuth quand le fournisseur en offre une (OpenAI : jamais de clé API) ; une clé API n'est acceptable que si c'est la seule voie (MiniMax, ADR-0018) et alors validée avant stockage, gardée au coffre Windows, jamais renvoyée à la webview
+- ALWAYS: préférer une connexion de compte type OAuth quand le fournisseur en offre une (OpenAI : jamais de clé API) ; une clé API n'est acceptable que si c'est la seule voie (MiniMax, ADR-0018) et alors validée avant stockage, gardée au coffre du système, jamais renvoyée à la webview
 - NEVER: créer des dossiers spécifiques à une technologie avant que la stack soit choisie
 
 ## Context & compaction

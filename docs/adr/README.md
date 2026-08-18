@@ -29,3 +29,4 @@ Registre des décisions d'architecture. Une décision par fichier ; on ne suppri
 | [0023](./0023-licence-agpl.md) | Licence : AGPL-3.0-or-later | accepted | 2026-08-15 | licence, agpl, docx, pdf, distribution, stratégie |
 | [0024](./0024-correction-pdf-assistee-par-le-modele.md) | Correction de PDF par consigne — construite, puis masquée | accepted (mise en œuvre suspendue) | 2026-08-17 | pdf, ia, cloud, édition, chantier-en-pause |
 | [0025](./0025-distribution-linux-appimage.md) | Distribution Linux : AppImage, et l'Ollama de la distribution | accepted | 2026-08-18 | distribution, linux, appimage, ollama, sidecar, ci |
+| [0026](./0026-coffre-de-secrets-multiplateforme.md) | Coffre de secrets hors Windows : Secret Service via keyring | accepted | 2026-08-18 | secret, linux, keyring, secret-service, cloud, portabilité |

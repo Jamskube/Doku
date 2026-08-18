@@ -30,7 +30,7 @@ La raison est décisive : l'archive Linux d'Ollama 0.32.0 pèse **1,44 Go**, alo
 
 **Négatif, et il faut le dire clairement :**
 
-- **Le copilote cloud ne fonctionne pas sous Linux.** `write_secret` hors Windows rend « Le stockage protégé […] est actuellement disponible sous Windows » : ni OpenAI ni MiniMax. Seul Ollama local est disponible. Y remédier demande un dorsal Secret Service (GNOME Keyring / KWallet) — la caisse `keyring` couvre les trois systèmes et simplifierait au passage le code Windows. **C'est la suite naturelle de cette ADR.**
+- ~~**Le copilote cloud ne fonctionne pas sous Linux.**~~ **LEVÉ le jour même par [ADR-0026](./0026-coffre-de-secrets-multiplateforme.md)** : `write_secret` s'appuie désormais sur le Secret Service de la session via `keyring`. OpenAI et MiniMax sont disponibles sous Linux.
 - **Ollama devient un prérequis** sous Linux, là où Windows n'en a aucun. Assumé : c'est la convention de la plateforme.
 - **Pas de matériau Mica** ; le chrome CSS opaque prend le relais, comme prévu.
 - **Aucune vérification sur machine réelle.** La CI prouve que ça compile et que l'AppImage est bien formée, pas que l'application se lance. WebKitGTK sur Arch est souvent en avance sur ce qu'attend Tauri : le premier essai réel est celui du collègue, et un ou deux allers-retours sont à prévoir.

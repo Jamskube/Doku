@@ -34,6 +34,14 @@ windows = { version = "0.61", features = [
     "Win32_System_Threading",
 ] }
 
+# Coffre de secrets hors Windows (ADR-0026). `keyring` en features par défaut installe
+# paresseusement le magasin de la plateforme ; sur *nix c'est le Secret Service via zbus,
+# donc du Rust pur — aucune bibliothèque C à installer sur la machine de build.
+# Windows garde son implémentation CredWriteW native : la remplacer changerait la
+# convention de nommage des identifiants et ORPHELINERAIT les secrets déjà stockés.
+[target.'cfg(not(windows))'.dependencies]
+keyring = "4"
+
 [profile.release]
 panic = "abort"
 codegen-units = 1

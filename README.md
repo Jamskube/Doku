@@ -24,10 +24,11 @@ Construite en CI seulement — WebKitGTK ne se cross-compile pas depuis Windows.
 workflow **Build Linux x64** (`workflow_dispatch` ou tag `v*`), récupérer l'artefact,
 `chmod +x` et exécuter : aucune installation.
 
-Deux différences avec Windows, voir [ADR-0025](docs/adr/0025-distribution-linux-appimage.md) :
-Doku lance l'**Ollama du système** (`sudo pacman -S ollama`, `apt install ollama`…) plutôt
-qu'un sidecar empaqueté, et le **copilote cloud est indisponible** — le stockage protégé des
-clés n'a pas encore de dorsal Linux.
+Deux différences avec Windows, voir [ADR-0025](docs/adr/0025-distribution-linux-appimage.md)
+et [ADR-0026](docs/adr/0026-coffre-de-secrets-multiplateforme.md) : Doku lance l'**Ollama du
+système** (`sudo pacman -S ollama`, `apt install ollama`…) plutôt qu'un sidecar empaqueté, et
+les clés du copilote cloud vivent dans le **Secret Service** de la session (GNOME Keyring,
+KWallet, KeePassXC) au lieu du Gestionnaire d'identifiants Windows.
 
 Le build x64 automatisé est aussi disponible dans GitHub Actions via le workflow
 `Build Windows x64`. Il publie un artefact contenant l'installateur et son SHA-256.
