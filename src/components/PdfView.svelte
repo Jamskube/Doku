@@ -918,11 +918,17 @@
       await tick()
       requestFit()
       return true
-    } catch {
+    } catch (error) {
+      // La CAUSE, pas seulement le fait. Un `catch {}` muet ici a coûté un aller-retour
+      // complet au premier essai sous Linux : « n'a pas pu sauvegarder » couvre aussi bien
+      // un disque plein qu'un refus de permission ou un chemin hors périmètre, et ni
+      // l'utilisateur ni nous ne pouvions les distinguer.
+      const raison = error instanceof Error ? error.message : String(error)
+      console.error('[pdf] annotation non enregistrée', error)
       app.banner = {
         tone: 'error',
         title: 'Annotation non enregistrée',
-        message: 'Doku n’a pas pu sauvegarder cette annotation localement.',
+        message: `Doku n’a pas pu sauvegarder cette annotation localement : ${raison}`,
       }
       return false
     } finally {
