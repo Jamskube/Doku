@@ -1181,8 +1181,11 @@
     if (!wrap) return
     const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches
     renderAnnotationMarksForPage(note.page, true)
-    wrap.scrollIntoView({ block: 'center', behavior: reduced ? 'auto' : 'smooth' })
-    wrap.querySelectorAll<Element>(`[data-drawing-id="${CSS.escape(note.id)}"]`).forEach((target) => {
+    const targets = wrap.querySelectorAll<Element>(`[data-drawing-id="${CSS.escape(note.id)}"]`)
+    // Centrer le TRACÉ, pas la page : une note en haut ou en bas d'une grande page
+    // restait hors écran alors que la page, elle, était bien centrée.
+    ;(targets[0] ?? wrap).scrollIntoView({ block: 'center', behavior: reduced ? 'auto' : 'smooth' })
+    targets.forEach((target) => {
       target.classList.remove('attention')
       requestAnimationFrame(() => target.classList.add('attention'))
     })
@@ -1192,11 +1195,13 @@
 
   // Surligne les rectangles du passage cité dans le wrapper de la page (fractions 0..1 →
   // % du canvas, insensible au zoom/DPR). Éléments transitoires, retirés après le fondu.
-  async function highlightPassage(wrap: HTMLElement, page: number, text: string): Promise<boolean> {
-    if (!pdf) return false
+  // Rend le PREMIER repère posé : c'est lui qu'il faut amener sous les yeux. Cadrer
+  // sur la page laissait un extrait de bas de page hors écran.
+  async function highlightPassage(wrap: HTMLElement, page: number, text: string): Promise<HTMLElement | null> {
+    if (!pdf) return null
     const { getCitedRects } = await import('../lib/pdf')
     const rects = await getCitedRects(pdf, page, text).catch(() => [])
-    if (!rects.length) return false
+    if (!rects.length) return null
     const marks: HTMLElement[] = []
     for (const r of rects) {
       const m = document.createElement('div')
@@ -1209,7 +1214,7 @@
       marks.push(m)
     }
     setTimeout(() => marks.forEach((m) => m.remove()), 4200)
-    return true
+    return marks[0] ?? null
   }
 
   // Révélation d'une page citée (citations ancrées sur PDF). Les canvases sont créés
@@ -1232,8 +1237,14 @@
           setTimeout(() => canvas.classList.remove('pdf-page-cited'), 1800)
         }
         // Surlignage précis si le passage est fourni ET retrouvé ; sinon halo de page.
+        // Second cadrage une fois le passage localisé : le premier (haut de page) sert de
+        // retour immédiat pendant la recherche des rectangles, mais il n'est le bon que si
+        // le passage est en tête de page. Sinon on recentre sur le surlignage.
         if (reveal.text && wrap) {
-          void highlightPassage(wrap, reveal.page, reveal.text).then((ok) => { if (!ok) fallbackHalo() })
+          void highlightPassage(wrap, reveal.page, reveal.text).then((mark) => {
+            if (mark) mark.scrollIntoView({ block: 'center', behavior: reduced ? 'auto' : 'smooth' })
+            else fallbackHalo()
+          })
         } else {
           fallbackHalo()
         }

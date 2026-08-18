@@ -1,5 +1,6 @@
 import { DEMO_DIR, DEMO_TABS } from './demo'
 import { dropEditorRuntime, editorForPane, selectionForPane } from './editor-registry.svelte'
+import { EditorView } from '@codemirror/view'
 import { detectLineEnding } from './editor/editor'
 import { baseName, DEFAULT_SORT, isSupportedFile, joinPath, parentPath, validateExpandedPaths, type ExplorerSort, type SortKey } from './explorer'
 import { detectUnsupported } from './encoding'
@@ -847,10 +848,13 @@ export function scrollToLine(line: number) {
   const view = activeEditorView()
   if (!view) return
   const docLine = view.state.doc.line(Math.min(line, view.state.doc.lines))
+  // `scrollIntoView: true` vaut `y: 'nearest'` : le défilement MINIMAL, donc le titre
+  // collé au bord par lequel il entre — en bas de l'écran quand on saute vers l'aval,
+  // et il fallait faire défiler soi-même pour voir la section. Un plan de document
+  // amène son titre en HAUT, avec sa section dessous.
   view.dispatch({
     selection: { anchor: docLine.from },
-    effects: [],
-    scrollIntoView: true,
+    effects: [EditorView.scrollIntoView(docLine.from, { y: 'start', yMargin: 24 })],
   })
   view.focus()
 }
