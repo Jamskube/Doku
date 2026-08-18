@@ -62,6 +62,10 @@
   let staleAnnotations = $state(false)
   // Mention de signature — vide tant qu'il n'y en a pas, ce qui est le cas courant.
   let signatureNotice = $state('')
+  // Mode présentation : plein écran, chrome effacé, une page à la fois.
+  let presenting = $state(false)
+  let presentPage = $state(1)
+  let pageTotal = $state(0)
   // Carnet présent mais incompréhensible : il faudra le mettre à l'abri avant d'écrire.
   let unreadableManifest = false
   let activeNoteIds = $state<string[]>([])
@@ -987,6 +991,50 @@
   // lecteurs PDF (ou un lecteur et un éditeur) les reçoivent tous. Ce volet ne répond
   // que s'il est le volet actif ET que le focus est chez lui ou nulle part (une
   // sélection de texte à la souris laisse le focus sur `body`).
+  // --- Mode présentation ---------------------------------------------------------
+  // Il ne rend RIEN de neuf : il réutilise le défilement, l'ajustement et les pages
+  // déjà en place. Seuls changent le plein écran, l'effacement du chrome, et une
+  // navigation page par page. Un mode qui aurait son propre chemin de rendu serait un
+  // second lecteur à maintenir.
+
+  /** Page dont le haut est le plus proche du haut du défilement — la page « en cours ». */
+  function pageAtScroll(): number {
+    if (!container) return 1
+    const top = container.scrollTop
+    let found = 1
+    for (const [n, wrap] of [...pageWraps.entries()].sort((a, b) => a[0] - b[0])) {
+      if (wrap.offsetTop > top + 1) break
+      found = n
+    }
+    return found
+  }
+
+  function goToPage(n: number) {
+    const target = Math.min(Math.max(n, 1), Math.max(pageTotal, 1))
+    const wrap = pageWraps.get(target)
+    if (!wrap) return
+    presentPage = target
+    const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches
+    wrap.scrollIntoView({ block: 'start', behavior: reduced ? 'auto' : 'smooth' })
+  }
+
+  async function togglePresenting() {
+    if (presenting) {
+      presenting = false
+      if (document.fullscreenElement) await document.exitFullscreen().catch(() => {})
+      return
+    }
+    presentPage = pageAtScroll()
+    presenting = true
+    // Le plein écran peut être refusé (politique du navigateur, permission) : le mode
+    // reste alors utile en fenêtré — chrome effacé et navigation au clavier — plutôt
+    // que d'échouer entièrement pour une commodité.
+    await shell?.requestFullscreen?.().catch(() => {})
+    await tick()
+    requestFit()
+    goToPage(presentPage)
+  }
+
   function ownsGlobalKeys(): boolean {
     if (workspace.activePaneId !== paneId) return false
     const active = document.activeElement
@@ -1359,6 +1407,25 @@
           return
         }
       }
+      // F5 entre en présentation (touche d'Okular et des suites bureautiques). En
+      // présentation, la navigation prend la main sur tout le reste.
+      if (event.key === 'F5' && status === 'ready') {
+        event.preventDefault()
+        void togglePresenting()
+        return
+      }
+      if (presenting) {
+        const next = ['ArrowRight', 'ArrowDown', 'PageDown', ' ', 'Enter'].includes(event.key)
+        const prev = ['ArrowLeft', 'ArrowUp', 'PageUp', 'Backspace'].includes(event.key)
+        if (next || prev) {
+          event.preventDefault()
+          goToPage(presentPage + (next ? 1 : -1))
+          return
+        }
+        if (event.key === 'Home') { event.preventDefault(); goToPage(1); return }
+        if (event.key === 'End') { event.preventDefault(); goToPage(pageTotal); return }
+        if (event.key === 'Escape') { event.preventDefault(); void togglePresenting(); return }
+      }
       if (annotationMode && selectedDrawingId && (event.key === 'Delete' || event.key === 'Backspace')) {
         event.preventDefault()
         void deleteDrawing(selectedDrawingId)
@@ -1405,6 +1472,13 @@
     document.addEventListener('pointerdown', closeTransientUi)
     document.addEventListener('keydown', closeOnEscape)
     document.addEventListener('keydown', handleShortcuts)
+    // Le plein écran peut être quitté SANS passer par nous — F11, Échap du navigateur,
+    // changement d'onglet système. Sans cette synchronisation, le chrome resterait
+    // effacé dans une fenêtre redevenue normale : un mode fantôme dont on ne sort plus.
+    const syncFullscreen = () => {
+      if (presenting && !document.fullscreenElement) presenting = false
+    }
+    document.addEventListener('fullscreenchange', syncFullscreen)
 
     interface PageView {
       baseWidth: number
@@ -1555,7 +1629,16 @@
       // boîte de padding est fractionnaire (volet scindé). Arrondi vers le haut, la
       // page dépassait d'un demi-pixel — `safe center` basculait alors en `start` et
       // une scrollbar horizontale fantôme apparaissait.
-      const available = Math.floor(host.getBoundingClientRect().width) - (host.offsetWidth - host.clientWidth)
+      let available = Math.floor(host.getBoundingClientRect().width) - (host.offsetWidth - host.clientWidth)
+      // En présentation, une page qui déborde en hauteur oblige à faire défiler — ce qui
+      // vide le mode de son sens. On réduit la largeur DISPONIBLE jusqu'à ce que la
+      // hauteur rentre, plutôt que de toucher à `fitPdfPage`, qui reste une fonction pure
+      // raisonnant en largeur.
+      if (presenting) {
+        const first = pages.values().next().value as PageView | undefined
+        const ratio = first ? first.baseWidth / Math.max(first.baseHeight, 1) : 0
+        if (ratio > 0) available = Math.min(available, Math.floor((host.clientHeight - 24) * ratio) + 24)
+      }
       for (const page of pages.values()) {
         const fitted = fitPdfPage(
           available,
@@ -1637,6 +1720,7 @@
         unreadableManifest = parsed.unreadable
         staleAnnotations = parsed.stale
           || parsed.manifest.drawings.some((drawing) => drawing.status === 'orphaned')
+        pageTotal = loaded.doc.numPages
         status = 'ready'
 
         // Signatures : métadonnées SEULEMENT, et jamais bloquantes. Un document non
@@ -1751,6 +1835,8 @@
       document.removeEventListener('pointerdown', closeTransientUi)
       document.removeEventListener('keydown', closeOnEscape)
       document.removeEventListener('keydown', handleShortcuts)
+      document.removeEventListener('fullscreenchange', syncFullscreen)
+      if (document.fullscreenElement) void document.exitFullscreen().catch(() => {})
       for (const page of pages.values()) page.textLayerInstance?.cancel()
       pageWraps.clear()
       visibleAnnotationPages.clear()
@@ -1765,6 +1851,7 @@
   class="pdf-shell"
   class:annotation-mode={annotationMode}
   data-pointer-mode={annotationMode ? pointerMode : 'read'}
+  data-presenting={presenting ? 'true' : null}
   bind:this={shell}
   tabindex="-1"
   role="group"
@@ -1864,9 +1951,24 @@
       <span class="msr">stylus</span>
       <span class="annotate-toggle-label">Annoter</span>
     </button>
+    <button
+      class="present-toggle"
+      aria-label="Mode présentation (F5)"
+      title="Mode présentation (F5)"
+      disabled={status !== 'ready'}
+      onclick={() => void togglePresenting()}
+    >
+      <span class="msr">slideshow</span>
+    </button>
 
   <!-- Mention de signature : discrète, informative, jamais un verdict. Le libellé
        porte lui-même la réserve — voir `pdf-signatures.ts`. -->
+  {#if presenting}
+    <p class="present-hint" role="status">
+      Page {presentPage} / {pageTotal} · ← → pour naviguer · Échap pour quitter
+    </p>
+  {/if}
+
   {#if signatureNotice}
     <p class="pdf-signature-notice" role="note" title={signatureNotice}>
       <span class="msr" aria-hidden="true">verified</span>
@@ -2586,6 +2688,48 @@
     font-variant-numeric: tabular-nums;
   }
   .annotation-toggle,
+  /* Mode présentation : le document, rien d'autre. Le chrome n'est pas seulement
+     masqué visuellement — il est retiré du flux ET des cibles de pointeur, pour qu'un
+     clic parasite ne rouvre pas un outil pendant une projection. */
+  [data-presenting='true'] .pdf-actions,
+  [data-presenting='true'] .annotation-list { display: none; }
+  [data-presenting='true'] .pdf-view { background: #000; }
+  [data-presenting='true'] .present-hint {
+    position: fixed;
+    left: 50%;
+    bottom: 18px;
+    transform: translateX(-50%);
+    z-index: 40;
+    padding: 6px 14px;
+    border-radius: 999px;
+    background: rgba(0, 0, 0, 0.55);
+    color: #fff;
+    font-family: var(--font-sans);
+    font-size: 12px;
+    pointer-events: none;
+    /* Elle s'efface d'elle-même : une aide permanente deviendrait un meuble. */
+    animation: present-hint-fade 4s ease forwards;
+  }
+  @keyframes present-hint-fade {
+    0%, 60% { opacity: 1; }
+    100% { opacity: 0; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    [data-presenting='true'] .present-hint { animation: none; opacity: 0.85; }
+  }
+  .present-toggle {
+    width: 32px;
+    height: 32px;
+    display: inline-grid;
+    place-items: center;
+    border: 0;
+    border-radius: 999px;
+    background: var(--surface);
+    box-shadow: 0 5px 16px rgba(var(--shadow-rgb), 0.14);
+    color: var(--ink-2);
+  }
+  .present-toggle:disabled { opacity: 0.45; }
+
   /* Mention informative, pas une alerte : ton neutre, jamais de vert « validé ».
      Elle s'efface derrière le document et se tronque plutôt que de pousser la barre —
      l'infobulle porte le texte entier. */
