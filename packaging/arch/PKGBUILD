@@ -1,15 +1,21 @@
 # Maintainer: Kubo <aimaster@soundnodes.com>
 #
-# Paquet Arch de Doku à partir du .deb produit par la CI.
+# Paquet Arch de Doku, construit DANS Arch contre les bibliothèques d'Arch.
 #
-# Pourquoi pas l'AppImage : elle embarque le GTK et le Mesa d'Ubuntu
-# (linuxdeploy-plugin-gtk), et cette pile ne sait pas énumérer les pilotes d'Arch —
-# GDK abandonne au démarrage sur « Could not create default EGL display:
-# EGL_BAD_PARAMETER ». Le .deb, lui, ne transporte aucune bibliothèque système : il les
-# déclare. On les reprend ici en `depends`, servies par pacman, à jour et cohérentes
-# avec le reste du système. Même raisonnement que pour Ollama (ADR-0025).
+# Pourquoi pas l'AppImage : elle embarque le GTK et le Mesa du runner Ubuntu
+# (linuxdeploy-plugin-gtk). Cette pile ne sait pas énumérer les pilotes d'Arch, et GDK
+# abandonne au démarrage sur « Could not create default EGL display: EGL_BAD_PARAMETER ».
+# Aucun réglage WEBKIT_* n'y change rien : la panne est SOUS WebKit. Voir ADR-0025.
+#
+# Ici, rien n'est transporté ni traduit : le binaire est compilé sur place et lié contre
+# le webkit2gtk-4.1 de la machine. C'est le même principe que pour Ollama — on ne
+# transporte pas ce que la distribution fournit mieux.
+#
+# Ce PKGBUILD attend le binaire DÉJÀ construit (workflow « Build Arch x64 », qui lance
+# `tauri build --no-bundle` avant `makepkg`). Il n'embarque donc pas d'étape build() :
+# la compilation Rust + npm vit dans la CI, où elle est cachée entre les exécutions.
 
-pkgname=doku-bin
+pkgname=doku
 pkgver=3.0.0
 pkgrel=1
 pkgdesc="Lecteur-éditeur de documents (Markdown, DOCX, PDF) avec copilote IA local"
@@ -18,23 +24,41 @@ url="https://github.com/Jamskube/Doku"
 license=('AGPL-3.0-or-later')
 depends=('webkit2gtk-4.1' 'gtk3' 'libsoup3' 'openssl')
 optdepends=('ollama: copilote IA local')
-provides=('doku')
-conflicts=('doku')
-options=('!strip')
+options=('!strip' '!debug')
 
-# Le .deb n'est pas publié en release : on le récupère dans l'artefact du workflow
-# « Build Linux x64 » et on le pose à côté de ce PKGBUILD.
-source=("Doku_${pkgver}_amd64.deb")
-sha256sums=('SKIP')
+# Tout vient du dépôt lui-même : aucune source à télécharger.
+source=()
+sha256sums=()
 
 package() {
-  # Un .deb est une archive `ar` contenant data.tar.* — bsdtar lit les deux directement.
-  # Contenu vérifié sur le paquet réellement produit : usr/bin/doku, les icônes, le
-  # .desktop et usr/lib/Doku/licenses. AUCUNE bibliothèque graphique — c'est tout
-  # l'intérêt de passer par le .deb plutôt que par l'AppImage (voir ../README.md).
-  bsdtar -xf "Doku_${pkgver}_amd64.deb" -O data.tar.gz | bsdtar -xf - -C "$pkgdir"
-}
+  local repo="$startdir/../.."
+  local bin="$repo/src-tauri/target/x86_64-unknown-linux-gnu/release/doku"
 
-# Pas de fichier de licence à installer : AGPL-3.0 fait partie des licences communes
-# d'Arch (/usr/share/licenses/common/AGPL3), et celles des dépendances voyagent déjà
-# dans usr/lib/Doku/licenses.
+  if [ ! -x "$bin" ]; then
+    echo "Binaire introuvable : $bin" >&2
+    echo "Lancer d'abord : npm run tauri build -- --target x86_64-unknown-linux-gnu --no-bundle" >&2
+    return 1
+  fi
+
+  install -Dm755 "$bin" "$pkgdir/usr/bin/doku"
+
+  # Ressources attendues à côté du binaire par `resource_dir()` de Tauri.
+  install -Dm644 "$repo/src-tauri/resources/licenses/"* -t "$pkgdir/usr/lib/doku/licenses"
+
+  for size in 32x32 128x128; do
+    install -Dm644 "$repo/src-tauri/icons/${size}.png" \
+      "$pkgdir/usr/share/icons/hicolor/${size}/apps/doku.png"
+  done
+
+  install -Dm644 /dev/stdin "$pkgdir/usr/share/applications/doku.desktop" <<'DESKTOP'
+[Desktop Entry]
+Type=Application
+Name=Doku
+Comment=Lire et écrire, sans friction
+Exec=doku %f
+Icon=doku
+Terminal=false
+Categories=Office;TextEditor;Viewer;
+MimeType=text/markdown;text/plain;text/html;application/pdf;application/vnd.openxmlformats-officedocument.wordprocessingml.document;
+DESKTOP
+}
