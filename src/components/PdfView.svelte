@@ -469,6 +469,64 @@
     }
   }
 
+  // Ergonomie de sélection de la couche texte — le mécanisme `endOfContent` du
+  // visualiseur officiel de pdf.js, que la classe `TextLayer` de bas niveau ne fournit
+  // PAS. Sans lui, dépasser la fin d'une ligne n'offre aucune prise au glisser : le
+  // navigateur raccroche la sélection au span le plus proche et avale la ligne suivante.
+  // C'est ce que le filtre `sweep` de `selectionHighlight` compensait en aval, symptôme
+  // par symptôme.
+  //
+  // Le principe : un bloc invisible et non sélectionnable, placé APRÈS le dernier span.
+  // Au repos il est hors cadre (`inset: 100% 0 0`) ; pendant une sélection la classe
+  // `selecting` le fait couvrir toute la page, ce qui donne au glisser une surface où
+  // atterrir au lieu de sauter d'une ligne à l'autre.
+  const textLayerEnds = new Map<HTMLElement, HTMLElement>()
+
+  function attachEndOfContent(layer: HTMLElement) {
+    let end = textLayerEnds.get(layer)
+    if (!end || !layer.contains(end)) {
+      end = document.createElement('div')
+      end.className = 'endOfContent'
+      textLayerEnds.set(layer, end)
+    }
+    // Toujours DERNIER enfant : `TextLayer.render()` ajoute ses spans à la suite, et un
+    // repère de fin qui ne serait plus à la fin ne repérerait plus rien.
+    layer.append(end)
+  }
+
+  function resetTextSelecting() {
+    for (const [layer, end] of textLayerEnds) {
+      if (!layer.isConnected) {
+        textLayerEnds.delete(layer)
+        continue
+      }
+      layer.append(end)
+      layer.classList.remove('selecting')
+    }
+  }
+
+  function syncTextSelecting() {
+    const selection = document.getSelection()
+    if (!selection || selection.rangeCount === 0) {
+      resetTextSelecting()
+      return
+    }
+    const actives = new Set<HTMLElement>()
+    for (let i = 0; i < selection.rangeCount; i += 1) {
+      const range = selection.getRangeAt(i)
+      for (const layer of textLayerEnds.keys()) {
+        if (layer.isConnected && range.intersectsNode(layer)) actives.add(layer)
+      }
+    }
+    for (const [layer, end] of textLayerEnds) {
+      if (actives.has(layer)) layer.classList.add('selecting')
+      else {
+        layer.append(end)
+        layer.classList.remove('selecting')
+      }
+    }
+  }
+
   // Texte réellement couvert par un rectangle de surlignage : on retrouve les lignes
   // de la couche texte qu'il traverse et on les tronque à ses bords. La citation
   // décrit ainsi EXACTEMENT ce qui est peint — y compris après le bridage ci-dessous.
@@ -503,7 +561,15 @@
     // les rectangles n'ont de sens que dans le repère d'UNE page. Sans ce recadrage,
     // le geste ne produirait rien du tout — échec muet.
     const pageRange = range.cloneRange()
-    if (!layer.contains(range.endContainer)) pageRange.setEnd(layer, layer.childNodes.length)
+    // Fin ramenée AVANT le repère `endOfContent` : pendant une sélection il couvre toute
+    // la page, et l'inclure donnerait un rectangle de la taille de la feuille. Il est
+    // `user-select: none` et le relâchement le replie avant ce calcul, mais un repère qui
+    // ne peut PAS être compté vaut mieux qu'un repère qui ne devrait pas l'être.
+    const marqueur = layer.querySelector('.endOfContent')
+    const finDeTexte = marqueur ? Array.prototype.indexOf.call(layer.childNodes, marqueur) : layer.childNodes.length
+    if (!layer.contains(range.endContainer) || range.endContainer === marqueur) {
+      pageRange.setEnd(layer, Math.max(0, finDeTexte))
+    }
     const pageRect = wrap.getBoundingClientRect()
     const rects = Array.from(pageRange.getClientRects())
       // La sélection du navigateur déborde volontiers d'une ligne : dès que le pointeur
@@ -1404,6 +1470,19 @@
     document.addEventListener('keydown', closeOnEscape)
     document.addEventListener('keydown', handleShortcuts)
 
+    // Un AbortController plutôt que quatre retraits symétriques : le piège du drapeau
+    // de capture (voir le nettoyage plus bas) ne peut pas se reproduire ici.
+    const selectionAbort = new AbortController()
+    const sig = { signal: selectionAbort.signal }
+    host.addEventListener('mousedown', (event) => {
+      const layer = (event.target as Element | null)?.closest?.<HTMLElement>('.textLayer')
+      if (layer) layer.classList.add('selecting')
+    }, sig)
+    document.addEventListener('selectionchange', syncTextSelecting, sig)
+    document.addEventListener('pointerup', resetTextSelecting, sig)
+    document.addEventListener('keyup', resetTextSelecting, sig)
+    window.addEventListener('blur', resetTextSelecting, sig)
+
     interface PageView {
       baseWidth: number
       baseHeight: number
@@ -1459,6 +1538,7 @@
           pageView.wrap.style.setProperty('--user-unit', String(viewport.userUnit))
           if (pageView.textLayerInstance) {
             pageView.textLayerInstance.update({ viewport })
+            attachEndOfContent(pageView.textLayer)
           } else {
             const { TextLayer } = await import('pdfjs-dist')
             const layer = new TextLayer({
@@ -1468,6 +1548,7 @@
             })
             pageView.textLayerInstance = layer
             await layer.render()
+            attachEndOfContent(pageView.textLayer)
           }
         } finally {
           pdfPage.cleanup()
@@ -1735,6 +1816,8 @@
       document.removeEventListener('pointerdown', closeTransientUi)
       document.removeEventListener('keydown', closeOnEscape)
       document.removeEventListener('keydown', handleShortcuts)
+      selectionAbort.abort()
+      textLayerEnds.clear()
       for (const page of pages.values()) page.textLayerInstance?.cancel()
       pageWraps.clear()
       visibleAnnotationPages.clear()
@@ -2199,6 +2282,19 @@
     text-size-adjust: none;
     user-select: text;
   }
+  /* Repère de fin de contenu : hors cadre au repos, couvrant la page pendant une
+     sélection. Jamais sélectionnable — il donne une prise au glisser, il n'est pas
+     du contenu. */
+  .pdf-view :global(.textLayer .endOfContent) {
+    display: block;
+    position: absolute;
+    inset: 100% 0 0;
+    z-index: 0;
+    cursor: default;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+  .pdf-view :global(.textLayer.selecting .endOfContent) { top: 0; }
   .pdf-view :global(.textLayer :is(span, br)) {
     position: absolute;
     color: transparent;
