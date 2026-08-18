@@ -3,7 +3,7 @@
 Application de bureau pour **ouvrir, lire et éditer des documents** — Markdown en premier, PDF en lecture, export HTML/DOCX — avec un copilote IA **100 % local** (Ollama, RAG sur dossier). Native Windows ARM64 et x64.
 
 ## État du projet
-📦 **v2.2.0** — feature-complete (Epics 1-16, 18, 19 livrés ; ledger 69 features / 68 PASS). Phase actuelle : usage réel quotidien, le prochain chantier émergera de l'usage.
+📦 **v3.0.0** — feature-complete (Epics 1-16, 18, 19 livrés ; ledger 69 features / 68 PASS), plus l'édition DOCX, l'annotation PDF et la réécriture par consigne libre. Phase actuelle : usage réel quotidien, le prochain chantier émergera de l'usage.
 
 ## Stack
 Tauri 2 + Svelte 5 + Vite (TypeScript) · CodeMirror 6 « live preview » · pdf.js · sidecar Ollama (`qwen2.5:1.5b-instruct-q4_0`) · hôte Rust minimal (ADR-0004). Décisions : `docs/adr/` (16 ADR).

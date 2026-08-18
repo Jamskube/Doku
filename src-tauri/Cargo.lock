@@ -770,7 +770,7 @@ dependencies = [
 
 [[package]]
 name = "doku"
-version = "2.2.0"
+version = "3.0.0"
 dependencies = [
  "base64 0.22.1",
  "futures-util",
