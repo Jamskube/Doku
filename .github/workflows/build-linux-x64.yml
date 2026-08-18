@@ -64,12 +64,18 @@ jobs:
       # (ADR-0025). `tauri.linux.conf.json` retire `externalBin` et la lib empaquetée.
       # APPIMAGE_EXTRACT_AND_RUN : les runners GitHub n'ont pas FUSE, sans quoi
       # l'outil d'empaquetage échoue au montage de sa propre image.
-      - name: Construire l'AppImage x64
+      # DEUX formats, pour deux publics :
+      #  - .deb : ne transporte AUCUNE bibliothèque système, il les DÉCLARE. C'est le seul
+      #    qui fonctionne sur une distribution dont la pile graphique diffère de celle du
+      #    runner (vécu : l'AppImage embarque le GTK/Mesa d'Ubuntu via
+      #    linuxdeploy-plugin-gtk, et GDK abandonne sur « EGL_BAD_PARAMETER » chez Arch).
+      #  - .AppImage : pratique là où elle marche, un fichier et rien à installer.
+      - name: Construire les paquets x64
         env:
           APPIMAGE_EXTRACT_AND_RUN: 1
-        run: npm run tauri build -- --target x86_64-unknown-linux-gnu --bundles appimage
+        run: npm run tauri build -- --target x86_64-unknown-linux-gnu --bundles appimage,deb
 
-      - name: Vérifier l'AppImage et produire le SHA-256
+      - name: Vérifier les paquets et produire les SHA-256
         run: |
           set -euo pipefail
           root="src-tauri/target/x86_64-unknown-linux-gnu/release"
@@ -87,15 +93,24 @@ jobs:
           test -x "$workdir/squashfs-root/usr/bin/doku" \
             || { echo "L'AppImage ne contient pas l'exécutable attendu" >&2; exit 1; }
 
-          sha256sum "$appimage" | sed "s| .*/| |" > "$root/bundle/appimage/SHA256SUMS.txt"
-          cat "$root/bundle/appimage/SHA256SUMS.txt"
+          deb=$(find "$root/bundle/deb" -name '*.deb' | head -n 1)
+          if [ -z "$deb" ]; then echo ".deb introuvable" >&2; exit 1; fi
 
-      - name: Publier l'AppImage x64
+          # Le .deb ne doit embarquer AUCUNE pile graphique : c'est toute sa raison d'être
+          # ici. S'il en contenait une, il aurait le défaut qu'on cherche à fuir.
+          if bsdtar -tf "$deb" 2>/dev/null | grep -qiE 'libEGL|libgbm|libGL.so'; then
+            echo "Le .deb embarque une pile graphique — il perd son intérêt" >&2; exit 1
+          fi
+
+          mkdir -p "$root/bundle/publish"
+          cp "$appimage" "$deb" "$root/bundle/publish/"
+          (cd "$root/bundle/publish" && sha256sum ./* > SHA256SUMS.txt && cat SHA256SUMS.txt)
+
+      - name: Publier les paquets x64
         uses: actions/upload-artifact@v7
         with:
           name: Doku-${{ github.ref_name }}-linux-x64
           path: |
-            src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/appimage/*.AppImage
-            src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/appimage/SHA256SUMS.txt
+            src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/publish/*
           if-no-files-found: error
           retention-days: 14

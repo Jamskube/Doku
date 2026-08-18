@@ -39,6 +39,7 @@ Doku — petite application pour **ouvrir, lire et éditer des fichiers Markdown
 | `scripts/` | Outillage de build manuel (subset d'icônes) — sorties committées |
 | `docs/` | Documentation (planning, adr, design, sprints, journal, plans, autopilot, archives) |
 | `public/` | Assets statiques servis tels quels par Vite |
+| `packaging/` | Recettes d'empaquetage hors CI (PKGBUILD Arch) |
 | `.github/workflows/` | Chaînes de construction CI : `Build Windows x64`, `Build Linux x64` (AppImage) |
 
 ## Patterns

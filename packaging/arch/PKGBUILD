@@ -1,0 +1,37 @@
+# Maintainer: Kubo <aimaster@soundnodes.com>
+#
+# Paquet Arch de Doku à partir du .deb produit par la CI.
+#
+# Pourquoi pas l'AppImage : elle embarque le GTK et le Mesa d'Ubuntu
+# (linuxdeploy-plugin-gtk), et cette pile ne sait pas énumérer les pilotes d'Arch —
+# GDK abandonne au démarrage sur « Could not create default EGL display:
+# EGL_BAD_PARAMETER ». Le .deb, lui, ne transporte aucune bibliothèque système : il les
+# déclare. On les reprend ici en `depends`, servies par pacman, à jour et cohérentes
+# avec le reste du système. Même raisonnement que pour Ollama (ADR-0025).
+
+pkgname=doku-bin
+pkgver=3.0.0
+pkgrel=1
+pkgdesc="Lecteur-éditeur de documents (Markdown, DOCX, PDF) avec copilote IA local"
+arch=('x86_64')
+url="https://github.com/Jamskube/Doku"
+license=('AGPL-3.0-or-later')
+depends=('webkit2gtk-4.1' 'gtk3' 'libsoup3' 'openssl')
+optdepends=('ollama: copilote IA local')
+provides=('doku')
+conflicts=('doku')
+options=('!strip')
+
+# Le .deb n'est pas publié en release : on le récupère dans l'artefact du workflow
+# « Build Linux x64 » et on le pose à côté de ce PKGBUILD.
+source=("Doku_${pkgver}_amd64.deb")
+sha256sums=('SKIP')
+
+package() {
+  # Un .deb est une archive `ar` contenant data.tar.* — bsdtar lit les deux directement.
+  bsdtar -xf "Doku_${pkgver}_amd64.deb" -O data.tar.gz | bsdtar -xf - -C "$pkgdir"
+
+  # Le .deb dépose son propre fichier de licence ; celui du paquet Arch va ailleurs.
+  install -Dm644 "$pkgdir/usr/share/doc/doku/copyright" \
+    "$pkgdir/usr/share/licenses/$pkgname/LICENSE" 2>/dev/null || true
+}

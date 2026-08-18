@@ -51,12 +51,21 @@ npm run build:installer:arm64
 npm run build:installer:x64
 ```
 
-**Linux** — AppImage, **CI only**: Tauri links against WebKitGTK, which does not cross-compile from Windows. Run the *Build Linux x64* workflow (`workflow_dispatch`, or push a `v*` tag) and download the artifact.
+**Linux** — **CI only**: Tauri links against WebKitGTK, which does not cross-compile from Windows. Run the *Build Linux x64* workflow (`workflow_dispatch`, or push a `v*` tag) and download the artifact. It contains two formats.
+
+`.deb` — **the one to use on Arch and anything that is not Ubuntu-shaped.** It declares its system libraries instead of carrying them:
 
 ```bash
-chmod +x Doku_3.0.0_amd64.AppImage
-./Doku_3.0.0_amd64.AppImage
+cd packaging/arch && makepkg -si    # Arch: builds doku-bin from the .deb
 ```
+
+`.AppImage` — one file, nothing to install, convenient where it works (Ubuntu and derivatives):
+
+```bash
+chmod +x Doku_3.0.0_amd64.AppImage && ./Doku_3.0.0_amd64.AppImage
+```
+
+> The AppImage bundles the runner's GTK **and Mesa** stack, which cannot enumerate another distribution's drivers — on Arch, GDK aborts with `EGL_BAD_PARAMETER` before a window ever opens, and no `WEBKIT_*` variable helps because the failure sits below WebKit. See [`packaging/`](packaging/).
 
 Two deliberate differences on Linux ([ADR-0025](docs/adr/0025-distribution-linux-appimage.md)): Doku launches the **system** Ollama (`pacman -S ollama`, `apt install ollama`) instead of shipping a 1.4 GB sidecar to duplicate what your package manager already does better — and secrets go to the session Secret Service (GNOME Keyring, KWallet, KeePassXC) rather than the Windows vault.
 
@@ -72,6 +81,7 @@ A *Build Windows x64* workflow produces the x64 installer with its SHA-256 the s
 | `scripts/` | Hand-run build tooling (icon subsetting) — outputs are committed |
 | `spike/` | Preserved experiments (WYSIWYG S0, RAG 15.1, NPU 17.1) |
 | `public/` | Static assets served as-is by Vite |
+| `packaging/` | Distro packaging recipes not produced by CI (Arch `PKGBUILD`) |
 | `.github/workflows/` | Windows x64 and Linux x64 build pipelines |
 
 ## Documentation
