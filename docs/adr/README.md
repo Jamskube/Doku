@@ -27,3 +27,5 @@ Registre des décisions d'architecture. Une décision par fichier ; on ne suppri
 | [0021](./0021-citations-markdown-portables.md) | Citations Markdown portables avec ancrage Doku facultatif | accepted | 2026-08-13 | notes, citations, markdown, sécurité, portabilité |
 | [0022](./0022-ecriture-pdf-pdf-lib.md) | Écriture PDF : `@cantoo/pdf-lib`, export non destructif — édition de texte refusée | accepted | 2026-08-15 | pdf, écriture, pdf-lib, annotations, formulaires, licence, arm64 |
 | [0023](./0023-licence-agpl.md) | Licence : AGPL-3.0-or-later | accepted | 2026-08-15 | licence, agpl, docx, pdf, distribution, stratégie |
+| [0024](./0024-correction-pdf-assistee-par-le-modele.md) | Correction de PDF par consigne — construite, puis masquée | accepted (mise en œuvre suspendue) | 2026-08-17 | pdf, ia, cloud, édition, chantier-en-pause |
+| [0025](./0025-distribution-linux-appimage.md) | Distribution Linux : AppImage, et l'Ollama de la distribution | accepted | 2026-08-18 | distribution, linux, appimage, ollama, sidecar, ci |

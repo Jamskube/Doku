@@ -129,6 +129,20 @@ impl OllamaState {
     }
 }
 
+#[cfg(windows)]
+fn spawn_error<E: std::fmt::Display>(error: E) -> String {
+    error.to_string()
+}
+
+// Hors Windows, Doku ne transporte pas Ollama : il lance celui du système. L'échec le
+// plus probable n'y est donc pas un bug mais une ABSENCE, et « No such file or
+// directory » ne dit ni laquelle ni quoi faire.
+#[cfg(not(windows))]
+fn spawn_error<E: std::fmt::Display>(_error: E) -> String {
+    "Ollama est introuvable sur le système. Installez-le avec le gestionnaire de paquets de votre distribution (Arch : « sudo pacman -S ollama »), puis relancez le moteur."
+        .to_string()
+}
+
 // Démarre `ollama serve` en sidecar (idempotent). Port éphémère, modèles isolés, cloud coupé
 // (8.3), et l'enfant est rattaché au Job Object pour un kill d'arbre garanti.
 #[tauri::command]
@@ -150,29 +164,36 @@ pub async fn start_ollama(
     // Où Ollama trouve lib/ollama (llama-server.exe + DLLs ggml), chargé relativement à ce
     // chemin. DEV : le sidecar tourne depuis target/debug → on pointe vers src-tauri/binaries
     // (la lib réelle y est extraite). RELEASE : bundle.resources copie lib/ollama sous
-    // resource_dir() (à côté de l'exe empaqueté).
+    // resource_dir() (à côté de l'exe empaqueté). Windows seulement : ailleurs, c'est
+    // l'Ollama de la distribution qui connaît ses propres bibliothèques.
+    #[cfg(windows)]
     let lib_base = if cfg!(debug_assertions) {
         std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("binaries")
     } else {
         app.path().resource_dir().map_err(|e| e.to_string())?
     };
 
-    let (mut rx, child) = app
-        .shell()
-        .sidecar("ollama")
-        .map_err(|e| e.to_string())?
+    // Windows : le sidecar empaqueté — Ollama n'y est pas installable en une commande, et
+    // Doku doit fonctionner sans que l'utilisateur ait rien à installer.
+    // Ailleurs : l'Ollama du système, sur le PATH (`pacman -S ollama`, `apt install
+    // ollama`…). Empaqueter 1,4 Go d'archive pour dupliquer ce que le gestionnaire de
+    // paquets fait mieux, et met à jour tout seul, n'aurait aucun sens.
+    #[cfg(windows)]
+    let command = app.shell().sidecar("ollama").map_err(|e| e.to_string())?;
+    #[cfg(not(windows))]
+    let command = app.shell().command("ollama");
+
+    let command = command
         .args(["serve"])
         .env("OLLAMA_HOST", format!("127.0.0.1:{port}"))
         .env("OLLAMA_MODELS", models.to_string_lossy().to_string())
-        .env(
-            "OLLAMA_LIBRARY_PATH",
-            lib_base.to_string_lossy().to_string(),
-        )
         .env("OLLAMA_NO_CLOUD", "1") // coupe le poll model_recommendations -> ollama.com (8.3)
         .env("OLLAMA_REMOTES", "127.0.0.1") // ceinture : neutralise l'allow-list distante
-        .env("OLLAMA_ORIGINS", "http://tauri.localhost")
-        .spawn()
-        .map_err(|e| e.to_string())?;
+        .env("OLLAMA_ORIGINS", "http://tauri.localhost");
+    #[cfg(windows)]
+    let command = command.env("OLLAMA_LIBRARY_PATH", lib_base.to_string_lossy().to_string());
+
+    let (mut rx, child) = command.spawn().map_err(spawn_error)?;
 
     // Draine les événements : stderr = diagnostic n°1 (binaire ARM64 invalide, port pris) ;
     // Terminated distingue « sorti » de « lent à répondre » ET auto-répare l'état : si le

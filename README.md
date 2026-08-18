@@ -19,6 +19,16 @@ npm run build:installer:arm64  # installateur NSIS ARM64
 npm run build:installer:x64    # installateur NSIS Intel/AMD x64
 ```
 
+## Linux (AppImage)
+Construite en CI seulement — WebKitGTK ne se cross-compile pas depuis Windows. Lancer le
+workflow **Build Linux x64** (`workflow_dispatch` ou tag `v*`), récupérer l'artefact,
+`chmod +x` et exécuter : aucune installation.
+
+Deux différences avec Windows, voir [ADR-0025](docs/adr/0025-distribution-linux-appimage.md) :
+Doku lance l'**Ollama du système** (`sudo pacman -S ollama`, `apt install ollama`…) plutôt
+qu'un sidecar empaqueté, et le **copilote cloud est indisponible** — le stockage protégé des
+clés n'a pas encore de dorsal Linux.
+
 Le build x64 automatisé est aussi disponible dans GitHub Actions via le workflow
 `Build Windows x64`. Il publie un artefact contenant l'installateur et son SHA-256.
 
