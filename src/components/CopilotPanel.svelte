@@ -5,6 +5,7 @@
   import { formatBytes } from '../lib/ollama'
   import { addCopilotContext, beginOpenAiAuth, cancelOpenAiConnection, cancelPull, connectMinimax, copilot, disconnectMinimaxKey, disconnectOpenAiAccount, ensureCopilotReady, isEmbedModel, jumpToCitation, newChat as clearChat, pullModel, refreshMinimaxStatus, refreshModels, refreshOpenAiStatus, removeCopilotContext, removeModel, retryGeneration, saveMessageAsNote, sendChat, setActiveModel, setCopilotContextFolder, setCopilotMemoryFolder, setCopilotProvider, stopChat, summarizeDoc, type ChatMsg } from '../lib/copilot.svelte'
   import { MINIMAX_DEFAULT_MODEL } from '../lib/compat'
+  import { vaultLabel, vaultShortLabel } from '../lib/platform'
   import { DEFAULT_EMBED_MODEL, FALLBACK_EMBED_MODEL, noteTitle } from '../lib/rag'
   import { cancelRagIndexing, deleteRagIndex, ragState, refreshRagIndex } from '../lib/rag-index.svelte'
   import { baseName, parentPath } from '../lib/explorer'
@@ -1346,7 +1347,7 @@
                   <small>
                     {copilot.openAiPreferredAvailable === false
                       ? 'Cet abonnement ne propose pas Luna dans Codex. Doku ne lancera aucune génération avec un autre modèle à votre insu.'
-                      : 'La session est protégée par Windows. Aucune clé API n’est demandée ni enregistrée.'}
+                      : `La session est protégée par ${vaultLabel()}. Aucune clé API n’est demandée ni enregistrée.`}
                   </small>
                 </span>
               </div>
@@ -1381,7 +1382,7 @@
                 <ol>
                   <li><span class="msr">key_off</span><p><strong>Aucune clé API</strong><small>Doku ne vous demandera jamais d’en créer une.</small></p></li>
                   <li><span class="msr">verified_user</span><p><strong>Validation par OpenAI</strong><small>Votre mot de passe ne transite jamais par Doku.</small></p></li>
-                  <li><span class="msr">lock</span><p><strong>Session protégée</strong><small>Les jetons restent dans le coffre Windows.</small></p></li>
+                  <li><span class="msr">lock</span><p><strong>Session protégée</strong><small>Les jetons restent dans {vaultLabel()}.</small></p></li>
                 </ol>
                 <button class="cop-btn-fill" onclick={() => void beginOpenAiAuth()} disabled={copilot.openAiAuthPhase === 'starting'}>
                   <span class="msr">login</span>{copilot.openAiAuthPhase === 'starting' ? 'Connexion…' : 'Se connecter avec OpenAI'}
@@ -1426,7 +1427,7 @@
                 <span class="msr">verified_user</span>
                 <span>
                   <strong>Clé MiniMax connectée</strong>
-                  <small>La clé est protégée par Windows — elle n'apparaît jamais dans les réglages ni dans les fichiers de Doku.</small>
+                  <small>La clé est protégée par {vaultLabel()} — elle n'apparaît jamais dans les réglages ni dans les fichiers de Doku.</small>
                 </span>
               </div>
               {#if copilot.minimaxStatus.error}
@@ -1445,7 +1446,7 @@
                 </p>
                 <ol>
                   <li><span class="msr">verified_user</span><p><strong>Vérifiée avant stockage</strong><small>Clé invalide ou réseau en panne : rien n’est enregistré.</small></p></li>
-                  <li><span class="msr">lock</span><p><strong>Protégée par Windows</strong><small>La clé vit dans le coffre Windows, jamais dans les fichiers de Doku.</small></p></li>
+                  <li><span class="msr">lock</span><p><strong>Protégée par {vaultShortLabel()}</strong><small>La clé vit dans {vaultLabel()}, jamais dans les fichiers de Doku.</small></p></li>
                 </ol>
                 <form
                   class="cop-mm-connect"
