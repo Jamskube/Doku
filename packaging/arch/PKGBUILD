@@ -29,9 +29,12 @@ sha256sums=('SKIP')
 
 package() {
   # Un .deb est une archive `ar` contenant data.tar.* — bsdtar lit les deux directement.
+  # Contenu vérifié sur le paquet réellement produit : usr/bin/doku, les icônes, le
+  # .desktop et usr/lib/Doku/licenses. AUCUNE bibliothèque graphique — c'est tout
+  # l'intérêt de passer par le .deb plutôt que par l'AppImage (voir ../README.md).
   bsdtar -xf "Doku_${pkgver}_amd64.deb" -O data.tar.gz | bsdtar -xf - -C "$pkgdir"
-
-  # Le .deb dépose son propre fichier de licence ; celui du paquet Arch va ailleurs.
-  install -Dm644 "$pkgdir/usr/share/doc/doku/copyright" \
-    "$pkgdir/usr/share/licenses/$pkgname/LICENSE" 2>/dev/null || true
 }
+
+# Pas de fichier de licence à installer : AGPL-3.0 fait partie des licences communes
+# d'Arch (/usr/share/licenses/common/AGPL3), et celles des dépendances voyagent déjà
+# dans usr/lib/Doku/licenses.
