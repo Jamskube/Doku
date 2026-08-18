@@ -1,36 +1,36 @@
 # Next session pointer
-_Updated: 2026-08-18 11:05_
+_Updated: 2026-08-18 16:30_
 
 ## Where I left off
-Journée en quatre temps, tous terminés : **v3.0.0** (installateurs Windows ARM64 et x64 reconstruits), **MiniMax rendu rapide** — c'était une asymétrie de Doku, pas une lenteur du fournisseur —, **ouverture à Linux** (AppImage construite en CI du premier coup, plus le coffre de secrets multiplateforme qui débloque le copilote cloud), et un **passage de documentation** qui remet le README en anglais et le reste d'aplomb.
+**La v3 est propre et complète.** Journée en sept temps : passage en v3.0.0, MiniMax rendu rapide, ouverture de Doku à Linux (AppImage → `.deb` → vrai paquet pacman), premier lancement réel chez un collègue sous Arch et la cascade de correctifs qu'il a déclenchée, README remis en anglais, une tentative ratée puis annulée sur la sélection de texte, et trois emprunts à Okular (signature, présentation, sélection de zone).
 
-8 commits, **tous poussés**. 815 tests front, 9 tests Rust, 0 erreur de type. Rien en attente, aucune PR.
+**24 commits, tous poussés.** 842 tests front, 9 tests Rust, 0 erreur de type. Trois installateurs construits et vérifiés.
 
 ## Open work
 - Branche : `main` — propre, **à jour avec `origin/main`**
 - PR ouvertes : aucune
-- Artefacts prêts :
-  - `src-tauri/target/{aarch64,x86_64}-pc-windows-msvc/release/bundle/nsis/Doku_3.0.0_*-setup.exe`
-  - `dist-linux/Doku_3.0.0_amd64.AppImage` (87 Mo, empreinte vérifiée) — dossier ignoré par git
-- Plans : `docs/plans/` (8 plans, tous exécutés ou clos) · `docs/planning/feasibility-pdf-edition.md` — palier 4 (formulaires AcroForm) toujours non commencé
+- Artefacts prêts (dossiers ignorés par git) :
+  - `src-tauri/target/aarch64-pc-windows-msvc/release/bundle/nsis/Doku_3.0.0_arm64-setup.exe` — `cc1261e3…`
+  - `src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/Doku_3.0.0_x64-setup.exe` — `19e5c841…`
+  - `dist-arch/doku-3.0.0-1-x86_64.pkg.tar.zst` — `26f8ed47…`
 
-## Ce qui attend une vraie machine
-Deux choses sont **écrites, compilées, mais jamais exécutées** :
-
-1. **L'AppImage sur Arch.** La CI prouve qu'elle compile et qu'elle est bien formée ; elle n'ouvre aucune fenêtre. WebKitGTK sur Arch est souvent en avance sur ce qu'attend Tauri. Le collègue est le premier essai réel — récupérer ses messages d'erreur **tels quels**.
-2. **Le coffre de secrets Linux.** `keyring` compile et la caisse installe son magasin toute seule (vérifié dans son code source), mais **rien n'a jamais échangé un mot avec un vrai Secret Service**. Premier contact = première connexion cloud chez lui.
-
-Et toujours : **rien n'a jamais tourné en natif sur la Surface** hors des installateurs fraîchement posés. Le parcours DOCX de bout en bout (ouvrir un `.docx`, bulle de format, question au copilote, enregistrer, exporter en PDF) reste le maillon jamais exercé hors navigateur.
+## Ce qui attend un usage réel
+1. **Les trois emprunts à Okular chez le collègue Arch.** Signature, présentation et surtout **sélection de zone** n'ont été validés que sur Windows. La CI prouve que le paquet s'installe et que ses bibliothèques se résolvent — pas que l'outil se comporte bien.
+2. **La sélection de lecture reste imparfaite** — « ça demande un peu de dextérité ». Le recadrage au pointeur aide sur le dépassement de marge (cas 3, celui qui gênait le plus), mais le fond n'est pas résolu. Tout est dans `docs/planning/feasibility-selection-pdf-et-okular.md` : ce qui a été essayé, pourquoi ça a échoué, et la voie Okular (calculer la sélection sur la géométrie, sans DOM). **Le module `pdf-area-text.ts` prouve que cette voie fonctionne** — c'est le même calcul, appliqué à un rectangle plutôt qu'à un glisser.
+3. **Le parcours DOCX en natif** n'a toujours jamais été exercé hors navigateur.
 
 ## À trancher par toi
-1. **Le modèle MiniMax par défaut est `MiniMax-M2.5`** (`src/lib/compat.ts:10`) — un modèle dont la réflexion **ne peut pas être coupée** : le correctif d'aujourd'hui ne vaut que pour M3. Un nouvel utilisateur atterrit donc sur le modèle lent. Passer le défaut à `MiniMax-M3` serait cohérent, mais c'est un choix produit.
-2. **La réflexion est coupée pour la conversation aussi**, pas seulement pour les appels internes. C'est ce qui rend M3 vif ; on y perd de la profondeur sur les questions difficiles. Un `"disabled"` à passer en `"adaptive"` dans `chat_body` (`src-tauri/src/compat.rs`) si l'arbitrage change — dis-le et j'en fais un réglage plutôt qu'une constante.
-3. **Les ~100 modes de langage CodeMirror — 416 Ko d'installateur.** Toujours en attente de ta liste de langages à garder.
-4. **Un dossier `tmp/pdfs` vide traîne à la racine** — ni suivi ni vu par git, donc inoffensif ; à supprimer si tu veux la racine nette.
+1. **Le modèle MiniMax par défaut est `MiniMax-M2.5`** (`src/lib/compat.ts:10`) — un modèle dont la réflexion **ne peut pas** être coupée : le correctif de vitesse ne vaut que pour M3. Un nouvel utilisateur atterrit sur le modèle lent. Passer le défaut à `MiniMax-M3` serait cohérent, mais c'est un choix produit.
+2. **La réflexion est coupée pour la conversation aussi.** C'est ce qui rend M3 vif ; on y perd de la profondeur sur les questions difficiles. `"disabled"` → `"adaptive"` dans `chat_body` (`src-tauri/src/compat.rs`) si l'arbitrage change.
+3. **Au doigt, le défilement est bloqué en mode sélection de zone** (le calque doit capter le glisser). On pourrait réserver le tracé au stylet et à la souris.
+4. **Les ~100 modes de langage CodeMirror — 416 Ko d'installateur.** Toujours en attente de ta liste.
+5. **Un guide des raccourcis** — évoqué en retirant le bouton du mode présentation.
 
-## Rappels d'outillage (deux pièges vécus aujourd'hui)
-- **Les installateurs se construisent depuis PowerShell**, jamais depuis Git Bash : `prepare-ollama-sidecar.mjs` exige le `tar.exe` de Windows (bsdtar), le GNU tar de Git Bash ne lit pas les zip. Et un `| tail` derrière la commande **masque le code de sortie** — l'échec passe inaperçu.
-- **L'AppImage se déclenche** par `gh workflow run "Build Linux x64" --ref main`, puis `gh run download <id> -n Doku-main-linux-x64`.
+## Pièges d'outillage (tous vécus aujourd'hui)
+- **Les installateurs Windows se construisent depuis PowerShell**, jamais Git Bash : `prepare-ollama-sidecar.mjs` exige le `tar.exe` de Windows. Et un `| tail` derrière la commande **masque le code de sortie**.
+- **Arrêter une tâche qui pilote `npm` ne tue pas le processus** : vérifier le port 1420 après coup.
+- **Les heredocs bash cassent sur ce dépôt** (backticks, accents, `${}` dans le contenu) — préférer l'écriture directe de fichier pour tout patch non trivial.
+- **CI Arch** : `gh workflow run "Build Arch x64" --ref main`, puis `gh run download <id> -n Doku-main-arch-x64`.
 
 ## Next concrete step
-Envoyer `dist-linux/Doku_3.0.0_amd64.AppImage` au collègue sous Arch et **le regarder la lancer** : c'est le seul moyen de savoir si l'ouverture à Linux tient debout, et les deux inconnues qui restent (WebKitGTK, Secret Service) se révèlent toutes les deux dans les trente premières secondes d'usage.
+Envoyer `dist-arch/doku-3.0.0-1-x86_64.pkg.tar.zst` au collègue et lui faire tester **la sélection de zone** — c'est la nouveauté la plus riche, la seule jamais exercée hors Windows, et celle qui répond à la gêne d'origine sur la précision de sélection.
