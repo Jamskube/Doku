@@ -10,7 +10,7 @@ import { classifyExternalChange } from './reload'
 import { makeSearchDoc, searchDocs, type SearchDoc, type SearchResult } from './search'
 import { snapshotKey, type SnapshotInfo } from './snapshot'
 import { canonicalPathKey, runSaveAs, type TextSaveSnapshot } from './save-as'
-import { buildSession, parseSession, restoreWorkspace } from './session'
+import { buildSession, buildWorkspacePathSnapshot, parseSession, parseWorkspacePathSnapshot, restoreWorkspace, type WorkspacePathSnapshot } from './session'
 import { buildSearchIndex, confirmReplacePath, isTauri, listSnapshots, pathExistsAt, purgeAllSnapshots, readSnapshot, readTextFileAt, recordSnapshot, saveTextDialog, scanFiles, setAlwaysOnTop, syncSystemBackdrop, writeTextFileAtomic } from './tauri'
 import { normalizeTarget, wikilinkCandidates, wikilinkFileName } from './wikilink'
 import { clampCopilotWidth, COPILOT_DEFAULT_WIDTH } from './copilot-width'
@@ -34,7 +34,7 @@ export const docxActions = $state({
   dirty: false,
 })
 
-export type SidebarView = 'files' | 'plan' | 'history' | 'search'
+export type SidebarView = 'files' | 'plan' | 'history' | 'search' | 'discussions'
 // Vue interne du panneau copilote droit (14.0). Transitoire : boot toujours en
 // 'chat' (coquille statique, ne démarre PAS le moteur) ; 'models' déclenche
 // ensureReady à l'ouverture (intention explicite) — évite un spawn Ollama au boot.
@@ -257,6 +257,110 @@ export function visibleTabs(): DocTab[] {
   })
 }
 
+export interface OpenableDocumentCandidate {
+  path: string
+  name: string
+  kind: DocKind
+  content: string
+  existingTabId: number | null
+  dirty: boolean
+}
+
+export interface WorkspaceRestoreResult {
+  missing: string[]
+  dirtyUsed: string[]
+  restoredPaths: string[]
+}
+
+export interface PreparedWorkspaceRestore {
+  snapshot: WorkspacePathSnapshot
+  candidates: OpenableDocumentCandidate[]
+  missing: string[]
+  dirtyUsed: string[]
+}
+
+export function captureWorkspacePathSnapshot(): WorkspacePathSnapshot {
+  return buildWorkspacePathSnapshot(workspace, (tabId) => app.tabs.find((tab) => tab.id === tabId)?.path ?? null)
+}
+
+// Prépare un document sans toucher au bureau. La phase de commit n'arrive qu'après que
+// TOUS les chemins ont été lus : aucun demi-bureau n'est visible pendant une reprise.
+export async function readOpenableDocument(path: string): Promise<OpenableDocumentCandidate | null> {
+  const key = canonicalPathKey(path)
+  const existing = app.tabs.find((tab) => tab.path && canonicalPathKey(tab.path) === key)
+  if (existing) {
+    return {
+      path,
+      name: existing.name,
+      kind: existing.kind,
+      content: existing.content,
+      existingTabId: existing.id,
+      dirty: isDirty(existing),
+    }
+  }
+  const name = baseName(path)
+  const kind = kindFromName(name)
+  if (isBinaryKind(kind)) {
+    if (!(await pathExistsAt(path))) return null
+    return { path, name, kind, content: '', existingTabId: null, dirty: false }
+  }
+  let content: string | null
+  try { content = await readTextFileAt(path) } catch { return null }
+  if (content == null || detectUnsupported(content, name)) return null
+  return { path, name, kind, content, existingTabId: null, dirty: false }
+}
+
+export async function prepareWorkspacePathSnapshot(value: WorkspacePathSnapshot): Promise<PreparedWorkspaceRestore> {
+  const snapshot = parseWorkspacePathSnapshot(value)
+  const requested = [snapshot.primaryPath, snapshot.secondaryPath].filter((path): path is string => Boolean(path))
+  const prepared = await Promise.all(requested.map(async (path) => ({ path, candidate: await readOpenableDocument(path) })))
+  return {
+    snapshot,
+    candidates: prepared.flatMap(({ candidate }) => candidate ? [candidate] : []),
+    missing: prepared.filter((entry) => !entry.candidate).map((entry) => entry.path),
+    dirtyUsed: prepared.filter((entry) => entry.candidate?.dirty).map((entry) => entry.path),
+  }
+}
+
+export function commitPreparedWorkspaceRestore(prepared: PreparedWorkspaceRestore): WorkspaceRestoreResult {
+  const { snapshot, candidates, missing, dirtyUsed } = prepared
+  const byKey = new Map(candidates.map((candidate) => [canonicalPathKey(candidate.path), candidate] as const))
+
+  // Mutation synchrone : Svelte ne peint qu'après le bloc, les assignations intermédiaires
+  // d'openTab ne deviennent donc jamais un état visible.
+  const tabId = (path: string | null): number | null => {
+    if (!path) return null
+    const candidate = byKey.get(canonicalPathKey(path))
+    if (!candidate) return null
+    if (candidate.existingTabId != null) return candidate.existingTabId
+    return openTab(candidate.name, candidate.path, candidate.content, candidate.kind).id
+  }
+  let primary = tabId(snapshot.primaryPath)
+  let secondary = tabId(snapshot.secondaryPath)
+  if (primary == null && secondary != null) {
+    primary = secondary
+    secondary = null
+  }
+  const next = createWorkspaceState(primary)
+  next.ratio = snapshot.ratio
+  next.secondary.tabId = secondary !== primary ? secondary : null
+  next.split = snapshot.split && next.secondary.tabId != null
+  next.activePaneId = next.split && snapshot.activePaneId === 'secondary' ? 'secondary' : 'primary'
+  applyWorkspaceState(next)
+
+  return {
+    missing,
+    dirtyUsed,
+    restoredPaths: [snapshot.primaryPath, snapshot.secondaryPath]
+      .filter((path): path is string => path !== null)
+      .filter((path) => byKey.has(canonicalPathKey(path))),
+  }
+}
+
+export async function restoreWorkspacePathSnapshot(value: WorkspacePathSnapshot): Promise<WorkspaceRestoreResult> {
+  return commitPreparedWorkspaceRestore(await prepareWorkspacePathSnapshot(value))
+}
+
 const SETTINGS_KEY = 'doku-settings'
 
 // Préférences persistées (thème, état sidebar) — localStorage, survit aux
@@ -268,7 +372,7 @@ export function loadSettings() {
       const s = JSON.parse(raw)
       if (s.theme === 'dark' || s.theme === 'light') app.theme = s.theme
       if (typeof s.sidebarOpen === 'boolean') app.sidebarOpen = s.sidebarOpen
-      if (s.sidebarView === 'files' || s.sidebarView === 'plan' || s.sidebarView === 'history' || s.sidebarView === 'search') {
+      if (s.sidebarView === 'files' || s.sidebarView === 'plan' || s.sidebarView === 'history' || s.sidebarView === 'search' || s.sidebarView === 'discussions') {
         app.sidebarView = s.sidebarView
       }
       if (s.columnWidth === 'narrow' || s.columnWidth === 'wide' || s.columnWidth === 'full') {
@@ -416,11 +520,17 @@ export async function restoreSession() {
   sessionReady = true
 }
 
-export function initApp() {
+let appReadyPromise: Promise<void> = Promise.resolve()
+
+export function waitForAppReady(): Promise<void> {
+  return appReadyPromise
+}
+
+export function initApp(): Promise<void> {
   if (isTauri) {
-    void restoreSession()
+    appReadyPromise = restoreSession()
     void purgeAllSnapshots(Date.now()) // purge de démarrage de l'historique (ADR-0003)
-    return
+    return appReadyPromise
   }
   // Mode navigateur (design/dev) : contenu de démonstration.
   if (app.tabs.length === 0) {
@@ -429,6 +539,8 @@ export function initApp() {
     if (first) selectTab(first.id)
   }
   sessionReady = true
+  appReadyPromise = Promise.resolve()
+  return appReadyPromise
 }
 
 export function applyTheme() {

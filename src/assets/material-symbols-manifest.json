@@ -1,5 +1,6 @@
 [
   "add",
+  "archive",
   "arrow_back",
   "arrow_downward",
   "arrow_forward",
@@ -42,6 +43,7 @@
   "ellipse",
   "embed",
   "error",
+  "expand_less",
   "expand_more",
   "file_download",
   "folder",

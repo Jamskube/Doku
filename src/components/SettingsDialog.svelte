@@ -6,7 +6,7 @@
   import DokuMark from '../lib/DokuMark.svelte'
 
   type SettingsSection = 'appearance' | 'data' | 'about'
-  type Job = 'snapshots' | 'rag'
+  type Job = 'snapshots' | 'rag' | 'conversations'
 
   let dlg = $state<HTMLDialogElement | null>(null)
   let activeSection = $state<SettingsSection>('appearance')
@@ -72,9 +72,13 @@
         done = count === 0
           ? 'Aucun historique à supprimer.'
           : `Historique supprimé (${count} fichier${count > 1 ? 's' : ''}).`
-      } else {
+      } else if (job === 'rag') {
         await deleteAllRagIndexes()
         done = 'Index sémantique supprimé.'
+      } else {
+        const { purgeCopilotConversations } = await import('../lib/copilot.svelte')
+        await purgeCopilotConversations()
+        done = 'Discussions Doku-San supprimées.'
       }
     } catch {
       done = 'Suppression impossible. Un fichier est peut-être verrouillé.'
@@ -254,6 +258,27 @@
                     <button class="button secondary" disabled={!!running} onclick={() => (confirming = null)}>Annuler</button>
                   {:else}
                     <button class="button danger-quiet" disabled={!isTauri || !!running} onclick={() => (confirming = 'rag')}>
+                      Supprimer…
+                    </button>
+                  {/if}
+                </div>
+              </div>
+
+              <div class="data-row">
+                <span class="data-icon msr" aria-hidden="true">chat_bubble</span>
+                <div class="data-copy">
+                  <strong>Discussions Doku-San</strong>
+                  <small>Conversations, contexte associé et espace de documents à reprendre.</small>
+                </div>
+                <div class="row-actions">
+                  {#if confirming === 'conversations'}
+                    <span class="confirm-label">Supprimer ?</span>
+                    <button class="button danger" disabled={!!running} onclick={() => purge('conversations')}>
+                      {running === 'conversations' ? 'Suppression…' : 'Oui, supprimer'}
+                    </button>
+                    <button class="button secondary" disabled={!!running} onclick={() => (confirming = null)}>Annuler</button>
+                  {:else}
+                    <button class="button danger-quiet" disabled={!isTauri || !!running} onclick={() => (confirming = 'conversations')}>
                       Supprimer…
                     </button>
                   {/if}

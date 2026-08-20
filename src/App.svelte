@@ -108,7 +108,10 @@
   }
 
   onMount(() => {
-    initApp()
+    const appReady = initApp()
+    void appReady.then(() => import('./lib/copilot-conversations.svelte'))
+      .then(({ initConversations }) => initConversations())
+      .catch((error) => console.error('Chargement des discussions échoué', error))
 
     // Précharge le module du copilote à l'idle : au premier clic, le composant est déjà
     // en cache et l'ouverture (montage fermé → slide) est instantanée.
@@ -117,6 +120,21 @@
 
     let unlistenClose: (() => void) | null = null
     onWindowCloseRequested(async () => {
+      try {
+        const [{ flushActiveConversation }, { flushConversationWrites }] = await Promise.all([
+          import('./lib/copilot.svelte'),
+          import('./lib/copilot-conversations.svelte'),
+        ])
+        await flushActiveConversation()
+        await flushConversationWrites()
+      } catch (error) {
+        app.banner = {
+          tone: 'error',
+          title: 'Discussion non enregistrée',
+          message: error instanceof Error ? error.message : 'Doku n’a pas pu enregistrer la discussion avant de fermer.',
+        }
+        return false
+      }
       saveSession() // flush au quit (au-delà du débounce)
       const dirty = app.tabs.filter(isDirty)
       if (dirty.length === 0) return true

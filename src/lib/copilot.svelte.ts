@@ -6,13 +6,18 @@ import {
   activeTab,
   app,
   activeEditorView,
+  captureWorkspacePathSnapshot,
+  commitPreparedWorkspaceRestore,
   isCloudProvider,
   openPath,
+  prepareWorkspacePathSnapshot,
   refreshExplorer,
+  waitForAppReady,
   visibleTabs,
   type CopilotProvider,
   type DocKind,
 } from './stores.svelte'
+import type { WorkspacePathSnapshot } from './session'
 import {
   compatChat,
   compatGenerate,
@@ -32,7 +37,7 @@ import { isBinaryKind } from './doc-kind'
 import { setRephrasePreview } from './editor/rephrase-preview'
 import { baseName, joinPath, parentPath } from './explorer'
 import { noteContent, noteFileName } from './notes'
-import { createFileWithContent, isTauri } from './tauri'
+import { createFileWithContent, fileSizeAt, isTauri, readFileBytes, readTextFileAt } from './tauri'
 import { chunkText, DEFAULT_EMBED_MODEL, noteTitle, RAG_TOP_K } from './rag'
 import { cancelRagIndexing, ragState, searchDocEphemeral, searchRag, type RagHit } from './rag-index.svelte'
 import { chat, deleteModel, generate, listModels, pull, startOllama, waitReady, type OllamaModel } from './ollama'
@@ -94,6 +99,24 @@ import {
   type CopilotContextItem,
   type SentContextSource,
 } from './copilot-context'
+import { cleanContextLabel, contextItemId, truncateContextItem } from './copilot-context'
+import {
+  conversationHistoryWindow,
+  createConversationId,
+  historyBudget,
+  titleFromMessages,
+  type ConversationV1,
+  type PersistedChatMessage,
+  type PersistedContextItem,
+  type PersistedEvidence,
+} from './copilot-conversation'
+import {
+  conversations,
+  loadConversation,
+  persistConversation,
+  purgeConversations,
+  setActiveConversation,
+} from './copilot-conversations.svelte'
 import {
   memoryWorkspace,
   queueMemoryExtraction,
@@ -208,6 +231,13 @@ export const copilot = $state({
   minimaxChecking: false,
   minimaxConnecting: false,
   minimaxConnectError: '',
+  // Discussion durable active. Le brouillon reste `null` jusqu'au premier vrai tour.
+  conversationRevision: 0,
+  conversationCreatedAt: null as string | null,
+  conversationTitle: '',
+  conversationTitlePinned: false,
+  conversationWorkspace: null as WorkspacePathSnapshot | null,
+  historyOmitted: 0,
 })
 
 export function addCopilotContext(items: readonly CopilotContextItem[]): void {
@@ -251,6 +281,287 @@ export function setWebSearchEnabled(enabled: boolean): void {
   copilot.webSearchEnabled = enabled
   copilot.contextRevision++
   copilot.contextError = ''
+}
+
+function terminalState(message: ChatMsg): PersistedChatMessage['terminal'] {
+  if (message.failed) return 'failed'
+  if (message.notice || message.config) return 'notice'
+  if (message.streaming) return 'interrupted'
+  return 'complete'
+}
+
+function persistedEvidence(message: ChatMsg): PersistedEvidence[] | undefined {
+  const evidence: PersistedEvidence[] = []
+  const seen = new Set<string>()
+  const add = (item: PersistedEvidence) => {
+    const key = `${item.kind}:${item.locator}:${item.hash ?? ''}`
+    if (seen.has(key)) return
+    seen.add(key)
+    evidence.push(item)
+  }
+  const cited = message.citedOnly ? new Set(message.cited ?? []) : null
+  for (const source of message.sources ?? []) {
+    if (cited && !cited.has(source.n)) continue
+    add({
+      kind: 'document',
+      locator: `${source.path ?? ''}#${source.n}`,
+      label: source.name ?? message.sourceLabel ?? 'Document',
+      snippet: source.text,
+      hash: null,
+    })
+  }
+  for (const source of message.webCitations ?? []) {
+    add({ kind: 'web', locator: source.url, label: source.title, snippet: source.snippet ?? '', hash: null })
+  }
+  for (const source of message.memorySources ?? []) {
+    add({ kind: 'memory', locator: source.id, label: source.name, snippet: source.content, hash: null })
+  }
+  for (const source of message.contextSources ?? []) {
+    add({ kind: 'context', locator: source.id, label: source.label, snippet: '', hash: null })
+  }
+  return evidence.length ? evidence : undefined
+}
+
+function persistChatMessage(message: ChatMsg): PersistedChatMessage {
+  return {
+    role: message.role,
+    content: message.content,
+    terminal: terminalState(message),
+    sourceLabel: message.sourceLabel,
+    evidence: persistedEvidence(message),
+    activity: message.activity?.map((activity) => ({
+      id: activity.id,
+      kind: activity.kind,
+      label: activity.label,
+      detail: activity.detail,
+      state: activity.state === 'error' ? 'error' : 'done',
+    })),
+    citedOnly: message.citedOnly,
+    cited: message.cited,
+    webSearch: message.webSearch,
+  }
+}
+
+function hydrateChatMessage(message: PersistedChatMessage): ChatMsg {
+  const documents = message.evidence?.filter((item) => item.kind === 'document') ?? []
+  const web = message.evidence?.filter((item) => item.kind === 'web') ?? []
+  const memory = message.evidence?.filter((item) => item.kind === 'memory') ?? []
+  const context = message.evidence?.filter((item) => item.kind === 'context') ?? []
+  return {
+    role: message.role,
+    content: message.content,
+    failed: message.terminal === 'failed' || undefined,
+    notice: message.terminal === 'notice' || undefined,
+    sourceLabel: message.sourceLabel,
+    sources: documents.map((item, index) => {
+      const marker = /#(\d+)$/.exec(item.locator)
+      return {
+        n: marker ? Number.parseInt(marker[1], 10) : index + 1,
+        path: item.locator.replace(/#\d+$/, '') || null,
+        name: item.label || null,
+        text: item.snippet,
+      }
+    }),
+    webCitations: web.map((item, index) => ({ n: index + 1, url: item.locator, title: item.label, snippet: item.snippet || undefined })),
+    memorySources: memory.map((item) => ({ id: item.locator, name: item.label, type: 'fact', content: item.snippet, updatedAt: new Date().toISOString() })),
+    contextSources: context.map((item) => ({
+      id: item.locator,
+      kind: 'file',
+      label: item.label,
+      originalChars: 0,
+      sentChars: 0,
+      truncatedAtLoad: false,
+      truncatedForRequest: false,
+      primary: false,
+    })),
+    activity: message.activity?.map((activity) => ({ ...activity })),
+    citedOnly: message.citedOnly,
+    cited: message.cited,
+    webSearch: message.webSearch,
+  }
+}
+
+function persistContextItem(item: CopilotContextItem): PersistedContextItem | null {
+  if (item.kind === 'file') {
+    if (!item.path) return null
+    return { kind: 'file', id: item.id, path: item.path, label: item.label, signature: item.signature ?? null }
+  }
+  return {
+    kind: item.kind,
+    id: item.id,
+    label: item.label,
+    text: item.text,
+    truncated: item.truncatedAtLoad,
+  }
+}
+
+async function hydrateContextItem(item: PersistedContextItem): Promise<CopilotContextItem | null> {
+  if (item.kind !== 'file') {
+    return {
+      id: item.id,
+      kind: item.kind,
+      label: item.label,
+      text: item.text,
+      charCount: item.text.length,
+      truncatedAtLoad: item.truncated,
+    }
+  }
+  const size = await fileSizeAt(item.path)
+  if (size == null) return null
+  let text: string | null = null
+  if (/\.pdf$/i.test(item.path)) {
+    if (size > 25 * 1024 * 1024) return null
+    const bytes = await readFileBytes(item.path)
+    if (!bytes) return null
+    const { extractPdfText } = await import('./pdf')
+    const extraction = await extractPdfText(bytes)
+    if (extraction.scanned) return null
+    text = extraction.text
+  } else {
+    if (size > 2 * 1024 * 1024) return null
+    text = await readTextFileAt(item.path)
+  }
+  if (text == null) return null
+  const bounded = truncateContextItem(text)
+  return {
+    id: contextItemId({ kind: 'file', path: item.path, text: '' }),
+    kind: 'file',
+    label: cleanContextLabel(item.label),
+    text: bounded.text,
+    charCount: text.length,
+    path: item.path,
+    signature: item.signature ?? undefined,
+    truncatedAtLoad: bounded.truncated,
+  }
+}
+
+function ensureConversationIdentity(): void {
+  if (!conversations.activeId) {
+    const id = createConversationId()
+    const now = new Date().toISOString()
+    setActiveConversation(id)
+    copilot.conversationCreatedAt = now
+    copilot.conversationRevision = 0
+    copilot.conversationTitle = ''
+    copilot.conversationTitlePinned = false
+  }
+  copilot.conversationWorkspace ??= captureWorkspacePathSnapshot()
+}
+
+function currentConversationRecord(): ConversationV1 | null {
+  const userMessages = copilot.messages.filter((message) => message.role === 'user' && message.content.trim())
+  if (!userMessages.length) return null
+  ensureConversationIdentity()
+  const now = new Date().toISOString()
+  const messages = copilot.messages.map(persistChatMessage)
+  const nextRevision = copilot.conversationRevision + 1
+  return {
+    version: 1,
+    id: conversations.activeId!,
+    revision: nextRevision,
+    title: copilot.conversationTitlePinned && copilot.conversationTitle
+      ? copilot.conversationTitle
+      : titleFromMessages(messages),
+    titlePinned: copilot.conversationTitlePinned,
+    createdAt: copilot.conversationCreatedAt ?? now,
+    updatedAt: now,
+    archived: false,
+    messages,
+    contextItems: copilot.contextItems.map(persistContextItem).filter((item): item is PersistedContextItem => item !== null),
+    scope: copilot.scope,
+    contextFolder: copilot.contextFolder ? { ...copilot.contextFolder } : null,
+    memoryFolder: copilot.memoryFolder ? { ...copilot.memoryFolder } : null,
+    webSearchEnabled: copilot.webSearchEnabled,
+    lastProvider: app.copilotProvider,
+    workspace: copilot.conversationWorkspace ?? captureWorkspacePathSnapshot(),
+  }
+}
+
+let persistTimer: ReturnType<typeof setTimeout> | undefined
+let switchQueue: Promise<unknown> = Promise.resolve()
+let restoreRevision = 0
+let conversationsPurging = false
+
+export async function flushActiveConversation(): Promise<void> {
+  if (conversationsPurging) return
+  clearTimeout(persistTimer)
+  persistTimer = undefined
+  const record = currentConversationRecord()
+  if (!record) return
+  const canonical = await persistConversation(record)
+  copilot.conversationRevision = canonical.revision
+  copilot.conversationCreatedAt = canonical.createdAt
+  copilot.conversationTitle = canonical.title
+  copilot.conversationTitlePinned = canonical.titlePinned
+}
+
+export function scheduleConversationPersist(delay = 500): void {
+  const id = conversations.activeId
+  clearTimeout(persistTimer)
+  persistTimer = setTimeout(() => {
+    if (conversations.restoring || (id && conversations.activeId !== id)) return
+    void flushActiveConversation().catch((error) => {
+      app.banner = {
+        tone: 'error',
+        title: 'Discussion non enregistrée',
+        message: error instanceof Error ? error.message : 'La discussion n’a pas pu être enregistrée.',
+      }
+    })
+  }, delay)
+}
+
+export async function resumeConversation(id: string): Promise<void> {
+  if (copilot.generating) {
+    app.banner = { tone: 'warning', title: 'Réponse en cours', message: 'Arrêtez la réponse avant de changer de discussion.' }
+    return
+  }
+  const requestedRevision = ++restoreRevision
+  const restore = async () => {
+    conversations.restoring = true
+    try {
+      await waitForAppReady()
+      await flushActiveConversation()
+      const record = await loadConversation(id)
+      const hydratedContext = (await Promise.all(record.contextItems.map(hydrateContextItem)))
+        .filter((item): item is CopilotContextItem => item !== null)
+      const preparedWorkspace = await prepareWorkspacePathSnapshot(record.workspace)
+      if (requestedRevision !== restoreRevision) return
+      const restored = commitPreparedWorkspaceRestore(preparedWorkspace)
+      copilot.messages = record.messages.map(hydrateChatMessage)
+      copilot.contextItems = hydratedContext
+      copilot.scope = record.scope
+      copilot.contextFolder = record.contextFolder ? { ...record.contextFolder } : null
+      copilot.memoryFolder = record.memoryFolder ? { ...record.memoryFolder } : null
+      copilot.webSearchEnabled = record.webSearchEnabled
+      copilot.contextRevision++
+      copilot.conversationRevision = record.revision
+      copilot.conversationCreatedAt = record.createdAt
+      copilot.conversationTitle = record.title
+      copilot.conversationTitlePinned = record.titlePinned
+      copilot.conversationWorkspace = { ...record.workspace }
+      copilot.historyOmitted = 0
+      setActiveConversation(record.id)
+      app.copilotView = 'chat'
+      app.copilotOpen = true
+      app.copilotExpanded = false
+      const details = [
+        restored.missing.length ? `${restored.missing.length} fichier(s) introuvable(s).` : '',
+        restored.dirtyUsed.length ? `${restored.dirtyUsed.length} version(s) non enregistrée(s) conservée(s).` : '',
+        hydratedContext.length < record.contextItems.length ? 'Certaines sources ponctuelles ne sont plus lisibles.' : '',
+      ].filter(Boolean).join(' ')
+      if (details) app.banner = { tone: 'warning', title: 'Discussion reprise avec ajustements', message: details }
+    } catch (error) {
+      app.banner = {
+        tone: 'error',
+        title: 'Reprise impossible',
+        message: error instanceof Error ? error.message : 'La discussion n’a pas pu être reprise.',
+      }
+    } finally {
+      conversations.restoring = false
+    }
+  }
+  switchQueue = switchQueue.then(restore, restore)
+  await switchQueue
 }
 
 let readyPromise: Promise<number | null> | null = null
@@ -839,18 +1150,8 @@ export async function sendChat(
   copilot.generating = true
   genController = new AbortController()
   const signal = genController.signal
-  // Historique = paires user→assistant RÉUSSIES uniquement (une question à réponse échouée
-  // ou vide est écartée → jamais deux tours `user` consécutifs envoyés à /api/chat).
-  const history: ChatTurn[] = []
-  for (let k = 0; k < copilot.messages.length; k++) {
-    const m = copilot.messages[k]
-    // `config` et `notice` écartés aussi : cartes/messages d'UI, pas des tours de dialogue.
-    if (m.role === 'assistant' && !m.failed && !m.config && !m.notice && m.content) {
-      const prev = copilot.messages[k - 1]
-      if (prev?.role === 'user') history.push({ role: 'user', content: prev.content })
-      history.push({ role: 'assistant', content: m.content })
-    }
-  }
+  ensureConversationIdentity()
+  copilot.conversationWorkspace = captureWorkspacePathSnapshot()
 
   copilot.messages.push({ role: 'user', content: q })
   // `status` couvre le démarrage moteur + le PREFILL (ingestion du doc, longue sur CPU) : sans
@@ -983,6 +1284,20 @@ export async function sendChat(
     let webCitations: WebCitation[] = []
     let wholeDoc = false
     let bundle: ContextBundle | null = null
+    const fixedChars = 12_000
+      + q.length
+      + (scope === 'doc' ? doc.text.length : 0)
+      + contextItems.reduce((sum, item) => sum + item.text.length, 0)
+      + recalledMemories.reduce((sum, item) => sum + item.name.length + item.content.length, 0)
+    const historyWindow = conversationHistoryWindow(
+      copilot.messages.slice(0, -2).map(persistChatMessage),
+      historyBudget(runtime.provider, fixedChars),
+    )
+    copilot.historyOmitted = historyWindow.omitted
+    const history: ChatTurn[] = historyWindow.messages.map((message) => ({
+      role: message.role,
+      content: message.content,
+    }))
     if (scope === 'folder') {
       const prep = await prepareFolderMessages(
         q, history, persona, runtime, signal, idx, contextItems,
@@ -1170,6 +1485,7 @@ export async function sendChat(
     }
     copilot.generating = false
     genController = null
+    scheduleConversationPersist(0)
   }
 }
 
@@ -1487,6 +1803,8 @@ export async function summarizeDoc(
   copilot.generating = true
   genController = new AbortController()
   const signal = genController.signal
+  ensureConversationIdentity()
+  copilot.conversationWorkspace = captureWorkspacePathSnapshot()
   // Extraits numérotés du résumé cité (single-fenêtre) — attachés au message en fin de
   // run, comme les sources du chat.
   let citedSources: CitedPassage[] | null = null
@@ -2023,9 +2341,10 @@ export async function saveMessageAsNote(msg: ChatMsg): Promise<string | null> {
   }
 }
 
-// Nouvelle conversation : annule d'abord une génération en cours, puis vide l'historique.
-export function newChat(): void {
-  genController?.abort()
+// Nouvelle conversation : la discussion courante doit être durable avant de rendre un
+// brouillon vide. Une génération en cours est arrêtée explicitement par son propre bouton.
+function resetConversationDraft(): void {
+  setActiveConversation(null)
   copilot.messages = []
   copilot.contextItems = []
   copilot.contextFolder = null
@@ -2033,6 +2352,45 @@ export function newChat(): void {
   copilot.contextRevision = 0
   copilot.webSearchEnabled = false
   copilot.scope = 'doc'
+  copilot.conversationRevision = 0
+  copilot.conversationCreatedAt = null
+  copilot.conversationTitle = ''
+  copilot.conversationTitlePinned = false
+  copilot.conversationWorkspace = null
+  copilot.historyOmitted = 0
+}
+
+export async function newChat(): Promise<boolean> {
+  if (copilot.generating) {
+    app.banner = { tone: 'warning', title: 'Réponse en cours', message: 'Arrêtez la réponse avant de démarrer une nouvelle discussion.' }
+    return false
+  }
+  try {
+    await flushActiveConversation()
+  } catch (error) {
+    app.banner = {
+      tone: 'error',
+      title: 'Discussion non enregistrée',
+      message: error instanceof Error ? error.message : 'La discussion actuelle n’a pas pu être enregistrée.',
+    }
+    return false
+  }
+  resetConversationDraft()
+  return true
+}
+
+export async function purgeCopilotConversations(): Promise<void> {
+  if (copilot.generating) throw new Error('Arrêtez la réponse avant de supprimer les discussions.')
+  conversationsPurging = true
+  restoreRevision++
+  clearTimeout(persistTimer)
+  persistTimer = undefined
+  try {
+    await purgeConversations()
+    resetConversationDraft()
+  } finally {
+    conversationsPurging = false
+  }
 }
 
 // Crochet DEV uniquement (vérifications navigateur/Playwright : injecter un message,

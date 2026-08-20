@@ -14,7 +14,7 @@ Frontend Svelte 5 de Doku : shell applicatif, éditeur Markdown *live preview*, 
 | File | Purpose |
 |---|---|
 | `TitleBar.svelte` | Barre 40 px : onglets, onglets de volets en mode scindé, menu compact, options et contrôles fenêtre |
-| `Sidebar.svelte` | Ruban d'icônes 46 px + panneau (Fichiers / Plan / Historique) ; repliée = 0 px |
+| `Sidebar.svelte` | Ruban d'icônes 46 px + panneau (Fichiers / Plan / Historique / Discussions) ; repliée = 0 px |
 | `WorkspaceView.svelte` | Orchestration du bureau simple/scindé, séparateur redimensionnable, orientation responsive |
 | `DocumentPane.svelte` | Enveloppe de volet : document actif, état vide, sélecteur local quand les volets sont empilés |
 | `PaneTabSelector.svelte` | Sélecteur compact partagé entre le header global et le volet secondaire |
@@ -26,6 +26,7 @@ Frontend Svelte 5 de Doku : shell applicatif, éditeur Markdown *live preview*, 
 | `PdfPagesDialog.svelte` | Modale « Organiser les pages » : vignettes paresseuses, glisser-déposer, insertion d'un autre PDF |
 | `PdfTextEditDialog.svelte` | Modale d'édition du texte d'une page PDF (la correction par consigne y est **masquée**, voir ADR-0024) |
 | `CopilotPanel.svelte` | Chat Doku-San : fournisseurs, composeur Question/Contexte, mémoire cloud, citations cliquables |
+| `CopilotConversationList.svelte` | Navigateur compact des discussions durables : périodes, recherche, reprise, renommage et archivage |
 | `CopilotEvidence.svelte` | Trace compacte d’activité et bloc unifié des sources, réutilisés dans les réponses et le panneau temporaire |
 | `SettingsDialog.svelte` | Réglages : modèles et fournisseurs, apparence, à propos (version lue dans `package.json`) |
 | `ConfirmDialog.svelte` | Confirmation modale générique (actions destructrices) |
@@ -65,6 +66,9 @@ Frontend Svelte 5 de Doku : shell applicatif, éditeur Markdown *live preview*, 
 | File | Purpose |
 |---|---|
 | `copilot.svelte.ts` | État runtime du copilote : runs, streaming, annulation, résumés, réécritures |
+| `copilot-conversation.ts` | Schéma pur d’une discussion durable, validation, résumés, recherche et fenêtre d’historique bornée |
+| `copilot-conversation-repository.ts` | File d’écritures, fichiers canoniques, réconciliation et index reconstructible des discussions |
+| `copilot-conversations.svelte.ts` | Projection réactive des discussions et orchestration des mutations de la sidebar |
 | `copilot-service.ts` | CopilotService + ContextBuilder : assemblage du contexte et des prompts, purs et testables |
 | `copilot-context.ts` | Éléments de contexte ajoutés à la main (sélection, presse-papiers, fichier) et leurs plafonds |
 | `copilot-memory.ts` | Mémoire durable du copilote cloud : schéma Markdown, validation, déduplication, prompts purs |

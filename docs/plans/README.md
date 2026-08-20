@@ -16,6 +16,7 @@ Ces plans sont des **instantanés d'intention**, pas de la documentation vivante
 | `notes-ia-et-reecritures-structurelles.md` | Notes issues du copilote et réécritures de structure |
 | `edition-texte-pdf-en-place.md` | Édition du texte d'un PDF sans passer par une conversion |
 | `correction-pdf-par-consigne.md` | Correction d'une page de PDF par consigne — **chantier masqué**, voir [ADR-0024](../adr/0024-correction-pdf-assistee-par-le-modele.md) |
+| `discussions-doku-san.md` | Discussions locales durables : historique, contexte et restauration du bureau documentaire, avec navigateur inspiré de DeepSeek Harness |
 
 ## Dependencies
 - Internal: `docs/adr/` (ce que le plan a fini par graver), `docs/autopilot/` (les runs qui les ont exécutés)

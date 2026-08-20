@@ -4,6 +4,7 @@
   import { createDirAt, createFileAt, isTauri, openFolderDialog, readDirectory } from '../lib/tauri'
   import { DEMO_DIR } from '../lib/demo'
   import DokuMark from '../lib/DokuMark.svelte'
+  import CopilotConversationList from './CopilotConversationList.svelte'
   import { untrack } from 'svelte'
 
   // Plan : titres du Markdown seulement (un .txt/.html n'en a pas), et pas pour un
@@ -356,6 +357,9 @@
       <button class="rib" class:active={app.sidebarView === 'history' && app.sidebarOpen} title="Historique des versions" aria-label="Historique" onclick={() => toggleSidebarView('history')}>
         <span class="msr" style="font-size:21px">history</span>
       </button>
+      <button class="rib" class:active={app.sidebarView === 'discussions' && app.sidebarOpen} title="Discussions Doku-San" aria-label="Discussions Doku-San" onclick={() => toggleSidebarView('discussions')}>
+        <span class="msr" style="font-size:21px">chat_bubble</span>
+      </button>
 
       <div class="spacer"></div>
 
@@ -365,6 +369,9 @@
     </div>
 
     <div class="panel">
+      {#if app.sidebarView === 'discussions'}
+        <CopilotConversationList />
+      {:else}
       <div class="panel-head">
         {#if app.sidebarView === 'files'}
           <span class="panel-title">Fichiers</span>
@@ -601,6 +608,7 @@
           </div>
         {/if}
       </div>
+      {/if}
     </div>
   </div>
 </aside>

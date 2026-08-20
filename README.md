@@ -3,7 +3,7 @@
 A desktop application to **open, read and write documents** — Markdown, DOCX and PDF — with an AI copilot that runs **locally by default**. Windows (ARM64 · x64) and Linux (x86_64).
 
 ## Project status
-📦 **v3.1.0** — feature-complete. Epics 1-16, 18 and 19 shipped (ledger: 69 features, 68 PASS), plus DOCX editing, PDF annotation and free-form rewriting. Current phase: daily real-world use, which is where 3.1 comes from: the copilot panel is now resizable and its reading size adjustable.
+📦 **v3.2.0** — feature-complete. Epics 1-16, 18 and 19 shipped (ledger: 69 features, 68 PASS), plus DOCX editing, PDF annotation, free-form rewriting and durable Doku-San discussions that restore their document workspace.
 
 ## What it does
 
@@ -62,7 +62,7 @@ cd packaging/arch && makepkg -si    # Arch: builds doku-bin from the .deb
 `.AppImage` — one file, nothing to install, convenient where it works (Ubuntu and derivatives):
 
 ```bash
-chmod +x Doku_3.1.0_amd64.AppImage && ./Doku_3.1.0_amd64.AppImage
+chmod +x Doku_3.2.0_amd64.AppImage && ./Doku_3.2.0_amd64.AppImage
 ```
 
 > The AppImage bundles the runner's GTK **and Mesa** stack, which cannot enumerate another distribution's drivers — on Arch, GDK aborts with `EGL_BAD_PARAMETER` before a window ever opens, and no `WEBKIT_*` variable helps because the failure sits below WebKit. See [`packaging/`](packaging/).

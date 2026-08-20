@@ -1,19 +1,21 @@
 import { canonicalPathKey } from './save-as'
 import { clampWorkspaceRatio, createWorkspaceState, type PaneId, type WorkspaceState } from './workspace'
 
+export interface WorkspacePathSnapshot {
+  split: boolean
+  activePaneId: PaneId
+  primaryPath: string | null
+  secondaryPath: string | null
+  primaryUnsaved: boolean
+  secondaryUnsaved: boolean
+  ratio: number
+}
+
 export interface SessionV2 {
   version: 2
   tabs: string[]
   activePath: string | null
-  workspace: {
-    split: boolean
-    activePaneId: PaneId
-    primaryPath: string | null
-    secondaryPath: string | null
-    primaryUnsaved: boolean
-    secondaryUnsaved: boolean
-    ratio: number
-  }
+  workspace: WorkspacePathSnapshot
 }
 
 interface LegacySession {
@@ -38,6 +40,42 @@ function uniquePaths(value: unknown): string[] {
     paths.push(path)
   }
   return paths
+}
+
+export function parseWorkspacePathSnapshot(value: unknown): WorkspacePathSnapshot {
+  const workspace = value && typeof value === 'object' ? value as Record<string, unknown> : {}
+  const primaryPath = pathOrNull(workspace.primaryPath)
+  const secondaryCandidate = pathOrNull(workspace.secondaryPath)
+  const secondaryPath = primaryPath && secondaryCandidate && canonicalPathKey(primaryPath) === canonicalPathKey(secondaryCandidate)
+    ? null
+    : secondaryCandidate
+  const split = workspace.split === true && secondaryPath !== null
+  return {
+    split,
+    activePaneId: split && workspace.activePaneId === 'secondary' ? 'secondary' : 'primary',
+    primaryPath,
+    secondaryPath,
+    primaryUnsaved: workspace.primaryUnsaved === true,
+    secondaryUnsaved: workspace.secondaryUnsaved === true,
+    ratio: clampWorkspaceRatio(typeof workspace.ratio === 'number' ? workspace.ratio : 50),
+  }
+}
+
+export function buildWorkspacePathSnapshot(
+  workspace: WorkspaceState,
+  pathForTab: (tabId: number | null) => string | null,
+): WorkspacePathSnapshot {
+  const primaryPath = pathForTab(workspace.primary.tabId)
+  const secondaryPath = pathForTab(workspace.secondary.tabId)
+  return {
+    split: workspace.split && secondaryPath !== null,
+    activePaneId: workspace.split && workspace.activePaneId === 'secondary' && secondaryPath !== null ? 'secondary' : 'primary',
+    primaryPath,
+    secondaryPath,
+    primaryUnsaved: workspace.primary.tabId != null && primaryPath == null,
+    secondaryUnsaved: workspace.secondary.tabId != null && secondaryPath == null,
+    ratio: clampWorkspaceRatio(workspace.ratio),
+  }
 }
 
 export function parseSession(raw: string | null): SessionV2 | null {
@@ -67,28 +105,11 @@ export function parseSession(raw: string | null): SessionV2 | null {
       },
     }
   }
-  const workspace = value.workspace as Record<string, unknown>
-  const primaryPath = pathOrNull(workspace.primaryPath)
-  const secondaryCandidate = pathOrNull(workspace.secondaryPath)
-  const secondaryPath =
-    primaryPath && secondaryCandidate && canonicalPathKey(primaryPath) === canonicalPathKey(secondaryCandidate)
-      ? null
-      : secondaryCandidate
-  const split = workspace.split === true
-  const activePaneId: PaneId = split && workspace.activePaneId === 'secondary' ? 'secondary' : 'primary'
   return {
     version: 2,
     tabs,
     activePath,
-    workspace: {
-      split,
-      activePaneId,
-      primaryPath,
-      secondaryPath,
-      primaryUnsaved: workspace.primaryUnsaved === true,
-      secondaryUnsaved: workspace.secondaryUnsaved === true,
-      ratio: clampWorkspaceRatio(typeof workspace.ratio === 'number' ? workspace.ratio : 50),
-    },
+    workspace: parseWorkspacePathSnapshot(value.workspace),
   }
 }
 
@@ -98,22 +119,12 @@ export function buildSession(
   pathForTab: (tabId: number | null) => string | null,
 ): SessionV2 {
   const tabs = uniquePaths(paths)
-  const primaryPath = pathForTab(workspace.primary.tabId)
-  const secondaryPath = pathForTab(workspace.secondary.tabId)
   const activePath = pathForTab(workspace[workspace.activePaneId].tabId)
   return {
     version: 2,
     tabs,
     activePath,
-    workspace: {
-      split: workspace.split,
-      activePaneId: workspace.activePaneId,
-      primaryPath,
-      secondaryPath,
-      primaryUnsaved: workspace.primary.tabId != null && primaryPath == null,
-      secondaryUnsaved: workspace.secondary.tabId != null && secondaryPath == null,
-      ratio: clampWorkspaceRatio(workspace.ratio),
-    },
+    workspace: buildWorkspacePathSnapshot(workspace, pathForTab),
   }
 }
 

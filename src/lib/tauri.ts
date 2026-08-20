@@ -516,6 +516,172 @@ export async function writeFileAtomic(path: string, bytes: Uint8Array) {
   await rename(tmp, path)
 }
 
+// --- Discussions durables Doku-San -----------------------------------------------
+// Le fichier <uuid>.json est canonique ; index.json est une projection reconstruite.
+// Aucun titre ni chemin utilisateur ne devient un segment de chemin.
+
+const CONVERSATION_STORAGE_PREFIX = 'doku:conversation:'
+
+function validConversationId(id: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id)
+}
+
+async function conversationDir(): Promise<string> {
+  const { appDataDir, join } = await import('@tauri-apps/api/path')
+  return join(await appDataDir(), 'conversations')
+}
+
+export async function listConversationFiles(): Promise<{ id: string; content: string }[]> {
+  if (!isTauri) {
+    const out: { id: string; content: string }[] = []
+    for (let i = 0; i < (globalThis.localStorage?.length ?? 0); i++) {
+      const key = globalThis.localStorage?.key(i)
+      if (!key?.startsWith(CONVERSATION_STORAGE_PREFIX)) continue
+      const id = key.slice(CONVERSATION_STORAGE_PREFIX.length)
+      if (!validConversationId(id)) continue
+      const content = globalThis.localStorage?.getItem(key)
+      if (content != null) out.push({ id, content })
+    }
+    return out
+  }
+  try {
+    const { readDir, readTextFile, remove } = await import('@tauri-apps/plugin-fs')
+    const { join } = await import('@tauri-apps/api/path')
+    const dir = await conversationDir()
+    const out: { id: string; content: string }[] = []
+    for (const entry of await readDir(dir)) {
+      if (entry.isDirectory) continue
+      if (entry.name.endsWith('.doku-tmp')) {
+        try { await remove(await join(dir, entry.name)) } catch { /* nettoyé au prochain boot */ }
+        continue
+      }
+      const match = /^([0-9a-f-]{36})\.json$/i.exec(entry.name)
+      if (!match || !validConversationId(match[1])) continue
+      try { out.push({ id: match[1], content: await readTextFile(await join(dir, entry.name)) }) } catch { /* isolé */ }
+    }
+    return out
+  } catch {
+    return []
+  }
+}
+
+export async function readConversationFile(id: string): Promise<string | null> {
+  if (!validConversationId(id)) return null
+  if (!isTauri) return globalThis.localStorage?.getItem(`${CONVERSATION_STORAGE_PREFIX}${id}`) ?? null
+  try {
+    const { readTextFile } = await import('@tauri-apps/plugin-fs')
+    const { join } = await import('@tauri-apps/api/path')
+    return await readTextFile(await join(await conversationDir(), `${id}.json`))
+  } catch {
+    return null
+  }
+}
+
+export async function writeConversationFile(id: string, content: string): Promise<void> {
+  if (!validConversationId(id)) throw new Error('Identifiant de discussion invalide.')
+  if (!isTauri) {
+    globalThis.localStorage?.setItem(`${CONVERSATION_STORAGE_PREFIX}${id}`, content)
+    return
+  }
+  const { mkdir } = await import('@tauri-apps/plugin-fs')
+  const { join } = await import('@tauri-apps/api/path')
+  const dir = await conversationDir()
+  await mkdir(dir, { recursive: true })
+  await writeTextFileAtomic(await join(dir, `${id}.json`), content)
+}
+
+export async function readConversationIndex(): Promise<string | null> {
+  if (!isTauri) return globalThis.localStorage?.getItem('doku:conversation-index') ?? null
+  try {
+    const { readTextFile } = await import('@tauri-apps/plugin-fs')
+    const { join } = await import('@tauri-apps/api/path')
+    return await readTextFile(await join(await conversationDir(), 'index.json'))
+  } catch {
+    return null
+  }
+}
+
+export async function writeConversationIndex(content: string): Promise<void> {
+  if (!isTauri) {
+    globalThis.localStorage?.setItem('doku:conversation-index', content)
+    return
+  }
+  const { mkdir } = await import('@tauri-apps/plugin-fs')
+  const { join } = await import('@tauri-apps/api/path')
+  const dir = await conversationDir()
+  await mkdir(dir, { recursive: true })
+  await writeTextFileAtomic(await join(dir, 'index.json'), content)
+}
+
+export async function keepConversationFileAside(id: string, stamp: string): Promise<void> {
+  if (!validConversationId(id)) return
+  if (!isTauri) {
+    const key = `${CONVERSATION_STORAGE_PREFIX}${id}`
+    const content = globalThis.localStorage?.getItem(key)
+    if (content != null) globalThis.localStorage?.setItem(`${key}:illisible:${stamp}`, content)
+    globalThis.localStorage?.removeItem(key)
+    return
+  }
+  try {
+    const { rename } = await import('@tauri-apps/plugin-fs')
+    const { join } = await import('@tauri-apps/api/path')
+    const dir = await conversationDir()
+    await rename(await join(dir, `${id}.json`), await join(dir, `${id}.illisible-${stamp}.json`))
+  } catch { /* un fichier déjà absent est déjà isolé */ }
+}
+
+export async function removeConversationFile(id: string): Promise<void> {
+  if (!validConversationId(id)) return
+  if (!isTauri) {
+    const prefix = `${CONVERSATION_STORAGE_PREFIX}${id}`
+    for (const key of Object.keys(globalThis.localStorage ?? {})) if (key.startsWith(prefix)) globalThis.localStorage?.removeItem(key)
+    return
+  }
+  try {
+    const { readDir, remove } = await import('@tauri-apps/plugin-fs')
+    const { join } = await import('@tauri-apps/api/path')
+    const dir = await conversationDir()
+    for (const entry of await readDir(dir)) {
+      if (!entry.isDirectory && (entry.name === `${id}.json` || entry.name.startsWith(`${id}.illisible-`) || entry.name.startsWith(`${id}.json.`))) {
+        try { await remove(await join(dir, entry.name)) } catch { /* poursuivre les artefacts */ }
+      }
+    }
+  } catch { /* dossier absent */ }
+}
+
+export async function purgeConversationFiles(): Promise<void> {
+  if (!isTauri) {
+    const keys: string[] = []
+    for (let i = 0; i < (globalThis.localStorage?.length ?? 0); i++) {
+      const key = globalThis.localStorage?.key(i)
+      if (key?.startsWith(CONVERSATION_STORAGE_PREFIX) || key === 'doku:conversation-index') keys.push(key)
+    }
+    for (const key of keys) globalThis.localStorage?.removeItem(key)
+    return
+  }
+  const { readDir, remove } = await import('@tauri-apps/plugin-fs')
+  const { join } = await import('@tauri-apps/api/path')
+  const dir = await conversationDir()
+  let entries
+  try { entries = await readDir(dir) } catch { return }
+  const isConversationArtifact = (name: string) => name === 'index.json'
+    || /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}(?:\.json|\.illisible-[A-Za-z0-9-]+\.json|\.json\..+\.doku-tmp)$/i.test(name)
+  const failures: string[] = []
+  for (const entry of entries) {
+    if (entry.isDirectory || !isConversationArtifact(entry.name)) continue
+    try { await remove(await join(dir, entry.name)) } catch { failures.push(entry.name) }
+  }
+  if (failures.length) throw new Error(`Suppression incomplète : ${failures.length} fichier(s) verrouillé(s).`)
+  const remaining = (await readDir(dir)).filter((entry) => !entry.isDirectory && isConversationArtifact(entry.name))
+  if (remaining.length) throw new Error('Suppression incomplète : des discussions sont encore présentes sur le disque.')
+}
+
+export async function confirmAction(title: string, message: string): Promise<boolean> {
+  if (!isTauri) return globalThis.confirm?.(`${title}\n\n${message}`) ?? false
+  const { confirm } = await import('@tauri-apps/plugin-dialog')
+  return confirm(message, { title, kind: 'warning', okLabel: 'Confirmer', cancelLabel: 'Annuler' })
+}
+
 // --- Mémoire durable du copilote cloud -----------------------------------------------
 // %APPDATA%\<app>\memory\<sha1-dossier>\ : un fichier Markdown par souvenir,
 // MEMORY.md comme index lisible, undo.json comme unique point de retour. Les clés et noms

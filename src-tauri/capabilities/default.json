@@ -132,6 +132,9 @@
         },
         {
           "path": "$APPDATA/annotations/**"
+        },
+        {
+          "path": "$APPDATA/conversations/**"
         }
       ]
     },

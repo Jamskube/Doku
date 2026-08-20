@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildSession, parseSession, restoreWorkspace } from './session'
+import { buildSession, buildWorkspacePathSnapshot, parseSession, restoreWorkspace } from './session'
 import { createWorkspaceState } from './workspace'
 
 describe('session workspace v2', () => {
@@ -36,10 +36,27 @@ describe('session workspace v2', () => {
       },
     }))
     expect(session?.workspace).toEqual({
+      split: false,
+      activePaneId: 'primary',
+      primaryPath: 'C:\\Docs\\a.md',
+      secondaryPath: null,
+      primaryUnsaved: false,
+      secondaryUnsaved: false,
+      ratio: 75,
+    })
+  })
+
+  it('partage le même snapshot borné avec les discussions', () => {
+    const workspace = createWorkspaceState(1)
+    workspace.split = true
+    workspace.secondary.tabId = 2
+    workspace.activePaneId = 'secondary'
+    workspace.ratio = 99
+    expect(buildWorkspacePathSnapshot(workspace, (id) => id === 1 ? 'C:\\Docs\\a.md' : 'C:\\Docs\\b.md')).toEqual({
       split: true,
       activePaneId: 'secondary',
       primaryPath: 'C:\\Docs\\a.md',
-      secondaryPath: null,
+      secondaryPath: 'C:\\Docs\\b.md',
       primaryUnsaved: false,
       secondaryUnsaved: false,
       ratio: 75,

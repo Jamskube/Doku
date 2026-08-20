@@ -3,7 +3,8 @@
   import { activeEditorSelection, activeTab, app, isCloudProvider, openPath, visibleTabs, type CopilotProvider, type DocTab } from '../lib/stores.svelte'
   import { closeWindow, fileSizeAt, isTauri, minimizeWindow, openContextFilesDialog, openFolderDialog, readFileBytes, readTextFileAt, toggleMaximizeWindow } from '../lib/tauri'
   import { formatBytes } from '../lib/ollama'
-  import { addCopilotContext, beginOpenAiAuth, cancelOpenAiConnection, cancelPull, connectMinimax, copilot, disconnectMinimaxKey, disconnectOpenAiAccount, ensureCopilotReady, isEmbedModel, jumpToCitation, newChat as clearChat, pullModel, refreshMinimaxStatus, refreshModels, refreshOpenAiStatus, removeCopilotContext, removeModel, retryGeneration, saveMessageAsNote, sendChat, setActiveModel, setCopilotContextFolder, setCopilotMemoryFolder, setCopilotProvider, setWebSearchEnabled, stopChat, summarizeDoc, type ChatMsg } from '../lib/copilot.svelte'
+  import { addCopilotContext, beginOpenAiAuth, cancelOpenAiConnection, cancelPull, connectMinimax, copilot, disconnectMinimaxKey, disconnectOpenAiAccount, ensureCopilotReady, isEmbedModel, jumpToCitation, newChat as clearChat, pullModel, refreshMinimaxStatus, refreshModels, refreshOpenAiStatus, removeCopilotContext, removeModel, retryGeneration, saveMessageAsNote, scheduleConversationPersist, sendChat, setActiveModel, setCopilotContextFolder, setCopilotMemoryFolder, setCopilotProvider, setWebSearchEnabled, stopChat, summarizeDoc, type ChatMsg } from '../lib/copilot.svelte'
+  import { conversations } from '../lib/copilot-conversations.svelte'
   import { MINIMAX_DEFAULT_MODEL } from '../lib/compat'
   import { vaultLabel, vaultShortLabel } from '../lib/platform'
   import { clampCopilotWidth, COPILOT_DEFAULT_WIDTH, COPILOT_MAX_WIDTH, COPILOT_MIN_WIDTH } from '../lib/copilot-width'
@@ -659,14 +660,26 @@
     })
   }
 
-  function startNewChat() {
-    clearChat()
+  async function startNewChat() {
+    if (!(await clearChat())) return
     draft = ''
     activityDrawerOpen = false
     composerFace = 'question'
     verbMenuOpen = false
     requestAnimationFrame(() => promptEl?.focus())
   }
+
+  $effect(() => {
+    void [
+      copilot.messages.map((message) => `${message.role}:${message.content}:${message.streaming ? 1 : 0}`).join('|'),
+      copilot.contextRevision,
+      copilot.scope,
+      copilot.contextFolder?.path,
+      copilot.memoryFolder?.path,
+      copilot.webSearchEnabled,
+    ]
+    if (!conversations.restoring && conversations.activeId) scheduleConversationPersist()
+  })
 
   function hasEvidence(message: ChatMsg): boolean {
     if (message.config || message.notice) return false
@@ -2114,6 +2127,12 @@
       {:else}
         <!-- Conversation -->
         <div class="cop-conv">
+          {#if copilot.historyOmitted > 0}
+            <p class="cop-history-window" role="status">
+              <span class="msr" aria-hidden="true">history</span>
+              {copilot.historyOmitted} ancien{copilot.historyOmitted > 1 ? 's' : ''} message{copilot.historyOmitted > 1 ? 's' : ''} reste{copilot.historyOmitted > 1 ? 'nt' : ''} dans la discussion mais ne rejoint{copilot.historyOmitted > 1 ? 'nent' : ''} pas ce tour.
+            </p>
+          {/if}
           {#each copilot.messages as m, i (i)}
             {#if m.role === 'user'}
               <div class="cop-user"><div class="cop-user-bubble">{m.content}</div></div>
@@ -3259,6 +3278,8 @@
 
   /* Chat — conversation */
   .cop-conv { padding: 20px 2px 18px; display: flex; flex-direction: column; gap: 26px; }
+  .cop-history-window { display: flex; align-items: center; gap: 6px; margin: -6px 8px 0; color: var(--ink-5); font-size: 10.5px; line-height: 1.4; }
+  .cop-history-window .msr { flex: 0 0 auto; font-size: 15px; }
   .cop-user { display: flex; justify-content: flex-end; padding-left: 44px; }
   .cop-user-bubble {
     max-width: 100%; background: var(--surface-2); border: 0; border-radius: 17px 17px 5px 17px;

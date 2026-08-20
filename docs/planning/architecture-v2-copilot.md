@@ -64,7 +64,7 @@ Pas de base de données ; fichiers, cohérent ADR-0003. Nouvelles familles :
 
 - **Modèles** : gérés par Ollama dans `%APPDATA%\Doku\models\` (via `OLLAMA_MODELS`). Source de vérité = Ollama ; Doku les liste via l'API, ne manipule pas les GGUF directement.
 - **Réglage copilote** (`settings.json`, étendu) : modèle actif, préférences (ton de reformulation par défaut, portée doc/dossier), état du panneau.
-- **Conversation** : par défaut **éphémère** (mémoire, par session) — persistance = question ouverte (voir §Open questions).
+- **Conversation** : durable et locale après le premier prompt accepté (ADR-0027). Un fichier canonique versionné conserve les tours stabilisés, les preuves bornées et le snapshot du bureau ; la sidebar utilise un index reconstructible.
 - **Index RAG** *(v2.1)* (`%APPDATA%\Doku\rag\<sha1(dossier)>\`) : vecteurs d'embeddings + méta (chemin, offset du passage, hash pour l'incrémental) + version du modèle d'embedding. Reconstructible → jamais une source de vérité, purgeable.
 
 ## External dependencies
@@ -92,7 +92,7 @@ Pas de base de données ; fichiers, cohérent ADR-0003. Nouvelles familles :
 - [ADR-0006](../adr/0006-copilote-ia-ollama-sidecar-cpu.md) — Moteur = **Ollama sidecar CPU**, NPU écarté — **accepted**. Fonde tout ce sous-système.
 - **À créer** → `/create-adr` : **cycle de vie du sidecar** (port dédié vs fixe 11434, découverte, kill, externalBin vs shell) — fork non trivial, à figer avant le spike.
 - **À créer** → `/create-adr` : **stack RAG** (modèle d'embedding local, format d'index vectoriel maison vs lib, ré-indexation incrémentale) — le gros fork de v2.1, précédé d'un spike.
-- **À créer (option)** → `/create-adr` : **persistance de l'historique de chat** (éphémère vs disque, portée) si on décide de persister.
+- **Décidé** → ADR-0027 : discussions locales durables, distinctes de la mémoire document/dossier et reprenables avec leur espace documentaire.
 
 ## Open questions
 
