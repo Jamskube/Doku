@@ -3,9 +3,16 @@
 ## Ajouter du contexte depuis le composer
 
 Le bouton `+` ouvre un menu compact au-dessus du contenu. Il propose quatre instantanés
-éphémères : sélection actuelle, fichiers Markdown/texte/HTML/PDF, dossier de notes et texte du
-presse-papiers. Les ajouts restent visibles et retirables dans la face **Contexte** jusqu’à
-**Nouvelle conversation**.
+éphémères — sélection actuelle, fichiers Markdown/texte/HTML/PDF, dossier de notes et texte du
+presse-papiers — ainsi qu’un contexte **Recherche Web**. Les ajouts restent visibles et retirables
+dans la face **Contexte** jusqu’à **Nouvelle conversation**.
+
+- La recherche Web fonctionne avec les trois fournisseurs : outil hébergé et citations ancrées
+  pour OpenAI ; pour Ollama et MiniMax, le modèle prépare une requête depuis la demande et le
+  document, puis Doku filtre les résultats avant de lui transmettre leurs extraits.
+- Les résultats Web sont traités comme des données non fiables, séparés du document, et leurs URL
+  HTTPS normalisées sont les seules que l’interface puisse ouvrir. Le pied de réponse expose uniquement
+  les sources réellement citées ; en local, l’interface précise que seule la requête quitte la machine.
 
 - Quand le bureau est scindé, les deux documents visibles rejoignent automatiquement le contexte :
   le volet actif reste la source principale et l’autre apparaît comme **Automatique · volet visible**.

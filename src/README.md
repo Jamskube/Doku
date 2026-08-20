@@ -69,6 +69,8 @@ Frontend Svelte 5 de Doku : shell applicatif, éditeur Markdown *live preview*, 
 | `copilot-memory.ts` | Mémoire durable du copilote cloud : schéma Markdown, validation, déduplication, prompts purs |
 | `copilot-memory.svelte.ts` | Chargement, rappel, extraction, mutations atomiques et annulation de la mémoire cloud |
 | `copilot-width.ts` | Bornes de la largeur du panneau copilote (séparateur, préférence persistée) |
+| `web-search.ts` | Recherche Web pilotée par Doku pour Ollama/MiniMax et injection sûre des extraits |
+| `web-citations.ts` | Normalisation HTTPS et rendu des citations Web OpenAI ou pilotées par Doku |
 | `ollama.ts` | Client du sidecar Ollama local (ADR-0006/0012) |
 | `openai.ts` | Client IPC OpenAI : connexion du compte Codex, statut, streaming, annulation — jamais de jeton exposé |
 | `compat.ts` | Fournisseurs cloud compatibles OpenAI (ADR-0018, MiniMax) — miroir d'`openai.ts` pour le chemin « clé API » |

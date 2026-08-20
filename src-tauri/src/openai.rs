@@ -120,6 +120,8 @@ pub struct OpenAiRequest {
     reasoning_effort: Option<String>,
     /// Même rôle que côté compatible : borner les appels internes courts.
     max_output_tokens: Option<u32>,
+    #[serde(default)]
+    web_search: bool,
 }
 
 #[derive(Serialize, Clone)]
@@ -246,8 +248,14 @@ async fn fetch_models(token: &str) -> Result<Vec<String>, String> {
 
 #[tauri::command]
 pub async fn openai_status(state: State<'_, OpenAiState>) -> Result<OpenAiStatus, String> {
-    let stored = read_secret(ACCESS_TOKEN_TARGET, SECRET_WHAT).ok().flatten().is_some()
-        || read_secret(REFRESH_TOKEN_TARGET, SECRET_WHAT).ok().flatten().is_some();
+    let stored = read_secret(ACCESS_TOKEN_TARGET, SECRET_WHAT)
+        .ok()
+        .flatten()
+        .is_some()
+        || read_secret(REFRESH_TOKEN_TARGET, SECRET_WHAT)
+            .ok()
+            .flatten()
+            .is_some();
     if !stored {
         return Ok(OpenAiStatus {
             authenticated: false,
@@ -511,13 +519,54 @@ fn response_body(request: &OpenAiRequest) -> Value {
     if let Some(max) = request.max_output_tokens {
         body["max_output_tokens"] = serde_json::json!(max);
     }
+    let mut include = Vec::new();
     if let Some(effort) = request.reasoning_effort.as_deref() {
         body["reasoning"] = serde_json::json!({ "effort": effort, "summary": "auto" });
-        body["include"] = serde_json::json!(["reasoning.encrypted_content"]);
-    } else {
-        body["include"] = serde_json::json!([]);
+        include.push("reasoning.encrypted_content");
     }
+    if request.web_search {
+        body["tools"] = serde_json::json!([{
+            "type": "web_search",
+            "external_web_access": true,
+            "search_context_size": "medium"
+        }]);
+        body["tool_choice"] = serde_json::json!("auto");
+        include.push("web_search_call.action.sources");
+    }
+    body["include"] = serde_json::json!(include);
     body
+}
+
+fn web_citations(json: &Value) -> Vec<Value> {
+    let mut citations = Vec::new();
+    let Some(output) = json.pointer("/response/output").and_then(Value::as_array) else {
+        return citations;
+    };
+    for item in output {
+        let Some(content) = item.get("content").and_then(Value::as_array) else {
+            continue;
+        };
+        for part in content {
+            let Some(annotations) = part.get("annotations").and_then(Value::as_array) else {
+                continue;
+            };
+            for annotation in annotations {
+                if annotation.get("type").and_then(Value::as_str) != Some("url_citation") {
+                    continue;
+                }
+                let Some(url) = annotation.get("url").and_then(Value::as_str) else {
+                    continue;
+                };
+                citations.push(serde_json::json!({
+                    "url": url,
+                    "title": annotation.get("title").and_then(Value::as_str).unwrap_or("Source Web"),
+                    "startIndex": annotation.get("start_index").and_then(Value::as_u64).unwrap_or(0),
+                    "endIndex": annotation.get("end_index").and_then(Value::as_u64).unwrap_or(0),
+                }));
+            }
+        }
+    }
+    citations
 }
 
 async fn send_codex_request(
@@ -580,6 +629,7 @@ pub async fn stream_openai(
         let mut buffer = Vec::<u8>::new();
         let mut completed = false;
         let mut thinking_sent = false;
+        let mut searching_sent = false;
         loop {
             tokio::select! {
                 _ = &mut cancel_rx => break,
@@ -608,7 +658,17 @@ pub async fn stream_openai(
                                     send_event(&on_event, "thinking", None)?;
                                 }
                             }
+                            Some("response.output_item.added") | Some("response.output_item.done") => {
+                                if !searching_sent && json.pointer("/item/type").and_then(Value::as_str) == Some("web_search_call") {
+                                    searching_sent = true;
+                                    send_event(&on_event, "searching", None)?;
+                                }
+                            }
                             Some("response.completed") => {
+                                let citations = web_citations(&json);
+                                if !citations.is_empty() {
+                                    send_event(&on_event, "citations", Some(serde_json::to_string(&citations).map_err(|error| error.to_string())?))?;
+                                }
                                 completed = true;
                                 send_event(&on_event, "done", None)?;
                                 break;
@@ -646,8 +706,8 @@ pub async fn stream_openai(
 #[cfg(test)]
 mod tests {
     use super::{
-        chatgpt_account_id, parse_sse_event, response_body, token_expires_soon, OpenAiMessage,
-        OpenAiRequest, SseEvent,
+        chatgpt_account_id, parse_sse_event, response_body, token_expires_soon, web_citations,
+        OpenAiMessage, OpenAiRequest, SseEvent,
     };
     use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -704,11 +764,45 @@ mod tests {
             ],
             reasoning_effort: Some("low".into()),
             max_output_tokens: None,
+            web_search: false,
         });
         assert_eq!(body["instructions"], "Cadre");
         assert_eq!(body["input"][0]["role"], "user");
         assert_eq!(body["store"], false);
         assert!(body.get("max_output_tokens").is_none());
+        assert!(body.get("tools").is_none());
     }
 
+    #[test]
+    fn enables_hosted_web_search_and_extracts_citations() {
+        let body = response_body(&OpenAiRequest {
+            request_id: "r".into(),
+            model: "gpt-5.6-luna".into(),
+            input: vec![OpenAiMessage {
+                role: "user".into(),
+                content: "Actualité".into(),
+            }],
+            reasoning_effort: Some("low".into()),
+            max_output_tokens: None,
+            web_search: true,
+        });
+        assert_eq!(body["tools"][0]["type"], "web_search");
+        assert_eq!(body["tools"][0]["external_web_access"], true);
+        assert!(body["include"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|v| v == "web_search_call.action.sources"));
+
+        let event = serde_json::json!({ "response": { "output": [{
+            "type": "message",
+            "content": [{ "type": "output_text", "annotations": [{
+                "type": "url_citation", "url": "https://example.com", "title": "Exemple",
+                "start_index": 4, "end_index": 7
+            }] }]
+        }] } });
+        let citations = web_citations(&event);
+        assert_eq!(citations[0]["url"], "https://example.com");
+        assert_eq!(citations[0]["endIndex"], 7);
+    }
 }

@@ -3,7 +3,7 @@
   import { activeEditorSelection, activeTab, app, isCloudProvider, openPath, visibleTabs, type CopilotProvider, type DocTab } from '../lib/stores.svelte'
   import { closeWindow, fileSizeAt, isTauri, minimizeWindow, openContextFilesDialog, openFolderDialog, readFileBytes, readTextFileAt, toggleMaximizeWindow } from '../lib/tauri'
   import { formatBytes } from '../lib/ollama'
-  import { addCopilotContext, beginOpenAiAuth, cancelOpenAiConnection, cancelPull, connectMinimax, copilot, disconnectMinimaxKey, disconnectOpenAiAccount, ensureCopilotReady, isEmbedModel, jumpToCitation, newChat as clearChat, pullModel, refreshMinimaxStatus, refreshModels, refreshOpenAiStatus, removeCopilotContext, removeModel, retryGeneration, saveMessageAsNote, sendChat, setActiveModel, setCopilotContextFolder, setCopilotMemoryFolder, setCopilotProvider, stopChat, summarizeDoc, type ChatMsg } from '../lib/copilot.svelte'
+  import { addCopilotContext, beginOpenAiAuth, cancelOpenAiConnection, cancelPull, connectMinimax, copilot, disconnectMinimaxKey, disconnectOpenAiAccount, ensureCopilotReady, isEmbedModel, jumpToCitation, newChat as clearChat, pullModel, refreshMinimaxStatus, refreshModels, refreshOpenAiStatus, removeCopilotContext, removeModel, retryGeneration, saveMessageAsNote, sendChat, setActiveModel, setCopilotContextFolder, setCopilotMemoryFolder, setCopilotProvider, setWebSearchEnabled, stopChat, summarizeDoc, type ChatMsg } from '../lib/copilot.svelte'
   import { MINIMAX_DEFAULT_MODEL } from '../lib/compat'
   import { vaultLabel, vaultShortLabel } from '../lib/platform'
   import { clampCopilotWidth, COPILOT_DEFAULT_WIDTH, COPILOT_MAX_WIDTH, COPILOT_MIN_WIDTH } from '../lib/copilot-width'
@@ -18,22 +18,42 @@
   import { cloudMemory, deleteCloudMemoryRecord, loadCloudMemory, memoryWorkspace, undoCloudMemory, updateCloudMemoryRecord, type MemoryWorkspace } from '../lib/copilot-memory.svelte'
   import { NOTICE_DELAY, autoDismiss } from '../lib/auto-dismiss'
   import type { CloudMemoryProvider, MemoryRecord, MemoryType } from '../lib/copilot-memory'
+  import { addWebCitationMarkers, annotateWebCitations, citedWebCitationNumbers, webCitationHost } from '../lib/web-citations'
 
   // Rendu d'une réponse : Markdown assaini PUIS puces de citation (l'annotation opère
   // après DOMPurify — seul notre markup de puce est injecté). Sans sources (petit doc,
   // refus honnête), les marqueurs [n] éventuels sont retirés (count = 0).
   function renderAnswer(m: ChatMsg): string {
-    return annotateCitations(renderChatMarkdown(m.content), m.sources?.length ?? 0)
+    const marked = addWebCitationMarkers(m.content, m.webCitations ?? [])
+    const rendered = annotateCitations(renderChatMarkdown(marked), m.sources?.length ?? 0)
+    return annotateWebCitations(rendered, m.webCitations?.length ?? 0)
   }
 
   // Clic délégué sur les puces [n] injectées via {@html} (pas de handlers Svelte dedans).
   function onAnswerClick(e: MouseEvent, m: ChatMsg) {
+    const webChip = (e.target as HTMLElement).closest?.('.cop-web-cite')
+    if (webChip) {
+      const n = Number.parseInt(webChip.getAttribute('data-web-cite') ?? '', 10)
+      const citation = m.webCitations?.find((source) => source.n === n)
+      if (citation) void openWebSource(citation.url)
+      return
+    }
     const chip = (e.target as HTMLElement).closest?.('.cop-cite')
     if (!chip) return
     dismissCitePreview()
     const n = Number.parseInt(chip.getAttribute('data-cite') ?? '', 10)
     const passage = m.sources?.find((s) => s.n === n)
     if (passage) void revealCitation(passage)
+  }
+
+  async function openWebSource(url: string) {
+    let safe: URL
+    try { safe = new URL(url) } catch { return }
+    if (safe.protocol !== 'https:') return
+    if (isTauri) {
+      const { openUrl } = await import('@tauri-apps/plugin-opener')
+      await openUrl(safe.href)
+    } else globalThis.open(safe.href, '_blank', 'noopener,noreferrer')
   }
 
   // En plein écran, une citation n'a de sens que si sa source redevient visible.
@@ -481,7 +501,7 @@
   })
   const contextCount = $derived(
     (copilot.scope === 'folder' ? (ragDir ? 1 : 0) : contextDetails.count + automaticContextTabs.length)
-      + copilot.contextItems.length,
+      + copilot.contextItems.length + (copilot.webSearchEnabled ? 1 : 0),
   )
   const contextSummary = $derived(
     copilot.scope === 'folder'
@@ -492,7 +512,7 @@
     app.copilotProvider === 'openai' ? 'OpenAI' : app.copilotProvider === 'minimax' ? 'MiniMax' : null,
   )
   const hasSupplementalContext = $derived(
-    automaticContextTabs.length > 0 || copilot.contextItems.length > 0 || copilot.contextFolder !== null,
+    automaticContextTabs.length > 0 || copilot.contextItems.length > 0 || copilot.contextFolder !== null || copilot.webSearchEnabled,
   )
 
   function automaticContextMeta(tab: DocTab): string {
@@ -1078,8 +1098,18 @@
     >
       <div class="cop-add-context-head">
         <strong>Ajouter du contexte</strong>
-        {#if cloudDestination}<small>Sera envoyé à {cloudDestination}</small>{:else}<small>Reste sur cet appareil</small>{/if}
+        {#if cloudDestination}<small>Sera envoyé à {cloudDestination}</small>{:else if copilot.webSearchEnabled}<small>Documents locaux · recherche en ligne</small>{:else}<small>Reste sur cet appareil</small>{/if}
       </div>
+      <button
+        class="cop-add-context-action"
+        class:active={copilot.webSearchEnabled}
+        role="menuitemcheckbox"
+        aria-checked={copilot.webSearchEnabled}
+        onclick={() => { setWebSearchEnabled(!copilot.webSearchEnabled); closeAddMenu(true) }}
+      >
+        <span class="msr">search</span><span><strong>Recherche Web</strong><small>Informations actuelles avec sources</small></span>
+        <span class="cop-add-context-check msr">{copilot.webSearchEnabled ? 'check' : 'add'}</span>
+      </button>
       <button class="cop-add-context-action" role="menuitem" disabled={!selectionAvailable || contextLoading} onclick={addSelection}>
         <span class="msr">notes</span><span><strong>Sélection actuelle</strong><small>Capturer le texte sélectionné</small></span>
       </button>
@@ -2068,6 +2098,20 @@
                     </div>
                   {/if}
                 {/if}
+                {#if m.webCitations?.length && !m.streaming}
+                  {@const webCited = citedWebCitationNumbers(m.content, m.webCitations.length)}
+                  {@const shownWeb = m.webCitations.filter((source) => webCited.has(source.n))}
+                  {#if shownWeb.length}
+                    <div class="cop-sources cop-web-sources">
+                      <span class="cop-sources-lbl">Sources Web citées</span>
+                      {#each shownWeb as source (source.n)}
+                        <button class="cop-source-chip" title={source.title} onclick={() => void openWebSource(source.url)}>
+                          <span class="cop-source-num">{source.n}</span>{webCitationHost(source.url)}
+                        </button>
+                      {/each}
+                    </div>
+                  {/if}
+                {/if}
                 {#if m.contextSources?.length && !m.streaming}
                   <div class="cop-sources cop-context-sources">
                     <span class="cop-sources-lbl">Contexte transmis</span>
@@ -2316,6 +2360,18 @@
                       </button>
                     </div>
                   {/each}
+                  {#if copilot.webSearchEnabled}
+                    <div class="cop-context-extra web">
+                      <span class="msr" aria-hidden="true">search</span>
+                      <span class="cop-context-extra-copy">
+                        <strong>Recherche Web</strong>
+                        <small>La question est recherchée en ligne · sources citées</small>
+                      </span>
+                      <button title="Désactiver la recherche Web" aria-label="Désactiver la recherche Web" onclick={() => setWebSearchEnabled(false)}>
+                        <span class="msr">close</span>
+                      </button>
+                    </div>
+                  {/if}
                   {#if cloudDestination}
                     <button class="cop-context-memory" onclick={openMemoryView}>
                       <span class="msr" aria-hidden="true">database</span>
@@ -2340,7 +2396,9 @@
           {/key}
         </div>
         <div class="cop-disclaimer">
-          {app.copilotProvider === 'openai'
+          {copilot.webSearchEnabled && app.copilotProvider === 'ollama'
+            ? 'Local · seule la recherche Web quitte cet appareil'
+            : app.copilotProvider === 'openai'
             ? 'OpenAI · contexte envoyé au cloud'
             : app.copilotProvider === 'minimax'
               ? 'MiniMax · contexte envoyé au cloud'
@@ -2445,7 +2503,7 @@
   .cop-resize::after {
     content: '';
     position: absolute;
-    top: 0;
+    top: var(--chrome-titlebar-height);
     bottom: 0;
     left: 0;
     width: 2px;
@@ -2536,11 +2594,14 @@
     flex-direction: column;
     background: var(--cream-content);
     border-left: 1px solid var(--line-1);
-    /* En vue partagée, le coin gauche rejoint la page sans fente de chrome. Pendant
-       l'agrandissement, il s'arrondit progressivement jusqu'aux 14 px du plein écran. */
-    border-radius: clamp(0px, calc((100cqi - 400px) * 0.024), 14px) 14px 0 0;
+    /* La largeur réglable ne décrit pas un changement de mode : quelle que soit sa
+       valeur, un panneau voisin du document garde une couture droite. Les coins ne
+       s'arrondissent que lorsque l'état plein écran est réellement actif. */
+    border-radius: 0;
     overflow: hidden;
+    transition: border-radius 240ms cubic-bezier(0.22, 1, 0.36, 1);
   }
+  .cop-panel.expanded .cop-card { border-radius: 14px 14px 0 0; }
   .cop-scroll {
     flex: 1; min-height: 0; overflow-y: auto;
     padding: 0 max(18px, calc((100% - 760px) / 2));
@@ -3504,12 +3565,16 @@
     border: 0; border-radius: 10px; background: transparent; color: var(--ink); text-align: left; cursor: pointer;
   }
   .cop-add-context-action:hover, .cop-add-context-action:focus-visible { background: var(--surface-hover); outline: none; }
+  .cop-add-context-action.active { background: var(--accent-soft); }
   .cop-add-context-action:disabled { opacity: 0.38; cursor: default; background: transparent; }
   .cop-add-context-action > .msr {
     width: 30px; height: 30px; flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center;
     border-radius: 9px; background: var(--surface-2); color: var(--ink-3); font-size: 17px;
   }
-  .cop-add-context-action > span:last-child { min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+  .cop-add-context-action > span:nth-child(2) { min-width: 0; display: flex; flex: 1; flex-direction: column; gap: 1px; }
+  .cop-add-context-action > .cop-add-context-check {
+    width: 24px; height: 24px; margin-left: auto; background: transparent; color: var(--ink-3); font-size: 15px;
+  }
   .cop-add-context-action strong { font-size: 11.5px; font-weight: 600; }
   .cop-add-context-action small { font-size: 10px; color: var(--ink-4); }
   .cop-hidden-file { display: none; }
@@ -3528,6 +3593,13 @@
   .cop-source-chip:focus-visible { outline: 2px solid var(--line-3); outline-offset: 1px; }
   /* Sans nom de note (extraits du document courant) : la puce est juste le numéro. */
   .cop-source-chip.bare { padding: 0 4px; }
+  .cop-md :global(.cop-web-cite) {
+    min-width: 18px; height: 18px; margin: 0 2px; padding: 0 5px; border: 0; border-radius: 999px;
+    background: var(--accent-soft); color: var(--ink-2); font: 650 9.5px var(--font-sans);
+    cursor: pointer; vertical-align: 0.08em;
+  }
+  .cop-md :global(.cop-web-cite:hover) { background: var(--surface-hover); color: var(--ink); }
+  .cop-md :global(.cop-web-cite:focus-visible) { outline: 2px solid var(--line-3); outline-offset: 1px; }
   .cop-source-chip.static { cursor: default; padding-left: 7px; }
   .cop-source-chip.static:hover { background: var(--surface-2); color: var(--ink-3); }
   .cop-source-chip.static > .msr { font-size: 13px; }
@@ -3642,6 +3714,7 @@
   @media (prefers-reduced-motion: reduce) {
     .cop-composer-front { animation: none; }
     .cop-panel,
+    .cop-card,
     .cop-composer-panel,
     .cop-composer-switch,
     .cop-advanced-chev,

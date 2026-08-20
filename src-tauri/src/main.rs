@@ -9,6 +9,7 @@ mod openai;
 mod secrets;
 mod sidecar;
 mod sse;
+mod web_search;
 
 use compat::CompatState;
 use openai::OpenAiState;
@@ -77,6 +78,7 @@ fn main() {
             compat::compat_disconnect,
             compat::stream_compat,
             compat::cancel_compat,
+            web_search::web_search,
         ])
         .on_window_event(|window, event| {
             // Arrêt du sidecar à la destruction de la fenêtre. Filet de sécurité : même si ce

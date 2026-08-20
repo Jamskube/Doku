@@ -96,6 +96,15 @@ import {
   type MemoryWorkspace,
 } from './copilot-memory.svelte'
 import type { CloudMemoryProvider, MemoryPromptSource } from './copilot-memory'
+import { normalizeWebCitations, type WebCitation } from './web-citations'
+import {
+  appendCurrentDateContext,
+  appendWebSearchContext,
+  buildWebSearchPlannerPrompt,
+  parseWebSearchQuery,
+  searchWeb,
+  webSearchCitations,
+} from './web-search'
 
 // Un tour de conversation (14.1). `streaming` = réponse en cours (bulle en texte brut,
 // rendu Markdown à la fin) ; `failed` = carte d'erreur ; `status` = ligne de progression
@@ -139,6 +148,10 @@ export interface ChatMsg {
   // Souvenirs effectivement rappelés avant CETTE réponse. L'UI affiche les entrées
   // injectées par Doku, sans dépendre d'une citation produite par le modèle.
   memorySources?: MemoryPromptSource[]
+  // Sources réellement citées par le tool Web hébergé OpenAI. Les URL ne sont jamais
+  // rendues dans le HTML du modèle : l'UI ouvre uniquement cette liste normalisée HTTPS.
+  webCitations?: WebCitation[]
+  webSearch?: boolean
   // Posé sur une carte `failed` : ce qu'il faut rejouer pour « Réessayer » (la question ou le
   // mode de résumé). Le document est re-capturé au moment du retry (le dossier aussi, 15.3).
   retry?: { kind: 'chat'; question: string; scope: ChatScope; contextRevision: number; workspaceContextKey?: string } | { kind: 'summary'; mode: SummaryMode }
@@ -161,6 +174,9 @@ export const copilot = $state({
   // Portée courante des questions (15.3) — éphémère, choisie dans la face « Contexte ».
   scope: 'doc' as ChatScope,
   contextItems: [] as CopilotContextItem[],
+  // Recherche hébergée OpenAI, explicite et éphémère : active jusqu'au retrait ou à une
+  // nouvelle conversation. Ce n'est pas un faux document ajouté au budget de contexte.
+  webSearchEnabled: false,
   contextFolder: null as { path: string; label: string } | null,
   // Mémoire partagée volontairement avec un dossier. null = portée document, qui est
   // toujours le défaut. Séparée de l'explorateur ET du contexte : parcourir ou ajouter
@@ -221,6 +237,13 @@ export function setCopilotContextFolder(folder: { path: string; label: string } 
 export function setCopilotMemoryFolder(folder: { path: string; label: string } | null): void {
   if (copilot.memoryFolder?.path === folder?.path) return
   copilot.memoryFolder = folder ? { ...folder } : null
+}
+
+export function setWebSearchEnabled(enabled: boolean): void {
+  if (copilot.webSearchEnabled === enabled) return
+  copilot.webSearchEnabled = enabled
+  copilot.contextRevision++
+  copilot.contextError = ''
 }
 
 let readyPromise: Promise<number | null> | null = null
@@ -571,10 +594,21 @@ function streamChat(
   messages: OpenAiMessage[],
   onToken: (token: string) => void,
   signal: AbortSignal,
-  onThinking?: () => void,
+  options: {
+    onThinking?: () => void
+    webSearch?: boolean
+    onSearching?: () => void
+    onCitations?: (citations: WebCitation[]) => void
+  } = {},
 ): Promise<string> {
-  if (runtime.provider === 'openai') return openAiChat(messages, onToken, signal, onThinking)
-  if (runtime.provider === 'minimax') return compatChat('minimax', runtime.model, messages, onToken, signal, onThinking)
+  if (runtime.provider === 'openai') {
+    return openAiChat(messages, onToken, signal, options.onThinking, {
+      webSearch: options.webSearch,
+      onSearching: options.onSearching,
+      onCitations: (raw) => options.onCitations?.(normalizeWebCitations(raw)),
+    })
+  }
+  if (runtime.provider === 'minimax') return compatChat('minimax', runtime.model, messages, onToken, signal, options.onThinking)
   return chat(runtime.port, runtime.model, messages, onToken, signal, {
     num_ctx: COPILOT_NUM_CTX,
     temperature: COPILOT_TEMPERATURE,
@@ -611,6 +645,17 @@ function streamGenerate(
 function memoryGenerate(runtime: ProviderRuntime) {
   return (prompt: string, signal?: AbortSignal) =>
     streamGenerate(runtime, prompt, () => {}, signal ?? new AbortController().signal, { map: true })
+}
+
+async function planWebSearchQuery(
+  runtime: ProviderRuntime,
+  question: string,
+  messages: readonly OllamaMessage[],
+  signal: AbortSignal,
+): Promise<string | null> {
+  const prompt = buildWebSearchPlannerPrompt(question, messages)
+  const raw = await streamGenerate(runtime, prompt, () => {}, signal, { map: true })
+  return parseWebSearchQuery(raw)
 }
 
 // Carte de config posée quand le fournisseur cloud n'est pas prêt (chip `config`).
@@ -776,6 +821,7 @@ export async function sendChat(
   const contextFolder = copilot.contextFolder ? { ...copilot.contextFolder } : null
   const memoryFolder = copilot.memoryFolder ? { ...copilot.memoryFolder } : null
   const contextRevision = copilot.contextRevision
+  const webSearchEnabled = copilot.webSearchEnabled
   const automaticDocuments = scope === 'doc' ? snapshotAutomaticDocuments() : []
   const workspaceContextKey = scope === 'doc' ? visibleContextKey() : undefined
 
@@ -906,6 +952,7 @@ export async function sendChat(
     }
     let messages: OllamaMessage[]
     let sources: CitedPassage[] | null = null
+    let webCitations: WebCitation[] = []
     let wholeDoc = false
     let bundle: ContextBundle | null = null
     if (scope === 'folder') {
@@ -926,6 +973,21 @@ export async function sendChat(
       wholeDoc = prep.wholeDoc ?? false
       bundle = prep.bundle
     }
+    if (webSearchEnabled && runtime.provider !== 'openai') {
+      const message = copilot.messages[idx]
+      if (message && !message.content) message.status = 'Doku-San prépare la recherche…'
+      const searchQuery = await planWebSearchQuery(runtime, q, messages, signal)
+      if (signal.aborted) return
+      if (searchQuery) {
+        if (message && !message.content) message.status = 'Doku-San recherche sur le Web…'
+        const results = await searchWeb(searchQuery)
+        if (signal.aborted) return
+        messages = appendWebSearchContext(messages, results, searchQuery)
+        webCitations = webSearchCitations(results)
+      } else {
+        messages = appendCurrentDateContext(messages)
+      }
+    }
     // num_ctx fixé (14.3) : le doc + la consigne d'ancrage doivent rester en contexte sur plusieurs
     // tours ; au défaut Ollama (4096) l'historique les évincerait par troncature gauche silencieuse.
     // Mutation via l'index (élément proxifié du $state array) → réactif ; muter la ref locale
@@ -939,11 +1001,19 @@ export async function sendChat(
         m.content += t
       },
       signal,
-      () => {
+      {
+        webSearch: webSearchEnabled,
+        onThinking: () => {
         // Réflexion cloud : efface « lit le document… » — les points chorégraphiés seuls
         // portent l'attente (pas de texte redondant). Jamais après le 1er token.
         const m = copilot.messages[idx]
         if (m && m.streaming && !m.content) m.status = undefined
+        },
+        onSearching: () => {
+          const m = copilot.messages[idx]
+          if (m && m.streaming && !m.content) m.status = 'Doku-San recherche sur le Web…'
+        },
+        onCitations: (citations) => { webCitations = citations },
       },
     )
     // Pied « Passages consultés » déterministe (15.3) — supprimé sur refus : des sources
@@ -960,6 +1030,8 @@ export async function sendChat(
       done.sourceLabel = [principal, ...labels].filter(Boolean).join(' + ') || undefined
       done.contextSources = bundle?.sentSources.filter((source) => !source.primary)
       done.memorySources = recalledMemories
+      done.webSearch = webSearchEnabled
+      done.webCitations = webCitations
     }
     if (
       sources &&
@@ -1876,6 +1948,7 @@ export function newChat(): void {
   copilot.contextFolder = null
   copilot.contextError = ''
   copilot.contextRevision = 0
+  copilot.webSearchEnabled = false
   copilot.scope = 'doc'
 }
 

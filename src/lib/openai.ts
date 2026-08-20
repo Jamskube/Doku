@@ -29,7 +29,7 @@ export interface OpenAiMessage {
 
 interface OpenAiStreamEvent {
   // 'thinking' : premier delta de raisonnement — signal sans texte, une fois.
-  kind: 'delta' | 'thinking' | 'done' | 'error'
+  kind: 'delta' | 'thinking' | 'searching' | 'citations' | 'done' | 'error'
   text?: string
 }
 
@@ -39,6 +39,9 @@ interface OpenAiStreamOptions {
    *  `maxOutputTokens` côté compatible : borner les appels internes courts. */
   maxOutputTokens?: number
   onThinking?: () => void
+  webSearch?: boolean
+  onSearching?: () => void
+  onCitations?: (citations: unknown[]) => void
 }
 
 function nativeOnly(): Error {
@@ -107,6 +110,15 @@ async function streamOpenAi(
       onToken(event.text)
     } else if (event.kind === 'thinking') {
       options.onThinking?.()
+    } else if (event.kind === 'searching') {
+      options.onSearching?.()
+    } else if (event.kind === 'citations' && event.text) {
+      try {
+        const citations = JSON.parse(event.text)
+        if (Array.isArray(citations)) options.onCitations?.(citations)
+      } catch {
+        // Une réponse sans métadonnées exploitables reste affichable ; aucun faux lien.
+      }
     } else if (event.kind === 'error') {
       streamError = event.text || 'La génération OpenAI a échoué.'
     }
@@ -123,6 +135,7 @@ async function streamOpenAi(
         input,
         reasoningEffort: options.reasoningEffort ?? 'low',
         maxOutputTokens: options.maxOutputTokens,
+        webSearch: options.webSearch ?? false,
       },
       onEvent,
     })
@@ -141,8 +154,9 @@ export function openAiChat(
   onToken: (token: string) => void,
   signal?: AbortSignal,
   onThinking?: () => void,
+  options: Pick<OpenAiStreamOptions, 'webSearch' | 'onSearching' | 'onCitations'> = {},
 ): Promise<string> {
-  return streamOpenAi(messages, onToken, signal, { reasoningEffort: 'low', onThinking })
+  return streamOpenAi(messages, onToken, signal, { reasoningEffort: 'low', onThinking, ...options })
 }
 
 export function openAiGenerate(
