@@ -6,6 +6,7 @@
   import { addCopilotContext, beginOpenAiAuth, cancelOpenAiConnection, cancelPull, connectMinimax, copilot, disconnectMinimaxKey, disconnectOpenAiAccount, ensureCopilotReady, isEmbedModel, jumpToCitation, newChat as clearChat, pullModel, refreshMinimaxStatus, refreshModels, refreshOpenAiStatus, removeCopilotContext, removeModel, retryGeneration, saveMessageAsNote, sendChat, setActiveModel, setCopilotContextFolder, setCopilotMemoryFolder, setCopilotProvider, stopChat, summarizeDoc, type ChatMsg } from '../lib/copilot.svelte'
   import { MINIMAX_DEFAULT_MODEL } from '../lib/compat'
   import { vaultLabel, vaultShortLabel } from '../lib/platform'
+  import { clampCopilotWidth, COPILOT_DEFAULT_WIDTH, COPILOT_MAX_WIDTH, COPILOT_MIN_WIDTH } from '../lib/copilot-width'
   import { DEFAULT_EMBED_MODEL, FALLBACK_EMBED_MODEL, noteTitle } from '../lib/rag'
   import { cancelRagIndexing, deleteRagIndex, ragState, refreshRagIndex } from '../lib/rag-index.svelte'
   import { baseName, parentPath } from '../lib/explorer'
@@ -51,6 +52,89 @@
   // de l'extrait réellement fourni au modèle, sans avoir à cliquer. Contenu rendu en
   // TEXTE (jamais {@html}) — c'est du contenu de document, pas du markup de confiance.
   let panelEl = $state<HTMLElement | null>(null)
+
+  // --- Séparateur de largeur (même geste que celui des volets) ---------------------
+  // La largeur réglée pendant le glisser reste LOCALE : `app.copilotWidth` déclenche
+  // l'$effect de persistance d'App.svelte, et l'écrire à chaque frame ferait un
+  // `localStorage.setItem` par image. On ne la publie donc qu'au relâchement.
+  let resizeWidth = $state<number | null>(null)
+  let resizing = $state(false)
+  let resizeFrame = 0
+  let pendingWidth = COPILOT_DEFAULT_WIDTH
+  const panelWidth = $derived(resizeWidth ?? app.copilotWidth)
+
+  /** Place partagée par la zone document et le panneau — sidebar exclue. */
+  function availableWidth(): number {
+    const shell = panelEl?.parentElement?.getBoundingClientRect()
+    if (!shell) return Number.POSITIVE_INFINITY
+    // Le voisin de gauche est la zone document (App.svelte) : mesurer son bord gauche
+    // plutôt que supposer une largeur de sidebar, qui se replie et se déploie.
+    const doc = panelEl?.previousElementSibling?.getBoundingClientRect()
+    return doc ? shell.right - doc.left : shell.width
+  }
+
+  function scheduleWidth(width: number) {
+    pendingWidth = clampCopilotWidth(width, availableWidth())
+    if (resizeFrame) return
+    resizeFrame = requestAnimationFrame(() => {
+      resizeFrame = 0
+      resizeWidth = pendingWidth
+    })
+  }
+
+  function commitWidth(width: number) {
+    if (resizeFrame) {
+      cancelAnimationFrame(resizeFrame)
+      resizeFrame = 0
+    }
+    app.copilotWidth = clampCopilotWidth(width, availableWidth())
+    resizeWidth = null
+  }
+
+  function resizeStart(event: PointerEvent) {
+    const handle = event.currentTarget as HTMLElement
+    handle.setPointerCapture(event.pointerId)
+    pendingWidth = app.copilotWidth
+    resizing = true
+  }
+
+  function resizeMove(event: PointerEvent) {
+    const handle = event.currentTarget as HTMLElement
+    if (!handle.hasPointerCapture(event.pointerId)) return
+    const shell = panelEl?.parentElement?.getBoundingClientRect()
+    if (!shell) return
+    // Le panneau est le dernier élément de la barre : son bord droit ne bouge pas, donc
+    // la largeur voulue est exactement la distance du pointeur à ce bord.
+    scheduleWidth(shell.right - event.clientX)
+  }
+
+  function resizeEnd(event: PointerEvent) {
+    const handle = event.currentTarget as HTMLElement
+    if (handle.hasPointerCapture(event.pointerId)) handle.releasePointerCapture(event.pointerId)
+    if (!resizing) return
+    resizing = false
+    commitWidth(pendingWidth)
+  }
+
+  function resizeKey(event: KeyboardEvent) {
+    // Le panneau est à droite : vers la GAUCHE l'élargit. La flèche suit le bord qu'on
+    // déplace, pas la valeur — c'est ce que fait le séparateur des volets.
+    const step = event.key === 'ArrowLeft' ? 24 : event.key === 'ArrowRight' ? -24 : 0
+    if (step !== 0) {
+      event.preventDefault()
+      commitWidth(panelWidth + step)
+      return
+    }
+    if (event.key === 'Home' || event.key === 'End') {
+      event.preventDefault()
+      commitWidth(event.key === 'Home' ? COPILOT_MIN_WIDTH : COPILOT_MAX_WIDTH)
+    }
+  }
+
+  $effect(() => () => {
+    if (resizeFrame) cancelAnimationFrame(resizeFrame)
+  })
+
   let citePreview = $state<{ n: number; name: string | null; text: string; x: number; y: number; below: boolean } | null>(null)
   let citePreviewTimer: ReturnType<typeof setTimeout> | undefined
 
@@ -1038,10 +1122,37 @@
   class="cop-panel"
   class:open={app.copilotOpen}
   class:expanded={app.copilotExpanded}
+  class:resizing
+  style:--copilot-width="min({panelWidth}px, calc(100vw - 40px))"
   aria-hidden={!app.copilotOpen}
   inert={!app.copilotOpen}
   bind:this={panelEl}
 >
+  <!-- Séparateur de largeur : même geste que celui des volets (glisser, flèches,
+       double-clic pour revenir au défaut). Il vit DANS le panneau plutôt qu'en frère
+       dans .app — ainsi il suit le bord du rideau à l'ouverture sans avoir à rejouer
+       lui-même l'animation de flex-basis. Masqué en plein écran : là, la largeur n'est
+       plus la dimension qui gouverne (voir .cop-panel.expanded). -->
+  <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+  <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+  <div
+    class="cop-resize"
+    role="separator"
+    tabindex="0"
+    aria-orientation="vertical"
+    aria-label="Redimensionner le panneau du copilote"
+    title="Glissez ou utilisez les flèches pour redimensionner"
+    aria-valuemin={COPILOT_MIN_WIDTH}
+    aria-valuemax={COPILOT_MAX_WIDTH}
+    aria-valuenow={Math.round(panelWidth)}
+    onpointerdown={resizeStart}
+    onpointermove={resizeMove}
+    onpointerup={resizeEnd}
+    onpointercancel={resizeEnd}
+    ondblclick={() => commitWidth(COPILOT_DEFAULT_WIDTH)}
+    onkeydown={resizeKey}
+  ></div>
+
   <!-- En-tête : contrôles panneau + contrôles fenêtre (draggable, motif TitleBar) -->
   <header class="cop-head" data-tauri-drag-region>
     <div class="cop-identity" data-tauri-drag-region>
@@ -2264,6 +2375,9 @@
 
 <style>
   .cop-panel {
+    /* Repli seulement : la largeur réelle vient d'un style inline (préférence persistée,
+       réglée au séparateur). Sans cette ligne, un `--copilot-width` absent rendrait
+       `flex-basis` invalide et le panneau se replierait à zéro. */
     --copilot-width: min(400px, calc(100vw - 40px));
     /* Une seule propriété de taille animée (flex-basis) : width/max-width décrivaient la
        même boîte et triplaient le travail d'interpolation + diff de style par frame. */
@@ -2307,6 +2421,45 @@
   .cop-panel.open.expanded {
     flex-grow: 1;
   }
+  /* Pendant le glisser, aucune transition : le rideau de 340 ms transformerait chaque
+     image en interpolation en retard sur le pointeur (le panneau traînerait derrière). */
+  .cop-panel.resizing,
+  .cop-panel.open.resizing {
+    transition: none;
+  }
+
+  /* Séparateur de largeur — même affordance que celui des volets : invisible au repos,
+     un filet se pose sur la couture à l'approche. Il recouvre le bord gauche du panneau,
+     qui n'est qu'une gouttière (padding de l'en-tête, bordure de la carte). */
+  .cop-resize {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    z-index: 20;
+    width: 8px;
+    cursor: col-resize;
+    touch-action: none;
+    user-select: none;
+  }
+  .cop-resize::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    width: 2px;
+    background: transparent;
+    transition: background 140ms ease;
+  }
+  .cop-resize:hover::after,
+  .cop-resize:focus-visible::after { background: var(--line-3); }
+  .cop-resize:focus-visible { outline: none; }
+  .cop-panel.resizing .cop-resize::after { background: var(--line-3); }
+  .cop-panel.expanded .cop-resize { display: none; }
+  @media (prefers-reduced-motion: reduce) {
+    .cop-resize::after { transition: none; }
+  }
   .cop-panel > .cop-head,
   .cop-panel > .cop-card {
     width: 100%;
@@ -2330,11 +2483,17 @@
   }
   .cop-identity { display: flex; align-items: center; gap: 7px; min-width: 0; }
   .cop-mark {
+    flex: 0 0 auto;
     width: 24px; height: 24px; display: inline-flex; align-items: center; justify-content: center;
     border-radius: 8px; background: var(--cream-content); color: var(--ink-3);
   }
-  .cop-title { font-size: 12.5px; font-weight: 600; color: var(--ink-2); white-space: nowrap; }
+  /* C'est le TITRE qui cède quand l'en-tête manque de place. Sans `min-width: 0`, sa
+     taille minimale automatique vaut son texte entier : l'identité refusait de se
+     comprimer et poussait la pastille d'état PAR-DESSUS le premier bouton — visible dès
+     que le panneau descend sous ~330 px, ce que le séparateur rend désormais atteignable. */
+  .cop-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; font-size: 12.5px; font-weight: 600; color: var(--ink-2); white-space: nowrap; }
   .cop-local {
+    flex: 0 0 auto;
     height: 18px; display: inline-flex; align-items: center; padding: 0 6px;
     border-radius: 999px; background: var(--accent-soft); color: var(--ink-4);
     font-size: 9.5px; font-weight: 500; letter-spacing: 0.02em;
@@ -2387,7 +2546,7 @@
     padding: 0 max(18px, calc((100% - 760px) / 2));
     contain: layout paint;
   }
-  .cop-msg { margin: 14px 4px; font-size: 12.5px; color: var(--ink-4); }
+  .cop-msg { margin: 14px 4px; font-size: calc(var(--cop-text) - 1px); color: var(--ink-4); }
   .cop-msg.err { color: var(--err-text); }
 
   /* Sélecteur unifié « Modèle actif » : le menu flotte au-dessus de la page, mais sa
@@ -2885,7 +3044,7 @@
   .cop-user { display: flex; justify-content: flex-end; padding-left: 44px; }
   .cop-user-bubble {
     max-width: 100%; background: var(--surface-2); border: 0; border-radius: 17px 17px 5px 17px;
-    padding: 9px 13px; font-size: 13px; line-height: 1.55; color: var(--ink); white-space: pre-wrap; overflow-wrap: anywhere;
+    padding: 9px 13px; font-size: calc(var(--cop-text) - 0.5px); line-height: 1.55; color: var(--ink); white-space: pre-wrap; overflow-wrap: anywhere;
   }
   /* Le contenu de la conversation doit être COPIABLE (le body global est en user-select:none) :
      sans ça, une question échouée ne peut même pas être re-copiée pour la retaper. */
@@ -2927,7 +3086,7 @@
     from { background-position: 140% 0; }
     to { background-position: -40% 0; }
   }
-  .cop-md-plain { font-size: 13.5px; line-height: 1.65; color: var(--ink-2); white-space: pre-wrap; overflow-wrap: anywhere; }
+  .cop-md-plain { font-size: var(--cop-text); line-height: 1.65; color: var(--ink-2); white-space: pre-wrap; overflow-wrap: anywhere; }
   /* Curseur de streaming : pulse doux au bout du texte qui s'écrit (retiré au rendu final). */
   .cop-md-plain.streaming::after {
     content: '';
@@ -3033,26 +3192,29 @@
   }
 
   /* Rendu Markdown assaini (contenu injecté via {@html} → styles :global) */
-  .cop-md { font-size: 13.5px; line-height: 1.65; color: var(--ink-2); overflow-wrap: anywhere; }
+  /* Tout ce qui est imbriqué dans une réponse s'exprime en `em` : les valeurs sont les
+     tailles d'origine rapportées à la base de 13,5 px, si bien que le réglage « Normal »
+     rend exactement la mise en page d'avant, et que les autres suivent proportionnellement. */
+  .cop-md { font-size: var(--cop-text); line-height: 1.65; color: var(--ink-2); overflow-wrap: anywhere; }
   .cop-md :global(p) { margin: 0 0 10px; }
   .cop-md :global(> *:last-child) { margin-bottom: 0; }
   .cop-md :global(ul), .cop-md :global(ol) { padding-left: 18px; margin: 0 0 12px; display: flex; flex-direction: column; gap: 5px; }
-  .cop-md :global(h1), .cop-md :global(h2), .cop-md :global(h3) { font-size: 14px; font-weight: 600; color: var(--ink); margin: 12px 0 6px; }
+  .cop-md :global(h1), .cop-md :global(h2), .cop-md :global(h3) { font-size: 1.04em; font-weight: 600; color: var(--ink); margin: 12px 0 6px; }
   .cop-md :global(a) { color: var(--ink); text-decoration: underline; }
-  .cop-md :global(code) { background: var(--code-bg); border-radius: 4px; padding: 1px 4px; font-family: var(--font-mono); font-size: 11.5px; }
+  .cop-md :global(code) { background: var(--code-bg); border-radius: 4px; padding: 1px 4px; font-family: var(--font-mono); font-size: 0.85em; }
   .cop-md :global(pre) { background: var(--code-bg); border-radius: 8px; padding: 10px 12px; overflow-x: auto; margin: 0 0 10px; }
   .cop-md :global(pre code) { background: none; padding: 0; }
   .cop-md :global(blockquote) { padding: 9px 11px; border-radius: 8px; background: var(--surface-2); color: var(--ink-3); margin: 0 0 10px; }
   /* border-collapse ignore border-radius → separate + spacing 0 (mêmes hairlines, coins ronds réels) */
-  .cop-md :global(table) { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 12px; border: 1px solid var(--line-1); border-radius: 8px; overflow: hidden; margin: 0 0 10px; }
+  .cop-md :global(table) { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 0.89em; border: 1px solid var(--line-1); border-radius: 8px; overflow: hidden; margin: 0 0 10px; }
   .cop-md :global(tr:last-child td) { border-bottom: 0; }
   .cop-md :global(th) { background: var(--surface-2); text-align: left; padding: 5px 9px; color: var(--ink); font-weight: 600; border-bottom: 1px solid var(--line-1); }
   .cop-md :global(td) { padding: 5px 9px; color: var(--ink-2); border-bottom: 1px solid var(--line-1); }
 
   /* Carte d'erreur (génération échouée) */
   .cop-err-card { display: flex; gap: 11px; padding: 13px; border-radius: 12px; background: var(--surface-2); }
-  .cop-err-title { font-size: 13px; font-weight: 600; color: var(--ink); margin-bottom: 3px; }
-  .cop-err-msg { font-size: 12px; line-height: 1.5; color: var(--ink-4); margin: 0 0 11px; }
+  .cop-err-title { font-size: calc(var(--cop-text) - 0.5px); font-weight: 600; color: var(--ink); margin-bottom: 3px; }
+  .cop-err-msg { font-size: calc(var(--cop-text) - 1.5px); line-height: 1.5; color: var(--ink-4); margin: 0 0 11px; }
   .cop-err-acts { display: flex; gap: 7px; }
   .cop-err-btn { height: 30px; padding: 0 12px; background: var(--cream-content); color: var(--ink-3); border: 0; border-radius: 8px; font-family: var(--font-sans); font-size: 12px; cursor: pointer; transition: background 120ms ease, color 120ms ease, filter 120ms ease, transform 100ms ease; }
   .cop-err-btn:hover { background: var(--surface-hover); color: var(--ink); }
@@ -3197,7 +3359,7 @@
   .cop-input-ta {
     grid-column: 1 / -1; grid-row: 1; align-self: start;
     width: 100%; min-width: 0; border: 0; background: transparent; outline: none; resize: none;
-    font-family: var(--font-sans); font-size: 13.5px; line-height: 1.45; color: var(--ink); padding: 2px 4px 7px; max-height: 120px;
+    font-family: var(--font-sans); font-size: var(--cop-text); line-height: 1.45; color: var(--ink); padding: 2px 4px 7px; max-height: 120px;
     field-sizing: content; /* auto-grow : les lignes Shift+Entrée restent visibles (WebView2 OK) */
   }
   .cop-input-ta::placeholder { color: var(--ink-4); }
@@ -3387,11 +3549,13 @@
      désignent le même passage. */
   .cop-md :global(.cop-cite) {
     display: inline-flex; align-items: center; justify-content: center;
-    min-width: 16px; height: 15px; margin: 0 2px; padding: 0 4px; border: 0; border-radius: 5px;
+    /* Gabarit en `em` de SA propre taille : la puce grandit avec le texte qu'elle ponctue.
+       Les facteurs sont les valeurs d'origine rapportées à ses 10 px (16/10, 15/10, …). */
+    min-width: 1.6em; height: 1.5em; margin: 0 0.2em; padding: 0 0.4em; border: 0; border-radius: 0.5em;
     background: var(--accent-soft); color: var(--ink-3);
-    font-family: var(--font-sans); font-size: 10px; font-weight: 600; line-height: 1;
+    font-family: var(--font-sans); font-size: 0.74em; font-weight: 600; line-height: 1;
     font-variant-numeric: tabular-nums;
-    vertical-align: 2px; cursor: pointer;
+    vertical-align: 0.2em; cursor: pointer;
     transition: background 120ms ease, color 120ms ease, transform 100ms ease;
   }
   .cop-md :global(.cop-cite:hover) { background: var(--ink); color: var(--cream-content); }

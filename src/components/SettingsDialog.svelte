@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { app, closeSettings, setColumnWidth, setTheme } from '../lib/stores.svelte'
+  import { app, closeSettings, COPILOT_TEXT_PX, setColumnWidth, setCopilotTextSize, setTheme } from '../lib/stores.svelte'
   import { deleteAllRagIndexes } from '../lib/rag-index.svelte'
   import { isTauri, purgeSnapshotsHard } from '../lib/tauri'
   import { version } from '../../package.json'
@@ -27,6 +27,16 @@
     { key: 'narrow' as const, label: 'Étroit', icon: 'width_normal' },
     { key: 'wide' as const, label: 'Confortable', icon: 'width_wide' },
     { key: 'full' as const, label: 'Pleine largeur', icon: 'width_full' },
+  ]
+  // Sans icône, contrairement aux deux réglages voisins : il n'existe pas de pictogramme
+  // de « taille de texte » dans le subset Material Symbols embarqué, et en ajouter un
+  // obligerait à régénérer la police. L'échantillon rendu à sa propre taille dit de toute
+  // façon mieux que n'importe quelle icône ce que chaque choix produit.
+  const COPILOT_TEXT_SIZES = [
+    { key: 'small' as const, label: 'Petit' },
+    { key: 'normal' as const, label: 'Normal' },
+    { key: 'large' as const, label: 'Grand' },
+    { key: 'xlarge' as const, label: 'Très grand' },
   ]
 
   $effect(() => {
@@ -167,6 +177,28 @@
                       onclick={() => setColumnWidth(width.key)}
                     >
                       <span class="msr" aria-hidden="true">{width.icon}</span>{width.label}
+                    </button>
+                  {/each}
+                </div>
+              </div>
+
+              <div class="preference">
+                <div class="preference-copy">
+                  <span class="preference-icon msr" aria-hidden="true">subject</span>
+                  <div>
+                    <strong>Taille du texte du copilote</strong>
+                    <small>S’applique à la conversation — réponses, questions et saisie. Les commandes du panneau gardent leur taille.</small>
+                  </div>
+                </div>
+                <div class="segmented text-sizes" role="radiogroup" aria-label="Taille du texte du copilote">
+                  {#each COPILOT_TEXT_SIZES as size (size.key)}
+                    <button
+                      role="radio"
+                      aria-checked={app.copilotTextSize === size.key}
+                      class:active={app.copilotTextSize === size.key}
+                      onclick={() => setCopilotTextSize(size.key)}
+                    >
+                      <span class="text-sample" style:font-size={COPILOT_TEXT_PX[size.key]} aria-hidden="true">Aa</span>{size.label}
                     </button>
                   {/each}
                 </div>
@@ -441,6 +473,10 @@
     box-shadow: 0 1px 4px rgba(var(--shadow-rgb), 0.12), 0 0 0 1px var(--elevation-ring);
   }
   .widths button { min-width: 112px; }
+  .text-sizes button { min-width: 88px; gap: 7px; }
+  /* Échantillon rendu à la taille qu'il propose : le bouton montre son effet au lieu
+     de le nommer. Hauteur de ligne à 1 pour que « Très grand » ne creuse pas la pilule. */
+  .text-sample { font-weight: 600; line-height: 1; }
 
   .privacy-note {
     display: flex;
@@ -544,6 +580,7 @@
     .segmented { width: 100%; }
     .segmented button { min-width: 0; flex: 1; padding-inline: 9px; }
     .widths button { min-width: 0; }
+    .text-sizes button { min-width: 0; }
     .data-row { align-items: flex-start; flex-wrap: wrap; }
     .data-copy { min-width: calc(100% - 32px); }
     .row-actions { width: 100%; justify-content: flex-end; }

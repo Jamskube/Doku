@@ -13,6 +13,7 @@ import { canonicalPathKey, runSaveAs, type TextSaveSnapshot } from './save-as'
 import { buildSession, parseSession, restoreWorkspace } from './session'
 import { buildSearchIndex, confirmReplacePath, isTauri, listSnapshots, pathExistsAt, purgeAllSnapshots, readSnapshot, readTextFileAt, recordSnapshot, saveTextDialog, scanFiles, setAlwaysOnTop, syncSystemBackdrop, writeTextFileAtomic } from './tauri'
 import { normalizeTarget, wikilinkCandidates, wikilinkFileName } from './wikilink'
+import { clampCopilotWidth, COPILOT_DEFAULT_WIDTH } from './copilot-width'
 import type { CopilotVerbosity } from './copilot-service'
 import { activateWorkspacePane, assignWorkspaceTab, closeWorkspaceTab, createWorkspaceState, openWorkspaceSplit, otherPane, reuniteWorkspace, selectWorkspaceTab, setWorkspaceRatio, swapWorkspacePanes, type PaneId, type WorkspaceState } from './workspace'
 
@@ -46,6 +47,7 @@ export function isCloudProvider(p: CopilotProvider): boolean {
   return p !== 'ollama'
 }
 export type ColumnWidth = 'narrow' | 'wide' | 'full'
+export type CopilotTextSize = 'small' | 'normal' | 'large' | 'xlarge'
 export type NoticeTone = 'error' | 'warning' | 'success'
 
 export interface AppNotice {
@@ -57,6 +59,17 @@ export interface AppNotice {
 // Largeur de la colonne de lecture (variable CSS --doc-width, consommée par
 // l'éditeur). full = pas de max-width.
 export const COLUMN_PX: Record<ColumnWidth, string> = { narrow: '680px', wide: '820px', full: 'none' }
+
+// Taille de lecture du copilote (variable CSS --cop-text). Elle ne gouverne QUE le texte
+// qu'on lit dans la conversation — réponses, questions, saisie, messages d'état. Les
+// commandes du panneau (en-tête, boutons, sélecteur de modèle) gardent leur taille : leur
+// gabarit est réglé au pixel, et les faire grossir déformerait la mise en page.
+export const COPILOT_TEXT_PX: Record<CopilotTextSize, string> = {
+  small: '12.5px',
+  normal: '13.5px',
+  large: '15px',
+  xlarge: '16.5px',
+}
 
 export interface DocTab {
   id: number
@@ -116,6 +129,10 @@ export const app = $state({
   // CSS sortent du bundle de démarrage. Ce drapeau (runtime, non persisté) reste vrai
   // après la première ouverture — le panneau garde ensuite son DOM et son slide.
   copilotMounted: false,
+  // Largeur du panneau (px), réglée au séparateur comme celle des volets ; persistée.
+  copilotWidth: COPILOT_DEFAULT_WIDTH,
+  // Taille du texte lu dans la conversation (réglage Apparence) ; persistée.
+  copilotTextSize: 'normal' as CopilotTextSize,
   // Vue copilote pleine page : transitoire, revient en vue partagée à la fermeture du panneau.
   copilotExpanded: false,
   // Modale Paramètres (19.2) : transitoire — elle ne doit jamais se rouvrir au démarrage.
@@ -266,6 +283,12 @@ export function loadSettings() {
         app.copilotVerbosity = s.copilotVerbosity
       if (typeof s.cloudMemoryEnabled === 'boolean') app.cloudMemoryEnabled = s.cloudMemoryEnabled
       if (typeof s.copilotOpen === 'boolean') app.copilotOpen = s.copilotOpen
+      if (typeof s.copilotWidth === 'number') app.copilotWidth = clampCopilotWidth(s.copilotWidth)
+      // hasOwn plutôt que `in` : `in` remonte le prototype, donc un settings corrompu
+      // portant "toString" passerait la garde et poserait une taille inexistante.
+      if (typeof s.copilotTextSize === 'string' && Object.hasOwn(COPILOT_TEXT_PX, s.copilotTextSize)) {
+        app.copilotTextSize = s.copilotTextSize as CopilotTextSize
+      }
       // Réglage validé champ par champ : un settings corrompu ne doit pas faire
       // planter le tri (sortEntries recevrait une clé inconnue et ne trierait plus).
       const sort = s.explorerSort
@@ -279,6 +302,7 @@ export function loadSettings() {
   }
   applyTheme()
   applyColumnWidth()
+  applyCopilotTextSize()
 }
 
 export function saveSettings() {
@@ -297,6 +321,8 @@ export function saveSettings() {
         copilotVerbosity: app.copilotVerbosity,
         cloudMemoryEnabled: app.cloudMemoryEnabled,
         copilotOpen: app.copilotOpen,
+        copilotWidth: app.copilotWidth,
+        copilotTextSize: app.copilotTextSize,
         explorerSort: app.explorerSort,
         explorerExpanded: app.explorerExpanded,
       }),
@@ -308,6 +334,10 @@ export function saveSettings() {
 
 export function applyColumnWidth() {
   document.documentElement.style.setProperty('--doc-width', COLUMN_PX[app.columnWidth])
+}
+
+export function applyCopilotTextSize() {
+  document.documentElement.style.setProperty('--cop-text', COPILOT_TEXT_PX[app.copilotTextSize])
 }
 
 const SESSION_KEY = 'doku-session'
@@ -417,6 +447,11 @@ export function setTheme(theme: 'light' | 'dark') {
 export function setColumnWidth(width: ColumnWidth) {
   app.columnWidth = width
   applyColumnWidth()
+}
+
+export function setCopilotTextSize(size: CopilotTextSize) {
+  app.copilotTextSize = size
+  applyCopilotTextSize()
 }
 
 // Épingle la fenêtre au-dessus des autres apps (FR-11). Logique partagée entre le
