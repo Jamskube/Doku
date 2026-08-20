@@ -288,6 +288,20 @@ export function memoryRecallCandidates(query: string, records: readonly MemoryRe
     .map(({ record }) => record)
 }
 
+// Repli sans appel fournisseur pour les parcours sensibles au rate-limit (MiniMax + Web).
+// Les préférences sont globalement utiles ; les autres souvenirs doivent partager au moins
+// un terme avec la question, afin de ne jamais injecter arbitrairement tout le carnet.
+export function memoryRecallLocalCandidates(query: string, records: readonly MemoryRecord[]): MemoryRecord[] {
+  const queryTokens = tokens(query)
+  return memoryRecallCandidates(query, records)
+    .filter((record) => {
+      if (record.type === 'preference') return true
+      const recordTokens = tokens(`${record.name} ${record.description} ${record.content}`)
+      return [...queryTokens].some((token) => recordTokens.has(token))
+    })
+    .slice(0, MEMORY_RECALL_LIMIT)
+}
+
 export function parseSelectedMemoryIds(raw: string, allowed: ReadonlySet<string>): string[] {
   const parsed = extractJsonObject(raw)
   if (!parsed || typeof parsed !== 'object') return []

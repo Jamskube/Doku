@@ -18,7 +18,8 @@
   import { cloudMemory, deleteCloudMemoryRecord, loadCloudMemory, memoryWorkspace, undoCloudMemory, updateCloudMemoryRecord, type MemoryWorkspace } from '../lib/copilot-memory.svelte'
   import { NOTICE_DELAY, autoDismiss } from '../lib/auto-dismiss'
   import type { CloudMemoryProvider, MemoryRecord, MemoryType } from '../lib/copilot-memory'
-  import { addWebCitationMarkers, annotateWebCitations, citedWebCitationNumbers, webCitationHost } from '../lib/web-citations'
+  import { addWebCitationMarkers, annotateWebCitations } from '../lib/web-citations'
+  import CopilotEvidence from './CopilotEvidence.svelte'
 
   // Rendu d'une réponse : Markdown assaini PUIS puces de citation (l'annotation opère
   // après DOMPurify — seul notre markup de puce est injecté). Sans sources (petit doc,
@@ -441,6 +442,9 @@
   let draft = $state('')
   let promptEl = $state<HTMLTextAreaElement | null>(null)
   let scroller = $state<HTMLElement | null>(null)
+  let activityDrawerOpen = $state(false)
+  let activityButtonEl = $state<HTMLButtonElement | null>(null)
+  let activityDrawerEl = $state<HTMLElement | null>(null)
   let composerFace = $state<'question' | 'context'>('question')
   let atBottom = true // ne pas voler le scroll si l'utilisateur est remonté relire
 
@@ -658,9 +662,37 @@
   function startNewChat() {
     clearChat()
     draft = ''
+    activityDrawerOpen = false
     composerFace = 'question'
     verbMenuOpen = false
     requestAnimationFrame(() => promptEl?.focus())
+  }
+
+  function hasEvidence(message: ChatMsg): boolean {
+    if (message.config || message.notice) return false
+    return Boolean(
+      message.activity?.length || message.sources?.length || message.webCitations?.length ||
+      message.contextSources?.length || message.memorySources?.length,
+    )
+  }
+
+  const evidenceTurns = $derived(copilot.messages.flatMap((message, index) => {
+    if (message.role !== 'assistant' || !hasEvidence(message)) return []
+    const question = copilot.messages[index - 1]?.role === 'user' ? copilot.messages[index - 1].content : 'Réponse de Doku-San'
+    return [{ index, question, message }]
+  }))
+
+  async function toggleActivityDrawer() {
+    activityDrawerOpen = !activityDrawerOpen
+    if (activityDrawerOpen) {
+      await tick()
+      activityDrawerEl?.focus()
+    }
+  }
+
+  function closeActivityDrawer(returnFocus = true) {
+    activityDrawerOpen = false
+    if (returnFocus) requestAnimationFrame(() => activityButtonEl?.focus())
   }
 
   function onComposerTabKey(e: KeyboardEvent, face: 'question' | 'context') {
@@ -681,6 +713,60 @@
     e.preventDefault()
     const details = (e.currentTarget as HTMLElement).parentElement as HTMLDetailsElement | null
     if (details) details.open = !details.open
+  }
+
+  // --- Menu de l'identité ------------------------------------------------------------
+  // Les destinations secondaires vivent sous « Doku-San » pour garder le header calme.
+  // Le pop est rendu à la racine du panneau : il échappe ainsi au chrome et à ses clips.
+  let identityMenuOpen = $state(false)
+  let identityButtonEl = $state<HTMLButtonElement | null>(null)
+  let identityMenuEl = $state<HTMLElement | null>(null)
+  let identityMenuPos = $state<{ left: number; top: number } | null>(null)
+  const IDENTITY_MENU_W = 232
+
+  function closeIdentityMenu(restoreFocus = false) {
+    identityMenuOpen = false
+    if (restoreFocus) identityButtonEl?.focus()
+  }
+
+  function toggleIdentityMenu() {
+    identityMenuOpen = !identityMenuOpen
+    if (!identityMenuOpen || !identityButtonEl || !panelEl) return
+    const trigger = identityButtonEl.getBoundingClientRect()
+    const panel = panelEl.getBoundingClientRect()
+    const left = Math.min(Math.max(Math.round(trigger.left - panel.left), 8), Math.round(panel.width - IDENTITY_MENU_W - 8))
+    identityMenuPos = { left, top: Math.round(trigger.bottom - panel.top) + 6 }
+    void tick().then(() => identityMenuEl?.querySelector<HTMLButtonElement>('[role="menuitem"]')?.focus())
+  }
+
+  function openCopilotView(view: 'models' | 'memory') {
+    closeIdentityMenu()
+    if (view === 'memory') openMemoryView()
+    else app.copilotView = 'models'
+  }
+
+  function onIdentityMenuKeydown(e: KeyboardEvent) {
+    if (e.key === 'Escape') {
+      e.preventDefault()
+      e.stopPropagation()
+      closeIdentityMenu(true)
+      return
+    }
+    if (e.key === 'Tab') {
+      closeIdentityMenu()
+      return
+    }
+    const options = Array.from(identityMenuEl?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]') ?? [])
+    if (!options.length) return
+    const index = options.indexOf(document.activeElement as HTMLButtonElement)
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault()
+      const offset = e.key === 'ArrowDown' ? 1 : -1
+      options[(index + offset + options.length) % options.length]?.focus()
+    } else if (e.key === 'Home' || e.key === 'End') {
+      e.preventDefault()
+      ;(e.key === 'Home' ? options[0] : options.at(-1))?.focus()
+    }
   }
 
   // Envoie le brouillon ; capture un SNAPSHOT du doc courant (le contexte ne change pas si
@@ -939,6 +1025,7 @@
     // Le menu vit hors du root du chip (racine du panneau) : les deux comptent comme « dedans ».
     if (verbMenuOpen && !verbMenuRootEl?.contains(t) && !verbMenuEl?.contains(t)) verbMenuOpen = false
     if (addMenuOpen && !addButtonEl?.contains(t) && !addMenuEl?.contains(t)) addMenuOpen = false
+    if (identityMenuOpen && !identityButtonEl?.contains(t) && !identityMenuEl?.contains(t)) identityMenuOpen = false
   }
 
   // Actions rapides de la vue vide — trois LIVRABLES distincts du même pipeline de résumé
@@ -1126,6 +1213,41 @@
   {/if}
 {/snippet}
 
+{#snippet identityMenu()}
+  {#if identityMenuOpen && identityMenuPos}
+    <div
+      class="cop-identity-menu"
+      style="left:{identityMenuPos.left}px; top:{identityMenuPos.top}px"
+      role="menu"
+      aria-label="Menu Doku-San"
+      tabindex="-1"
+      bind:this={identityMenuEl}
+      onkeydown={onIdentityMenuKeydown}
+    >
+      <button
+        role="menuitem"
+        class:active={app.copilotView === 'models'}
+        onclick={() => openCopilotView('models')}
+      >
+        <span class="cop-identity-menu-icon"><span class="msr">layers</span></span>
+        <span><strong>Modèles</strong><small>{app.copilotProvider === 'openai' ? OPENAI_MODEL : app.copilotProvider === 'minimax' ? (app.minimaxModel || MINIMAX_DEFAULT_MODEL) : (app.activeModel || 'Aucun modèle actif')}</small></span>
+        <span class="msr">chevron_right</span>
+      </button>
+      {#if isCloudProvider(app.copilotProvider)}
+        <button
+          role="menuitem"
+          class:active={app.copilotView === 'memory'}
+          onclick={() => openCopilotView('memory')}
+        >
+          <span class="cop-identity-menu-icon"><span class="msr">database</span></span>
+          <span><strong>Mémoire</strong><small>{app.cloudMemoryEnabled ? 'Automatique' : 'Désactivée'}</small></span>
+          <span class="msr">chevron_right</span>
+        </button>
+      {/if}
+    </div>
+  {/if}
+{/snippet}
+
 {#snippet citePreviewCard()}
   {#if citePreview}
     <div
@@ -1146,7 +1268,7 @@
 
 <!-- Échap est géré sur les triggers/pops eux-mêmes (focus toujours dedans quand ouvert)
      avec stopPropagation ; ici seul le clic extérieur, partagé par les deux menus. -->
-<svelte:window onpointerdowncapture={pickerOpen || verbMenuOpen || addMenuOpen ? onGlobalPointerDown : undefined} />
+<svelte:window onpointerdowncapture={pickerOpen || verbMenuOpen || addMenuOpen || identityMenuOpen ? onGlobalPointerDown : undefined} />
 
 <aside
   class="cop-panel"
@@ -1185,15 +1307,24 @@
 
   <!-- En-tête : contrôles panneau + contrôles fenêtre (draggable, motif TitleBar) -->
   <header class="cop-head" data-tauri-drag-region>
-    <div class="cop-identity" data-tauri-drag-region>
-      <span class="cop-mark" data-tauri-drag-region>
-        <span class="msr" style="font-size:15px" data-tauri-drag-region>spa</span>
+    <button
+      class="cop-identity"
+      bind:this={identityButtonEl}
+      aria-haspopup="menu"
+      aria-expanded={identityMenuOpen}
+      aria-label="Ouvrir le menu Doku-San"
+      onclick={toggleIdentityMenu}
+      onkeydown={(event) => { if (event.key === 'Escape') closeIdentityMenu(true) }}
+    >
+      <span class="cop-mark">
+        <span class="msr" style="font-size:15px">spa</span>
       </span>
-      <span class="cop-title" data-tauri-drag-region>Doku-San</span>
-      <span class="cop-local" class:cloud={isCloudProvider(app.copilotProvider)} data-tauri-drag-region>
+      <span class="cop-title">Doku-San</span>
+      <span class="cop-local" class:cloud={isCloudProvider(app.copilotProvider)}>
         {isCloudProvider(app.copilotProvider) ? 'cloud' : 'local'}
       </span>
-    </div>
+      <span class="cop-identity-chevron msr" aria-hidden="true">expand_more</span>
+    </button>
     <div class="cop-head-spacer" data-tauri-drag-region></div>
     <button
       class="cop-ic"
@@ -1221,14 +1352,6 @@
           </svg>
         </button>
       {/if}
-      {#if isCloudProvider(app.copilotProvider)}
-        <button class="cop-ic" title="Mémoire du travail" aria-label="Mémoire du travail" onclick={openMemoryView}>
-          <span class="msr" style="font-size:18px">database</span>
-        </button>
-      {/if}
-      <button class="cop-ic" title="Gérer les modèles" aria-label="Gérer les modèles" onclick={() => (app.copilotView = 'models')}>
-        <span class="msr" style="font-size:19px">layers</span>
-      </button>
     {/if}
     <div class="cop-sep"></div>
     <button class="cop-win" title="Réduire" aria-label="Réduire" onclick={minimizeWindow}>
@@ -1244,6 +1367,19 @@
 
   <!-- Corps : carte arrondie qui démarre sous l'en-tête -->
   <div class="cop-card">
+    {#if app.copilotView === 'chat' && evidenceTurns.length > 0}
+      <button
+        bind:this={activityButtonEl}
+        class="cop-activity-fab"
+        class:active={activityDrawerOpen}
+        title="Sources et activité"
+        aria-label="Afficher les sources et l’activité"
+        aria-expanded={activityDrawerOpen}
+        onclick={() => void toggleActivityDrawer()}
+      >
+        <span class="msr">format_list_bulleted</span>
+      </button>
+    {/if}
     <div class="cop-scroll" bind:this={scroller} onscroll={onScroll}>
       {#if app.copilotView === 'chat' && cloudMemory.lastBatch}
         <!-- L'auto-effacement referme aussi la fenêtre d'annulation : c'est voulu et
@@ -2081,58 +2217,12 @@
                   >{@html renderAnswer(m)}</div>
                 {/if}
                 {/if}
-                {#if m.sources?.length && !m.streaming}
-                  <!-- Citations DÉTERMINISTES (15.3, ancrées 21.x) : les passages réellement
-                       fournis au modèle — pas ce qu'il prétend avoir lu. Le clic saute au
-                       passage exact (flash). Mode « document complet » (citedOnly) : seuls
-                       les extraits que la réponse cite — la liste entière = tout le doc. -->
-                  {@const shown = m.citedOnly ? m.sources.filter((s) => m.cited?.includes(s.n)) : m.sources}
-                  {#if shown.length}
-                    <div class="cop-sources">
-                      <span class="cop-sources-lbl">{m.citedOnly ? 'Passages cités' : 'Passages consultés'}</span>
-                      {#each shown as s (s.n)}
-                        <button class="cop-source-chip" class:bare={!s.name} title={s.path ?? undefined} onclick={() => void revealCitation(s)}>
-                          <span class="cop-source-num">{s.n}</span>{#if s.name}{s.name}{/if}
-                        </button>
-                      {/each}
-                    </div>
-                  {/if}
-                {/if}
-                {#if m.webCitations?.length && !m.streaming}
-                  {@const webCited = citedWebCitationNumbers(m.content, m.webCitations.length)}
-                  {@const shownWeb = m.webCitations.filter((source) => webCited.has(source.n))}
-                  {#if shownWeb.length}
-                    <div class="cop-sources cop-web-sources">
-                      <span class="cop-sources-lbl">Sources Web citées</span>
-                      {#each shownWeb as source (source.n)}
-                        <button class="cop-source-chip" title={source.title} onclick={() => void openWebSource(source.url)}>
-                          <span class="cop-source-num">{source.n}</span>{webCitationHost(source.url)}
-                        </button>
-                      {/each}
-                    </div>
-                  {/if}
-                {/if}
-                {#if m.contextSources?.length && !m.streaming}
-                  <div class="cop-sources cop-context-sources">
-                    <span class="cop-sources-lbl">Contexte transmis</span>
-                    {#each m.contextSources as source (source.id)}
-                      <span class="cop-source-chip static" title={source.truncatedAtLoad || source.truncatedForRequest ? 'Source transmise partiellement' : 'Source transmise en entier'}>
-                        <span class="msr">{source.kind === 'clipboard' ? 'content_paste' : source.kind === 'selection' ? 'notes' : 'description'}</span>
-                        {source.label}{#if source.truncatedAtLoad || source.truncatedForRequest}<em>partiel</em>{/if}
-                      </span>
-                    {/each}
-                  </div>
-                {/if}
-                {#if m.memorySources?.length && !m.streaming}
-                  <div class="cop-sources cop-memory-sources">
-                    <span class="cop-sources-lbl">Mémoire utilisée</span>
-                    {#each m.memorySources as memory (memory.id)}
-                      <button class="cop-source-chip" title={memory.content} onclick={openMemoryView}>
-                        <span class="msr">database</span>{memory.name}
-                      </button>
-                    {/each}
-                  </div>
-                {/if}
+                <CopilotEvidence
+                  message={m}
+                  onReveal={(source) => void revealCitation(source)}
+                  onOpenWeb={(url) => void openWebSource(url)}
+                  onOpenMemory={openMemoryView}
+                />
               </div>
             {/if}
           {/each}
@@ -2407,6 +2497,41 @@
         </div>
       </div>
     {/if}
+    {#if app.copilotView === 'chat' && activityDrawerOpen}
+      <button
+        class="cop-activity-backdrop"
+        aria-label="Fermer les sources et l’activité"
+        onclick={() => closeActivityDrawer()}
+      ></button>
+      <div
+        bind:this={activityDrawerEl}
+        class="cop-activity-drawer"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Sources et activité de la conversation"
+        tabindex="-1"
+        onkeydown={(event) => { if (event.key === 'Escape') closeActivityDrawer() }}
+      >
+        <header>
+          <span class="msr" aria-hidden="true">progress_activity</span>
+          <div><strong>Sources et activité</strong><small>{evidenceTurns.length} réponse{evidenceTurns.length > 1 ? 's' : ''}</small></div>
+        </header>
+        <div class="cop-activity-turns">
+          {#each evidenceTurns as turn (turn.index)}
+            <section class="cop-activity-turn">
+              <p>{turn.question}</p>
+              <CopilotEvidence
+                message={turn.message}
+                collapsed
+                onReveal={(source) => void revealCitation(source)}
+                onOpenWeb={(url) => void openWebSource(url)}
+                onOpenMemory={openMemoryView}
+              />
+            </section>
+          {/each}
+        </div>
+      </div>
+    {/if}
   </div>
   <input
     class="cop-hidden-file"
@@ -2429,6 +2554,7 @@
   {@render citePreviewCard()}
   {@render verbMenuCard()}
   {@render addContextMenu()}
+  {@render identityMenu()}
 </aside>
 
 <style>
@@ -2539,7 +2665,13 @@
     box-shadow: inset 0 1px 0 var(--chrome-material-filet);
     user-select: none;
   }
-  .cop-identity { display: flex; align-items: center; gap: 7px; min-width: 0; }
+  .cop-identity {
+    min-width: 0; height: 32px; display: flex; align-items: center; gap: 7px; padding: 0 7px 0 0;
+    border: 0; border-radius: 9px; background: transparent; color: inherit; cursor: pointer;
+    text-align: left; transition: background 120ms ease, color 120ms ease;
+  }
+  .cop-identity:hover, .cop-identity[aria-expanded='true'] { background: var(--surface-hover); }
+  .cop-identity:focus-visible { outline: 1px solid var(--line-3); outline-offset: -2px; }
   .cop-mark {
     flex: 0 0 auto;
     width: 24px; height: 24px; display: inline-flex; align-items: center; justify-content: center;
@@ -2557,6 +2689,8 @@
     font-size: 9.5px; font-weight: 500; letter-spacing: 0.02em;
   }
   .cop-local.cloud { background: rgba(82, 119, 178, 0.14); color: var(--ink-3); }
+  .cop-identity-chevron { flex: 0 0 auto; color: var(--ink-4); font-size: 15px; transition: transform 140ms ease; }
+  .cop-identity[aria-expanded='true'] .cop-identity-chevron { transform: rotate(180deg); }
   .cop-head-spacer { flex: 1; align-self: stretch; }
   .cop-sep { width: 1px; height: 16px; background: var(--line-2); margin: 0 4px; }
   .cop-ic,
@@ -2586,8 +2720,31 @@
   .cop-win.close:hover { background: var(--window-close); color: #fff; }
   .cop-win.close:active { background: var(--window-close-active); color: #fff; }
 
+  .cop-identity-menu {
+    position: absolute; z-index: 40; width: 232px; padding: 6px;
+    border-radius: 14px; background: var(--cream-tint);
+    box-shadow: 0 0 0 1px var(--elevation-ring-soft), 0 14px 34px rgba(var(--shadow-rgb), 0.18);
+    animation: cop-picker-in 140ms cubic-bezier(0.22, 1, 0.36, 1);
+  }
+  .cop-identity-menu > button {
+    width: 100%; min-height: 48px; display: flex; align-items: center; gap: 9px; padding: 6px 8px;
+    border: 0; border-radius: 10px; background: transparent; color: var(--ink-2); text-align: left; cursor: pointer;
+  }
+  .cop-identity-menu > button:hover, .cop-identity-menu > button.active { background: var(--surface-hover); color: var(--ink); }
+  .cop-identity-menu > button:focus-visible { outline: 2px solid var(--line-3); outline-offset: -2px; }
+  .cop-identity-menu-icon {
+    width: 30px; height: 30px; flex: 0 0 30px; display: inline-flex; align-items: center; justify-content: center;
+    border-radius: 9px; background: var(--surface-2); color: var(--ink-3);
+  }
+  .cop-identity-menu-icon .msr { font-size: 17px; }
+  .cop-identity-menu > button > span:nth-child(2) { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 1px; }
+  .cop-identity-menu strong { font: 600 11.5px/1.35 var(--font-sans); }
+  .cop-identity-menu small { overflow: hidden; color: var(--ink-4); font: 400 10px/1.35 var(--font-sans); white-space: nowrap; text-overflow: ellipsis; }
+  .cop-identity-menu > button > .msr { flex: 0 0 auto; color: var(--ink-4); font-size: 15px; }
+
   /* Corps */
   .cop-card {
+    position: relative;
     flex: 1;
     min-height: 0;
     display: flex;
@@ -3301,11 +3458,106 @@
 
   /* Composeur à deux plans : Question et Contexte permutent leur profondeur. */
   .cop-input-wrap {
+    position: relative;
+    z-index: 2;
     flex-shrink: 0;
     padding: 8px max(16px, calc((100% - 760px) / 2)) 10px;
     background: var(--cream-content);
     container-type: inline-size;
   }
+  .cop-input-wrap::before {
+    content: '';
+    position: absolute;
+    z-index: -1;
+    left: 0;
+    right: 0;
+    top: -24px;
+    height: 24px;
+    background: linear-gradient(180deg, transparent, var(--cream-content));
+    pointer-events: none;
+  }
+
+  .cop-activity-fab {
+    position: absolute;
+    z-index: 10;
+    top: 12px;
+    right: 12px;
+    width: 34px;
+    height: 34px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: 0;
+    border-radius: 11px;
+    background: color-mix(in srgb, var(--cream-tint) 82%, transparent);
+    box-shadow: 0 7px 20px rgba(var(--shadow-rgb), 0.1);
+    color: var(--ink-4);
+    cursor: pointer;
+    transition: background 120ms ease, color 120ms ease, transform 100ms ease;
+  }
+  .cop-activity-fab > .msr { font-size: 19px; }
+  .cop-activity-fab:hover,
+  .cop-activity-fab.active {
+    background: color-mix(in srgb, var(--cream-tint) 72%, var(--ink) 8%);
+    box-shadow: 0 9px 24px rgba(var(--shadow-rgb), 0.14);
+    color: var(--ink);
+  }
+  .cop-activity-fab:active { transform: scale(0.94); }
+  .cop-activity-fab:focus-visible { outline: 2px solid var(--line-3); outline-offset: 2px; }
+
+  .cop-activity-backdrop {
+    position: absolute;
+    z-index: 8;
+    inset: 0;
+    border: 0;
+    background: transparent;
+    cursor: default;
+  }
+  .cop-activity-drawer {
+    position: absolute;
+    z-index: 9;
+    top: 54px;
+    right: 12px;
+    width: min(380px, calc(100% - 24px));
+    max-height: min(72%, 620px);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    border: 0;
+    border-radius: 18px;
+    background: var(--cream-tint);
+    box-shadow: 0 20px 52px rgba(var(--shadow-rgb), 0.2);
+    color: var(--ink);
+    transform-origin: top right;
+    animation: cop-drawer-in 180ms cubic-bezier(.22, 1, .36, 1) both;
+  }
+  :global([data-theme='dark']) .cop-activity-drawer {
+    background: color-mix(in srgb, var(--composer-bg) 96%, white);
+  }
+  .cop-activity-drawer > header {
+    min-height: 54px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 9px 8px 14px;
+    border-bottom: 1px solid var(--line-1);
+  }
+  .cop-activity-drawer > header > .msr { color: var(--ink-3); font-size: 18px; }
+  .cop-activity-drawer > header > div { min-width: 0; flex: 1; display: flex; flex-direction: column; }
+  .cop-activity-drawer > header strong { font: 600 12.5px/1.4 var(--font-sans); }
+  .cop-activity-drawer > header small { color: var(--ink-4); font: 400 10.5px/1.3 var(--font-sans); }
+  .cop-activity-turns { min-height: 0; overflow-y: auto; padding: 6px 12px 18px; }
+  .cop-activity-turn { padding: 10px 0 12px; }
+  .cop-activity-turn + .cop-activity-turn { border-top: 1px solid var(--line-1); }
+  .cop-activity-turn > p {
+    margin: 0 8px 4px;
+    overflow: hidden;
+    color: var(--ink-2);
+    font: 500 12px/1.45 var(--font-sans);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  @keyframes cop-drawer-in { from { opacity: 0; transform: translateY(-6px) scale(0.985); } }
   .cop-composer-shell {
     overflow: visible;
   }
@@ -3579,20 +3831,6 @@
   .cop-add-context-action small { font-size: 10px; color: var(--ink-4); }
   .cop-hidden-file { display: none; }
 
-  /* Passages consultés (15.3) */
-  .cop-sources { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 10px; }
-  .cop-sources-lbl { font-size: 10.5px; color: var(--ink-4); letter-spacing: 0.02em; }
-  .cop-source-chip {
-    display: inline-flex; align-items: center; gap: 5px; height: 24px; padding: 0 9px 0 4px;
-    border: 0; border-radius: 999px; background: var(--surface-2);
-    color: var(--ink-3); font-family: var(--font-sans); font-size: 11px; cursor: pointer;
-    transition: background 120ms ease, color 120ms ease, transform 100ms ease;
-  }
-  .cop-source-chip:hover { background: var(--accent-soft); color: var(--ink); }
-  .cop-source-chip:active { transform: scale(0.96); }
-  .cop-source-chip:focus-visible { outline: 2px solid var(--line-3); outline-offset: 1px; }
-  /* Sans nom de note (extraits du document courant) : la puce est juste le numéro. */
-  .cop-source-chip.bare { padding: 0 4px; }
   .cop-md :global(.cop-web-cite) {
     min-width: 18px; height: 18px; margin: 0 2px; padding: 0 5px; border: 0; border-radius: 999px;
     background: var(--accent-soft); color: var(--ink-2); font: 650 9.5px var(--font-sans);
@@ -3600,25 +3838,7 @@
   }
   .cop-md :global(.cop-web-cite:hover) { background: var(--surface-hover); color: var(--ink); }
   .cop-md :global(.cop-web-cite:focus-visible) { outline: 2px solid var(--line-3); outline-offset: 1px; }
-  .cop-source-chip.static { cursor: default; padding-left: 7px; }
-  .cop-source-chip.static:hover { background: var(--surface-2); color: var(--ink-3); }
-  .cop-source-chip.static > .msr { font-size: 13px; }
-  .cop-source-chip.static em { font-size: 9px; font-style: normal; color: var(--warn-text); }
-  /* Tag arrondi-carré plutôt que cercle : le padding horizontal laisse respirer les
-     numéros à 2 chiffres qu'un cercle de 16px écrasait. */
-  .cop-source-num {
-    display: inline-flex; align-items: center; justify-content: center;
-    min-width: 16px; height: 15px; padding: 0 4px; border-radius: 5px;
-    background: var(--accent-soft); color: var(--ink-3);
-    /* Inter (pas la mono) : un numéro de citation est un repère de lecture, pas un tag
-       technique. tabular-nums = colonnes stables entre [1] et [11]. */
-    font-family: var(--font-sans); font-size: 10px; font-weight: 600; line-height: 1;
-    font-variant-numeric: tabular-nums;
-  }
-
-  /* Puces de citation [n] inline (21.x) — injectées via {@html} après sanitize, d'où le
-     :global. Même vocabulaire visuel que .cop-source-num : la puce inline et le pied
-     désignent le même passage. */
+  /* Puces de citation [n] inline (21.x) — injectées via {@html} après sanitize. */
   .cop-md :global(.cop-cite) {
     display: inline-flex; align-items: center; justify-content: center;
     /* Gabarit en `em` de SA propre taille : la puce grandit avec le texte qu'elle ponctue.
@@ -3713,6 +3933,8 @@
 
   @media (prefers-reduced-motion: reduce) {
     .cop-composer-front { animation: none; }
+    .cop-activity-backdrop,
+    .cop-activity-drawer { animation: none; }
     .cop-panel,
     .cop-card,
     .cop-composer-panel,
@@ -3726,8 +3948,8 @@
     .cop-copy,
     .cop-err-btn,
     .cop-dismiss,
+    .cop-activity-fab,
     .cop-input-send,
-    .cop-verb-chip,
-    .cop-source-chip { transition-duration: 0.01ms; }
+    .cop-verb-chip { transition-duration: 0.01ms; }
   }
 </style>

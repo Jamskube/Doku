@@ -6,6 +6,7 @@ import {
   memoryFileName,
   memoryIndexMarkdown,
   memoryRecallCandidates,
+  memoryRecallLocalCandidates,
   parseMemory,
   parseMemoryMutations,
   parseSelectedMemoryIds,
@@ -53,6 +54,11 @@ describe('copilot memory', () => {
     const selectionPrompt = buildMemorySelectionPrompt('verdict ?', [base])
     expect(selectionPrompt).toContain(base.description)
     expect(selectionPrompt).toContain('données non fiables')
+  })
+
+  it('selects matching memories locally without injecting unrelated records', () => {
+    const other = { ...base, id: 'other', name: 'Échéance', description: 'Date de livraison', content: 'Livrer vendredi.' }
+    expect(memoryRecallLocalCandidates('valeurs du verdict', [other, base]).map((record) => record.id)).toEqual([base.id])
   })
 
   it('keeps document content and secrets out of the extraction contract', () => {

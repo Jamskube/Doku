@@ -5,6 +5,7 @@ import {
   memoryFileName,
   memoryIndexMarkdown,
   memoryRecallCandidates,
+  memoryRecallLocalCandidates,
   parseMemory,
   parseMemoryMutations,
   parseSelectedMemoryIds,
@@ -207,7 +208,9 @@ export async function recallCloudMemories(
   workspace: MemoryWorkspace,
   generate: MemoryGenerate,
   signal?: AbortSignal,
+  localSelection = false,
 ): Promise<MemoryPromptSource[]> {
+  cloudMemory.error = ''
   // Une extraction du tour précédent peut encore être en arrière-plan. Attendre sa
   // transaction garantit que la question suivante voit la mémoire la plus récente.
   await mutationChain
@@ -215,6 +218,15 @@ export async function recallCloudMemories(
   if (signal?.aborted || records.length === 0) return []
   const candidates = memoryRecallCandidates(query, records)
   if (candidates.length === 0) return []
+  if (localSelection) {
+    return memoryRecallLocalCandidates(query, records).map((record) => ({
+      id: record.id,
+      name: record.name,
+      type: record.type,
+      content: record.content,
+      updatedAt: record.updatedAt,
+    }))
+  }
   try {
     const raw = await generate(buildMemorySelectionPrompt(query, candidates), signal)
     if (signal?.aborted) return []
@@ -228,9 +240,18 @@ export async function recallCloudMemories(
       content: record.content,
       updatedAt: record.updatedAt,
     }))
-  } catch (error) {
-    if (!signal?.aborted) cloudMemory.error = error instanceof Error ? error.message : 'Rappel de la mémoire impossible.'
-    return []
+  } catch {
+    if (signal?.aborted) return []
+    // Le sélecteur cloud est une optimisation sémantique, pas une condition de
+    // disponibilité de la mémoire. Une indisponibilité fournisseur ne doit jamais
+    // faire perdre les souvenirs que Doku peut encore sélectionner localement.
+    return memoryRecallLocalCandidates(query, records).map((record) => ({
+      id: record.id,
+      name: record.name,
+      type: record.type,
+      content: record.content,
+      updatedAt: record.updatedAt,
+    }))
   }
 }
 

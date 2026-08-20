@@ -23,6 +23,11 @@ import {
   type CompatStatus,
 } from './compat'
 import { citedNumbers, locateOffset, locatePassage, type CitedPassage } from './citations'
+import {
+  finishRunningCopilotActivities,
+  upsertCopilotActivity,
+  type CopilotActivity,
+} from './copilot-activity'
 import { isBinaryKind } from './doc-kind'
 import { setRephrasePreview } from './editor/rephrase-preview'
 import { baseName, joinPath, parentPath } from './explorer'
@@ -96,12 +101,11 @@ import {
   type MemoryWorkspace,
 } from './copilot-memory.svelte'
 import type { CloudMemoryProvider, MemoryPromptSource } from './copilot-memory'
-import { normalizeWebCitations, type WebCitation } from './web-citations'
+import { extractWebCitationsFromMarkdown, normalizeWebCitations, type WebCitation } from './web-citations'
 import {
   appendCurrentDateContext,
   appendWebSearchContext,
-  buildWebSearchPlannerPrompt,
-  parseWebSearchQuery,
+  buildWebSearchQuery,
   searchWeb,
   webSearchCitations,
 } from './web-search'
@@ -125,6 +129,9 @@ export interface ChatMsg {
   // mais exclu de l'historique envoyé au modèle (ce n'est pas un tour de dialogue).
   notice?: boolean
   status?: string
+  // Trace factuelle des opérations réalisées pour cette réponse. Elle décrit les outils et
+  // le contexte, jamais la pensée interne du modèle, et reste disponible après le streaming.
+  activity?: CopilotActivity[]
   // Passages top-k réellement fournis au modèle (15.3, enrichi 21.x) : UN PAR EXTRAIT,
   // numérotés comme dans le prompt. Alimente le pied « Passages consultés » DÉTERMINISTE
   // ET les puces [n] inline (citations ancrées) — on affiche toujours les passages
@@ -628,7 +635,11 @@ function streamGenerate(
   // jamais lus par l'utilisateur.
   const cap = options.map ? SUMMARY_MAP_MAX_TOKENS : undefined
   if (runtime.provider === 'openai') {
-    return openAiGenerate(prompt, onToken, signal, options.onThinking, cap)
+    // Le backend Codex réserve une partie du budget au raisonnement : un plafond
+    // court peut interrompre ou refuser la sortie JSON des mutations mémoire.
+    // Les appels internes OpenAI restent peu nombreux (le rappel Web est local),
+    // donc on privilégie ici une réponse complète plutôt qu'une borne artificielle.
+    return openAiGenerate(prompt, onToken, signal, options.onThinking)
   }
   if (runtime.provider === 'minimax') {
     return compatGenerate('minimax', runtime.model, prompt, onToken, signal, options.onThinking, {
@@ -645,17 +656,6 @@ function streamGenerate(
 function memoryGenerate(runtime: ProviderRuntime) {
   return (prompt: string, signal?: AbortSignal) =>
     streamGenerate(runtime, prompt, () => {}, signal ?? new AbortController().signal, { map: true })
-}
-
-async function planWebSearchQuery(
-  runtime: ProviderRuntime,
-  question: string,
-  messages: readonly OllamaMessage[],
-  signal: AbortSignal,
-): Promise<string | null> {
-  const prompt = buildWebSearchPlannerPrompt(question, messages)
-  const raw = await streamGenerate(runtime, prompt, () => {}, signal, { map: true })
-  return parseWebSearchQuery(raw)
 }
 
 // Carte de config posée quand le fournisseur cloud n'est pas prêt (chip `config`).
@@ -859,6 +859,12 @@ export async function sendChat(
     role: 'assistant',
     content: '',
     streaming: true,
+    activity: [{
+      id: 'context',
+      kind: 'context',
+      label: scope === 'folder' ? 'Recherche dans les notes' : 'Lecture du contexte',
+      state: 'running',
+    }],
     status: scope === 'folder'
       ? 'Doku-San cherche dans vos notes…'
       : automaticDocuments.length
@@ -866,6 +872,14 @@ export async function sendChat(
         : 'Doku-San lit le document…',
   })
   const idx = copilot.messages.length - 1 // index stable (generating sérialise les envois)
+  const setActivity = (activity: CopilotActivity) => {
+    const message = copilot.messages[idx]
+    if (message) message.activity = upsertCopilotActivity(message.activity, activity)
+  }
+  const finishActivities = (state: 'done' | 'error') => {
+    const message = copilot.messages[idx]
+    if (message) message.activity = finishRunningCopilotActivities(message.activity, state)
+  }
 
   try {
     if (automaticDocuments.length) {
@@ -941,10 +955,24 @@ export async function sendChat(
         turnMemoryWorkspace = await memoryWorkspace(doc.path, doc.name ?? baseName(doc.path), 'document')
       }
       if (turnMemoryWorkspace) {
+        setActivity({ id: 'memory', kind: 'memory', label: 'Rappel de la mémoire', state: 'running' })
         const message = copilot.messages[idx]
         if (message && !message.content) message.status = 'Doku-San retrouve le fil du travail…'
-        recalledMemories = await recallCloudMemories(q, turnMemoryWorkspace, memoryGenerate(runtime), signal)
+        recalledMemories = await recallCloudMemories(
+          q,
+          turnMemoryWorkspace,
+          memoryGenerate(runtime),
+          signal,
+          webSearchEnabled,
+        )
         if (signal.aborted) return
+        setActivity({
+          id: 'memory',
+          kind: 'memory',
+          label: 'Rappel de la mémoire',
+          detail: recalledMemories.length ? `${recalledMemories.length} souvenir${recalledMemories.length > 1 ? 's' : ''}` : 'Aucun souvenir utile',
+          state: 'done',
+        })
         if (message && !message.content) {
           message.status = scope === 'folder' ? 'Doku-San cherche dans vos notes…' : 'Doku-San lit le document…'
         }
@@ -973,17 +1001,42 @@ export async function sendChat(
       wholeDoc = prep.wholeDoc ?? false
       bundle = prep.bundle
     }
+    const sentSourceCount = bundle?.sentSources.length ?? 0
+    setActivity({
+      id: 'context',
+      kind: 'context',
+      label: scope === 'folder' ? 'Recherche dans les notes' : 'Lecture du contexte',
+      detail: sentSourceCount
+        ? `${sentSourceCount} source${sentSourceCount > 1 ? 's' : ''} transmise${sentSourceCount > 1 ? 's' : ''}`
+        : 'Document courant',
+      state: 'done',
+    })
     if (webSearchEnabled && runtime.provider !== 'openai') {
       const message = copilot.messages[idx]
+      setActivity({ id: 'web-plan', kind: 'web-plan', label: 'Préparation de la recherche Web', state: 'running' })
       if (message && !message.content) message.status = 'Doku-San prépare la recherche…'
-      const searchQuery = await planWebSearchQuery(runtime, q, messages, signal)
-      if (signal.aborted) return
+      const searchQuery = buildWebSearchQuery(q, messages)
+      setActivity({
+        id: 'web-plan',
+        kind: 'web-plan',
+        label: 'Préparation de la recherche Web',
+        detail: searchQuery || 'Date courante uniquement',
+        state: 'done',
+      })
       if (searchQuery) {
+        setActivity({ id: 'web-search', kind: 'web-search', label: 'Recherche sur le Web', detail: searchQuery, state: 'running' })
         if (message && !message.content) message.status = 'Doku-San recherche sur le Web…'
         const results = await searchWeb(searchQuery)
         if (signal.aborted) return
         messages = appendWebSearchContext(messages, results, searchQuery)
         webCitations = webSearchCitations(results)
+        setActivity({
+          id: 'web-search',
+          kind: 'web-search',
+          label: 'Recherche sur le Web',
+          detail: `${results.length} résultat${results.length > 1 ? 's' : ''}`,
+          state: 'done',
+        })
       } else {
         messages = appendCurrentDateContext(messages)
       }
@@ -992,6 +1045,7 @@ export async function sendChat(
     // tours ; au défaut Ollama (4096) l'historique les évincerait par troncature gauche silencieuse.
     // Mutation via l'index (élément proxifié du $state array) → réactif ; muter la ref locale
     // poussée ne le serait PAS (piège $state profond de Svelte 5).
+    setActivity({ id: 'answer', kind: 'answer', label: 'Rédaction de la réponse', state: 'running' })
     await streamChat(
       runtime,
       applyVerbosity(messages, app.copilotVerbosity),
@@ -1012,14 +1066,40 @@ export async function sendChat(
         onSearching: () => {
           const m = copilot.messages[idx]
           if (m && m.streaming && !m.content) m.status = 'Doku-San recherche sur le Web…'
+          setActivity({ id: 'web-search', kind: 'web-search', label: 'Recherche sur le Web', state: 'running' })
         },
-        onCitations: (citations) => { webCitations = citations },
+        onCitations: (citations) => {
+          webCitations = citations
+          setActivity({
+            id: 'web-search',
+            kind: 'web-search',
+            label: 'Recherche sur le Web',
+            detail: `${citations.length} source${citations.length > 1 ? 's' : ''}`,
+            state: 'done',
+          })
+        },
       },
     )
+    setActivity({ id: 'answer', kind: 'answer', label: 'Rédaction de la réponse', state: 'done' })
     // Pied « Passages consultés » déterministe (15.3) — supprimé sur refus : des sources
     // cliquables sous « je ne trouve pas » seraient trompeuses. Sans `sources` posées,
     // les marqueurs [n] éventuels de la réponse sont retirés au rendu (count = 0).
     const done = copilot.messages[idx]
+    if (runtime.provider === 'openai' && webSearchEnabled && done?.content) {
+      webCitations = normalizeWebCitations([
+        ...webCitations,
+        ...extractWebCitationsFromMarkdown(done.content),
+      ])
+      setActivity({
+        id: 'web-search',
+        kind: 'web-search',
+        label: 'Recherche sur le Web',
+        detail: webCitations.length
+          ? `${webCitations.length} source${webCitations.length > 1 ? 's' : ''}`
+          : 'Aucune source exploitable',
+        state: 'done',
+      })
+    }
     // Provenance capturée MAINTENANT (pas au clic « Sauver en note » : l'onglet actif
     // aura pu changer). Nom du doc même sans sources (petit doc, réponse libre).
     if (done?.content && !done.failed) {
@@ -1050,6 +1130,7 @@ export async function sendChat(
     }
     if (
       done?.content && !done.failed && !done.notice && turnMemoryWorkspace &&
+      !(runtime.provider === 'minimax' && webSearchEnabled) &&
       isCloudProvider(runtime.provider) && app.cloudMemoryEnabled
     ) {
       queueMemoryExtraction({
@@ -1076,9 +1157,11 @@ export async function sendChat(
     copilot.messages[idx].content = copilot.messages[idx].content || generationFailure(e, provider, 'La génération a échoué. Vérifiez que le moteur est prêt, puis réessayez.')
     copilot.messages[idx].failed = true
     copilot.messages[idx].retry = { kind: 'chat', question: q, scope, contextRevision, workspaceContextKey }
+    finishActivities('error')
   } finally {
     const m = copilot.messages[idx]
     if (m) {
+      if (!m.failed) finishActivities('done')
       m.streaming = false
       m.status = undefined
       // Annulé avant le 1er token → tour fantôme (question + réponse vide) : on retire les deux

@@ -2,6 +2,7 @@ export interface WebCitation {
   n: number
   url: string
   title: string
+  snippet?: string
   startIndex?: number
   endIndex?: number
 }
@@ -9,6 +10,7 @@ export interface WebCitation {
 interface RawWebCitation {
   url?: unknown
   title?: unknown
+  snippet?: unknown
   startIndex?: unknown
   endIndex?: unknown
 }
@@ -44,11 +46,26 @@ export function normalizeWebCitations(values: readonly unknown[]): WebCitation[]
       n: citations.length + 1,
       url,
       title: typeof value.title === 'string' && value.title.trim() ? value.title.trim() : new URL(url).hostname,
+      snippet: typeof value.snippet === 'string' && value.snippet.trim() ? value.snippet.trim() : undefined,
       startIndex,
       endIndex,
     })
   }
   return citations
+}
+
+export function extractWebCitationsFromMarkdown(markdown: string): WebCitation[] {
+  const candidates: RawWebCitation[] = []
+  for (const match of markdown.matchAll(/\[([^\]\n]+)\]\((https:\/\/[^)\s]+)\)/g)) {
+    candidates.push({ url: match[2], title: match[1] })
+  }
+  for (const match of markdown.matchAll(/<a\b[^>]*\bhref=["'](https:\/\/[^"']+)["'][^>]*>([^<]*)<\/a>/gi)) {
+    candidates.push({ url: match[1], title: match[2] })
+  }
+  for (const match of markdown.matchAll(/https:\/\/[^\s<>"'`)\]]+/g)) {
+    candidates.push({ url: match[0].replace(/[.,;:!?]+$/, '') })
+  }
+  return normalizeWebCitations(candidates)
 }
 
 // Les indices viennent de l'annotation OpenAI. On ajoute notre marqueur APRÈS le passage
@@ -89,6 +106,22 @@ export function citedWebCitationNumbers(markdown: string, count: number): Set<nu
     if (n >= 1 && n <= count) cited.add(n)
   }
   return cited
+}
+
+// Les fournisseurs pilotés par Doku citent avec `[web:n]`. OpenAI fournit plutôt
+// une plage de caractères sur le texte final. Les deux formes désignent une source
+// réellement utilisée et doivent alimenter la même vue « Sources ».
+export function visibleWebCitations(markdown: string, citations: readonly WebCitation[]): WebCitation[] {
+  const cited = citedWebCitationNumbers(markdown, citations.length)
+  return citations.filter((citation) =>
+    cited.has(citation.n) ||
+    markdown.includes(citation.url) ||
+    (
+      citation.startIndex != null &&
+      citation.endIndex != null &&
+      citation.endIndex > citation.startIndex
+    ),
+  )
 }
 
 export function webCitationHost(url: string): string {

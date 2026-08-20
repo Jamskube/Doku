@@ -2,8 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   appendWebSearchContext,
   appendCurrentDateContext,
-  buildWebSearchPlannerPrompt,
-  parseWebSearchQuery,
+  buildWebSearchQuery,
   webSearchCitations,
 } from './web-search'
 
@@ -25,23 +24,28 @@ describe('web search context', () => {
   })
 
   it('creates safe deterministic source metadata', () => {
-    expect(webSearchCitations(results)).toEqual([expect.objectContaining({ n: 1, title: 'Source fiable', url: 'https://example.com/a' })])
+    expect(webSearchCitations(results)).toEqual([expect.objectContaining({
+      n: 1,
+      title: 'Source fiable',
+      url: 'https://example.com/a',
+      snippet: 'Un extrait.',
+    })])
   })
 
-  it('plans from the document instead of searching the vague question verbatim', () => {
-    const prompt = buildWebSearchPlannerPrompt(
+  it('builds a useful query locally from a vague question and its document', () => {
+    const query = buildWebSearchQuery(
       'Est-ce normal ?',
       [{ role: 'user', content: 'Facture OpenAI Ireland Limited, ChatGPT Pro, reverse charge Belgique' }],
       new Date('2026-08-20T12:00:00Z'),
     )
-    expect(prompt).toContain('OpenAI Ireland Limited')
-    expect(prompt).toContain('Date actuelle certaine')
-    expect(prompt).toContain('NO_SEARCH')
+    expect(query).toContain('OpenAI Ireland Limited')
+    expect(query).toContain('ChatGPT Pro')
+    expect(query).toContain('reverse charge')
   })
 
-  it('accepts one clean query and skips needless date searches', () => {
-    expect(parseWebSearchQuery('Query: "OpenAI invoice VAT Belgium"\nExplication inutile')).toBe('OpenAI invoice VAT Belgium')
-    expect(parseWebSearchQuery('NO_SEARCH')).toBeNull()
+  it('skips needless date searches', () => {
+    expect(buildWebSearchQuery('Quel jour sommes-nous ?', [])).toBeNull()
+    expect(buildWebSearchQuery('Et quel jour sommes-nous ?', [])).toBeNull()
     expect(appendCurrentDateContext(
       [{ role: 'user', content: 'Quel jour sommes-nous ?' }],
       new Date('2026-08-20T12:00:00Z'),

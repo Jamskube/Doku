@@ -26,6 +26,7 @@ Frontend Svelte 5 de Doku : shell applicatif, éditeur Markdown *live preview*, 
 | `PdfPagesDialog.svelte` | Modale « Organiser les pages » : vignettes paresseuses, glisser-déposer, insertion d'un autre PDF |
 | `PdfTextEditDialog.svelte` | Modale d'édition du texte d'une page PDF (la correction par consigne y est **masquée**, voir ADR-0024) |
 | `CopilotPanel.svelte` | Chat Doku-San : fournisseurs, composeur Question/Contexte, mémoire cloud, citations cliquables |
+| `CopilotEvidence.svelte` | Trace compacte d’activité et bloc unifié des sources, réutilisés dans les réponses et le panneau temporaire |
 | `SettingsDialog.svelte` | Réglages : modèles et fournisseurs, apparence, à propos (version lue dans `package.json`) |
 | `ConfirmDialog.svelte` | Confirmation modale générique (actions destructrices) |
 | `WikilinkPrompt.svelte` | Résolution interactive d'un `[[wikilink]]` ambigu ou absent |
@@ -69,6 +70,7 @@ Frontend Svelte 5 de Doku : shell applicatif, éditeur Markdown *live preview*, 
 | `copilot-memory.ts` | Mémoire durable du copilote cloud : schéma Markdown, validation, déduplication, prompts purs |
 | `copilot-memory.svelte.ts` | Chargement, rappel, extraction, mutations atomiques et annulation de la mémoire cloud |
 | `copilot-width.ts` | Bornes de la largeur du panneau copilote (séparateur, préférence persistée) |
+| `copilot-activity.ts` | Étapes factuelles d’une réponse (contexte, mémoire, Web, rédaction), sans exposer le raisonnement interne |
 | `web-search.ts` | Recherche Web pilotée par Doku pour Ollama/MiniMax et injection sûre des extraits |
 | `web-citations.ts` | Normalisation HTTPS et rendu des citations Web OpenAI ou pilotées par Doku |
 | `ollama.ts` | Client du sidecar Ollama local (ADR-0006/0012) |
