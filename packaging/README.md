@@ -30,7 +30,7 @@ La CI **installe ensuite le paquet pour de vrai** (`pacman -U`) et vérifie que 
 gh run download <run-id> -n Doku-main-arch-x64
 
 # Installer — c'est un vrai paquet Arch
-sudo pacman -U doku-3.0.0-1-x86_64.pkg.tar.zst
+sudo pacman -U doku-3.1.0-1-x86_64.pkg.tar.zst
 
 doku                  # ou depuis le menu des applications
 sudo pacman -R doku   # désinstallation propre
