@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   DIAGRAM_GENRES,
+  buildDiagramCriticPrompt,
   buildDiagramStudioPlannerPrompt,
   parseDiagramCriticVerdict,
   parseDiagramStudioPlan,
@@ -49,7 +50,9 @@ describe('diagram studio planning', () => {
     const prompt = buildDiagramStudioPlannerPrompt('Montre la licence')
     expect(prompt).not.toContain('confidence')
     expect(prompt).toContain('block:')
-    expect(prompt).toContain('bytefield:')
+    // Le catalogue soumis couvre bien plusieurs familles — mais plus les genres
+    // retirés, voir « offered genre catalogue ».
+    expect(prompt).toContain('treeview:')
   })
 
   it('anchors a modification to the selected persisted view', () => {
@@ -89,5 +92,76 @@ describe('diagram studio planning', () => {
       rationale: 'Cette vue montre les responsabilités.',
     }
     expect(parsePersistedDiagramStudio(JSON.parse(JSON.stringify(studio)))).toEqual(studio)
+  })
+})
+
+describe('critic prompt', () => {
+  const plan = {
+    version: 1 as const,
+    brief: {
+      objective: 'o', keyQuestion: 'q', desiredInsight: 'i',
+      facts: [], entities: [], relations: [], measures: [], events: [],
+    },
+    candidates: [],
+  }
+  const candidate = (id: string, genre: string, defects?: string[]) => ({
+    id, genre, kind: 'architecture' as const, label: 'L', thesis: 't',
+    keeps: [], omits: [], layout: 'l', source: 's', width: 800, height: 500, aspectRatio: 1.6,
+    ...(defects ? { defects } : {}),
+  })
+
+  it('tells the critic which views are actually messy', () => {
+    const prompt = buildDiagramCriticPrompt(plan, [
+      candidate('block-1', 'block', ['overlapping-boxes', 'overlapping-labels']),
+      candidate('sequence-2', 'sequence'),
+    ])
+    expect(prompt).toContain('overlapping-boxes')
+    expect(prompt).toContain('choisis TOUJOURS la vue sans défaut')
+  })
+
+  it('stays silent when nothing was measured', () => {
+    // Sans défaut mesuré, la consigne n'a pas lieu d'être : elle ferait douter le
+    // critique de vues qui vont bien.
+    const prompt = buildDiagramCriticPrompt(plan, [candidate('a', 'block'), candidate('b', 'sequence')])
+    expect(prompt).not.toContain('choisis TOUJOURS la vue sans défaut')
+  })
+})
+
+describe('offered genre catalogue', () => {
+  it('keeps every engine genre parsable while offering only the documentary ones', () => {
+    expect(DIAGRAM_GENRES).toHaveLength(30)
+    const withheld = DIAGRAM_GENRES.filter((profile) => !profile.offered).map((profile) => profile.genre)
+    // Matériel et outillage de développement : un copilote documentaire n'a
+    // pratiquement aucune chance de les employer à bon escient.
+    expect(withheld.sort()).toEqual(['bytefield', 'gitgraph', 'harness', 'packet', 'rack', 'wave'])
+  })
+
+  it('does not show a withheld genre to the model', () => {
+    const prompt = buildDiagramStudioPlannerPrompt('Explique le protocole')
+    expect(prompt).toContain('- block:')
+    expect(prompt).not.toContain('- bytefield:')
+    expect(prompt).not.toContain('- rack:')
+  })
+
+  it('refuses a withheld genre in a fresh plan but restores one from an archive', () => {
+    const withheldPlan = `<diagram-plan>{
+      "brief": {"objective":"o","keyQuestion":"q","desiredInsight":"i"},
+      "candidates": [
+        {"genre":"rack","thesis":"t","keeps":[],"omits":[],"layout":"l"},
+        {"genre":"block","thesis":"t","keeps":[],"omits":[],"layout":"l"},
+        {"genre":"sequence","thesis":"t","keeps":[],"omits":[],"layout":"l"}
+      ]
+    }</diagram-plan>`
+    expect(parseDiagramStudioPlan(withheldPlan)?.candidates.map((c) => c.genre)).toEqual(['block', 'sequence'])
+
+    // Une discussion antérieure au retrait doit encore s'ouvrir.
+    const archived = parsePersistedDiagramStudio({
+      version: 1,
+      brief: { objective: 'o', keyQuestion: 'q', desiredInsight: 'i' },
+      candidates: [{ id: 'rack-1', genre: 'rack', thesis: 't', layout: 'l', source: 'type rack {}', width: 100, height: 80 }],
+      selectedCandidateId: 'rack-1',
+      rationale: 'r',
+    })
+    expect(archived?.candidates[0].genre).toBe('rack')
   })
 })

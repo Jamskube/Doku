@@ -1,0 +1,40 @@
+type bpmn { title: "Routage des réglages sans VPN" }
+graph { background: #ffffff padding: 36 gap: 40 }
+
+style node  { font: 13 #111827 stroke: #334155 1.2 fill: #ffffff }
+style edge  { stroke: #475569 1.3 font: 11 #475569 }
+style store { fill: #f1f5f9 }
+
+event start "Choisir un réglage" start none
+task entry "Accéder au Global dashboard" user right-of start gap 44
+task scope "Identifier la portée" rule right-of entry gap 44
+gateway common "Réplicable sur tout le parc ?" exclusive right-of scope gap 52
+
+task api "Envoyer via l'API" service below common gap 64
+event park "Appliqué à tout le parc" end right-of api gap 52
+
+task target "Cibler un device" user below common gap 64
+task relay "Transmettre par la passerelle" service right-of target gap 44
+task portal "Gérer dans le portail du device" user right-of relay gap 44
+event local "Appliqué au device ciblé" end right-of portal gap 44
+
+data template "Gabarit commun" object below api gap 28 align left
+data assignment "Affectation à une source" object below portal gap 28 align right
+data policy "Réglage propre au device" object below relay gap 28 align left
+
+start  -> entry
+entry  -> scope
+scope  -> common
+common -> api     "oui"
+common -> target  "non"
+api    -> park
+target -> relay
+relay  -> portal
+portal -> local
+
+scope  -> template   association
+api    -> template   association
+target -> assignment association
+portal -> assignment association
+relay  -> policy     association
+portal -> policy     association

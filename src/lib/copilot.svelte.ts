@@ -145,9 +145,11 @@ import {
   type WebSearchResult,
 } from './web-search'
 import {
+  BgraphQualityError,
   BgraphValidationError,
   assertBgraphQuality,
   bgraphRecipe,
+  renderDiagramForGeneration,
   MAX_BGRAPH_CORRECTIONS,
   buildBgraphCorrectionPrompt,
   buildBgraphPrompt,
@@ -1087,13 +1089,29 @@ async function generateDiagramCandidate(
   let output = await hiddenChat(runtime, candidateTurn as OpenAiMessage[], signal)
   let source = extractBgraphSource(output)
   let lastError: unknown = source ? null : new Error('Aucun bloc bgraph exploitable.')
+  // Une source qui rend mais échoue au contrôle de composition vaut mieux qu'une
+  // carte d'erreur : on garde la moins fautive rencontrée, au cas où les
+  // corrections suivantes ne donneraient rien.
+  let fallback: { artifact: DiagramCandidateArtifact; issues: number } | null = null
 
   for (let attempt = 0; attempt <= MAX_BGRAPH_CORRECTIONS; attempt += 1) {
-    if (source) {
+    const current = source
+    if (current) {
       try {
-        const svg = await renderBgraph(source)
-        assertBgraphQuality(source, svg)
-        return { ...candidate, source, ...measureBgraphSvg(svg) }
+        // La source retenue peut différer de celle du modèle : les libellés
+        // recouverts sont dégagés par calcul avant d'aller lui redemander.
+        const rendered = await renderDiagramForGeneration(current)
+        const artifact = { ...candidate, source: rendered.source, ...measureBgraphSvg(rendered.svg) }
+        if (!rendered.issues.length) return artifact
+        if (!fallback || rendered.issues.length < fallback.issues) {
+          // Le critique doit savoir que cette vue est brouillonne, sinon il la
+          // couronne sur la seule foi de son propos.
+          fallback = {
+            artifact: { ...artifact, defects: rendered.issues.map((issue) => issue.code) },
+            issues: rendered.issues.length,
+          }
+        }
+        lastError = new BgraphQualityError(rendered.issues)
       } catch (error) {
         lastError = error
       }
@@ -1113,6 +1131,7 @@ Conserve impérativement le genre “${candidate.genre}”, la thèse « ${candi
     source = extractBgraphSource(output)
     if (!source) lastError = new Error('La correction ne contient aucun bloc bgraph exploitable.')
   }
+  if (fallback) return fallback.artifact
   throw new Error(`${candidate.label} : ${lastError instanceof Error ? lastError.message : 'rendu impossible'}`)
 }
 
@@ -1193,9 +1212,9 @@ Préserve les faits et le genre. Réponds uniquement avec <bgraph>...</bgraph>.`
   const source = extractBgraphSource(output)
   if (!source) return candidate
   try {
-    const svg = await renderBgraph(source)
-    assertBgraphQuality(source, svg)
-    return { ...candidate, source, ...measureBgraphSvg(svg) }
+    const rendered = await renderDiagramForGeneration(source)
+    if (rendered.issues.length) return candidate
+    return { ...candidate, source: rendered.source, ...measureBgraphSvg(rendered.svg) }
   } catch {
     return candidate
   }
@@ -1874,7 +1893,22 @@ export async function sendChat(
         done.status = `Doku-San compare ${candidates.length} vue${candidates.length > 1 ? 's' : ''}…`
         const verdict = await critiqueDiagramCandidates(runtime, studioPlan, candidates, signal)
         if (signal.aborted) return
-        const selectedIndex = Math.max(0, candidates.findIndex((candidate) => candidate.id === verdict.selectedCandidateId))
+        let selectedIndex = Math.max(0, candidates.findIndex((candidate) => candidate.id === verdict.selectedCandidateId))
+        // Le critique reçoit les défauts mesurés, mais rien ne l'oblige à en tenir
+        // compte : mesuré en usage, il couronne des vues brouillonnes alors qu'une
+        // vue nette est disponible. Une vue qui se chevauche à l'écran est illisible
+        // quelle que soit la qualité de son propos, donc Doku tranche — et seulement
+        // dans ce cas, en gardant l'ordre de pertinence du critique parmi les nettes.
+        let rationale = verdict.rationale
+        if (candidates[selectedIndex]?.defects?.length) {
+          const clean = candidates.findIndex((candidate) => !candidate.defects?.length)
+          if (clean >= 0) {
+            selectedIndex = clean
+            // La justification du critique portait sur l'autre vue : la laisser
+            // afficherait un motif qui ne correspond plus à ce qui est montré.
+            rationale = `Vue retenue pour sa lisibilité : ${candidates[clean].label.toLowerCase()} sans chevauchement, là où la vue recommandée se superposait à l'écran.`
+          }
+        }
         if (verdict.refine && verdict.feedback) {
           done.status = 'Doku-San finalise la meilleure vue…'
           candidates[selectedIndex] = await refineDiagramCandidate(
@@ -1896,20 +1930,28 @@ export async function sendChat(
             brief: studioPlan.brief,
             candidates,
             selectedCandidateId: selected.id,
-            rationale: verdict.rationale,
+            rationale,
           },
         }
       } else {
         let source = extractBgraphSource(diagramOutput)
         let lastError: unknown = source ? null : new Error('Le modèle n’a pas renvoyé de bloc bgraph exploitable.')
+        // Même arbitrage que sur le chemin cloud : une source qui rend avec un
+        // défaut de composition vaut mieux qu'aucun diagramme.
+        let fallback: { source: string; issues: number } | null = null
         for (let attempt = 0; attempt <= MAX_BGRAPH_CORRECTIONS; attempt += 1) {
-          if (source) {
+          const current = source
+          if (current) {
+            let svg: string | null = null
             try {
-              const svg = await renderBgraph(source)
-              assertBgraphQuality(source, svg)
+              svg = await renderBgraph(current)
+              assertBgraphQuality(current, svg)
               lastError = null
               break
             } catch (error) {
+              if (svg && error instanceof BgraphQualityError && (!fallback || error.issues.length < fallback.issues)) {
+                fallback = { source: current, issues: error.issues.length }
+              }
               lastError = error
             }
           }
@@ -1928,10 +1970,11 @@ export async function sendChat(
           source = extractBgraphSource(diagramOutput)
           if (!source) lastError = new Error('La correction ne contient toujours aucun bloc bgraph exploitable.')
         }
-        if (!source || lastError) {
+        const retained = lastError ? fallback?.source ?? null : source
+        if (!retained) {
           throw new Error(`Le diagramme n’a pas pu être validé après ${MAX_BGRAPH_CORRECTIONS + 1} tentatives. ${lastError instanceof Error ? lastError.message : ''}`.trim())
         }
-        done.diagram = { title: diagramTitle(q), prompt: q, source }
+        done.diagram = { title: diagramTitle(q), prompt: q, source: retained }
       }
       done.content = `Diagramme généré : ${done.diagram.title}`
       done.status = undefined

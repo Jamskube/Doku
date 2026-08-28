@@ -1,0 +1,54 @@
+type block { title: "Routes d'accès aux réglages" }
+graph { background: #ffffff padding: 34 gap: 58 }
+
+block utilisateur "Utilisateur" person at (0, 0) {
+  description: "Déclenche la configuration."
+}
+
+block dashboard "Global dashboard" container right-of utilisateur gap 72 {
+  description: "Point d'entrée unique pour les deux routes."
+}
+
+group routeReplicable "Route réplicable — tout le parc" right-of dashboard gap 64 {
+  block reglagesReplicables "Réglages réplicables" container at (0, 0) {
+    description: "Gabarits et réglages de politique communs."
+  }
+  block api "API" component right-of reglagesReplicables gap 48 {
+    description: "Diffuse le réglage en une seule fois."
+  }
+  block toutParc "Tout le parc" container right-of api gap 48 {
+    description: "Tous les devices concernés."
+  }
+  block exempleGabarit "Exemple de gabarit" component below api gap 34 {
+    description: "MP3 128 kbit/s · segments de 10 min."
+  }
+}
+
+group routeLocale "Route propre au device — portail local" below routeReplicable gap 58 {
+  block reglageDevice "Réglage propre au device" container at (0, 0) {
+    description: "Paramètre spécifique à un boîtier."
+  }
+  block passerelle "Passerelle transparente" component right-of reglageDevice gap 48 {
+    description: "Transmet le réglage au device ciblé."
+  }
+  block deviceCible "Device ciblé" container right-of passerelle gap 48 {
+    description: "Un seul boîtier du parc."
+  }
+  block portailDevice "Portail du device" container right-of deviceCible gap 48 {
+    description: "Gère les paramètres locaux."
+  }
+  block exempleSource "Exemple d'affectation" component below passerelle gap 34 {
+    description: "98.500 MHz sur la source 1."
+  }
+}
+
+utilisateur -> dashboard "Accède à"
+dashboard -> reglagesReplicables "Choisit"
+dashboard -> reglageDevice "Choisit"
+reglagesReplicables -> api "Passe par"
+api -> toutParc "Applique à"
+reglageDevice -> passerelle "Passe par"
+passerelle -> deviceCible "Transmet à"
+deviceCible -> portailDevice "Gère dans"
+exempleGabarit -> reglagesReplicables "Illustre"
+exempleSource -> reglageDevice "Illustre"

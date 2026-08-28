@@ -29,6 +29,9 @@
     artifact.studio?.candidates.find((candidate) => candidate.id === artifact.studio?.selectedCandidateId),
   )
   const alternatives = $derived(artifact.studio?.candidates ?? [])
+  // Le passage par <img src="data:…"> rend inertes le role="img", l'aria-label et les
+  // <title> que le moteur produit : ce texte est le seul que porte le diagramme.
+  const imageAlt = $derived(artifact.studio?.brief.desiredInsight || artifact.title)
 
   function svgDataUrl(rendered: string): string {
     return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(rendered)}`
@@ -144,7 +147,7 @@
     {:else if error}
       <div class="diagram-error" role="alert"><span class="msr">error</span><span>{error}</span></div>
     {:else if imageUrl}
-      <img src={imageUrl} alt={artifact.title} />
+      <img src={imageUrl} alt={imageAlt} />
     {/if}
   </div>
 
@@ -168,7 +171,7 @@
       <strong>{artifact.title}</strong>
       <button class="icon-button" title="Fermer" aria-label="Fermer l’aperçu" onclick={closeExpanded}><span class="msr">close</span></button>
     </header>
-    {#if imageUrl}<img src={imageUrl} alt={artifact.title} />{/if}
+    {#if imageUrl}<img src={imageUrl} alt={imageAlt} />{/if}
   </dialog>
 {/if}
 
@@ -275,7 +278,10 @@
     justify-content: center;
     overflow: auto;
     border-radius: 11px;
-    background: #fff;
+    /* Le diagramme peint son propre fond blanc. Ce qu'on voit ici n'est que le
+       letterbox laissé par `object-fit: contain` : il doit se fondre dans le
+       panneau, pas y poser une dalle blanche en thème sombre. */
+    background: var(--surface-2);
   }
   .diagram-stage img { display: block; width: 100%; height: auto; min-height: 180px; max-height: 450px; object-fit: contain; }
   .diagram-skeleton {
@@ -318,7 +324,7 @@
   .diagram-dialog::backdrop, .alternatives-dialog::backdrop { background: rgba(0, 0, 0, 0.48); }
   .diagram-dialog > header { height: 52px; display: flex; align-items: center; gap: 10px; padding: 0 10px 0 16px; }
   .diagram-dialog > header strong { flex: 1; font: 600 13px/1.4 var(--font-sans); }
-  .diagram-dialog > img { display: block; width: 100%; height: calc(100% - 52px); padding: 14px; object-fit: contain; background: #fff; }
+  .diagram-dialog > img { display: block; width: 100%; height: calc(100% - 52px); padding: 14px; object-fit: contain; background: var(--surface-2); }
 
   .alternatives-dialog { width: min(920px, calc(100vw - 44px)); max-height: min(720px, calc(100vh - 44px)); }
   .alternatives-dialog > header { min-height: 62px; display: flex; align-items: center; gap: 14px; padding: 9px 12px 9px 18px; }
@@ -349,7 +355,7 @@
   }
   .alternatives-dialog .view-option:hover { background: var(--surface-hover); }
   .alternatives-dialog .view-option.selected { box-shadow: inset 0 0 0 1.5px var(--line-3); }
-  .view-preview { min-width: 0; display: flex; align-items: center; justify-content: center; overflow: hidden; border-radius: 9px; background: #fff; color: #777; }
+  .view-preview { min-width: 0; display: flex; align-items: center; justify-content: center; overflow: hidden; border-radius: 9px; background: var(--surface-2); color: var(--ink-3); }
   .view-preview img { display: block; width: 100%; height: 100%; object-fit: contain; }
   .view-preview > .msr { font-size: 28px; }
   .view-copy { min-width: 0; display: flex; flex-direction: column; gap: 4px; padding: 10px 8px 7px; }

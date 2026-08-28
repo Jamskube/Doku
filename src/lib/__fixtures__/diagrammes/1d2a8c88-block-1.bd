@@ -1,0 +1,43 @@
+type block { title: "Architecture proposée — deux routes" }
+graph { background: #f8fafc padding: 36 gap: 72 }
+
+block dashboard "Global dashboard" {
+  description: "Point d’entrée des réglages du parc et d’un device ciblé."
+}
+
+block api "API" right-of dashboard gap 120 {
+  description: "Distribue les gabarits et réglages de politique réplicables."
+}
+
+block park "Parc de devices" right-of api gap 120 {
+  description: "Reçoit les réglages applicables à tout le parc."
+}
+
+block gateway "Passerelle transparente" below dashboard gap 80 {
+  description: "Achemine les actions propres à un device."
+}
+
+block portal "Portail du device" right-of gateway gap 120 {
+  description: "Point d’administration du boîtier choisi."
+}
+
+block device "Device ciblé" right-of portal gap 120 {
+  description: "Reçoit et applique les réglages locaux."
+}
+
+block templates "Gabarits réplicables" below api gap 72 {
+  description: "Exemple : MP3 128 kbit/s, segments de 10 min."
+}
+
+block local "Réglages propres au device" below portal gap 72 {
+  description: "Exemple : 98.500 MHz ; l’affectation à une source reste locale."
+}
+
+dashboard -> api "Envoie les réglages réplicables"
+api -> park "Applique à tout le parc"
+dashboard -> gateway "Achemine une action ciblée"
+gateway -> portal "Relaye vers le portail choisi"
+portal -> device "Configure le boîtier"
+templates -> api "Se répliquent via l’API"
+local -> gateway "Passe par la route propre au device"
+local -> portal "Affectation à une source, locale au device"

@@ -14,39 +14,48 @@ export interface DiagramGenreProfile {
   kind: DiagramKind
   label: string
   purpose: string
+  /**
+   * Proposé au modèle, ou seulement reconnu.
+   *
+   * Les 30 genres du moteur restent tous lisibles : retirer une entrée ferait
+   * perdre le brief et les variantes de toute discussion archivée qui l'utilisait.
+   * Seuls ceux qu'un copilote documentaire a une chance de bien employer entrent
+   * dans le catalogue soumis au modèle.
+   */
+  offered: boolean
 }
 
 export const DIAGRAM_GENRES: readonly DiagramGenreProfile[] = [
-  { genre: 'free', kind: 'process', label: 'Relations libres', purpose: 'Petit flux ou carte de relations explicitement placée.' },
-  { genre: 'pie', kind: 'composition', label: 'Répartition', purpose: 'Parts non négatives qui composent un même total.' },
-  { genre: 'gantt', kind: 'timeline', label: 'Planification', purpose: 'Tâches datées, durées et dépendances de projet.' },
-  { genre: 'class', kind: 'architecture', label: 'Classes et interfaces', purpose: 'Types logiciels, membres, héritages et dépendances.' },
-  { genre: 'timeline', kind: 'timeline', label: 'Chronologie', purpose: 'Événements datés ou strictement ordonnés.' },
-  { genre: 'block', kind: 'architecture', label: 'Architecture des composants', purpose: 'Systèmes, composants, responsabilités et dépendances.' },
-  { genre: 'er', kind: 'architecture', label: 'Modèle de données', purpose: 'Entités, attributs, relations et cardinalités.' },
-  { genre: 'state', kind: 'process', label: 'Cycle d’état', purpose: 'États, transitions, conditions et fins possibles.' },
-  { genre: 'sequence', kind: 'sequence', label: 'Échanges entre acteurs', purpose: 'Messages ordonnés entre plusieurs participants.' },
-  { genre: 'xy', kind: 'comparison', label: 'Courbes XY', purpose: 'Séries numériques évoluant sur un axe quantitatif.' },
-  { genre: 'bar', kind: 'comparison', label: 'Comparaison par catégories', purpose: 'Valeurs comparables partageant une unité.' },
-  { genre: 'sankey', kind: 'composition', label: 'Flux quantifiés', purpose: 'Volumes qui circulent et se répartissent.' },
-  { genre: 'wave', kind: 'timeline', label: 'Chronogramme', purpose: 'Signaux ou états techniques qui évoluent dans le temps.' },
-  { genre: 'quadrant', kind: 'comparison', label: 'Matrice à quatre zones', purpose: 'Éléments positionnés selon deux critères.' },
-  { genre: 'treemap', kind: 'composition', label: 'Composition hiérarchique', purpose: 'Parts imbriquées dont la surface porte la valeur.' },
-  { genre: 'packet', kind: 'composition', label: 'Structure de paquet', purpose: 'Champs binaires et plages de bits.' },
-  { genre: 'gitgraph', kind: 'timeline', label: 'Branches et versions', purpose: 'Commits, branches, fusions et versions.' },
-  { genre: 'orgchart', kind: 'hierarchy', label: 'Organisation', purpose: 'Rôles ou équipes reliés par une hiérarchie.' },
-  { genre: 'mindmap', kind: 'hierarchy', label: 'Carte mentale', purpose: 'Concept central et idées organisées par branches.' },
-  { genre: 'treeview', kind: 'hierarchy', label: 'Arborescence', purpose: 'Taxonomie, dossiers ou structure imbriquée ordonnée.' },
-  { genre: 'harness', kind: 'architecture', label: 'Connectique', purpose: 'Connecteurs, broches et liaisons de câblage.' },
-  { genre: 'venn', kind: 'composition', label: 'Ensembles', purpose: 'Chevauchements entre deux ou trois ensembles.' },
-  { genre: 'bpmn', kind: 'process', label: 'Processus métier', purpose: 'Tâches, événements, décisions, rôles et artefacts.' },
-  { genre: 'network', kind: 'architecture', label: 'Infrastructure réseau', purpose: 'Réseaux, équipements, hôtes et segments.' },
-  { genre: 'rack', kind: 'architecture', label: 'Baies techniques', purpose: 'Équipements physiques positionnés dans des racks.' },
-  { genre: 'radar', kind: 'comparison', label: 'Profil multicritère', purpose: 'Plusieurs objets comparés selon les mêmes dimensions.' },
-  { genre: 'journey', kind: 'timeline', label: 'Parcours', purpose: 'Étapes vécues, acteurs et qualité d’expérience.' },
-  { genre: 'kanban', kind: 'process', label: 'Tableau de travail', purpose: 'Éléments distribués entre étapes d’avancement.' },
-  { genre: 'requirements', kind: 'hierarchy', label: 'Exigences', purpose: 'Exigences, dérivations, satisfactions et vérifications.' },
-  { genre: 'bytefield', kind: 'composition', label: 'Structure binaire', purpose: 'Champs et plages d’octets.' },
+  { genre: 'free', kind: 'process', label: 'Relations libres', purpose: 'Petit flux ou carte de relations explicitement placée.', offered: true },
+  { genre: 'pie', kind: 'composition', label: 'Répartition', purpose: 'Parts non négatives qui composent un même total.', offered: true },
+  { genre: 'gantt', kind: 'timeline', label: 'Planification', purpose: 'Tâches datées, durées et dépendances de projet.', offered: true },
+  { genre: 'class', kind: 'architecture', label: 'Classes et interfaces', purpose: 'Types logiciels, membres, héritages et dépendances.', offered: true },
+  { genre: 'timeline', kind: 'timeline', label: 'Chronologie', purpose: 'Événements datés ou strictement ordonnés.', offered: true },
+  { genre: 'block', kind: 'architecture', label: 'Architecture des composants', purpose: 'Systèmes, composants, responsabilités et dépendances.', offered: true },
+  { genre: 'er', kind: 'architecture', label: 'Modèle de données', purpose: 'Entités, attributs, relations et cardinalités.', offered: true },
+  { genre: 'state', kind: 'process', label: 'Cycle d’état', purpose: 'États, transitions, conditions et fins possibles.', offered: true },
+  { genre: 'sequence', kind: 'sequence', label: 'Échanges entre acteurs', purpose: 'Messages ordonnés entre plusieurs participants.', offered: true },
+  { genre: 'xy', kind: 'comparison', label: 'Courbes XY', purpose: 'Séries numériques évoluant sur un axe quantitatif.', offered: true },
+  { genre: 'bar', kind: 'comparison', label: 'Comparaison par catégories', purpose: 'Valeurs comparables partageant une unité.', offered: true },
+  { genre: 'sankey', kind: 'composition', label: 'Flux quantifiés', purpose: 'Volumes qui circulent et se répartissent.', offered: true },
+  { genre: 'wave', kind: 'timeline', label: 'Chronogramme', purpose: 'Signaux ou états techniques qui évoluent dans le temps.', offered: false },
+  { genre: 'quadrant', kind: 'comparison', label: 'Matrice à quatre zones', purpose: 'Éléments positionnés selon deux critères.', offered: true },
+  { genre: 'treemap', kind: 'composition', label: 'Composition hiérarchique', purpose: 'Parts imbriquées dont la surface porte la valeur.', offered: true },
+  { genre: 'packet', kind: 'composition', label: 'Structure de paquet', purpose: 'Champs binaires et plages de bits.', offered: false },
+  { genre: 'gitgraph', kind: 'timeline', label: 'Branches et versions', purpose: 'Commits, branches, fusions et versions.', offered: false },
+  { genre: 'orgchart', kind: 'hierarchy', label: 'Organisation', purpose: 'Rôles ou équipes reliés par une hiérarchie.', offered: true },
+  { genre: 'mindmap', kind: 'hierarchy', label: 'Carte mentale', purpose: 'Concept central et idées organisées par branches.', offered: true },
+  { genre: 'treeview', kind: 'hierarchy', label: 'Arborescence', purpose: 'Taxonomie, dossiers ou structure imbriquée ordonnée.', offered: true },
+  { genre: 'harness', kind: 'architecture', label: 'Connectique', purpose: 'Connecteurs, broches et liaisons de câblage.', offered: false },
+  { genre: 'venn', kind: 'composition', label: 'Ensembles', purpose: 'Chevauchements entre deux ou trois ensembles.', offered: true },
+  { genre: 'bpmn', kind: 'process', label: 'Processus métier', purpose: 'Tâches, événements, décisions, rôles et artefacts.', offered: true },
+  { genre: 'network', kind: 'architecture', label: 'Infrastructure réseau', purpose: 'Réseaux, équipements, hôtes et segments.', offered: true },
+  { genre: 'rack', kind: 'architecture', label: 'Baies techniques', purpose: 'Équipements physiques positionnés dans des racks.', offered: false },
+  { genre: 'radar', kind: 'comparison', label: 'Profil multicritère', purpose: 'Plusieurs objets comparés selon les mêmes dimensions.', offered: true },
+  { genre: 'journey', kind: 'timeline', label: 'Parcours', purpose: 'Étapes vécues, acteurs et qualité d’expérience.', offered: true },
+  { genre: 'kanban', kind: 'process', label: 'Tableau de travail', purpose: 'Éléments distribués entre étapes d’avancement.', offered: true },
+  { genre: 'requirements', kind: 'hierarchy', label: 'Exigences', purpose: 'Exigences, dérivations, satisfactions et vérifications.', offered: true },
+  { genre: 'bytefield', kind: 'composition', label: 'Structure binaire', purpose: 'Champs et plages d’octets.', offered: false },
 ] as const
 
 const GENRE_BY_NAME = new Map(DIAGRAM_GENRES.map((profile) => [profile.genre, profile]))
@@ -84,6 +93,10 @@ export interface DiagramCandidateArtifact extends DiagramCandidatePlan {
   width: number
   height: number
   aspectRatio: number
+  // Ce que la mise en page révèle et qu'aucune relecture du texte ne montre :
+  // libellés qui se chevauchent, boîtes superposées, liaisons traversantes.
+  // Transmis au critique, pas persisté — il se recalcule à tout moment.
+  defects?: string[]
 }
 
 export interface DiagramStudioArtifact {
@@ -180,7 +193,10 @@ export function parseDiagramStudioPlan(output: string): DiagramStudioPlan | null
     const profile = GENRE_BY_NAME.get(genre)
     const thesis = text(candidate.thesis)
     const layout = text(candidate.layout)
-    if (!profile || !thesis || !layout || seenGenres.has(genre)) return []
+    // `offered` seulement ici : un plan neuf ne retient qu'un genre du catalogue
+    // soumis, tandis que `parsePersistedDiagramStudio` accepte les 30 pour ne rien
+    // perdre d'une discussion archivée.
+    if (!profile?.offered || !thesis || !layout || seenGenres.has(genre)) return []
     seenGenres.add(genre)
     return [{
       id: `${genre}-${index + 1}`,
@@ -201,6 +217,7 @@ export function buildDiagramStudioPlannerPrompt(
   previous: DiagramStudioArtifact | null = null,
 ): string {
   const catalog = DIAGRAM_GENRES
+    .filter((profile) => profile.offered)
     .map((profile) => `- ${profile.genre}: ${profile.purpose}`)
     .join('\n')
   const previousContext = previous
@@ -260,6 +277,7 @@ ${recipe.slice(0, 12_000)}
 
 Contraintes :
 - utilise exactement “type ${candidate.genre}” sauf pour free, qui n'a pas de ligne type ;
+- palette claire imposée : “graph { background: #ffffff }” et des textes sombres. Les exemples de référence sont en fond sombre — ne recopie pas leurs couleurs, seulement leur structure. Un diagramme s'affiche dans un document et s'exporte : il doit rester lisible sur blanc ;
 - conserve uniquement les faits du brief et matérialise la thèse annoncée ;
 - 14 éléments et 24 relations maximum ; noms courts, descriptions concises, aucune citation [n] ;
 - canevas équilibré et lisible dans une carte paysage ; aucun flux implicite sur une seule ligne ;
@@ -280,9 +298,15 @@ export function buildDiagramCriticPrompt(
     omits: candidate.omits,
     layout: candidate.layout,
     render: { width: candidate.width, height: candidate.height, aspectRatio: candidate.aspectRatio },
+    // Mesuré sur la mise en page résolue, pas jugé à la lecture de la source.
+    defauts: candidate.defects ?? [],
     source: candidate.source.slice(0, 12_000),
   }))
+  const measured = candidates.some((candidate) => candidate.defects?.length)
   return `Tu es le directeur éditorial et visuel de Doku-San. Compare les diagrammes candidats au brief. Ne récompense pas la complexité : choisis la vue qui répond le mieux à la question, reste fidèle aux faits, perd le moins d'information importante et sera la plus lisible.
+${measured ? `
+Le champ “defauts” est MESURÉ sur le rendu, pas déduit du texte : il liste ce qui se chevauche réellement à l'écran. Une vue sans défaut se lit ; une vue qui en porte est brouillonne, quelle que soit la qualité de son propos. À pertinence comparable, choisis TOUJOURS la vue sans défaut. Ne retiens une vue défectueuse que si elle est la seule à répondre à la question — et pose alors refine=true en demandant de retirer des éléments.
+` : ''}
 
 BRIEF : ${JSON.stringify(plan.brief)}
 CANDIDATS : ${JSON.stringify(summaries)}

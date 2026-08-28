@@ -1,0 +1,60 @@
+type block { title: "Chemin d'accès au local dashboard — deux routes, sans VPN" }
+graph { background: #ffffff padding: 34 gap: 58 }
+
+block partner "Partenaire" person at (0, 0) {
+  description: "Opérateur qui pilote le parc depuis le global dashboard."
+}
+
+group entry "Point d'entrée unique" below partner gap 52 {
+  block gd "Global dashboard" container at (0, 0) {
+    description: "Seul point d'entrée. Expose l'API gabarits et relaie via la passerelle."
+  }
+}
+
+group split "Bifurcation" below gd gap 64 {
+  block api "API gabarits" container at (-200, 0) {
+    description: "Route montante : distribue les gabarits et la politique en action en masse."
+  }
+  block gw "Passerelle" container at (200, 0) {
+    description: "Route descendante : relais transparent vers le portail choisi."
+  }
+}
+
+block park "Tout le parc" external left-of api gap 72 {
+  description: "Devices ciblés par l'application en masse des gabarits."
+}
+
+group device "Device sélectionné" below gw gap 64 {
+  block portal "Portail du device" container at (0, 0) {
+    description: "Local dashboard. Un seul : celui choisi parmi le parc."
+  }
+  block unit "Device (boîtier)" external below portal gap 48 {
+    description: "Boîtier cible, configuré via son portail."
+  }
+}
+
+block templates "Gabarits réplicables" external above api gap 56 {
+  description: "FM, AM, DAB, AUDIO, streaming, stockage, repli, envoi et réglages de politique."
+}
+
+block specifics "Réglages hors API" external right-of portal gap 72 {
+  shape: rectangle
+  color: #b91c1c
+  description: "Propres au device : sources, réseau, Wi-Fi, GPS, identité, SFTP local, stockage miroir."
+}
+
+block novpn "Sans VPN" external left-of gw gap 72 {
+  shape: rectangle
+  color: #b91c1c
+  description: "Aucun VPN documenté : la connexion passe par la passerelle jusqu'au portail."
+}
+
+partner -> gd "Se connecte" { tech: "HTTPS" }
+gd -> api "Expose" { tech: "API" }
+gd -> gw "Relaye" { tech: "HTTPS" }
+templates -> api "Paramètre" { tech: "Politique" }
+api -> park "Action en masse" { tech: "Push" }
+gw -> portal "SANS VPN — transparent" { tech: "HTTPS" color: #b91c1c }
+specifics -> portal "Hors API" { tech: "Direct" }
+portal -> unit "Configure" { tech: "Direct" }
+novpn -> gw "Étiquetage" { tech: "Repère" color: #b91c1c }

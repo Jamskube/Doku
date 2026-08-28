@@ -1,0 +1,22 @@
+type network { title: "Accès au portail local du device" }
+
+graph { background: #ffffff padding: 34 gap: 58 }
+
+style host { fill: #f4f1e9 stroke: #8c877d 1.2 font: 12 #1c1a16 radius: 6 }
+style edge { stroke: #777168 1.3 font: 10 #4f4a43 head: none }
+style group { stroke: #c8c2b8 1 fill: #faf9f6 radius: 8 dash: dashed font: 11 #6b665e }
+
+host utilisateur "Utilisateur" client at (0, 0)
+host dashboard "Global dashboard" server right-of utilisateur gap 150
+host passerelle "Passerelle transparente" router right-of dashboard gap 150
+host portail "Portail local du device" server right-of passerelle gap 150
+host device "Device ciblé" server below portail gap 70
+host api "API des réglages" server above dashboard gap 85
+host replicables "Réglages réplicables" server right-of api gap 120
+
+utilisateur -> dashboard "accès"
+dashboard -> passerelle "route vers un device"
+passerelle -> portail "transmission transparente"
+portail -> device "réglages propres au device"
+dashboard -> api "pilotage global"
+api -> replicables "application au parc"
