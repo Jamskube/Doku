@@ -22,3 +22,13 @@ dist-linux/
 
 # Paquet Arch téléchargé depuis la CI
 dist-arch/
+
+# graft's local graph cache — regenerable, not committed (run `graft build`).
+/graft/
+
+# Source bgraph — confidentielle par licence (« The Source Is Confidential ») :
+# reconstruire le WASM avec `npm run build:bgraph`, ne jamais publier le source.
+/add-ons/
+
+# Reglages Claude Code personnels a la machine
+.claude/settings.local.json
