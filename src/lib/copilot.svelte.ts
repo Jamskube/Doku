@@ -25,7 +25,9 @@ import {
   getCompatStatus,
   MINIMAX_DEFAULT_MODEL,
   setCompatKey,
+  type CompatMessage,
   type CompatStatus,
+  type CompatToolCall,
 } from './compat'
 import { citedNumbers, locateOffset, locatePassage, type CitedPassage } from './citations'
 import {
@@ -128,16 +130,54 @@ import { extractWebCitationsFromMarkdown, normalizeWebCitations, type WebCitatio
 import {
   appendCurrentDateContext,
   appendWebSearchContext,
+  appendWebSearchFailureContext,
   buildWebSearchQuery,
+  mergeWebResults,
+  parseModelWebQuery,
+  parseModelWebRefinement,
+  parseWebSearchToolArguments,
   searchWeb,
+  WEB_SEARCH_TOOL,
+  webQueryPlanPrompt,
+  webQueryRefinePrompt,
   webSearchCitations,
+  webSearchToolResult,
+  type WebSearchResult,
 } from './web-search'
+import {
+  BgraphValidationError,
+  assertBgraphQuality,
+  bgraphRecipe,
+  MAX_BGRAPH_CORRECTIONS,
+  buildBgraphCorrectionPrompt,
+  buildBgraphPrompt,
+  diagramTitle,
+  extractBgraphSource,
+  measureBgraphSvg,
+  renderBgraph,
+  type DiagramArtifact,
+} from './bgraph'
+import {
+  buildDiagramCandidatePrompt,
+  buildDiagramCriticPrompt,
+  buildDiagramStudioPlannerPrompt,
+  parseDiagramCriticVerdict,
+  parseDiagramStudioPlan,
+  type DiagramCandidateArtifact,
+  type DiagramCandidatePlan,
+  type DiagramStudioPlan,
+} from './diagram-studio'
+
+// Nombre maximal de recherches Web pour UNE question. 3 laisse au modèle deux chances de
+// se corriger — au-delà, l'affinage tourne en rond et chaque tour coûte un appel de plus.
+const MAX_WEB_SEARCH_ROUNDS = 3
 
 // Un tour de conversation (14.1). `streaming` = réponse en cours (bulle en texte brut,
 // rendu Markdown à la fin) ; `failed` = carte d'erreur ; `status` = ligne de progression
 // transitoire pendant la phase « map » d'un résumé (14.2). Conversation éphémère (non persistée).
 // Portée d'une question (15.3) : le document courant ou le dossier entier (RAG).
 export type ChatScope = 'doc' | 'folder'
+export type ChatOutputMode = 'answer' | 'diagram'
 
 export interface ChatMsg {
   role: 'user' | 'assistant'
@@ -178,13 +218,28 @@ export interface ChatMsg {
   // Souvenirs effectivement rappelés avant CETTE réponse. L'UI affiche les entrées
   // injectées par Doku, sans dépendre d'une citation produite par le modèle.
   memorySources?: MemoryPromptSource[]
-  // Sources réellement citées par le tool Web hébergé OpenAI. Les URL ne sont jamais
-  // rendues dans le HTML du modèle : l'UI ouvre uniquement cette liste normalisée HTTPS.
+  // Sources Web attachées à CETTE réponse. Les URL ne sont jamais rendues depuis le HTML
+  // du modèle : l'UI n'ouvre que cette liste normalisée HTTPS.
   webCitations?: WebCitation[]
+  // Qui a établi cette liste. `false` (recherche menée par Doku) = les résultats
+  // RÉELLEMENT transmis au modèle, affichés tels quels — même symétrie que « Passages
+  // consultés ». `true` (tool hébergé OpenAI) = ce que le modèle déclare avoir cité.
+  // Filtrer la première forme sur la présence de `[web:n]` masquait les sources dès que
+  // le modèle n'obéissait pas au format, alors que Doku savait exactement ce qu'il avait envoyé.
+  webCitedOnly?: boolean
   webSearch?: boolean
+  diagram?: DiagramArtifact
   // Posé sur une carte `failed` : ce qu'il faut rejouer pour « Réessayer » (la question ou le
   // mode de résumé). Le document est re-capturé au moment du retry (le dossier aussi, 15.3).
-  retry?: { kind: 'chat'; question: string; scope: ChatScope; contextRevision: number; workspaceContextKey?: string } | { kind: 'summary'; mode: SummaryMode }
+  retry?: {
+    kind: 'chat'
+    question: string
+    scope: ChatScope
+    contextRevision: number
+    workspaceContextKey?: string
+    outputMode?: ChatOutputMode
+    diagramSeed?: DiagramArtifact
+  } | { kind: 'summary'; mode: SummaryMode }
 }
 
 export const copilot = $state({
@@ -207,6 +262,8 @@ export const copilot = $state({
   // Recherche hébergée OpenAI, explicite et éphémère : active jusqu'au retrait ou à une
   // nouvelle conversation. Ce n'est pas un faux document ajouté au budget de contexte.
   webSearchEnabled: false,
+  outputMode: 'answer' as ChatOutputMode,
+  diagramSeed: null as DiagramArtifact | null,
   contextFolder: null as { path: string; label: string } | null,
   // Mémoire partagée volontairement avec un dossier. null = portée document, qui est
   // toujours le défaut. Séparée de l'explorateur ET du contexte : parcourir ou ajouter
@@ -283,6 +340,33 @@ export function setWebSearchEnabled(enabled: boolean): void {
   copilot.contextError = ''
 }
 
+export function setChatOutputMode(mode: ChatOutputMode): void {
+  copilot.outputMode = mode
+  if (mode === 'answer') copilot.diagramSeed = null
+}
+
+export function reviseDiagram(artifact: DiagramArtifact): void {
+  copilot.outputMode = 'diagram'
+  copilot.diagramSeed = { ...artifact }
+}
+
+export function selectDiagramCandidate(messageIndex: number, candidateId: string): void {
+  const message = copilot.messages[messageIndex]
+  const studio = message?.diagram?.studio
+  const candidate = studio?.candidates.find((item) => item.id === candidateId)
+  if (!message?.diagram || !studio || !candidate || studio.selectedCandidateId === candidateId) return
+  message.diagram = {
+    ...message.diagram,
+    source: candidate.source,
+    studio: {
+      ...studio,
+      selectedCandidateId: candidate.id,
+      rationale: candidate.thesis,
+    },
+  }
+  scheduleConversationPersist(0)
+}
+
 function terminalState(message: ChatMsg): PersistedChatMessage['terminal'] {
   if (message.failed) return 'failed'
   if (message.notice || message.config) return 'notice'
@@ -339,6 +423,8 @@ function persistChatMessage(message: ChatMsg): PersistedChatMessage {
     citedOnly: message.citedOnly,
     cited: message.cited,
     webSearch: message.webSearch,
+    webCitedOnly: message.webCitedOnly,
+    diagram: message.diagram,
   }
 }
 
@@ -378,6 +464,8 @@ function hydrateChatMessage(message: PersistedChatMessage): ChatMsg {
     citedOnly: message.citedOnly,
     cited: message.cited,
     webSearch: message.webSearch,
+    webCitedOnly: message.webCitedOnly,
+    diagram: message.diagram,
   }
 }
 
@@ -917,6 +1005,8 @@ function streamChat(
     webSearch?: boolean
     onSearching?: () => void
     onCitations?: (citations: WebCitation[]) => void
+    tools?: unknown
+    onToolCalls?: (calls: CompatToolCall[]) => void
   } = {},
 ): Promise<string> {
   if (runtime.provider === 'openai') {
@@ -926,7 +1016,12 @@ function streamChat(
       onCitations: (raw) => options.onCitations?.(normalizeWebCitations(raw)),
     })
   }
-  if (runtime.provider === 'minimax') return compatChat('minimax', runtime.model, messages, onToken, signal, options.onThinking)
+  if (runtime.provider === 'minimax') {
+    return compatChat('minimax', runtime.model, messages, onToken, signal, options.onThinking, {
+      tools: options.tools,
+      onToolCalls: options.onToolCalls,
+    })
+  }
   return chat(runtime.port, runtime.model, messages, onToken, signal, {
     num_ctx: COPILOT_NUM_CTX,
     temperature: COPILOT_TEMPERATURE,
@@ -941,9 +1036,9 @@ function streamGenerate(
   options: { map?: boolean; onThinking?: () => void } = {},
 ): Promise<string> {
   // `map` = appel INTERNE court (sélection mémoire, map d'un résumé) : la sortie utile
-  // tient en quelques lignes. Le plafond ne partait qu'à Ollama — les deux nuages le
-  // perdaient en route et déroulaient sans borne, alors que ces appels-là ne sont
-  // jamais lus par l'utilisateur.
+  // tient en quelques lignes, et ces appels-là ne sont jamais lus par l'utilisateur.
+  // Le plafond part à Ollama et à MiniMax ; OpenAI en est exclu pour la raison donnée
+  // sur sa branche (budget de raisonnement), pas par oubli.
   const cap = options.map ? SUMMARY_MAP_MAX_TOKENS : undefined
   if (runtime.provider === 'openai') {
     // Le backend Codex réserve une partie du budget au raisonnement : un plafond
@@ -967,6 +1062,143 @@ function streamGenerate(
 function memoryGenerate(runtime: ProviderRuntime) {
   return (prompt: string, signal?: AbortSignal) =>
     streamGenerate(runtime, prompt, () => {}, signal ?? new AbortController().signal, { map: true })
+}
+
+async function hiddenChat(
+  runtime: ProviderRuntime,
+  messages: OpenAiMessage[],
+  signal: AbortSignal,
+): Promise<string> {
+  let output = ''
+  await streamChat(runtime, messages, (token) => { output += token }, signal, {})
+  return output.trim()
+}
+
+async function generateDiagramCandidate(
+  runtime: ProviderRuntime,
+  baseTurn: CompatMessage[],
+  plan: DiagramStudioPlan,
+  candidate: DiagramCandidatePlan,
+  signal: AbortSignal,
+): Promise<DiagramCandidateArtifact> {
+  const recipe = await bgraphRecipe(candidate.genre)
+  const prompt = buildDiagramCandidatePrompt(plan, candidate, recipe)
+  const candidateTurn = [...baseTurn, { role: 'user' as const, content: prompt }]
+  let output = await hiddenChat(runtime, candidateTurn as OpenAiMessage[], signal)
+  let source = extractBgraphSource(output)
+  let lastError: unknown = source ? null : new Error('Aucun bloc bgraph exploitable.')
+
+  for (let attempt = 0; attempt <= MAX_BGRAPH_CORRECTIONS; attempt += 1) {
+    if (source) {
+      try {
+        const svg = await renderBgraph(source)
+        assertBgraphQuality(source, svg)
+        return { ...candidate, source, ...measureBgraphSvg(svg) }
+      } catch (error) {
+        lastError = error
+      }
+    }
+    if (attempt >= MAX_BGRAPH_CORRECTIONS) break
+    const diagnostics = lastError instanceof BgraphValidationError
+      ? lastError.diagnostics
+      : (lastError instanceof Error ? lastError.message : 'Source invalide')
+    const correction = `${buildBgraphCorrectionPrompt(source, diagnostics)}
+
+Conserve impérativement le genre “${candidate.genre}”, la thèse « ${candidate.thesis} » et la stratégie « ${candidate.layout} ».`
+    output = await hiddenChat(runtime, [
+      ...candidateTurn,
+      ...(output ? [{ role: 'assistant' as const, content: output }] : []),
+      { role: 'user', content: correction },
+    ] as OpenAiMessage[], signal)
+    source = extractBgraphSource(output)
+    if (!source) lastError = new Error('La correction ne contient aucun bloc bgraph exploitable.')
+  }
+  throw new Error(`${candidate.label} : ${lastError instanceof Error ? lastError.message : 'rendu impossible'}`)
+}
+
+async function generateDiagramCandidates(
+  runtime: ProviderRuntime,
+  turn: CompatMessage[],
+  plan: DiagramStudioPlan,
+  signal: AbortSignal,
+): Promise<DiagramCandidateArtifact[]> {
+  const queue = [...plan.candidates]
+  const results: DiagramCandidateArtifact[] = []
+  const failures: string[] = []
+  const worker = async () => {
+    while (queue.length && !signal.aborted) {
+      const candidate = queue.shift()
+      if (!candidate) return
+      try {
+        results.push(await generateDiagramCandidate(runtime, turn, plan, candidate, signal))
+      } catch (error) {
+        if (signal.aborted) return
+        failures.push(error instanceof Error ? error.message : String(error))
+      }
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(2, queue.length) }, worker))
+  if (signal.aborted) return []
+  if (!results.length) throw new Error(`Aucune vue n'a pu être rendue. ${failures.join(' · ')}`)
+  return plan.candidates.flatMap((planned) => {
+    const result = results.find((candidate) => candidate.id === planned.id)
+    return result ? [result] : []
+  })
+}
+
+async function critiqueDiagramCandidates(
+  runtime: ProviderRuntime,
+  plan: DiagramStudioPlan,
+  candidates: DiagramCandidateArtifact[],
+  signal: AbortSignal,
+): Promise<{ selectedCandidateId: string; rationale: string; refine: boolean; feedback: string }> {
+  const prompt = buildDiagramCriticPrompt(plan, candidates)
+  let output = await hiddenChat(runtime, [{ role: 'user', content: prompt }], signal)
+  let verdict = parseDiagramCriticVerdict(output, candidates.map((candidate) => candidate.id))
+  if (!verdict && !signal.aborted) {
+    output = await hiddenChat(runtime, [
+      { role: 'user', content: prompt },
+      { role: 'assistant', content: output },
+      { role: 'user', content: 'La réponse ne respecte pas le contrat. Renvoie uniquement <diagram-verdict>{...}</diagram-verdict> avec un identifiant de candidat existant.' },
+    ], signal)
+    verdict = parseDiagramCriticVerdict(output, candidates.map((candidate) => candidate.id))
+  }
+  return verdict ?? {
+    selectedCandidateId: candidates[0].id,
+    rationale: candidates[0].thesis,
+    refine: false,
+    feedback: '',
+  }
+}
+
+async function refineDiagramCandidate(
+  runtime: ProviderRuntime,
+  plan: DiagramStudioPlan,
+  candidate: DiagramCandidateArtifact,
+  feedback: string,
+  signal: AbortSignal,
+): Promise<DiagramCandidateArtifact> {
+  if (!feedback) return candidate
+  const recipe = await bgraphRecipe(candidate.genre)
+  const prompt = `${buildDiagramCandidatePrompt(plan, candidate, recipe)}
+
+SOURCE ACTUELLE :
+<previous-bgraph>${candidate.source}</previous-bgraph>
+
+CRITIQUE À APPLIQUER :
+${feedback}
+
+Préserve les faits et le genre. Réponds uniquement avec <bgraph>...</bgraph>.`
+  const output = await hiddenChat(runtime, [{ role: 'user', content: prompt }], signal)
+  const source = extractBgraphSource(output)
+  if (!source) return candidate
+  try {
+    const svg = await renderBgraph(source)
+    assertBgraphQuality(source, svg)
+    return { ...candidate, source, ...measureBgraphSvg(svg) }
+  } catch {
+    return candidate
+  }
 }
 
 // Carte de config posée quand le fournisseur cloud n'est pas prêt (chip `config`).
@@ -1133,6 +1365,8 @@ export async function sendChat(
   const memoryFolder = copilot.memoryFolder ? { ...copilot.memoryFolder } : null
   const contextRevision = copilot.contextRevision
   const webSearchEnabled = copilot.webSearchEnabled
+  const outputMode = copilot.outputMode
+  const diagramSeed = copilot.diagramSeed ? { ...copilot.diagramSeed } : null
   const automaticDocuments = scope === 'doc' ? snapshotAutomaticDocuments() : []
   const workspaceContextKey = scope === 'doc' ? visibleContextKey() : undefined
 
@@ -1148,6 +1382,11 @@ export async function sendChat(
   }
 
   copilot.generating = true
+  // Le mode Diagramme est une intention pour CE tour. Le remettre immédiatement au
+  // défaut évite qu'une question suivante devienne un diagramme par surprise ; le retry
+  // conserve sa propre copie dans le message d'erreur.
+  copilot.outputMode = 'answer'
+  copilot.diagramSeed = null
   genController = new AbortController()
   const signal = genController.signal
   ensureConversationIdentity()
@@ -1170,7 +1409,9 @@ export async function sendChat(
       ? 'Doku-San cherche dans vos notes…'
       : automaticDocuments.length
         ? 'Doku-San lit les documents…'
-        : 'Doku-San lit le document…',
+        : outputMode === 'diagram'
+          ? 'Doku-San prépare le diagramme…'
+          : 'Doku-San lit le document…',
   })
   const idx = copilot.messages.length - 1 // index stable (generating sérialise les envois)
   const setActivity = (activity: CopilotActivity) => {
@@ -1242,7 +1483,7 @@ export async function sendChat(
       } else {
         message.content = copilot.error || 'Le moteur IA est indisponible.'
         message.failed = true
-        message.retry = { kind: 'chat', question: q, scope, contextRevision, workspaceContextKey }
+        message.retry = { kind: 'chat', question: q, scope, contextRevision, workspaceContextKey, outputMode, diagramSeed: diagramSeed ?? undefined }
       }
       return
     }
@@ -1282,6 +1523,10 @@ export async function sendChat(
     let messages: OllamaMessage[]
     let sources: CitedPassage[] | null = null
     let webCitations: WebCitation[] = []
+    // Partagés par les deux chemins (boucle d'outil MiniMax et tuyau scripté Ollama) :
+    // les sources cumulées du tour et le nombre de recherches réellement lancées.
+    let results: WebSearchResult[] = []
+    let searchCount = 0
     let wholeDoc = false
     let bundle: ContextBundle | null = null
     const fixedChars = 12_000
@@ -1326,32 +1571,119 @@ export async function sendChat(
         : 'Document courant',
       state: 'done',
     })
-    if (webSearchEnabled && runtime.provider !== 'openai') {
+    // MiniMax mène ses recherches lui-même (boucle d'outil plus bas) : le tuyau scripté
+    // — planifier une requête, chercher, juger, puis forcer une réponse — ne vaut plus
+    // que pour Ollama, dont le petit modèle ne tient pas une boucle d'appels d'outils.
+    const agenticSearch = webSearchEnabled && runtime.provider === 'minimax'
+    if (webSearchEnabled && runtime.provider === 'ollama') {
       const message = copilot.messages[idx]
       setActivity({ id: 'web-plan', kind: 'web-plan', label: 'Préparation de la recherche Web', state: 'running' })
       if (message && !message.content) message.status = 'Doku-San prépare la recherche…'
-      const searchQuery = buildWebSearchQuery(q, messages)
+      // C'est le MODÈLE qui formule la requête : il comprend la demande, l'heuristique ne
+      // fait que ramasser des mots dans l'ordre du texte. Un échec ici n'a pas à coûter la
+      // recherche — on retombe sur l'heuristique, dont on connaît les limites.
+      const heuristicQuery = buildWebSearchQuery(q, messages)
+      let searchQuery = heuristicQuery
+      let plannedBy: 'modèle' | 'Doku' = 'Doku'
+      // Le fil de la conversation, SANS le tour en cours (la bulle assistant vide à `idx`
+      // et la question déjà passée en `q`). Une relance — « oui », « plus ciblé » — ne
+      // porte aucun sujet : il est dans les messages précédents, et notamment dans les
+      // requêtes que le modèle a pu proposer lui-même au tour d'avant.
+      const planHistory = copilot.messages
+        .slice(0, Math.max(0, idx - 1))
+        .map((message) => ({ role: message.role, content: message.content }))
+      if (heuristicQuery) {
+        try {
+          const planned = parseModelWebQuery(await streamGenerate(
+            runtime,
+            webQueryPlanPrompt(q, bundle?.primary.map((source) => source.text).join('\n\n') ?? '', planHistory),
+            () => {},
+            signal,
+            { map: true },
+          ))
+          if (planned) {
+            searchQuery = planned
+            plannedBy = 'modèle'
+          }
+        } catch (error) {
+          if (signal.aborted) return
+          console.error('[copilot] planification de la requête Web', error)
+        }
+      }
+      if (signal.aborted) return
       setActivity({
         id: 'web-plan',
         kind: 'web-plan',
         label: 'Préparation de la recherche Web',
-        detail: searchQuery || 'Date courante uniquement',
+        detail: searchQuery ? `« ${searchQuery} » · rédigée par le ${plannedBy}` : 'Date courante uniquement',
         state: 'done',
       })
       if (searchQuery) {
-        setActivity({ id: 'web-search', kind: 'web-search', label: 'Recherche sur le Web', detail: searchQuery, state: 'running' })
-        if (message && !message.content) message.status = 'Doku-San recherche sur le Web…'
-        const results = await searchWeb(searchQuery)
-        if (signal.aborted) return
-        messages = appendWebSearchContext(messages, results, searchQuery)
-        webCitations = webSearchCitations(results)
-        setActivity({
-          id: 'web-search',
-          kind: 'web-search',
-          label: 'Recherche sur le Web',
-          detail: `${results.length} résultat${results.length > 1 ? 's' : ''}`,
-          state: 'done',
-        })
+        {
+        const m = copilot.messages[idx]
+        if (m && !m.content) m.status = 'Doku-San recherche sur le Web…'
+      }
+        // Une recherche qui ne rapporte rien est une ISSUE NORMALE de la recherche, pas
+        // une panne de la génération : la faire remonter au catch général tuait la
+        // réponse que le document permettait, et `generationFailure` remplaçait ensuite
+        // la cause par « vérifiez que le moteur est prêt » (Ollama) ou la préfixait du
+        // nom du fournisseur (« MiniMax : … »), accusant un composant hors de cause.
+        let searchError: string | null = null
+        const tried: string[] = []
+        let query: string | null = searchQuery
+        // Le modèle juge ses propres résultats et relance. Un seul coup le condamnait à
+        // subir une requête tombée sur des pages d'accueil : il constatait le problème,
+        // nommait la bonne recherche et devait DEMANDER à l'utilisateur de la lancer.
+        for (let round = 1; round <= MAX_WEB_SEARCH_ROUNDS && query; round += 1) {
+          const activityId = round === 1 ? 'web-search' : `web-search-${round}`
+          setActivity({ id: activityId, kind: 'web-search', label: `Recherche sur le Web${round > 1 ? ` (${round})` : ''}`, detail: `« ${query} »`, state: 'running' })
+          let found: WebSearchResult[]
+          try {
+            found = await searchWeb(query, signal)
+          } catch (error) {
+            if (signal.aborted) return
+            const cause = error instanceof Error ? error.message : String(error)
+            setActivity({ id: activityId, kind: 'web-search', label: `Recherche sur le Web${round > 1 ? ` (${round})` : ''}`, detail: cause, state: 'error' })
+            // Un affinage qui échoue ne doit pas effacer ce que les tours précédents ont
+            // trouvé : on ne signale l'échec au modèle que si TOUT a échoué.
+            if (!results.length) searchError = cause
+            break
+          }
+          if (signal.aborted) return
+          tried.push(query)
+          results = mergeWebResults(results, found)
+          setActivity({
+            id: activityId,
+            kind: 'web-search',
+            label: `Recherche sur le Web${round > 1 ? ` (${round})` : ''}`,
+            detail: `« ${query} » · ${found.length} résultat${found.length > 1 ? 's' : ''}`,
+            state: 'done',
+          })
+          query = null
+          if (round >= MAX_WEB_SEARCH_ROUNDS) break
+          try {
+            const refinement = parseModelWebRefinement(await streamGenerate(
+              runtime,
+              webQueryRefinePrompt(q, tried, results, planHistory),
+              () => {},
+              signal,
+              { map: true },
+            ))
+            // Sans verdict exploitable, on s'arrête : relancer au hasard coûterait un
+            // appel pour une requête que personne n'a choisie.
+            if (refinement && !refinement.done && refinement.query) query = refinement.query
+          } catch (error) {
+            if (signal.aborted) return
+            console.error('[copilot] affinage de la recherche Web', error)
+          }
+          if (signal.aborted) return
+        }
+        if (searchError) {
+          messages = appendWebSearchFailureContext(messages, searchError)
+        } else {
+          messages = appendWebSearchContext(messages, results, tried.join(' · '))
+          webCitations = webSearchCitations(results)
+        }
       } else {
         messages = appendCurrentDateContext(messages)
       }
@@ -1360,14 +1692,136 @@ export async function sendChat(
     // tours ; au défaut Ollama (4096) l'historique les évincerait par troncature gauche silencieuse.
     // Mutation via l'index (élément proxifié du $state array) → réactif ; muter la ref locale
     // poussée ne le serait PAS (piège $state profond de Svelte 5).
-    setActivity({ id: 'answer', kind: 'answer', label: 'Rédaction de la réponse', state: 'running' })
+    setActivity({
+      id: 'answer',
+      kind: 'answer',
+      label: outputMode === 'diagram' ? 'Création du diagramme' : 'Rédaction de la réponse',
+      state: 'running',
+    })
+    // Conversation de travail de la boucle d'outil : elle grossit d'un tour d'assistant
+    // (la demande de recherche) et d'un message `tool` par recherche exécutée.
+    let turn: CompatMessage[] = applyVerbosity(messages, app.copilotVerbosity) as CompatMessage[]
+    const diagramBaseSystem = turn[0]?.role === 'system' ? turn[0].content : null
+    const cloudDiagramStudio = outputMode === 'diagram' && isCloudProvider(runtime.provider)
+    if (outputMode === 'diagram') {
+      const instruction = cloudDiagramStudio
+        ? buildDiagramStudioPlannerPrompt(q, diagramSeed?.studio ?? null)
+        : buildBgraphPrompt(diagramSeed?.source)
+      turn = turn[0]?.role === 'system'
+        ? [{ ...turn[0], content: `${turn[0].content}\n\n${instruction}` }, ...turn.slice(1)]
+        : [{ role: 'system', content: instruction }, ...turn]
+    }
+    let diagramOutput = ''
+    if (agenticSearch) {
+      {
+        const m = copilot.messages[idx]
+        if (m && !m.content) m.status = 'Doku-San recherche sur le Web…'
+      }
+      for (let round = 0; round < MAX_WEB_SEARCH_ROUNDS; round += 1) {
+        let requested: CompatToolCall[] = []
+        let roundOutput = ''
+        await streamChat(
+          runtime,
+          turn as OpenAiMessage[],
+          (t) => {
+            const m = copilot.messages[idx]
+            m.status = undefined
+            if (outputMode === 'diagram') roundOutput += t
+            else m.content += t
+          },
+          signal,
+          {
+            tools: [WEB_SEARCH_TOOL],
+            onToolCalls: (calls) => { requested = calls },
+            onThinking: () => {
+              const m = copilot.messages[idx]
+              if (m && m.streaming && !m.content) m.status = undefined
+            },
+          },
+        )
+        if (signal.aborted) return
+        if (!requested.length) {
+          if (outputMode === 'diagram') diagramOutput = roundOutput
+          break
+        }
+        // Le tour d'assistant doit être rejoué TEL QUEL (forme OpenAI) : sans lui, les
+        // messages `tool` qui suivent ne répondent à rien et l'API les rejette.
+        turn = [...turn, {
+          role: 'assistant',
+          content: '',
+          toolCalls: requested.map((call) => ({
+            id: call.id,
+            type: 'function',
+            function: { name: call.name, arguments: call.arguments },
+          })),
+        }]
+        for (const call of requested) {
+          const query = parseWebSearchToolArguments(call.arguments)
+          const activityId = `web-search-${searchCount + 1}`
+          if (!query) {
+            turn = [...turn, { role: 'tool', content: 'Requête illisible : réessaie avec une requête en texte simple.', toolCallId: call.id }]
+            continue
+          }
+          searchCount += 1
+          setActivity({ id: activityId, kind: 'web-search', label: 'Recherche sur le Web', detail: `« ${query} »`, state: 'running' })
+          try {
+            const found = await searchWeb(query, signal)
+            if (signal.aborted) return
+            results = mergeWebResults(results, found)
+            turn = [...turn, { role: 'tool', content: webSearchToolResult(query, found), toolCallId: call.id }]
+            setActivity({
+              id: activityId,
+              kind: 'web-search',
+              label: 'Recherche sur le Web',
+              detail: `« ${query} » · ${found.length} résultat${found.length > 1 ? 's' : ''}`,
+              state: 'done',
+            })
+          } catch (error) {
+            if (signal.aborted) return
+            const cause = error instanceof Error ? error.message : String(error)
+            // L'échec est rendu AU MODÈLE, pas à l'utilisateur : il peut reformuler ou
+            // conclure sans le Web. C'est lui qui mène, il doit savoir ce qui a raté.
+            turn = [...turn, { role: 'tool', content: `La recherche a échoué : ${cause}`, toolCallId: call.id }]
+            setActivity({ id: activityId, kind: 'web-search', label: 'Recherche sur le Web', detail: cause, state: 'error' })
+          }
+        }
+        {
+        const m = copilot.messages[idx]
+        if (m && !m.content) m.status = 'Doku-San recherche sur le Web…'
+      }
+      }
+      webCitations = webSearchCitations(results)
+      if (searchCount >= MAX_WEB_SEARCH_ROUNDS) {
+        // Plafond atteint : le dire au modèle plutôt que de le laisser en redemander une
+        // qui ne partira pas. Un dernier tour SANS outil garantit une réponse rédigée.
+        turn = [...turn, {
+          role: 'user',
+          content: `Tu as atteint la limite de ${MAX_WEB_SEARCH_ROUNDS} recherches pour ce tour. Réponds maintenant avec ce que tu as, en disant franchement ce que tu n'as pas pu vérifier.`,
+        }]
+        let finalOutput = ''
+        await streamChat(
+          runtime,
+          turn as OpenAiMessage[],
+          (t) => {
+            const m = copilot.messages[idx]
+            m.status = undefined
+            if (outputMode === 'diagram') finalOutput += t
+            else m.content += t
+          },
+          signal,
+          {},
+        )
+        if (outputMode === 'diagram') diagramOutput = finalOutput
+      }
+    } else {
     await streamChat(
       runtime,
-      applyVerbosity(messages, app.copilotVerbosity),
+      turn as OpenAiMessage[],
       (t) => {
         const m = copilot.messages[idx]
         m.status = undefined // 1er token : le prefill est fini, le texte prend le relais
-        m.content += t
+        if (outputMode === 'diagram') diagramOutput += t
+        else m.content += t
       },
       signal,
       {
@@ -1395,7 +1849,99 @@ export async function sendChat(
         },
       },
     )
-    setActivity({ id: 'answer', kind: 'answer', label: 'Rédaction de la réponse', state: 'done' })
+    }
+    if (outputMode === 'diagram') {
+      const done = copilot.messages[idx]
+      if (cloudDiagramStudio) {
+        done.status = 'Doku-San explore plusieurs vues…'
+        let studioPlan = parseDiagramStudioPlan(diagramOutput)
+        if (!studioPlan) {
+          const retryOutput = await hiddenChat(runtime, [
+            ...turn,
+            ...(diagramOutput ? [{ role: 'assistant' as const, content: diagramOutput }] : []),
+            { role: 'user', content: 'Le plan est illisible. Reprends l’analyse et renvoie uniquement le bloc <diagram-plan>{...}</diagram-plan> demandé.' },
+          ] as OpenAiMessage[], signal)
+          if (signal.aborted) return
+          studioPlan = parseDiagramStudioPlan(retryOutput)
+        }
+        if (!studioPlan) throw new Error('Doku-San n’a pas pu structurer les vues du diagramme.')
+
+        const studioTurn: CompatMessage[] = diagramBaseSystem && turn[0]?.role === 'system'
+          ? [{ ...turn[0], content: diagramBaseSystem }, ...turn.slice(1)]
+          : turn
+        const candidates = await generateDiagramCandidates(runtime, studioTurn, studioPlan, signal)
+        if (signal.aborted) return
+        done.status = `Doku-San compare ${candidates.length} vue${candidates.length > 1 ? 's' : ''}…`
+        const verdict = await critiqueDiagramCandidates(runtime, studioPlan, candidates, signal)
+        if (signal.aborted) return
+        const selectedIndex = Math.max(0, candidates.findIndex((candidate) => candidate.id === verdict.selectedCandidateId))
+        if (verdict.refine && verdict.feedback) {
+          done.status = 'Doku-San finalise la meilleure vue…'
+          candidates[selectedIndex] = await refineDiagramCandidate(
+            runtime,
+            studioPlan,
+            candidates[selectedIndex],
+            verdict.feedback,
+            signal,
+          )
+          if (signal.aborted) return
+        }
+        const selected = candidates[selectedIndex]
+        done.diagram = {
+          title: diagramTitle(q),
+          prompt: q,
+          source: selected.source,
+          studio: {
+            version: 1,
+            brief: studioPlan.brief,
+            candidates,
+            selectedCandidateId: selected.id,
+            rationale: verdict.rationale,
+          },
+        }
+      } else {
+        let source = extractBgraphSource(diagramOutput)
+        let lastError: unknown = source ? null : new Error('Le modèle n’a pas renvoyé de bloc bgraph exploitable.')
+        for (let attempt = 0; attempt <= MAX_BGRAPH_CORRECTIONS; attempt += 1) {
+          if (source) {
+            try {
+              const svg = await renderBgraph(source)
+              assertBgraphQuality(source, svg)
+              lastError = null
+              break
+            } catch (error) {
+              lastError = error
+            }
+          }
+          if (attempt >= MAX_BGRAPH_CORRECTIONS) break
+          if (done) done.status = `Doku-San ajuste le diagramme… (${attempt + 1}/${MAX_BGRAPH_CORRECTIONS})`
+          const diagnostics = lastError instanceof BgraphValidationError
+            ? lastError.diagnostics
+            : (lastError instanceof Error ? lastError.message : 'Source invalide')
+          const correctionTurn: CompatMessage[] = [
+            ...turn,
+            ...(diagramOutput ? [{ role: 'assistant' as const, content: diagramOutput }] : []),
+            { role: 'user', content: buildBgraphCorrectionPrompt(source, diagnostics) },
+          ]
+          diagramOutput = await hiddenChat(runtime, correctionTurn as OpenAiMessage[], signal)
+          if (signal.aborted) return
+          source = extractBgraphSource(diagramOutput)
+          if (!source) lastError = new Error('La correction ne contient toujours aucun bloc bgraph exploitable.')
+        }
+        if (!source || lastError) {
+          throw new Error(`Le diagramme n’a pas pu être validé après ${MAX_BGRAPH_CORRECTIONS + 1} tentatives. ${lastError instanceof Error ? lastError.message : ''}`.trim())
+        }
+        done.diagram = { title: diagramTitle(q), prompt: q, source }
+      }
+      done.content = `Diagramme généré : ${done.diagram.title}`
+      done.status = undefined
+    }
+    setActivity({
+      id: 'answer',
+      kind: 'answer',
+      label: outputMode === 'diagram' ? 'Création du diagramme' : 'Rédaction de la réponse',
+      state: 'done',
+    })
     // Pied « Passages consultés » déterministe (15.3) — supprimé sur refus : des sources
     // cliquables sous « je ne trouve pas » seraient trompeuses. Sans `sources` posées,
     // les marqueurs [n] éventuels de la réponse sont retirés au rendu (count = 0).
@@ -1427,6 +1973,7 @@ export async function sendChat(
       done.memorySources = recalledMemories
       done.webSearch = webSearchEnabled
       done.webCitations = webCitations
+      done.webCitedOnly = runtime.provider === 'openai' || undefined
     }
     if (
       sources &&
@@ -1444,8 +1991,14 @@ export async function sendChat(
       }
     }
     if (
-      done?.content && !done.failed && !done.notice && turnMemoryWorkspace &&
-      !(runtime.provider === 'minimax' && webSearchEnabled) &&
+      done?.content && !done.diagram && !done.failed && !done.notice && turnMemoryWorkspace &&
+      // INVARIANT DE SÉCURITÉ (ne pas relâcher pour une raison de débit) : une réponse
+      // construite à partir de pages Web a pu être influencée par un texte écrit par un
+      // tiers. `queueMemoryExtraction` écrit du Markdown DURABLE dans le coffre et le
+      // réinjecte à chaque tour suivant : y laisser passer un tour Web transformerait une
+      // injection ponctuelle en injection permanente. La garde valait autrefois pour le
+      // seul MiniMax, au nom du rate-limit — le motif était le bon, la portée trop étroite.
+      !webSearchEnabled &&
       isCloudProvider(runtime.provider) && app.cloudMemoryEnabled
     ) {
       queueMemoryExtraction({
@@ -1471,12 +2024,14 @@ export async function sendChat(
     }
     copilot.messages[idx].content = copilot.messages[idx].content || generationFailure(e, provider, 'La génération a échoué. Vérifiez que le moteur est prêt, puis réessayez.')
     copilot.messages[idx].failed = true
-    copilot.messages[idx].retry = { kind: 'chat', question: q, scope, contextRevision, workspaceContextKey }
+    copilot.messages[idx].retry = { kind: 'chat', question: q, scope, contextRevision, workspaceContextKey, outputMode, diagramSeed: diagramSeed ?? undefined }
     finishActivities('error')
   } finally {
     const m = copilot.messages[idx]
     if (m) {
-      if (!m.failed) finishActivities('done')
+      // Annulé ≠ terminé : marquer « Terminé » une étape que l'utilisateur a interrompue
+      // ferait mentir la trace d'activité sur ce qui a réellement eu lieu.
+      if (!m.failed) finishActivities(signal.aborted ? 'error' : 'done')
       m.streaming = false
       m.status = undefined
       // Annulé avant le 1er token → tour fantôme (question + réponse vide) : on retire les deux
@@ -2292,7 +2847,11 @@ export function retryGeneration(idx: number): void {
   copilot.messages.splice(idx - 1, 2)
   const t = activeTab()
   const doc = { name: t?.name ?? null, text: t?.content ?? '', kind: t?.kind ?? ('md' as DocKind), path: t?.path ?? null }
-  if (r.kind === 'chat') void sendChat(r.question, doc, r.scope)
+  if (r.kind === 'chat') {
+    copilot.outputMode = r.outputMode ?? 'answer'
+    copilot.diagramSeed = r.diagramSeed ? { ...r.diagramSeed } : null
+    void sendChat(r.question, doc, r.scope)
+  }
   else void summarizeDoc(doc, r.mode)
 }
 
@@ -2357,6 +2916,8 @@ function resetConversationDraft(): void {
   copilot.conversationTitle = ''
   copilot.conversationTitlePinned = false
   copilot.conversationWorkspace = null
+  copilot.outputMode = 'answer'
+  copilot.diagramSeed = null
   copilot.historyOmitted = 0
 }
 

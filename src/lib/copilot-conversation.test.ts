@@ -55,6 +55,70 @@ describe('copilot conversation', () => {
     expect(summarizeConversation(parsed!)).toMatchObject({ archived: true, documentNames: ['licence.pdf', 'notes.md'] })
   })
 
+  it('round-trips a diagram artifact without affecting older messages', () => {
+    const value = conversation({
+      messages: [
+        { role: 'user', content: 'Montre le flux', terminal: 'complete' },
+        {
+          role: 'assistant',
+          content: 'Diagramme généré.',
+          terminal: 'complete',
+          diagram: {
+            title: 'Flux',
+            prompt: 'Montre le flux',
+            source: 'node a "Entrée" at (0, 0)',
+          },
+        },
+      ],
+    })
+    expect(parseConversation(serializeConversation(value))?.messages[1].diagram).toEqual(value.messages[1].diagram)
+    expect(parseConversation(serializeConversation(conversation()))?.messages[1].diagram).toBeUndefined()
+  })
+
+  it('round-trips the cloud diagram studio candidates', () => {
+    const diagram = {
+      title: 'Architecture',
+      prompt: 'Montre le système',
+      source: 'type block { title: "Architecture" }',
+      studio: {
+        version: 1 as const,
+        brief: {
+          objective: 'Expliquer le système',
+          keyQuestion: 'Qui dépend de quoi ?',
+          desiredInsight: 'Montrer les responsabilités',
+          facts: ['Registry conserve les droits'],
+          entities: ['Registry', 'Issuer'],
+          relations: ['Registry autorise Issuer'],
+          measures: [],
+          events: [],
+        },
+        candidates: [{
+          id: 'block-1',
+          genre: 'block',
+          kind: 'architecture' as const,
+          label: 'Architecture des composants',
+          thesis: 'Responsabilités',
+          keeps: ['composants'],
+          omits: ['chronologie'],
+          layout: 'deux niveaux',
+          source: 'type block { title: "Architecture" }',
+          width: 640,
+          height: 360,
+          aspectRatio: 640 / 360,
+        }],
+        selectedCandidateId: 'block-1',
+        rationale: 'Cette vue montre les responsabilités.',
+      },
+    }
+    const value = conversation({
+      messages: [
+        { role: 'user', content: 'Montre le système', terminal: 'complete' },
+        { role: 'assistant', content: 'Diagramme généré.', terminal: 'complete', diagram },
+      ],
+    })
+    expect(parseConversation(serializeConversation(value))?.messages[1].diagram).toEqual(diagram)
+  })
+
   it('rejects invalid ids and clamps unsafe workspace values', () => {
     expect(parseConversation(JSON.stringify({ ...conversation(), id: '../memory' }))).toBeNull()
     const parsed = parseConversation(JSON.stringify({ ...conversation(), workspace: { ...conversation().workspace, ratio: 999 } }))

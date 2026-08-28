@@ -17,16 +17,30 @@ export interface CompatStatus {
   error?: string
 }
 
+export interface CompatToolCall {
+  id: string
+  name: string
+  /** Arguments JSON tels que le modèle les a écrits — recollés côté hôte, mais pas
+   *  forcément valides : c'est à l'appelant de décider quoi faire d'un JSON bancal. */
+  arguments: string
+}
+
 export interface CompatMessage {
   // 'developer' (rôle Codex) est accepté en entrée et REMAPPÉ en 'system' à l'envoi :
   // les surfaces compatibles OpenAI classiques ne le connaissent pas.
-  role: 'system' | 'developer' | 'user' | 'assistant'
+  role: 'system' | 'developer' | 'user' | 'assistant' | 'tool'
   content: string
+  /** Le tour d'assistant qui a demandé des outils doit être rejoué TEL QUEL : sans lui,
+   *  l'API rejette les messages `tool` qui suivent (ils ne répondent à rien). */
+  toolCalls?: unknown
+  toolCallId?: string
 }
 
 interface CompatStreamEvent {
   // 'thinking' : premier delta de raisonnement (M-series) — signal sans texte, une fois.
-  kind: 'delta' | 'thinking' | 'done' | 'error'
+  // 'toolCalls' : le modèle demande une ou plusieurs exécutions ; `text` porte le tableau
+  // JSON recollé par l'hôte à partir des fragments du flux.
+  kind: 'delta' | 'thinking' | 'toolCalls' | 'done' | 'error'
   text?: string
 }
 
@@ -63,6 +77,30 @@ export interface CompatOptions {
   /** Plafond de tokens de sortie — les appels internes (sélection mémoire, map de résumé)
    *  produisent quelques lignes ; sans plafond le modèle peut dérouler indéfiniment. */
   maxOutputTokens?: number
+  /** Outils déclarés au modèle (format OpenAI). L'exécution reste ici : l'hôte transporte. */
+  tools?: unknown
+  /** Appelé quand le modèle demande des outils au lieu de répondre. */
+  onToolCalls?: (calls: CompatToolCall[]) => void
+}
+
+function parseToolCalls(payload: string): CompatToolCall[] {
+  try {
+    const parsed: unknown = JSON.parse(payload)
+    if (!Array.isArray(parsed)) return []
+    return parsed.flatMap((entry) => {
+      if (!entry || typeof entry !== 'object') return []
+      const call = entry as Record<string, unknown>
+      const name = typeof call.name === 'string' ? call.name : ''
+      if (!name) return []
+      return [{
+        id: typeof call.id === 'string' && call.id ? call.id : name,
+        name,
+        arguments: typeof call.arguments === 'string' ? call.arguments : '',
+      }]
+    })
+  } catch {
+    return []
+  }
 }
 
 export async function compatChat(
@@ -94,6 +132,9 @@ export async function compatChat(
       }
     } else if (event.kind === 'thinking') {
       onThinking?.()
+    } else if (event.kind === 'toolCalls' && event.text) {
+      const calls = parseToolCalls(event.text)
+      if (calls.length) options.onToolCalls?.(calls)
     } else if (event.kind === 'error') {
       streamError = event.text || 'La génération a échoué.'
     }
@@ -102,10 +143,24 @@ export async function compatChat(
   const cancel = () => void invoke('cancel_compat', { requestId }).catch(() => {})
   if (signal?.aborted) return output
   signal?.addEventListener('abort', cancel, { once: true })
-  const payload = messages.map((m) => (m.role === 'developer' ? { role: 'system', content: m.content } : m))
+  const payload = messages.map((message) => ({
+    role: message.role === 'developer' ? 'system' : message.role,
+    content: message.content,
+    // `undefined` disparaît à la sérialisation ; `null` ferait échouer l'API sur un
+    // message ordinaire, qui n'a pas le droit de porter ces champs.
+    ...(message.toolCalls ? { tool_calls: message.toolCalls } : {}),
+    ...(message.toolCallId ? { tool_call_id: message.toolCallId } : {}),
+  }))
   try {
     await invoke('stream_compat', {
-      request: { requestId, provider, model, messages: payload, maxOutputTokens: options.maxOutputTokens },
+      request: {
+        requestId,
+        provider,
+        model,
+        messages: payload,
+        maxOutputTokens: options.maxOutputTokens,
+        tools: options.tools,
+      },
       onEvent,
     })
     if (streamError && !signal?.aborted) throw new Error(streamError)

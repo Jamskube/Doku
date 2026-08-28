@@ -1,7 +1,7 @@
 <script lang="ts">
   import type { ChatMsg } from '../lib/copilot.svelte'
   import type { CitedPassage } from '../lib/citations'
-  import { visibleWebCitations, webCitationHost } from '../lib/web-citations'
+  import { citedWebCitationNumbers, visibleWebCitations, webCitationHost } from '../lib/web-citations'
 
   interface Props {
     message: ChatMsg
@@ -17,7 +17,13 @@
   const shownPassages = $derived(message.citedOnly
     ? (message.sources ?? []).filter((source) => message.cited?.includes(source.n))
     : (message.sources ?? []))
-  const shownWeb = $derived(visibleWebCitations(message.content, message.webCitations ?? []))
+  // Recherche menée par Doku : on montre ce qui a RÉELLEMENT été transmis au modèle, sans
+  // dépendre de sa docilité au format `[web:n]`. Tool hébergé OpenAI : la liste vient déjà
+  // de ses annotations, on la filtre sur ce que la réponse cite vraiment.
+  const shownWeb = $derived(message.webCitedOnly
+    ? visibleWebCitations(message.content, message.webCitations ?? [])
+    : (message.webCitations ?? []))
+  const citedWeb = $derived(citedWebCitationNumbers(message.content, message.webCitations?.length ?? 0))
   const sourceCount = $derived(
     shownPassages.length + shownWeb.length + (message.contextSources?.length ?? 0) + (message.memorySources?.length ?? 0),
   )
@@ -80,14 +86,15 @@
     <div class="evidence-list">
       {#if shownWeb.length}
         <section>
-          <h4>Web</h4>
+          <h4>{message.webCitedOnly ? 'Sources Web citées' : 'Sources Web consultées'}</h4>
           {#each shownWeb as source (source.n)}
             <button class="source-row" onclick={() => onOpenWeb(source.url)} title={source.url}>
-              <span class="source-index">{source.n}</span>
+              <span class="source-index" class:cited={citedWeb.has(source.n)}>{source.n}</span>
               <span class="source-copy">
                 <strong>{source.title}</strong>
                 <small>{source.snippet ?? webCitationHost(source.url)}</small>
               </span>
+              {#if citedWeb.has(source.n)}<span class="source-tag">citée</span>{/if}
               <span class="msr source-open" aria-hidden="true">open_in_new</span>
             </button>
           {/each}
@@ -232,6 +239,17 @@
     font-family: 'Material Symbols Rounded';
     font-size: 15px;
     font-weight: 400;
+  }
+  /* Toutes les sources listées ont été transmises au modèle ; celles-ci, il les a citées. */
+  .source-index.cited { background: var(--accent-soft, var(--surface-3)); color: var(--ink); }
+  .source-tag {
+    flex: 0 0 auto;
+    padding: 2px 6px;
+    border-radius: 6px;
+    background: var(--surface-2);
+    color: var(--ink-4);
+    font: 600 9.5px/1.4 var(--font-sans);
+    letter-spacing: 0.02em;
   }
   .source-copy { flex: 1; }
   .source-open { flex: 0 0 auto; color: var(--ink-4); font-size: 15px; }

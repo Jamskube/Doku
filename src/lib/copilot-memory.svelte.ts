@@ -240,8 +240,12 @@ export async function recallCloudMemories(
       content: record.content,
       updatedAt: record.updatedAt,
     }))
-  } catch {
+  } catch (error) {
     if (signal?.aborted) return []
+    // Le repli est le bon comportement, mais il ne doit pas être MUET : sans trace, une
+    // sélection devenue lexicale au lieu de sémantique est indiscernable d'un sélecteur
+    // qui fonctionne mal, et la cause n'est plus rapportable (leçon 2026-08-18).
+    console.error('[copilot] rappel mémoire cloud indisponible, repli local', error)
     // Le sélecteur cloud est une optimisation sémantique, pas une condition de
     // disponibilité de la mémoire. Une indisponibilité fournisseur ne doit jamais
     // faire perdre les souvenirs que Doku peut encore sélectionner localement.

@@ -118,10 +118,17 @@ pub struct CompatStatus {
     error: Option<String>,
 }
 
+/// Un tour de conversation tel qu'il part au fournisseur. `tool_calls` (réponse du modèle)
+/// et `tool_call_id` (résultat qu'on lui rend) ne sont sérialisés que lorsqu'ils existent :
+/// l'API refuse un `tool_calls: null` sur un message ordinaire.
 #[derive(Deserialize, Serialize)]
 pub struct CompatMessage {
     role: String,
     content: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    tool_calls: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    tool_call_id: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -134,6 +141,10 @@ pub struct CompatRequest {
     /// Plafond de tokens de sortie pour les appels INTERNES (sélection mémoire, map de
     /// résumé) dont la sortie utile tient en quelques lignes. Absent = conversation.
     max_output_tokens: Option<u32>,
+    /// Outils déclarés au modèle, au format OpenAI. Le frontend les exécute et relance —
+    /// l'hôte ne fait que transporter (ADR-0004).
+    #[serde(default)]
+    tools: Option<Value>,
 }
 
 #[derive(Serialize, Clone)]
@@ -435,6 +446,62 @@ pub fn cancel_compat(request_id: String, state: State<'_, CompatState>) {
     }
 }
 
+/// Un appel d'outil en cours de reconstitution. Le fournisseur ne l'envoie PAS d'un bloc :
+/// `id` et `function.name` arrivent au premier fragment, puis `function.arguments` tombe
+/// par morceaux de JSON qui ne sont valides qu'une fois recollés. `index` identifie
+/// l'appel quand le modèle en demande plusieurs à la fois.
+#[derive(Default)]
+struct PendingToolCall {
+    id: String,
+    name: String,
+    arguments: String,
+}
+
+fn absorb_tool_call_deltas(json: &Value, pending: &mut Vec<PendingToolCall>) {
+    let Some(calls) = json
+        .pointer("/choices/0/delta/tool_calls")
+        .and_then(Value::as_array)
+    else {
+        return;
+    };
+    for call in calls {
+        let index = call.get("index").and_then(Value::as_u64).unwrap_or(0) as usize;
+        if pending.len() <= index {
+            pending.resize_with(index + 1, PendingToolCall::default);
+        }
+        let slot = &mut pending[index];
+        if let Some(id) = call.get("id").and_then(Value::as_str) {
+            if !id.is_empty() {
+                slot.id = id.to_string();
+            }
+        }
+        if let Some(name) = call.pointer("/function/name").and_then(Value::as_str) {
+            slot.name.push_str(name);
+        }
+        if let Some(arguments) = call.pointer("/function/arguments").and_then(Value::as_str) {
+            slot.arguments.push_str(arguments);
+        }
+    }
+}
+
+fn tool_calls_payload(pending: &[PendingToolCall]) -> Option<String> {
+    let calls = pending
+        .iter()
+        .filter(|call| !call.name.is_empty())
+        .map(|call| {
+            serde_json::json!({
+                "id": call.id,
+                "name": call.name,
+                "arguments": call.arguments,
+            })
+        })
+        .collect::<Vec<_>>();
+    if calls.is_empty() {
+        return None;
+    }
+    serde_json::to_string(&calls).ok()
+}
+
 fn send_event(
     channel: &Channel<CompatStreamEvent>,
     kind: &'static str,
@@ -470,6 +537,10 @@ fn chat_body(def: &ProviderDef, request: &CompatRequest) -> Value {
         // fournisseur était bridé — d'où « MiniMax est lent, OpenAI est rapide », qui
         // était une asymétrie de Doku, pas des fournisseurs.
         body["thinking"] = serde_json::json!({ "type": "disabled" });
+    }
+    if let Some(tools) = &request.tools {
+        body["tools"] = tools.clone();
+        body["tool_choice"] = serde_json::json!("auto");
     }
     if let Some(max) = request.max_output_tokens {
         body["max_completion_tokens"] = serde_json::json!(max);
@@ -518,6 +589,8 @@ pub async fn stream_compat(
         let mut buffer = Vec::<u8>::new();
         let mut completed = false;
         let mut thinking_sent = false;
+        let mut pending_tool_calls: Vec<PendingToolCall> = Vec::new();
+        let mut tool_calls_sent = false;
         loop {
             tokio::select! {
                 _ = &mut cancel_rx => break,
@@ -532,6 +605,13 @@ pub async fn stream_compat(
                             SseEvent::Json(json) => json,
                             SseEvent::Done => {
                                 completed = true;
+                                // Les appels d'outils partent AVANT `done` : le frontend
+                                // doit savoir qu'il a des recherches à exécuter au moment
+                                // où il apprend que le tour est terminé.
+                                if let Some(payload) = tool_calls_payload(&pending_tool_calls) {
+                                    tool_calls_sent = true;
+                                    send_event(&on_event, "toolCalls", Some(payload))?;
+                                }
                                 send_event(&on_event, "done", None)?;
                                 break;
                             }
@@ -569,9 +649,18 @@ pub async fn stream_compat(
                             thinking_sent = true;
                             send_event(&on_event, "thinking", None)?;
                         }
+                        absorb_tool_call_deltas(&json, &mut pending_tool_calls);
                     }
                     if completed { break; }
                 }
+            }
+        }
+        // Flux clos sans `[DONE]` : les appels reconstitués seraient perdus alors qu'ils
+        // sont complets. Le repli n'est pas théorique — un fournisseur peut fermer la
+        // connexion sur le dernier chunk.
+        if !tool_calls_sent {
+            if let Some(payload) = tool_calls_payload(&pending_tool_calls) {
+                send_event(&on_event, "toolCalls", Some(payload))?;
             }
         }
         Ok(())
@@ -591,7 +680,10 @@ pub async fn stream_compat(
 
 #[cfg(test)]
 mod tests {
-    use super::{chat_body, provider, CompatMessage, CompatRequest};
+    use super::{
+        absorb_tool_call_deltas, chat_body, provider, tool_calls_payload, CompatMessage,
+        CompatRequest, Value,
+    };
 
     #[test]
     fn registry_knows_minimax_and_rejects_unknown() {
@@ -613,8 +705,11 @@ mod tests {
                 messages: vec![CompatMessage {
                     role: "user".into(),
                     content: "Question".into(),
+                    tool_calls: None,
+                    tool_call_id: None,
                 }],
                 max_output_tokens: None,
+                tools: None,
             },
         );
         assert_eq!(body["stream"], true);
@@ -639,8 +734,11 @@ mod tests {
                 messages: vec![CompatMessage {
                     role: "user".into(),
                     content: "Question".into(),
+                    tool_calls: None,
+                    tool_call_id: None,
                 }],
                 max_output_tokens: None,
+                tools: None,
             },
         );
         // Le pendant du `reasoning: {effort: "low"}` d'OpenAI. Sans lui, M3 réfléchissait
@@ -660,10 +758,74 @@ mod tests {
                 messages: vec![CompatMessage {
                     role: "user".into(),
                     content: "Choisis les souvenirs utiles".into(),
+                    tool_calls: None,
+                    tool_call_id: None,
                 }],
                 max_output_tokens: Some(512),
+                tools: None,
             },
         );
         assert_eq!(body["max_completion_tokens"], 512);
+    }
+
+    // Le fournisseur n'envoie PAS l'appel d'outil d'un bloc : `id` et `name` au premier
+    // fragment, puis les arguments par morceaux de JSON invalides pris isolément. Recoller
+    // avant de tenter le décodage est la seule façon d'obtenir la requête du modèle.
+    #[test]
+    fn reassembles_tool_calls_streamed_in_fragments() {
+        let mut pending = Vec::new();
+        for chunk in [
+            r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_a","function":{"name":"web_search","arguments":"{\"que"}}]}}]}"#,
+            r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"ry\":\"Adobe ETLA\"}"}}]}}]}"#,
+        ] {
+            absorb_tool_call_deltas(&serde_json::from_str(chunk).unwrap(), &mut pending);
+        }
+        let payload = tool_calls_payload(&pending).expect("un appel doit être reconstitué");
+        let parsed: Value = serde_json::from_str(&payload).unwrap();
+        assert_eq!(parsed[0]["id"], "call_a");
+        assert_eq!(parsed[0]["name"], "web_search");
+        assert_eq!(parsed[0]["arguments"], r#"{"query":"Adobe ETLA"}"#);
+    }
+
+    // Le modèle peut demander plusieurs recherches d'un coup : `index` est ce qui les
+    // distingue, et les mélanger produirait deux requêtes corrompues.
+    #[test]
+    fn keeps_parallel_tool_calls_apart() {
+        let mut pending = Vec::new();
+        absorb_tool_call_deltas(
+            &serde_json::from_str(
+                r#"{"choices":[{"delta":{"tool_calls":[
+                    {"index":0,"id":"a","function":{"name":"web_search","arguments":"{\"query\":\"un\"}"}},
+                    {"index":1,"id":"b","function":{"name":"web_search","arguments":"{\"query\":\"deux\"}"}}
+                ]}}]}"#,
+            )
+            .unwrap(),
+            &mut pending,
+        );
+        let parsed: Value = serde_json::from_str(&tool_calls_payload(&pending).unwrap()).unwrap();
+        assert_eq!(parsed.as_array().unwrap().len(), 2);
+        assert_eq!(parsed[1]["arguments"], r#"{"query":"deux"}"#);
+    }
+
+    #[test]
+    fn emits_nothing_without_a_tool_call() {
+        assert!(tool_calls_payload(&[]).is_none());
+    }
+
+    #[test]
+    fn declares_tools_only_when_asked() {
+        let with_tools = chat_body(
+            provider("minimax").unwrap(),
+            &CompatRequest {
+                request_id: "r".into(),
+                provider: "minimax".into(),
+                model: "MiniMax-M2.5".into(),
+                messages: vec![],
+                max_output_tokens: None,
+                tools: Some(serde_json::json!([{ "type": "function" }])),
+            },
+        );
+        assert_eq!(with_tools["tool_choice"], "auto");
+        assert_eq!(with_tools["tools"][0]["type"], "function");
     }
 }

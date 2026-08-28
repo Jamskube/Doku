@@ -3,7 +3,7 @@
   import { activeEditorSelection, activeTab, app, isCloudProvider, openPath, visibleTabs, type CopilotProvider, type DocTab } from '../lib/stores.svelte'
   import { closeWindow, fileSizeAt, isTauri, minimizeWindow, openContextFilesDialog, openFolderDialog, readFileBytes, readTextFileAt, toggleMaximizeWindow } from '../lib/tauri'
   import { formatBytes } from '../lib/ollama'
-  import { addCopilotContext, beginOpenAiAuth, cancelOpenAiConnection, cancelPull, connectMinimax, copilot, disconnectMinimaxKey, disconnectOpenAiAccount, ensureCopilotReady, isEmbedModel, jumpToCitation, newChat as clearChat, pullModel, refreshMinimaxStatus, refreshModels, refreshOpenAiStatus, removeCopilotContext, removeModel, retryGeneration, saveMessageAsNote, scheduleConversationPersist, sendChat, setActiveModel, setCopilotContextFolder, setCopilotMemoryFolder, setCopilotProvider, setWebSearchEnabled, stopChat, summarizeDoc, type ChatMsg } from '../lib/copilot.svelte'
+  import { addCopilotContext, beginOpenAiAuth, cancelOpenAiConnection, cancelPull, connectMinimax, copilot, disconnectMinimaxKey, disconnectOpenAiAccount, ensureCopilotReady, isEmbedModel, jumpToCitation, newChat as clearChat, pullModel, refreshMinimaxStatus, refreshModels, refreshOpenAiStatus, removeCopilotContext, removeModel, retryGeneration, reviseDiagram, saveMessageAsNote, scheduleConversationPersist, selectDiagramCandidate, sendChat, setActiveModel, setChatOutputMode, setCopilotContextFolder, setCopilotMemoryFolder, setCopilotProvider, setWebSearchEnabled, stopChat, summarizeDoc, type ChatMsg } from '../lib/copilot.svelte'
   import { conversations } from '../lib/copilot-conversations.svelte'
   import { MINIMAX_DEFAULT_MODEL } from '../lib/compat'
   import { vaultLabel, vaultShortLabel } from '../lib/platform'
@@ -21,6 +21,8 @@
   import type { CloudMemoryProvider, MemoryRecord, MemoryType } from '../lib/copilot-memory'
   import { addWebCitationMarkers, annotateWebCitations } from '../lib/web-citations'
   import CopilotEvidence from './CopilotEvidence.svelte'
+  import CopilotDiagram from './CopilotDiagram.svelte'
+  import type { DiagramArtifact } from '../lib/bgraph'
 
   // Rendu d'une réponse : Markdown assaini PUIS puces de citation (l'annotation opère
   // après DOMPurify — seul notre markup de puce est injecté). Sans sources (petit doc,
@@ -790,6 +792,15 @@
     draft = ''
     const t = activeTab()
     void sendChat(q, { name: t?.name ?? null, text: t?.content ?? '', kind: t?.kind ?? 'md', path: t?.path ?? null }, copilot.scope)
+  }
+
+  async function editDiagram(artifact: DiagramArtifact) {
+    reviseDiagram(artifact)
+    draft = 'Modifie ce diagramme : '
+    composerFace = 'question'
+    await tick()
+    promptEl?.focus()
+    promptEl?.setSelectionRange(draft.length, draft.length)
   }
 
   // --- Ajouter du contexte -------------------------------------------------------------
@@ -2197,7 +2208,7 @@
                   <span class="cop-asst-name">Doku-San</span>
                   <div class="grow"></div>
                   {#if !m.streaming}
-                    {#if isTauri && !m.notice && m.content}
+                    {#if isTauri && !m.notice && m.content && !m.diagram}
                       <!-- Sauver en note (21.x) : la réponse devient un fichier .md du dossier
                            courant — indexable, citable. Feedback succès (check) ET échec
                            (bannière) : jamais de bouton muet (règle Epic 19). -->
@@ -2211,15 +2222,23 @@
                         <span class="msr" style="font-size:15px">{noteSavedIdx === i ? 'check' : 'save'}</span>
                       </button>
                     {/if}
-                    <button class="cop-copy" title="Copier" aria-label="Copier la réponse" onclick={() => copyMessage(m.content)}>
-                      <span class="msr" style="font-size:15px">content_copy</span>
-                    </button>
+                    {#if !m.diagram}
+                      <button class="cop-copy" title="Copier" aria-label="Copier la réponse" onclick={() => copyMessage(m.content)}>
+                        <span class="msr" style="font-size:15px">content_copy</span>
+                      </button>
+                    {/if}
                   {/if}
                 </div>
                 {#if m.streaming}
                   <!-- Streaming : texte brut (aucun parse par token) — rendu Markdown à la fin.
                        ::after = curseur doux qui pulse au fil de l'écriture. -->
                   <div class="cop-md-plain streaming">{m.content}</div>
+                {:else if m.diagram}
+                  <CopilotDiagram
+                    artifact={m.diagram}
+                    onModify={(artifact) => void editDiagram(artifact)}
+                    onSelect={(candidateId) => selectDiagramCandidate(i, candidateId)}
+                  />
                 {:else}
                   <!-- Réponse terminée : Markdown assaini (allowlist, 0 réseau) + puces [n].
                        svelte-ignore : clic et survol sont délégués aux <button> injectés
@@ -2349,31 +2368,50 @@
                     bind:this={promptEl}
                     bind:value={draft}
                     rows="1"
-                    placeholder={copilot.scope === 'folder' ? 'Demandez à vos notes…' : 'Demandez à Doku-San…'}
+                    placeholder={copilot.outputMode === 'diagram'
+                      ? 'Décrivez le diagramme à créer…'
+                      : copilot.scope === 'folder' ? 'Demandez à vos notes…' : 'Demandez à Doku-San…'}
                     aria-label={copilot.scope === 'folder' ? 'Poser une question sur le dossier de notes' : 'Poser une question sur ce document'}
                     onkeydown={onPromptKey}
                   ></textarea>
-                  <!-- Style des réponses : puce compacte, menu vers le haut. -->
-                  <div class="cop-verb-root" bind:this={verbMenuRootEl}>
+                  <div class="cop-compose-options">
                     <button
-                      class="cop-verb-chip"
-                      class:open={verbMenuOpen}
-                      bind:this={verbChipEl}
-                      title="Style des réponses"
-                      aria-haspopup="menu"
-                      aria-expanded={verbMenuOpen}
-                      aria-label={`Style des réponses : ${verbosityLabel}`}
-                      onclick={toggleVerbMenu}
-                      onkeydown={(e) => {
-                        if (e.key === 'Escape' && verbMenuOpen) {
-                          e.stopPropagation()
-                          verbMenuOpen = false
-                        }
+                      class="cop-diagram-chip"
+                      class:active={copilot.outputMode === 'diagram'}
+                      aria-pressed={copilot.outputMode === 'diagram'}
+                      title={copilot.outputMode === 'diagram' ? 'Revenir à une réponse texte' : 'Créer un diagramme'}
+                      onclick={() => {
+                        verbMenuOpen = false
+                        setChatOutputMode(copilot.outputMode === 'diagram' ? 'answer' : 'diagram')
                       }}
                     >
-                      <span>{verbosityLabel}</span>
-                      <span class="msr">expand_more</span>
+                      <span class="msr">account_tree</span><span>Diagramme</span>
                     </button>
+                    {#if copilot.outputMode !== 'diagram'}
+                      <!-- Le style de prose n'a aucun effet sur un artefact visuel : le
+                           masquer évite un réglage trompeur et libère la largeur compacte. -->
+                      <div class="cop-verb-root" bind:this={verbMenuRootEl}>
+                        <button
+                          class="cop-verb-chip"
+                          class:open={verbMenuOpen}
+                          bind:this={verbChipEl}
+                          title="Style des réponses"
+                          aria-haspopup="menu"
+                          aria-expanded={verbMenuOpen}
+                          aria-label={`Style des réponses : ${verbosityLabel}`}
+                          onclick={toggleVerbMenu}
+                          onkeydown={(e) => {
+                            if (e.key === 'Escape' && verbMenuOpen) {
+                              e.stopPropagation()
+                              verbMenuOpen = false
+                            }
+                          }}
+                        >
+                          <span>{verbosityLabel}</span>
+                          <span class="msr">expand_more</span>
+                        </button>
+                      </div>
+                    {/if}
                   </div>
                   {#if copilot.generating}
                     <button class="cop-input-send" title="Arrêter" aria-label="Arrêter la génération" onclick={stopChat}>
@@ -2474,7 +2512,10 @@
                       <span class="msr" aria-hidden="true">search</span>
                       <span class="cop-context-extra-copy">
                         <strong>Recherche Web</strong>
-                        <small>La question est recherchée en ligne · sources citées</small>
+                        <!-- Le document alimente la requête quand la question ne se suffit
+                             pas : le dire ici, et le rendre vérifiable dans l'activité du
+                             tour, qui affiche la requête exacte partie au moteur. -->
+                        <small>Interroge un moteur de recherche · la question et, si elle est vague, quelques termes clés du document</small>
                       </span>
                       <button title="Désactiver la recherche Web" aria-label="Désactiver la recherche Web" onclick={() => setWebSearchEnabled(false)}>
                         <span class="msr">close</span>
@@ -2505,12 +2546,15 @@
           {/key}
         </div>
         <div class="cop-disclaimer">
-          {copilot.webSearchEnabled && app.copilotProvider === 'ollama'
-            ? 'Local · seule la recherche Web quitte cet appareil'
+          <!-- La recherche Web est un SECOND canal de sortie, indépendant du fournisseur :
+               un utilisateur MiniMax lisait « contexte envoyé au cloud » sans savoir qu'un
+               moteur de recherche était aussi interrogé. Les deux destinations, toujours. -->
+          {app.copilotProvider === 'ollama'
+            ? (copilot.webSearchEnabled ? 'Local · la requête de recherche quitte cet appareil' : 'Local · rien ne quitte cet appareil')
             : app.copilotProvider === 'openai'
-            ? 'OpenAI · contexte envoyé au cloud'
+            ? (copilot.webSearchEnabled ? 'OpenAI · contexte envoyé au cloud, recherche Web incluse' : 'OpenAI · contexte envoyé au cloud')
             : app.copilotProvider === 'minimax'
-              ? 'MiniMax · contexte envoyé au cloud'
+              ? (copilot.webSearchEnabled ? 'MiniMax · contexte envoyé au cloud + requête envoyée au moteur de recherche' : 'MiniMax · contexte envoyé au cloud')
               : 'Local · rien ne quitte cet appareil'}
           <span>·</span> Doku peut se tromper.
         </div>
@@ -3721,8 +3765,41 @@
   .cop-scope:focus-visible { outline: 2px solid var(--line-3); outline-offset: -2px; }
   .cop-scope.sel { background: var(--accent-soft); }
 
+  .cop-compose-options {
+    grid-column: 2;
+    grid-row: 2;
+    min-width: 0;
+    align-self: end;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    margin-bottom: 3px;
+    overflow: hidden;
+  }
+  .cop-diagram-chip {
+    min-width: 0;
+    height: 26px;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 0 9px 0 7px;
+    overflow: hidden;
+    border: 0;
+    border-radius: 999px;
+    background: transparent;
+    color: var(--ink-4);
+    font: 500 11px/1 var(--font-sans);
+    white-space: nowrap;
+    cursor: pointer;
+    transition: background 120ms ease, color 120ms ease, transform 100ms ease;
+  }
+  .cop-diagram-chip .msr { flex: 0 0 auto; font-size: 15px; }
+  .cop-diagram-chip:hover { background: var(--surface-hover); color: var(--ink); }
+  .cop-diagram-chip.active { background: var(--ink); color: var(--cream-content); }
+  .cop-diagram-chip:active { transform: scale(0.97); }
+  .cop-diagram-chip:focus-visible { outline: 2px solid var(--line-3); outline-offset: 1px; }
   /* Style des réponses : puce compacte dans la rangée de saisie + menu vers le haut. */
-  .cop-verb-root { position: relative; flex: 0 0 auto; align-self: flex-end; margin-bottom: 3px; }
+  .cop-verb-root { position: relative; flex: 0 0 auto; }
   .cop-verb-chip {
     display: inline-flex; align-items: center; gap: 3px; height: 26px; padding: 0 4px 0 9px;
     border: 0; border-radius: 999px; background: var(--surface-2); color: var(--ink-3);
@@ -3934,6 +4011,8 @@
   @container (max-width: 330px) {
     .cop-composer-note { display: none; }
     .cop-context-state { max-width: 86px; overflow: hidden; text-overflow: ellipsis; }
+    .cop-diagram-chip > span:last-child { display: none; }
+    .cop-diagram-chip { padding-inline: 7px; }
   }
 
   @media (pointer: coarse) {
@@ -3945,6 +4024,7 @@
     .cop-input-attach,
     .cop-input-send { width: 40px; height: 40px; }
     .cop-verb-chip { min-height: 40px; padding-inline: 11px 7px; }
+    .cop-diagram-chip { min-height: 40px; }
   }
 
   @keyframes cop-composer-drawer-in {
@@ -3971,6 +4051,7 @@
     .cop-dismiss,
     .cop-activity-fab,
     .cop-input-send,
-    .cop-verb-chip { transition-duration: 0.01ms; }
+    .cop-verb-chip,
+    .cop-diagram-chip { transition-duration: 0.01ms; }
   }
 </style>

@@ -936,6 +936,15 @@ export async function saveHtmlDialog(defaultName: string, html: string): Promise
   return true
 }
 
+export async function saveSvgDialog(defaultName: string, svg: string): Promise<boolean> {
+  if (!isTauri) return false
+  const { save } = await import('@tauri-apps/plugin-dialog')
+  const path = await save({ defaultPath: defaultName, filters: [{ name: 'SVG', extensions: ['svg'] }] })
+  if (!path) return false
+  await writeTextFileAtomic(path, svg)
+  return true
+}
+
 // Dialogue save + écriture BINAIRE d'un .docx. Requiert la permission fs:allow-write-file.
 // false si annulé ou en navigateur.
 export async function saveDocxDialog(defaultName: string, bytes: Uint8Array): Promise<boolean> {

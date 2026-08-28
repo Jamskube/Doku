@@ -1,13 +1,18 @@
 # Next session pointer
-_Updated: 2026-08-20 15:21_
+_Updated: 2026-08-27 11:32_
 
 ## Where I left off
-La v3.1.0 reste publiée, puis une nouvelle capacité **Recherche Web** a été câblée dans le `+` du copilote pour OpenAI, MiniMax et Ollama. Un test réel MiniMax sur une facture a révélé que la première version cherchait la question vague mot pour mot et affichait des liens hors sujet ; le flux prépare maintenant la requête depuis le document, filtre les résultats, fournit la date locale et ne montre que les sources citées. Le code est vérifié et commité (`161159a`) ; le nouveau backend Rust exige un redémarrage complet de Doku avant le smoke utilisateur.
+
+Le mode Diagramme de Doku-San est implémenté mais pas encore commité. OpenAI et MiniMax passent désormais par un studio cloud multi-passe : brief factuel, 2–3 genres bgraph distincts, génération par deux ouvriers, validation locale, critique indépendante, raffinement optionnel et persistance de toutes les variantes. La carte permet de comparer puis sélectionner une autre vue sans nouvelle génération ; Ollama conserve le pipeline simple à vue unique. La documentation du choix se trouve dans `docs/adr/0028-diagrammes-bgraph-wasm.md` et le plan dans `docs/plans/diagrammes-doku-san.md`.
 
 ## Open work
-- Branch: `main` — propre après le commit du journal
-- Open PRs: indisponible (`gh pr list` échoue sur une configuration JSON invalide)
-- Drafts/plans: `docs/plans/_latest.md`, `docs/plans/correction-pdf-par-consigne.md`
+
+- Branch: `main` — **48 entrées de travail non commitées** ; elles regroupent le chantier précédent de recherche Web/mémoire, le nouveau chantier diagrammes et ce journal, donc le staging devra rester délibéré.
+- Open PRs: aucune.
+- Drafts/plans: `docs/plans/diagrammes-doku-san.md` ; décision acceptée dans `docs/adr/0028-diagrammes-bgraph-wasm.md`.
+- Vérifications: `npm run check` sans diagnostic ; `npm test -- --run` avec 913/913 tests ; `npm run build` réussi ; contrôle visuel sombre réussi aux largeurs normale et 420 px.
+- Validation encore manquante: aucun smoke test réel n’a encore comparé la même demande de diagramme sur OpenAI et MiniMax avec restauration après redémarrage.
 
 ## Next concrete step
-Redémarrer Doku en natif, réactiver Recherche Web et rejouer la question sur la facture OpenAI ; si les résultats et citations sont pertinents, reconstruire les installateurs concernés.
+
+Exécuter une même demande d’architecture réelle avec OpenAI puis MiniMax, vérifier la recommandation, le changement via « Autres vues » et la restauration de la discussion, puis créer des commits atomiques si les deux parcours sont validés.

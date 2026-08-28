@@ -1,4 +1,6 @@
 import { baseName } from './explorer'
+import type { DiagramArtifact } from './bgraph'
+import { parsePersistedDiagramStudio } from './diagram-studio'
 import { parseWorkspacePathSnapshot, type WorkspacePathSnapshot } from './session'
 import type { CopilotProvider } from './stores.svelte'
 
@@ -40,6 +42,8 @@ export interface PersistedChatMessage {
   citedOnly?: boolean
   cited?: number[]
   webSearch?: boolean
+  webCitedOnly?: boolean
+  diagram?: DiagramArtifact
 }
 
 export interface ConversationV1 {
@@ -182,6 +186,18 @@ function parseMessage(value: unknown): PersistedChatMessage | null {
   const terminal = record.terminal === 'interrupted' || record.terminal === 'failed' || record.terminal === 'notice'
     ? record.terminal
     : 'complete'
+  const diagramRecord = record.diagram && typeof record.diagram === 'object'
+    ? record.diagram as Record<string, unknown>
+    : null
+  const diagramSource = diagramRecord ? string(diagramRecord.source, 48 * 1024).trim() : ''
+  const diagram = diagramSource
+    ? {
+        title: inline(diagramRecord?.title, 120) || 'Diagramme',
+        prompt: string(diagramRecord?.prompt, 4_096).trim(),
+        source: diagramSource,
+        studio: parsePersistedDiagramStudio(diagramRecord?.studio) ?? undefined,
+      }
+    : undefined
   return {
     role: record.role,
     content,
@@ -196,6 +212,8 @@ function parseMessage(value: unknown): PersistedChatMessage | null {
       ? [...new Set(record.cited.filter((x): x is number => Number.isInteger(x) && x > 0 && x <= 99))].slice(0, 32)
       : undefined,
     webSearch: record.webSearch === true || undefined,
+    webCitedOnly: record.webCitedOnly === true || undefined,
+    diagram,
   }
 }
 

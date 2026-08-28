@@ -1,4 +1,5 @@
 [
+  "account_tree",
   "add",
   "archive",
   "arrow_back",
@@ -37,6 +38,7 @@
   "description",
   "dir",
   "download",
+  "edit",
   "edit_document",
   "edit_note",
   "edit_square",

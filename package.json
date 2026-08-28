@@ -10,6 +10,7 @@
     "build": "vite build",
     "check": "svelte-check --tsconfig ./tsconfig.json",
     "test": "vitest run",
+    "build:bgraph": "node scripts/build-bgraph-wasm.mjs",
     "subset:icons": "node scripts/subset-icons.mjs",
     "prepare:ollama:arm64": "node scripts/prepare-ollama-sidecar.mjs arm64",
     "prepare:ollama:x64": "node scripts/prepare-ollama-sidecar.mjs x64",

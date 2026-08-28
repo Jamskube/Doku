@@ -28,6 +28,7 @@ Frontend Svelte 5 de Doku : shell applicatif, éditeur Markdown *live preview*, 
 | `CopilotPanel.svelte` | Chat Doku-San : fournisseurs, composeur Question/Contexte, mémoire cloud, citations cliquables |
 | `CopilotConversationList.svelte` | Navigateur compact des discussions durables : périodes, recherche, reprise, renommage et archivage |
 | `CopilotEvidence.svelte` | Trace compacte d’activité et bloc unifié des sources, réutilisés dans les réponses et le panneau temporaire |
+| `CopilotDiagram.svelte` | Carte de diagramme Doku-San : rendu SVG sûr, comparaison des variantes, sélection, aperçu, modification et export |
 | `SettingsDialog.svelte` | Réglages : modèles et fournisseurs, apparence, à propos (version lue dans `package.json`) |
 | `ConfirmDialog.svelte` | Confirmation modale générique (actions destructrices) |
 | `WikilinkPrompt.svelte` | Résolution interactive d'un `[[wikilink]]` ambigu ou absent |
@@ -75,8 +76,10 @@ Frontend Svelte 5 de Doku : shell applicatif, éditeur Markdown *live preview*, 
 | `copilot-memory.svelte.ts` | Chargement, rappel, extraction, mutations atomiques et annulation de la mémoire cloud |
 | `copilot-width.ts` | Bornes de la largeur du panneau copilote (séparateur, préférence persistée) |
 | `copilot-activity.ts` | Étapes factuelles d’une réponse (contexte, mémoire, Web, rédaction), sans exposer le raisonnement interne |
-| `web-search.ts` | Recherche Web pilotée par Doku pour Ollama/MiniMax et injection sûre des extraits |
+| `web-search.ts` | Recherche Web pilotée par Doku pour Ollama/MiniMax : requête rédigée par le modèle, boucle d'affinage, classement et injection sûre des extraits |
 | `web-citations.ts` | Normalisation HTTPS et rendu des citations Web OpenAI ou pilotées par Doku |
+| `bgraph.ts` | Contrat fournisseur-neutre, compilation WASM et assainissement strict des diagrammes bgraph |
+| `diagram-studio.ts` | Catalogue bgraph et pipeline cloud multi-passe : brief, variantes, critique, sélection et persistance |
 | `ollama.ts` | Client du sidecar Ollama local (ADR-0006/0012) |
 | `openai.ts` | Client IPC OpenAI : connexion du compte Codex, statut, streaming, annulation — jamais de jeton exposé |
 | `compat.ts` | Fournisseurs cloud compatibles OpenAI (ADR-0018, MiniMax) — miroir d'`openai.ts` pour le chemin « clé API » |

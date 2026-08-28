@@ -10,10 +10,11 @@ Outillage de build exécuté à la main (résultats committés — rien ne tourn
 | `icon-names.mjs` | Extraction des noms d'icônes depuis les sources — partagée entre le script et le garde-fou `src/lib/icons.test.ts`. |
 | `icon-names.d.mts` | Déclaration TypeScript du module ci-dessus (import depuis le test). |
 | `material-symbols-rounded.codepoints` | Table nom → codepoint (dépôt google/material-design-icons) : filtre les faux positifs d'extraction avant l'appel API. |
+| `build-bgraph-wasm.mjs` | Compile le moteur bgraph local en WebAssembly puis actualise l'artefact committé `public/bgraph.wasm`. |
 
 ## Dependencies
 - Internal: `src/` (lecture seule, extraction des noms)
-- External: réseau (Google Fonts) pour `subset-icons.mjs` uniquement
+- External: réseau (Google Fonts) pour `subset-icons.mjs` uniquement ; Rust et la cible `wasm32-unknown-unknown` pour `build-bgraph-wasm.mjs`
 
 ## Quand régénérer
 Le test `icons.test.ts` échoue dès qu'une icône apparaît dans les sources sans être
