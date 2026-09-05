@@ -3,7 +3,7 @@
 
 # Index de la connaissance projet
 
-Records : 83 · Active : 73 · Needs review : 9 · Superseded : 0 · Retired : 1
+Records : 85 · Active : 75 · Needs review : 9 · Superseded : 0 · Retired : 1
 
 | ID | Règle | Portée | Sévérité | Statut | Vérifié |
 |---|---|---|---|---|---|
@@ -90,3 +90,5 @@ Records : 83 · Active : 73 · Needs review : 9 · Superseded : 0 · Retired : 1
 | [LES-20260828-001](records/LES-20260828-001.md) | La porte de génération et la porte d'affichage sont deux fonctions distinctes : un artefact re-r | copilote | critical | active | 2026-08-28 |
 | [LES-20260828-002](records/LES-20260828-002.md) | Ne jamais réécrire une source bgraph pour lui imposer une palette : le moteur valide le contra | copilote | warning | active | 2026-08-28 |
 | [LES-20260828-003](records/LES-20260828-003.md) | Restreindre une énumération que le modèle peut nommer se fait par un champ « non proposé », jama | copilote | warning | active | 2026-08-28 |
+| [LES-20260905-001](records/LES-20260905-001.md) | Un binaire distribué dans un dépôt AGPL doit être accompagné de son source correspondant : un `.wasm` dont | licence | critical | active | 2026-09-05 |
+| [LES-20260905-002](records/LES-20260905-002.md) | Pour juger un rendu, capturer avec le moteur qui rend : XHTML dans un `<foreignObject>` SVG, jamais | copilote | warning | active | 2026-09-05 |

@@ -34,3 +34,4 @@ Registre des décisions d'architecture. Une décision par fichier ; on ne suppri
 | [0028](./0028-diagrammes-bgraph-wasm.md) | Diagrammes Doku-San avec bgraph en WebAssembly | accepted | 2026-08-27 | copilote, diagrammes, bgraph, wasm, svg, sécurité |
 | [0029](./0029-documents-generes-html-pdf.md) | Documents HTML et PDF générés par Doku-San | accepted | 2026-08-31 | copilote, html, pdf, sandbox, export |
 | [0030](./0030-logique-rust-secrets-et-reseau.md) | Logique Rust assumée : secrets, réseau authentifié, sidecar, API système | accepted | 2026-09-05 | tauri, rust, sécurité, maintenance |
+| [0031](./0031-repartition-local-cloud.md) | Répartition local / cloud assumée : le local lit, le cloud crée | accepted | 2026-09-05 | ia, local, cloud, produit, ux |

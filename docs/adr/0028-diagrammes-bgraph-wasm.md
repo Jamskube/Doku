@@ -33,4 +33,8 @@ bgraph est publié sous la *bgraph Noncommercial License 1.0* (`src-tauri/resour
 
 **Autorisation accordée.** L'auteur de bgraph (Bunchyearth23), collègue de travail du mainteneur de Doku, a autorisé de vive voix le 2026-08-28 l'utilisation et l'intégration de son travail dans Doku. Cette permission prime sur les termes publics puisqu'elle vient du licensor lui-même.
 
-**Ce qui reste à faire.** L'autorisation est orale : la faire confirmer par écrit et l'archiver ici. Elle ne lève par ailleurs pas la confidentialité du source — `add-ons/` est gitignoré, le dépôt Doku étant public, et seul l'artefact `public/bgraph.wasm` est versionné.
+**Autorisation élargie (2026-09-05).** L'auteur a confirmé au mainteneur que Doku peut faire « absolument ce qu'il veut » de bgraph, sans restriction — rapporté par le mainteneur le 2026-09-05. Cette permission couvre l'usage, la modification (le fork local `layout_source`/`bgraph_layout`), la redistribution du WASM et la publication du source.
+
+**Ce que l'AGPL exige.** Doku est sous AGPL-3.0 : distribuer `public/bgraph.wasm` oblige à fournir le *source correspondant* du binaire, fork compris. Tant que `add-ons/` reste gitignoré, le dépôt public livre un blob sans son source — contraire à la licence de Doku lui-même. L'autorisation élargie lève l'obstacle ; reste le geste.
+
+**Ce qui reste à faire.** (1) Obtenir la permission par écrit — un simple message archivé ici, ou mieux une note de l'auteur dans son dépôt. (2) Versionner le source du fork dans le dépôt public (par exemple `vendor/bgraph/` avec le patch Doku et la note d'autorisation), et faire échouer `npm run build:bgraph` si le patch n'est pas appliqué. Le mainteneur décide du moment de (2) : c'est une publication, irréversible.

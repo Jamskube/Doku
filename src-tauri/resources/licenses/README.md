@@ -9,7 +9,7 @@ Textes de licence distribués avec les composants natifs tiers.
 | File | Purpose |
 |---|---|
 | `Ollama-LICENSE.txt` | Licence MIT du sidecar Ollama 0.32.0 |
-| `bgraph-LICENSE.txt` | Licence amont du moteur de diagrammes bgraph embarqué en WebAssembly |
+| `bgraph-LICENSE.txt` | Licence amont du moteur de diagrammes bgraph embarqué en WebAssembly — autorisation élargie de l'auteur consignée dans l'ADR-0028 |
 | `Beautiful-Article-NOTICE.txt` | Provenance et licence MIT des principes éditoriaux adaptés par Doku Document Studio |
 
 ## Dependencies
