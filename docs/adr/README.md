@@ -27,7 +27,7 @@ Registre des décisions d'architecture. Une décision par fichier ; on ne suppri
 | [0021](./0021-citations-markdown-portables.md) | Citations Markdown portables avec ancrage Doku facultatif | accepted | 2026-08-13 | notes, citations, markdown, sécurité, portabilité |
 | [0022](./0022-ecriture-pdf-pdf-lib.md) | Écriture PDF : `@cantoo/pdf-lib`, export non destructif — édition de texte refusée | accepted | 2026-08-15 | pdf, écriture, pdf-lib, annotations, formulaires, licence, arm64 |
 | [0023](./0023-licence-agpl.md) | Licence : AGPL-3.0-or-later | accepted | 2026-08-15 | licence, agpl, docx, pdf, distribution, stratégie |
-| [0024](./0024-correction-pdf-assistee-par-le-modele.md) | Correction de PDF par consigne — construite, puis masquée | accepted (mise en œuvre suspendue) | 2026-08-17 | pdf, ia, cloud, édition, chantier-en-pause |
+| [0024](./0024-correction-pdf-assistee-par-le-modele.md) | Correction de PDF par consigne — construite, masquée, puis retirée | withdrawn | 2026-08-17 | pdf, ia, cloud, édition, chantier-en-pause |
 | [0025](./0025-distribution-linux-appimage.md) | Distribution Linux : AppImage + .deb/PKGBUILD, et l'Ollama de la distribution | accepted (amendée le jour même) | 2026-08-18 | distribution, linux, appimage, ollama, sidecar, ci |
 | [0026](./0026-coffre-de-secrets-multiplateforme.md) | Coffre de secrets hors Windows : Secret Service via keyring | accepted | 2026-08-18 | secret, linux, keyring, secret-service, cloud, portabilité |
 | [0027](./0027-discussions-doku-san-durables.md) | Discussions Doku-San durables et reprenables | accepted | 2026-08-20 | copilote, discussions, stockage, restauration, confidentialité |

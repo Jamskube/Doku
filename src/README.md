@@ -24,7 +24,7 @@ Frontend Svelte 5 de Doku : shell applicatif, éditeur Markdown *live preview*, 
 | `DocxFormatBubble.svelte` | Bulle de formatage contextuelle du DOCX (styles, gras/italique, listes) |
 | `PdfView.svelte` | Lecteur PDF adaptatif : TextLayer sélectionnable, carnet d'annotations, dessin vectoriel non destructif |
 | `PdfPagesDialog.svelte` | Modale « Organiser les pages » : vignettes paresseuses, glisser-déposer, insertion d'un autre PDF |
-| `PdfTextEditDialog.svelte` | Modale d'édition du texte d'une page PDF (la correction par consigne y est **masquée**, voir ADR-0024) |
+| `PdfTextEditDialog.svelte` | Modale d'édition du texte d'une page PDF, ligne par ligne, saisie manuelle (ADR-0023) |
 | `CopilotPanel.svelte` | Chat Doku-San : fournisseurs, composeur Question/Contexte, mémoire cloud, citations cliquables |
 | `CopilotConversationList.svelte` | Navigateur compact des discussions durables : périodes, recherche, reprise, renommage et archivage |
 | `CopilotEvidence.svelte` | Trace compacte d’activité et bloc unifié des sources, réutilisés dans les réponses et le panneau temporaire |
@@ -103,7 +103,6 @@ Frontend Svelte 5 de Doku : shell applicatif, éditeur Markdown *live preview*, 
 | `pdf-write.ts` | Gravure des annotations dans le PDF (ADR-0022) ; le manifeste reste la source de vérité |
 | `pdf-pages.ts` | Recomposition des pages, pur : pivoter, supprimer, déplacer, insérer, résumer |
 | `pdf-content-text.ts` | Lecture et réécriture du texte dans le flux de contenu d'une page |
-| `pdf-correction.ts` | Correction d'une page par consigne libre — cœur pur. **⛔ Interface masquée** (`PDF_CORRECTION_ENABLED = false`, ADR-0024) |
 
 ## lib/ — DOCX
 | File | Purpose |

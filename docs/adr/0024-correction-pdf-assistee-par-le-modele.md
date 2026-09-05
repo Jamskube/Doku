@@ -1,6 +1,15 @@
 # 0024. Correction de PDF assistée par le modèle : patch ciblé, jamais réécriture de ligne
 
-Date : 2026-08-17 · Status : **accepted, mise en œuvre SUSPENDUE** · Deciders : Kubo · Tags : pdf, copilote, cloud, édition, spike
+Date : 2026-08-17 · Status : **withdrawn** (code retiré le 2026-09-05) · Deciders : Kubo · Tags : pdf, copilote, cloud, édition, spike
+
+> ## Retrait (2026-09-05)
+>
+> Le code masqué depuis le 2026-08-17 (`pdf-correction.ts`, ses deux fichiers de tests, la
+> section « correction par consigne » de `copilot.svelte.ts` et la moitié de
+> `PdfTextEditDialog.svelte`, ~2 300 lignes) est **supprimé**. Il pesait sur chaque
+> lecture de la modale et chaque refactor du copilote sans servir personne. Le contrat et
+> ses gardes restent lisibles dans l'historique git (dernier commit qui les porte :
+> `b7ec5f2`). La suite naturelle reste le DOCX, comme dit ci-dessous.
 
 > ## ⛔ État : chantier non livré, interface masquée
 >
