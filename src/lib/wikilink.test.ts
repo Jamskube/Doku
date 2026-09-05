@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { matchWikilink, normalizeTarget, wikilinkCandidates, wikilinkFileName } from './wikilink'
+import { findBacklinks, matchWikilink, normalizeTarget, wikilinkCandidates, wikilinkFileName } from './wikilink'
 
 describe('normalizeTarget', () => {
   it('retire l’extension et met en minuscules', () => {
@@ -92,5 +92,19 @@ describe('wikilinkFileName', () => {
   it('renvoie une chaîne vide pour une cible vide', () => {
     expect(wikilinkFileName('')).toBe('')
     expect(wikilinkFileName('#anchor')).toBe('')
+  })
+})
+
+describe('findBacklinks', () => {
+  const doc = (path: string, content: string) => ({ path, name: path.split('/').pop()!, content, lower: content.toLowerCase() })
+  it('finds every document linking to the target, with alias, anchor and line', () => {
+    const docs = [
+      doc('C:/n/a.md', 'Voir [[Budget]] ici.\nEt [[budget|le budget]] là.\nPuis [[Budget#2026]].'),
+      doc('C:/n/b.md', 'Rien à voir avec [[Autre]].'),
+      doc('C:/n/Budget.md', 'Je me cite : [[Budget]].'),
+    ]
+    const links = findBacklinks('C:/n/Budget.md', 'Budget.md', docs)
+    expect(links.map((l) => [l.name, l.line, l.col])).toEqual([['a.md', 1, 6], ['a.md', 2, 4], ['a.md', 3, 6]])
+    expect(links[1].context).toBe('Et [[budget|le budget]] là.')
   })
 })

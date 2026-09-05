@@ -12,7 +12,7 @@ import { snapshotKey, type SnapshotInfo } from './snapshot'
 import { canonicalPathKey, runSaveAs, type TextSaveSnapshot } from './save-as'
 import { buildSession, buildWorkspacePathSnapshot, parseSession, parseWorkspacePathSnapshot, restoreWorkspace, type WorkspacePathSnapshot } from './session'
 import { buildSearchIndex, confirmReplacePath, isTauri, listSnapshots, pathExistsAt, purgeAllSnapshots, readSnapshot, readTextFileAt, recordSnapshot, saveTextDialog, scanFiles, setAlwaysOnTop, syncSystemBackdrop, writeTextFileAtomic } from './tauri'
-import { normalizeTarget, wikilinkCandidates, wikilinkFileName } from './wikilink'
+import { findBacklinks, normalizeTarget, wikilinkCandidates, wikilinkFileName, type Backlink } from './wikilink'
 import { clampCopilotWidth, COPILOT_DEFAULT_WIDTH } from './copilot-width'
 import type { CopilotVerbosity } from './copilot-service'
 import { activateWorkspacePane, assignWorkspaceTab, closeWorkspaceTab, createWorkspaceState, openWorkspaceSplit, otherPane, reuniteWorkspace, selectWorkspaceTab, setWorkspaceRatio, swapWorkspacePanes, type PaneId, type WorkspaceState } from './workspace'
@@ -173,6 +173,9 @@ export const app = $state({
   // panneau et après chaque save. snapshotsFor = onglet auquel la liste appartient.
   snapshots: [] as SnapshotInfo[],
   snapshotsFor: null as number | null,
+  // Liens entrants du document actif (panneau Plan) ; backlinksFor = onglet concerné.
+  backlinks: [] as Backlink[],
+  backlinksFor: null as number | null,
   // Wikilink ambigu ou inexistant en attente de décision (4.5).
   wikiPrompt: null as WikiPrompt | null,
   // Recherche plein-texte (FR-1) : requête courante, résultats, indexation en cours.
@@ -770,28 +773,57 @@ export async function runSearch(query: string) {
     app.searching = false
     return
   }
-  const dir = searchDir()
   app.searching = true
-  if (searchIndex == null || searchIndexDir !== dir) {
-    if (!indexBuild || indexBuild.dir !== dir) indexBuild = { dir, promise: buildIndexFor(dir) }
-    let built: SearchDoc[]
-    try {
-      built = await indexBuild.promise
-    } catch {
-      if (req === searchReq) {
-        app.searchResults = []
-        app.searching = false
-      }
-      return
+  let index: SearchDoc[]
+  try {
+    index = await ensureSearchIndex()
+  } catch {
+    if (req === searchReq) {
+      app.searchResults = []
+      app.searching = false
     }
-    if (req !== searchReq) return // requête plus récente : index périmé, on abandonne
-    searchIndex = built
-    searchIndexDir = dir
+    return
   }
-  const results = searchDocs(searchIndex, q)
+  if (req !== searchReq) return // requête plus récente : index périmé, on abandonne
+  const results = searchDocs(index, q)
   if (req !== searchReq) return
   app.searchResults = results
   app.searching = false
+}
+
+// L'index du dossier courant, construit une seule fois même sous des appels concurrents,
+// et partagé entre la recherche et les liens entrants.
+async function ensureSearchIndex(): Promise<SearchDoc[]> {
+  const dir = searchDir()
+  if (searchIndex != null && searchIndexDir === dir) return searchIndex
+  if (!indexBuild || indexBuild.dir !== dir) indexBuild = { dir, promise: buildIndexFor(dir) }
+  const built = await indexBuild.promise
+  searchIndex = built
+  searchIndexDir = dir
+  return built
+}
+
+// Liens entrants du document actif : quels fichiers du dossier le citent en `[[wikilink]]`.
+// Même jeton anti-périmé que l'historique : un changement d'onglet pendant la lecture
+// annule le résultat obsolète.
+let backlinksReq = 0
+export async function loadBacklinksForActive() {
+  const tab = activeTab()
+  const req = ++backlinksReq
+  if (!tab || !tab.path || tab.kind !== 'md') {
+    app.backlinks = []
+    app.backlinksFor = tab?.id ?? null
+    return
+  }
+  let index: SearchDoc[]
+  try {
+    index = await ensureSearchIndex()
+  } catch {
+    index = []
+  }
+  if (req !== backlinksReq) return
+  app.backlinks = findBacklinks(tab.path, tab.name, index)
+  app.backlinksFor = tab.id
 }
 
 // Ouvre le fichier d'un résultat de recherche et demande la révélation de l'occurrence

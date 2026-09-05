@@ -38,3 +38,56 @@ export function matchWikilink(target: string, files: WikiCandidate[]): string | 
   const c = wikilinkCandidates(target, files)
   return c.length ? c[0].path : null
 }
+
+// --- Liens entrants ---------------------------------------------------------------------
+
+export interface Backlink {
+  path: string
+  name: string
+  line: number
+  col: number
+  length: number
+  // La ligne qui porte le lien, pour situer sans ouvrir.
+  context: string
+}
+
+const WIKILINK = /\[\[([^\]\n]+?)\]\]/g
+const MAX_CONTEXT_CHARS = 140
+
+// Quels documents du dossier pointent vers `targetName` par un `[[wikilink]]` ? Pur :
+// reçoit les documents déjà indexés par la recherche (le même index, pas une seconde
+// lecture du disque). `[[cible|alias]]` et `[[cible#ancre]]` comptent comme `[[cible]]`.
+export function findBacklinks(
+  targetPath: string,
+  targetName: string,
+  docs: readonly { path: string; name: string; content: string; lower: string }[],
+): Backlink[] {
+  const wanted = normalizeTarget(targetName)
+  if (!wanted) return []
+  const out: Backlink[] = []
+  for (const doc of docs) {
+    if (doc.path === targetPath || !doc.lower.includes('[[')) continue
+    WIKILINK.lastIndex = 0
+    let match: RegExpExecArray | null
+    let line = 1
+    let scanned = 0
+    while ((match = WIKILINK.exec(doc.content))) {
+      const inner = match[1].split('|')[0]
+      if (normalizeTarget(inner) !== wanted) continue
+      for (let i = scanned; i < match.index; i += 1) if (doc.content.charCodeAt(i) === 10) line += 1
+      scanned = match.index
+      const start = doc.content.lastIndexOf('\n', match.index) + 1
+      const endIndex = doc.content.indexOf('\n', match.index)
+      const raw = doc.content.slice(start, endIndex < 0 ? undefined : endIndex).trim()
+      out.push({
+        path: doc.path,
+        name: doc.name,
+        line,
+        col: match.index - start + 1,
+        length: match[0].length,
+        context: raw.length > MAX_CONTEXT_CHARS ? `${raw.slice(0, MAX_CONTEXT_CHARS - 1)}…` : raw,
+      })
+    }
+  }
+  return out
+}

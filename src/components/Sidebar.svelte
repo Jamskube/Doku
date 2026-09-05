@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { app, activeTab, closeTab, collapseExplorer, docHeadings, isDirty, loadSnapshotsForActive, openPath, openSearchHit, openSettings, refreshExplorer, relocateOpenTabs, restoreSnapshot, runSearch, scrollToLine, setExplorerSort, tabsUnder, toggleExplorerExpanded, toggleSidebarView } from '../lib/stores.svelte'
+  import { app, activeTab, closeTab, collapseExplorer, docHeadings, isDirty, loadBacklinksForActive, loadSnapshotsForActive, openPath, openSearchHit, openSettings, refreshExplorer, relocateOpenTabs, restoreSnapshot, runSearch, scrollToLine, setExplorerSort, tabsUnder, toggleExplorerExpanded, toggleSidebarView } from '../lib/stores.svelte'
   import { baseName, flattenTree, joinPath, nameExists, normalizeNewName, parentPath, pathCrumbs, reachableExpanded, type FsEntry, type SortKey, type TreeRow } from '../lib/explorer'
   import { confirmAction, createDirAt, createFileAt, isTauri, openFolderDialog, readDirectory, renamePathAt, trashPathAt } from '../lib/tauri'
   import { DEMO_DIR } from '../lib/demo'
@@ -443,6 +443,15 @@
     if (selected) navigateTo(selected)
   }
 
+  // Liens entrants : chargés à l'ouverture du plan et à chaque changement d'onglet. Une
+  // sauvegarde met l'index à jour (invalidateSearchDoc) ; la liste suit au prochain passage.
+  $effect(() => {
+    if (app.sidebarView === 'plan' && app.sidebarOpen) {
+      void activeTab()?.id
+      void loadBacklinksForActive()
+    }
+  })
+
   // Charge l'historique du fichier actif quand le panneau est ouvert ; recharge au
   // changement d'onglet (dépendance activeTab().id). Les saves rafraîchissent via saveTab.
   $effect(() => {
@@ -709,6 +718,21 @@
             {:else}
               <p class="empty">Pas de titres dans ce document</p>
             {/each}
+            {#if activeTab()?.kind === 'md' && activeTab()?.path}
+              <h3 class="backlinks-head">Liens entrants{#if app.backlinksFor === activeTab()?.id && app.backlinks.length} · {app.backlinks.length}{/if}</h3>
+              {#if app.backlinksFor !== activeTab()?.id}
+                <p class="empty">Recherche…</p>
+              {:else}
+                {#each app.backlinks as link (link.path + ':' + link.line + ':' + link.col)}
+                  <button class="backlink" title={link.path} onclick={() => void openSearchHit(link.path, link.line, link.col, link.length)}>
+                    <span class="backlink-name">{link.name.replace(/\.(md|markdown)$/i, '')}</span>
+                    <span class="backlink-ctx">{link.context}</span>
+                  </button>
+                {:else}
+                  <p class="empty">Aucune note ne cite ce document par un [[lien]]</p>
+                {/each}
+              {/if}
+            {/if}
           </div>
         {:else if app.sidebarView === 'search'}
           <div class="search">
@@ -1137,6 +1161,11 @@
   }
 
   .plan { padding-top: 4px; }
+  .backlinks-head { margin: 18px 6px 4px; font: 550 10.5px/1.3 var(--font-sans); letter-spacing: 0.02em; text-transform: uppercase; color: var(--ink-4); }
+  .backlink { width: 100%; display: flex; flex-direction: column; gap: 1px; padding: 5px 8px; border: 0; border-radius: 7px; background: transparent; color: var(--ink-2); text-align: left; cursor: pointer; }
+  .backlink:hover { background: var(--surface-hover); color: var(--ink); }
+  .backlink-name { font-size: 12.5px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .backlink-ctx { font-size: 11px; color: var(--ink-4); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .plan-h1 {
     width: 100%;
     display: block;
