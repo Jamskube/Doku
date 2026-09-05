@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount, tick } from 'svelte'
-  import { app, activeTab, docxActions, isBinaryKind, openPath, openPdfPages, openPdfTextEdit, requestCloseTab, isDirty, saveTabOrSaveAs, selectTab, setColumnWidth, toggleActiveSourceMode, togglePin, toggleWorkspaceSplit, workspace, workspaceLayout, type ColumnWidth, type DocKind } from '../lib/stores.svelte'
+  import { app, activeTab, assignTabToPane, docxActions, isBinaryKind, openPath, openPdfPages, openPdfTextEdit, requestCloseTab, isDirty, saveTabOrSaveAs, selectTab, setColumnWidth, toggleActiveSourceMode, togglePin, toggleWorkspaceSplit, workspace, workspaceLayout, type ColumnWidth, type DocKind } from '../lib/stores.svelte'
   import type { PaneId } from '../lib/workspace'
   import { tabDiscriminator } from '../lib/tabs'
   import { parentPath } from '../lib/explorer'
@@ -9,6 +9,15 @@
   import PaneTabSelector from './PaneTabSelector.svelte'
 
   let { onOpen }: { onOpen: (paneId?: PaneId) => void } = $props()
+
+  // « + » détache le volet actif de son onglet plutôt que d'ouvrir directement le
+  // sélecteur de fichiers : on retombe sur l'écran d'accueil du volet, qui laisse
+  // le choix entre ouvrir un document et commencer une note. L'onglet courant
+  // reste dans la barre, un clic dessus le ramène. Ctrl+O garde le raccourci
+  // direct vers le dialogue.
+  function newTab() {
+    assignTabToPane(workspace.activePaneId, null)
+  }
 
   let railHover = $state(false)
   let menuOpen = $state(false)
@@ -443,7 +452,7 @@
       {/each}
     {/if}
     {#if !workspace.split}
-      <button class="new-tab" title="Nouvel onglet (Ctrl+O)" aria-label="Nouvel onglet" onclick={() => onOpen()}>
+      <button class="new-tab" title="Nouvel onglet" aria-label="Nouvel onglet" onclick={newTab}>
         <span class="msr" style="font-size:20px">add</span>
       </button>
     {/if}

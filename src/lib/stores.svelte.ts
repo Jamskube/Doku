@@ -1295,3 +1295,15 @@ export async function requestCloseTab(id: number) {
   }
   closeTab(id)
 }
+
+// Ouvre un artefact généré par Doku-San (document HTML/PDF, diagramme) comme un onglet
+// non enregistré : Ctrl+S proposera l'enregistrement. Un second clic sur le même artefact
+// revient à l'onglet déjà ouvert au lieu d'en empiler un autre.
+export function openGeneratedTab(name: string, html: string): DocTab {
+  const existing = app.tabs.find((tab) => tab.path === null && tab.name === name && tab.savedContent === html)
+  if (existing) {
+    selectTab(existing.id)
+    return existing
+  }
+  return openTab(name, null, html, 'html')
+}

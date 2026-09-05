@@ -2,6 +2,8 @@
   import { tick } from 'svelte'
   import { renderBgraph, type DiagramArtifact } from '../lib/bgraph'
   import { isTauri, saveSvgDialog } from '../lib/tauri'
+  import { openGeneratedTab } from '../lib/stores.svelte'
+  import { escapeHtml } from '../lib/export/print'
 
   let {
     artifact,
@@ -110,6 +112,14 @@
     closeAlternatives()
   }
 
+  // Le diagramme devient un onglet HTML non enregistré (le SVG inline suffit) :
+  // lisible en grand, enregistrable par Ctrl+S, imprimable par l'export de l'onglet.
+  function openInTab() {
+    if (!svg) return
+    const name = `${artifact.title.replace(/[<>:"/\|?*]+/g, '-').slice(0, 72) || 'diagramme'}.html`
+    openGeneratedTab(name, `<!doctype html><html lang="fr"><head><meta charset="utf-8"><title>${escapeHtml(artifact.title)}</title><style>body{display:flex;justify-content:center}svg{max-width:100%;height:auto}</style></head><body>${svg}</body></html>`)
+  }
+
   async function exportSvg() {
     if (!svg) return
     const name = `${artifact.title.replace(/[<>:"/\\|?*]+/g, '-').slice(0, 72) || 'diagramme'}.svg`
@@ -147,7 +157,7 @@
     {:else if error}
       <div class="diagram-error" role="alert"><span class="msr">error</span><span>{error}</span></div>
     {:else if imageUrl}
-      <img src={imageUrl} alt={imageAlt} />
+      <button class="diagram-open" title="Ouvrir dans un onglet" aria-label={`Ouvrir ${artifact.title} dans un onglet`} onclick={openInTab}><img src={imageUrl} alt={imageAlt} /></button>
     {/if}
   </div>
 
@@ -160,6 +170,7 @@
       </button>
       <span class="footer-spacer"></span>
     {/if}
+    <button disabled={!svg} onclick={openInTab}><span class="msr">open_in_new</span>Ouvrir</button>
     <button onclick={() => onModify(artifact)}><span class="msr">edit</span>Modifier</button>
     <button disabled={!svg} onclick={() => void exportSvg()}><span class="msr">download</span>Exporter SVG</button>
   </footer>
@@ -284,6 +295,8 @@
     background: var(--surface-2);
   }
   .diagram-stage img { display: block; width: 100%; height: auto; min-height: 180px; max-height: 450px; object-fit: contain; }
+  .diagram-open { display: block; width: 100%; padding: 0; border: 0; background: transparent; cursor: pointer; }
+  .diagram-open:focus-visible { outline: 2px solid var(--line-3); outline-offset: -2px; }
   .diagram-skeleton {
     width: calc(100% - 28px);
     height: 160px;
