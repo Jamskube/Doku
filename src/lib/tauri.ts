@@ -333,6 +333,23 @@ export async function saveTextDialog(defaultName: string, kind: 'md' | 'txt' | '
   })
 }
 
+// Renomme ou déplace (même volume) un fichier ou un dossier. `false` si la cible existe
+// déjà : `rename` écraserait un fichier en silence, et Windows compare sans casse.
+export async function renamePathAt(from: string, to: string): Promise<boolean> {
+  if (!isTauri) return false
+  const { exists, rename } = await import('@tauri-apps/plugin-fs')
+  if (from.toLowerCase() !== to.toLowerCase() && await exists(to)) return false
+  await rename(from, to)
+  return true
+}
+
+// Corbeille du système, jamais une suppression définitive (commande Rust, ADR-0030).
+export async function trashPathAt(path: string): Promise<void> {
+  if (!isTauri) throw new Error('Disponible dans l’application native seulement.')
+  const { invoke } = await import('@tauri-apps/api/core')
+  await invoke('move_to_trash', { path })
+}
+
 export async function pathExistsAt(path: string): Promise<boolean> {
   if (!isTauri) return false
   const { exists } = await import('@tauri-apps/plugin-fs')

@@ -1,7 +1,7 @@
 <script lang="ts">
-  import { app, activeTab, collapseExplorer, docHeadings, isDirty, loadSnapshotsForActive, openPath, openSearchHit, openSettings, refreshExplorer, restoreSnapshot, runSearch, scrollToLine, setExplorerSort, toggleExplorerExpanded, toggleSidebarView } from '../lib/stores.svelte'
-  import { flattenTree, joinPath, nameExists, normalizeNewName, parentPath, pathCrumbs, reachableExpanded, type FsEntry, type SortKey, type TreeRow } from '../lib/explorer'
-  import { createDirAt, createFileAt, isTauri, openFolderDialog, readDirectory } from '../lib/tauri'
+  import { app, activeTab, closeTab, collapseExplorer, docHeadings, isDirty, loadSnapshotsForActive, openPath, openSearchHit, openSettings, refreshExplorer, relocateOpenTabs, restoreSnapshot, runSearch, scrollToLine, setExplorerSort, tabsUnder, toggleExplorerExpanded, toggleSidebarView } from '../lib/stores.svelte'
+  import { baseName, flattenTree, joinPath, nameExists, normalizeNewName, parentPath, pathCrumbs, reachableExpanded, type FsEntry, type SortKey, type TreeRow } from '../lib/explorer'
+  import { confirmAction, createDirAt, createFileAt, isTauri, openFolderDialog, readDirectory, renamePathAt, trashPathAt } from '../lib/tauri'
   import { DEMO_DIR } from '../lib/demo'
   import DokuMark from '../lib/DokuMark.svelte'
   import CopilotConversationList from './CopilotConversationList.svelte'
@@ -246,6 +246,146 @@
     } else if (e.key === 'Escape') {
       e.preventDefault()
       cancelCreate()
+    }
+  }
+
+  // --- Actions sur une entrée : renommer, déplacer, supprimer (clic droit, F2, Suppr) ---
+  let rowMenu = $state<{ row: TreeRow; x: number; y: number } | null>(null)
+  let rowMenuEl = $state<HTMLElement | null>(null)
+  let renaming = $state<string | null>(null)
+  let renameDraft = $state('')
+  let renameError = $state<string | null>(null)
+  let renameInput = $state<HTMLInputElement | null>(null)
+
+  // Le nom est sélectionné sans son extension : c'est lui qu'on retape, pas le `.md`.
+  $effect(() => {
+    if (!renaming || !renameInput) return
+    renameInput.focus()
+    const dot = renameDraft.lastIndexOf('.')
+    renameInput.setSelectionRange(0, dot > 0 ? dot : renameDraft.length)
+  })
+
+  function openRowMenu(e: MouseEvent, row: TreeRow) {
+    if (!isTauri) return
+    e.preventDefault()
+    headerMenu = false
+    rowMenu = { row, x: e.clientX, y: e.clientY }
+  }
+
+  function closeRowMenu() {
+    rowMenu = null
+  }
+
+  function startRename(row: TreeRow) {
+    closeRowMenu()
+    cancelCreate()
+    renaming = row.path
+    renameDraft = row.entry.name
+    renameError = null
+  }
+
+  function cancelRename() {
+    renaming = null
+    renameDraft = ''
+    renameError = null
+  }
+
+  async function commitRename() {
+    if (!renaming || busy) return
+    const oldPath = renaming
+    const isDir = treeRows.find((r) => r.path === oldPath)?.entry.isDir ?? false
+    if (renameDraft.trim() === baseName(oldPath)) {
+      cancelRename()
+      return
+    }
+    const checked = normalizeNewName(renameDraft, isDir ? 'dir' : 'file')
+    if (!checked.ok) {
+      renameError = checked.error
+      return
+    }
+    const newPath = joinPath(parentPath(oldPath) ?? targetDir ?? '', checked.name)
+    busy = true
+    try {
+      if (!(await renamePathAt(oldPath, newPath))) {
+        renameError = 'Ce nom existe déjà dans ce dossier.'
+        return
+      }
+      relocateOpenTabs(oldPath, newPath)
+      cancelRename()
+      refreshExplorer()
+    } catch {
+      renameError = 'Renommage impossible (droits, ou fichier ouvert dans une autre application).'
+    } finally {
+      busy = false
+    }
+  }
+
+  function onRenameKey(e: KeyboardEvent) {
+    if (e.key === 'Enter') {
+      e.preventDefault()
+      void commitRename()
+    } else if (e.key === 'Escape') {
+      e.preventDefault()
+      cancelRename()
+    }
+  }
+
+  async function moveRow(row: TreeRow) {
+    closeRowMenu()
+    const dest = await openFolderDialog(parentPath(row.path))
+    if (!dest) return
+    const newPath = joinPath(dest, row.entry.name)
+    if (newPath === row.path) return
+    if (row.entry.isDir && (dest === row.path || dest.startsWith(row.path + '\\') || dest.startsWith(row.path + '/'))) {
+      app.banner = { tone: 'error', title: 'Déplacement impossible', message: 'Un dossier ne peut pas être déplacé dans lui-même.' }
+      return
+    }
+    busy = true
+    try {
+      if (!(await renamePathAt(row.path, newPath))) {
+        app.banner = { tone: 'error', title: 'Déplacement impossible', message: `« ${row.entry.name} » existe déjà dans le dossier choisi. Rien n’a été déplacé.` }
+        return
+      }
+      relocateOpenTabs(row.path, newPath)
+      refreshExplorer()
+    } catch {
+      app.banner = { tone: 'error', title: 'Déplacement impossible', message: 'Le déplacement a échoué (autre disque, droits, ou fichier ouvert ailleurs). Rien n’a été déplacé.' }
+    } finally {
+      busy = false
+    }
+  }
+
+  async function deleteRow(row: TreeRow) {
+    closeRowMenu()
+    const open = tabsUnder(row.path)
+    if (open.some(isDirty)) {
+      app.banner = { tone: 'warning', title: 'Modifications non enregistrées', message: `« ${row.entry.name} » est ouvert avec des modifications. Enregistrez-le ou fermez-le d’abord.` }
+      return
+    }
+    const ok = await confirmAction(
+      row.entry.isDir ? 'Supprimer le dossier ?' : 'Supprimer le fichier ?',
+      `« ${row.entry.name} » sera envoyé à la corbeille du système.`,
+    )
+    if (!ok) return
+    busy = true
+    try {
+      await trashPathAt(row.path)
+      for (const tab of open) closeTab(tab.id)
+      refreshExplorer()
+    } catch {
+      app.banner = { tone: 'error', title: 'Suppression impossible', message: `« ${row.entry.name} » n’a pas pu être envoyé à la corbeille. Rien n’a été supprimé.` }
+    } finally {
+      busy = false
+    }
+  }
+
+  function onRowKey(e: KeyboardEvent, row: TreeRow) {
+    if (e.key === 'F2') {
+      e.preventDefault()
+      startRename(row)
+    } else if (e.key === 'Delete') {
+      e.preventDefault()
+      void deleteRow(row)
     }
   }
 
@@ -507,6 +647,21 @@
             {#each treeRows as row (row.path)}
               {@const open = tabsByPath.get(row.path)}
               {@const expanded = row.entry.isDir && expandedSet.has(row.path)}
+              {#if renaming === row.path}
+                <div class="newrow" style={`padding-left: ${10 + row.depth * 16}px`}>
+                  <span class="msr fold">{row.entry.isDir ? 'folder' : 'description'}</span>
+                  <input
+                    bind:this={renameInput}
+                    bind:value={renameDraft}
+                    class="newname"
+                    aria-label={`Nouveau nom de ${row.entry.name}`}
+                    disabled={busy}
+                    onkeydown={onRenameKey}
+                    onblur={() => { if (!busy) cancelRename() }}
+                  />
+                </div>
+                {#if renameError}<p class="newerr" role="alert">{renameError}</p>{/if}
+              {:else}
               <button
                 class="row"
                 class:current={!row.entry.isDir && activePath === row.path}
@@ -515,6 +670,8 @@
                 style={`padding-left: ${10 + row.depth * 16}px`}
                 onclick={() => onRowClick(row)}
                 ondblclick={() => onRowDblClick(row)}
+                oncontextmenu={(e) => openRowMenu(e, row)}
+                onkeydown={(e) => onRowKey(e, row)}
               >
                 {#if row.entry.isDir}
                   <span class="msr twist" class:open={expanded} aria-hidden="true">chevron_right</span>
@@ -526,6 +683,7 @@
                 <span class="label grow" class:strong={row.entry.isDir}>{row.entry.name}</span>
                 {#if open && isDirty(open)}<span class="filedot">●</span>{/if}
               </button>
+              {/if}
             {:else}
               <p class="empty">Dossier vide</p>
             {/each}
@@ -613,7 +771,60 @@
   </div>
 </aside>
 
+<!-- Menu contextuel d'une entrée : hors de l'aside (`contain: paint` du panneau clipperait
+     même un élément fixe). Fermé au clic extérieur et par Échap. -->
+{#if rowMenu}
+  {@const row = rowMenu.row}
+  <div
+    class="row-menu"
+    role="menu"
+    aria-label={`Actions sur ${row.entry.name}`}
+    style={`left: ${Math.min(rowMenu.x, window.innerWidth - 210)}px; top: ${Math.min(rowMenu.y, window.innerHeight - 150)}px`}
+    bind:this={rowMenuEl}
+  >
+    <button role="menuitem" onclick={() => startRename(row)}><span class="msr">drive_file_rename_outline</span>Renommer<kbd>F2</kbd></button>
+    <button role="menuitem" onclick={() => void moveRow(row)}><span class="msr">drive_file_move</span>Déplacer vers…</button>
+    <div class="menu-sep" role="separator"></div>
+    <button role="menuitem" class="danger" onclick={() => void deleteRow(row)}><span class="msr">delete</span>Supprimer<kbd>Suppr</kbd></button>
+  </div>
+{/if}
+<svelte:window
+  onpointerdown={rowMenu ? (e) => { if (!rowMenuEl?.contains(e.target as Node)) closeRowMenu() } : undefined}
+  onkeydown={rowMenu ? (e) => { if (e.key === 'Escape') closeRowMenu() } : undefined}
+/>
+
 <style>
+  .row-menu {
+    position: fixed;
+    z-index: 60;
+    min-width: 200px;
+    padding: 5px;
+    border: 1px solid var(--line-2);
+    border-radius: 10px;
+    background: var(--cream-content);
+    box-shadow: 0 10px 30px rgba(var(--shadow-rgb), 0.18);
+  }
+  .row-menu button {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    height: 30px;
+    padding: 0 10px;
+    border: 0;
+    border-radius: 7px;
+    background: transparent;
+    color: var(--ink-2);
+    font-family: var(--font-sans);
+    font-size: 12.5px;
+    text-align: left;
+    cursor: pointer;
+  }
+  .row-menu button:hover, .row-menu button:focus-visible { background: var(--surface-hover); color: var(--ink); outline: none; }
+  .row-menu button.danger:hover { color: var(--err-text); }
+  .row-menu .msr { font-size: 17px; color: var(--ink-4); }
+  .row-menu kbd { margin-left: auto; font: 10.5px var(--font-sans); color: var(--ink-4); }
+
   .sidebar {
     flex: 0 0 auto;
     width: 0;

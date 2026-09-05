@@ -38,6 +38,15 @@ fn set_system_backdrop(window: tauri::WebviewWindow, enabled: bool, dark: bool) 
 }
 
 // Extrait un chemin de fichier des arguments (ignore l'exe en position 0 et les flags).
+// Envoie un fichier ou un dossier à la corbeille du système (ADR-0030, API système). Le
+// plugin-fs ne sait que supprimer définitivement ; pour des notes, c'est inacceptable.
+#[tauri::command]
+async fn move_to_trash(path: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || trash::delete(&path).map_err(|error| error.to_string()))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
 fn file_from_args(args: &[String]) -> Option<String> {
     args.iter().skip(1).find(|a| !a.starts_with('-')).cloned()
 }
@@ -79,6 +88,7 @@ fn main() {
         .manage(CompatState::default())
         .invoke_handler(tauri::generate_handler![
             set_system_backdrop,
+            move_to_trash,
             sidecar::start_ollama,
             openai::openai_status,
             openai::openai_auth_start,

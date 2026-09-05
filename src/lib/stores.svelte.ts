@@ -889,6 +889,29 @@ export function closeTab(id: number) {
   }
 }
 
+// Onglets ouverts sur ce chemin ou dessous (un dossier renommé ou supprimé emporte ses
+// fichiers ouverts). Comparaison canonique : Windows ne distingue pas la casse.
+export function tabsUnder(path: string): DocTab[] {
+  const key = canonicalPathKey(path)
+  return app.tabs.filter((tab) => {
+    if (!tab.path) return false
+    const tabKey = canonicalPathKey(tab.path)
+    return tabKey === key || tabKey.startsWith(key + '/') || tabKey.startsWith(key + '\\')
+  })
+}
+
+// Après un renommage ou un déplacement : les onglets suivent le fichier, le contenu et
+// l'état « modifié » restent intacts. L'historique de versions, indexé par chemin, repart
+// de zéro pour le nouveau nom — les anciennes versions restent sur disque sous l'ancien.
+export function relocateOpenTabs(from: string, to: string): void {
+  for (const tab of tabsUnder(from)) {
+    if (!tab.path) continue
+    tab.path = to + tab.path.slice(from.length)
+    tab.name = baseName(tab.path)
+  }
+  saveSession()
+}
+
 export function cycleTab(dir: 1 | -1) {
   if (app.tabs.length < 2) return
   const idx = app.tabs.findIndex((t) => t.id === app.activeId)
