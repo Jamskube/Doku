@@ -13,6 +13,21 @@ if (isTauri) {
   document.documentElement.dataset.dokuRuntime = 'tauri'
 }
 
+// Journal persistant (tauri-plugin-log) : les erreurs non rattrapées et tout
+// `console.error`/`console.warn` du frontend partent aussi dans `doku.log`. Best-effort :
+// si le plugin manque, l'application tourne comme avant, seule la trace est perdue.
+if (isTauri) {
+  void import('@tauri-apps/plugin-log').then(({ error, warn }) => {
+    const describe = (value: unknown) => value instanceof Error ? (value.stack ?? value.message) : String(value)
+    window.addEventListener('error', (event) => void error(`[window] ${event.message} — ${event.filename}:${event.lineno}`))
+    window.addEventListener('unhandledrejection', (event) => void error(`[promise] ${describe(event.reason)}`))
+    const originalError = console.error.bind(console)
+    const originalWarn = console.warn.bind(console)
+    console.error = (...args: unknown[]) => { originalError(...args); void error(args.map(describe).join(' ')) }
+    console.warn = (...args: unknown[]) => { originalWarn(...args); void warn(args.map(describe).join(' ')) }
+  }).catch(() => {})
+}
+
 const app = mount(App, { target: document.getElementById('app')! })
 
 // La fenêtre naît invisible (tauri.conf.json "visible": false) : on l'affiche une fois

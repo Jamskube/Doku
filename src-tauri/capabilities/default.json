@@ -16,6 +16,7 @@
     "core:window:allow-start-dragging",
     "dialog:default",
     "opener:default",
+    "log:default",
     "fs:default",
     {
       "identifier": "fs:allow-read-text-file",

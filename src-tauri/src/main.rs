@@ -1,7 +1,7 @@
-// Hôte Tauri minimal — ADR-0004 : zéro logique métier ici, tout l'I/O passe par les plugins
-// officiels appelés depuis le frontend TypeScript. Rôles Rust : instance unique, fenêtre,
-// transmission du fichier d'ouverture (2.3), et — exception documentée (ADR-0012) — le cycle
-// de vie du sidecar Ollama, isolé dans `sidecar.rs`.
+// Hôte Tauri — ADR-0030 : le Rust est borné à trois rôles, secrets et réseau authentifié
+// (`openai.rs`, `compat.rs`, `secrets.rs`, `web_search.rs`), cycle de vie du sidecar
+// (`sidecar.rs`) et API système (Mica, instance unique, fichier d'ouverture). Tout l'I/O
+// fichiers passe par les plugins officiels appelés depuis le frontend TypeScript (ADR-0004).
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod compat;
@@ -60,6 +60,20 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_opener::init())
+        // Journal persistant : `%LOCALAPPDATA%/<identifier>/logs/doku.log`, un seul fichier
+        // borné. Sans lui, un `console.error` du frontend ou un `panic = "abort"` ne
+        // laissaient aucune trace à joindre à un rapport de bug.
+        .plugin(
+            tauri_plugin_log::Builder::new()
+                .level(log::LevelFilter::Info)
+                .targets([
+                    tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::LogDir { file_name: Some("doku".into()) }),
+                    tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::Stdout),
+                ])
+                .max_file_size(2_000_000)
+                .rotation_strategy(tauri_plugin_log::RotationStrategy::KeepOne)
+                .build(),
+        )
         .manage(OllamaState::new())
         .manage(OpenAiState::default())
         .manage(CompatState::default())
