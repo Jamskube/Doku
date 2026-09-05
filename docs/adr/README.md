@@ -7,7 +7,7 @@ Registre des décisions d'architecture. Une décision par fichier ; on ne suppri
 | [0001](./0001-stack-tauri-svelte.md) | Stack applicative : Tauri 2 + Svelte 5 + TypeScript | accepted | 2026-07-08 | stack, desktop, arm64 |
 | [0002](./0002-moteur-wysiwyg-cm6-live-preview.md) | Moteur d'édition Markdown : CM6 « live preview » | accepted | 2026-07-08 | éditeur, wysiwyg, fr-3 |
 | [0003](./0003-stockage-snapshots-appdata.md) | Snapshots centralisés dans %APPDATA%\Doku | accepted | 2026-07-08 | données, snapshots, fiabilité |
-| [0004](./0004-io-fichiers-plugins-officiels.md) | I/O via plugins officiels Tauri, zéro commande Rust custom | accepted | 2026-07-08 | tauri, io, maintenance |
+| [0004](./0004-io-fichiers-plugins-officiels.md) | I/O via plugins officiels Tauri, zéro commande Rust custom | superseded par 0030 (l'I/O reste conforme) | 2026-07-08 | tauri, io, maintenance |
 | [0005](./0005-scope-fs-large-assume.md) | Scope fs/asset `**` : tradeoff assumé | accepted | 2026-07-10 | sécurité, fs, tradeoff |
 | [0006](./0006-copilote-ia-ollama-sidecar-cpu.md) | Copilote IA : Ollama sidecar CPU (GGUF libre), NPU écarté | accepted | 2026-07-13 | ia, llm, npu, arm64, copilote |
 | [0007](./0007-recherche-index-memoire.md) | Recherche plein-texte : index en mémoire (scan-once, watcher-invalidé) | accepted | 2026-07-13 | recherche, perf, arm64 |
@@ -33,3 +33,4 @@ Registre des décisions d'architecture. Une décision par fichier ; on ne suppri
 | [0027](./0027-discussions-doku-san-durables.md) | Discussions Doku-San durables et reprenables | accepted | 2026-08-20 | copilote, discussions, stockage, restauration, confidentialité |
 | [0028](./0028-diagrammes-bgraph-wasm.md) | Diagrammes Doku-San avec bgraph en WebAssembly | accepted | 2026-08-27 | copilote, diagrammes, bgraph, wasm, svg, sécurité |
 | [0029](./0029-documents-generes-html-pdf.md) | Documents HTML et PDF générés par Doku-San | accepted | 2026-08-31 | copilote, html, pdf, sandbox, export |
+| [0030](./0030-logique-rust-secrets-et-reseau.md) | Logique Rust assumée : secrets, réseau authentifié, sidecar, API système | accepted | 2026-09-05 | tauri, rust, sécurité, maintenance |

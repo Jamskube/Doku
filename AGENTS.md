@@ -6,7 +6,7 @@ Context for AI coding assistants. Read at the start of every session.
 Doku — petite application pour **ouvrir, lire et éditer des fichiers Markdown**, avec extension prévue plus tard vers d'autres formats (**PDF**, etc.).
 
 ## Stack
-- Language: TypeScript (frontend) + Rust minimal (hôte Tauri, zéro logique métier — ADR-0004)
+- Language: TypeScript (frontend) + Rust borné à trois rôles : secrets et réseau authentifié, sidecar, API système (ADR-0030 ; l'I/O fichiers reste en TS via plugin-fs, ADR-0004)
 - Framework: Tauri 2 + Svelte 5 + Vite — décidé, ADR-0001 accepted (`docs/adr/`)
 - Machine de développement principale : **Windows ARM64** — Surface Pro 11, Snapdragon X Elite. Distribution prise en charge : installateurs Windows ARM64 et x64, chacun avec son sidecar Ollama CPU natif ; **AppImage Linux x64** construite en CI, sur l'Ollama du système (ADR-0025)
 - Référence : `G:\KUDE` (mode lecture/édition Markdown + design system AIR) ; maquettes officielles dans `docs/design/w1/`
@@ -34,7 +34,7 @@ Doku — petite application pour **ouvrir, lire et éditer des fichiers Markdown
 | Folder | Purpose |
 |---|---|
 | `src/` | Frontend Svelte 5 (components/, lib/, lib/editor/, assets/) |
-| `src-tauri/` | Hôte Rust minimal — plugins officiels uniquement (ADR-0004) |
+| `src-tauri/` | Hôte Rust : plugins officiels + commandes bornées aux secrets, au réseau authentifié, au sidecar et aux API système (ADR-0030) |
 | `spike/` | Bancs d'essai conservés (WYSIWYG S0, RAG 15.1, NPU 17.1) |
 | `scripts/` | Outillage de build manuel (subset d'icônes) — sorties committées |
 | `docs/` | Documentation (planning, adr, design, sprints, journal, plans, autopilot, archives) |
