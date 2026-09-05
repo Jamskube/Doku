@@ -1,0 +1,81 @@
+name: CI
+
+# Vérifie CHAQUE push et chaque PR — les workflows build-* ne tournent que sur tag ou à
+# la main, donc `main` n'était jamais vérifié par une machine. Ici : typecheck Svelte,
+# tests vitest, build Vite, puis clippy et tests Rust sur les deux cibles Windows.
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  frontend:
+    name: Frontend (check · test · build)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run check
+      - run: npm test
+      - run: npm run build
+
+  rust:
+    name: Rust (${{ matrix.label }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: x64
+            runner: windows-latest
+            target: x86_64-pc-windows-msvc
+            ollama: x64
+            cache-path: src-tauri/binaries/.cache/ollama-v0.32.0/ollama-windows-amd64.zip
+            cache-key: ollama-windows-amd64-v0.32.0-56561a8f
+          - label: arm64
+            runner: windows-11-arm
+            target: aarch64-pc-windows-msvc
+            ollama: arm64
+            cache-path: src-tauri/binaries/.cache/ollama-v0.32.0/ollama-windows-arm64.zip
+            cache-key: ollama-windows-arm64-v0.32.0-82b7d36b
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      # `tauri-build` vérifie la présence de l'externalBin à la compilation : le sidecar
+      # doit exister même pour `cargo test`. Même cache que les workflows de build.
+      - name: Restaurer l'archive Ollama épinglée
+        uses: actions/cache@v6
+        with:
+          path: ${{ matrix.cache-path }}
+          key: ${{ matrix.cache-key }}
+      - run: npm ci
+      - run: npm run prepare:ollama:${{ matrix.ollama }}
+      - name: Clippy
+        working-directory: src-tauri
+        run: cargo clippy --target ${{ matrix.target }} --all-targets -- -D warnings
+      - name: Tests Rust
+        working-directory: src-tauri
+        run: cargo test --target ${{ matrix.target }}

@@ -290,7 +290,10 @@ export function parseConversation(raw: string): ConversationV1 | null {
   try { value = JSON.parse(raw) } catch { return null }
   if (!value || typeof value !== 'object') return null
   const record = value as Record<string, unknown>
-  if (record.version !== CONVERSATION_VERSION || typeof record.id !== 'string' || !UUID.test(record.id)) return null
+  // Un format PLUS RÉCENT est refusé (on ne sait pas le lire) ; un format plus ancien est
+  // relu champ par champ par les parseurs tolérants ci-dessous, jamais rejeté en bloc — un
+  // bump de version ne doit pas rendre invisibles les discussions existantes.
+  if (typeof record.version !== 'number' || record.version > CONVERSATION_VERSION || typeof record.id !== 'string' || !UUID.test(record.id)) return null
   const now = new Date().toISOString()
   const createdAt = iso(record.createdAt, now)
   const messages = Array.isArray(record.messages)

@@ -1,6 +1,6 @@
 # PRD : Doku — lecteur/éditeur de documents léger
 
-**Date** : 2026-07-08 · **Status** : Draft · **Version** : 1.0
+**Date** : 2026-07-08 · **Status** : Livré (v1, 2026-07) · **Version** : 1.0 — les paliers suivants sont dans `PRD-v1.5.md` (PDF, DOCX), `PRD-v2.md` (copilote) et `PRD-v3.md` (bureau scindé) ; l'état réel du produit se lit dans `epics.md` et `docs/adr/README.md`
 
 ## 1. Overview
 

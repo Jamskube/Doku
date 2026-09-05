@@ -4,7 +4,7 @@ _Source PRD : docs/planning/PRD.md (v1) + docs/planning/PRD-v1.5.md · Architect
 
 Backlog **v1** (Epics 1-8, jalons M1-M4) : ✅ **livré, feature-complete** (ledger 35/35). Cap P0 respecté : 10/36 (28 %).
 Backlog **v1.5** (Epics 9-12, source PRD-v1.5) : ✅ **livré, feature-complete** (ledger 46/46). Cap P0 : 3/11 (27 %).
-Backlog **v2** (Epics 13-16, source PRD-v2 — copilote IA local) : 🟡 **Epic 13 livrée** (ledger 50/50, fondation copilote) ; Epics 14-16 à faire (**8 stories**). Cap P0 : **7/13 (54 %)** — dérogation assumée au seuil 40 % : la fondation (sidecar + client + panneau) est de l'infra **irréductiblement P0** (rien ne fonctionne sans elle), voir note Epic 13.
+Backlog **v2** (Epics 13-16, source PRD-v2 — copilote IA local) : ✅ **livré** (Epic 13 ledger 50/50 ; Epics 14-16 livrées, voir sprints 13-16). Cap P0 : **7/13 (54 %)** — dérogation assumée au seuil 40 % : la fondation (sidecar + client + panneau) est de l'infra **irréductiblement P0** (rien ne fonctionne sans elle), voir note Epic 13.
 Légende état : ✅ fait · 🟡 amorcé (socle en place, à finir/tester) · ⬜ à faire.
 
 ---
@@ -321,7 +321,7 @@ _Source : docs/planning/PRD-v2.md · Architecture : docs/planning/architecture-v
 ### Stories
 | # | Title | Size | Priority | Acceptance |
 |---|-------|------|----------|------------|
-| 19.1 | Explorateur : nouvelle note, nouveau dossier, tri | M | P1 | Given l'explorateur ouvert sur un dossier, when je clique « Nouvelle note » / « Nouveau dossier », then une **saisie en place** apparaît dans la liste (Entrée crée, Échap annule) ; nom **validé avant écriture** (caractères interdits, noms réservés Windows, conflit insensible à la casse) et **jamais d'écrasement silencieux** ; une note créée s'**ouvre** aussitôt. « Trier » propose **Nom / Modifié le / Type** avec inversion croissant-décroissant, **persisté** entre sessions, dossiers toujours en tête. Le 4ᵉ bouton (« Tout replier ») est **retiré** : l'explorateur est plat, il n'a rien à replier |
+| 19.1 | Explorateur : nouvelle note, nouveau dossier, tri | M | P1 | Given l'explorateur ouvert sur un dossier, when je clique « Nouvelle note » / « Nouveau dossier », then une **saisie en place** apparaît dans la liste (Entrée crée, Échap annule) ; nom **validé avant écriture** (caractères interdits, noms réservés Windows, conflit insensible à la casse) et **jamais d'écrasement silencieux** ; une note créée s'**ouvre** aussitôt. « Trier » propose **Nom / Modifié le / Type** avec inversion croissant-décroissant, **persisté** entre sessions, dossiers toujours en tête. Le 4ᵉ bouton (« Tout replier ») avait été retiré quand l'explorateur était plat ; il est **revenu** avec l'arbre de dossiers (v3) |
 | 19.2 | Panneau Paramètres (l'engrenage du ruban) | M | P1 | Given le bouton ⚙ du ruban, when je clique, then un panneau **Paramètres** s'ouvre et **regroupe les réglages aujourd'hui éparpillés** (thème, largeur de colonne, modèle de chat, modèle d'embedding, purge des instantanés/index) ; chaque réglage est **persisté** ; aucun réglage n'est dupliqué sans être synchronisé avec son emplacement d'origine |
 | 19.3 | Bouton logo : « À propos » ou retrait | S | P2 | Given le logo Doku du ruban, when je clique, then soit une carte **À propos** s'affiche (version, licence, « 100 % hors-ligne »), soit le logo **cesse d'être un bouton** (élément décoratif, non focusable). Décision à prendre — l'état actuel (bouton focusable qui ne fait rien) est exclu |
 

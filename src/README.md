@@ -101,6 +101,8 @@ Frontend Svelte 5 de Doku : shell applicatif, éditeur Markdown *live preview*, 
 | `pdf-drawing.ts` | Primitives pures des tracés (crayon, surligneur, rectangle, ellipse) : épaisseur, lissage, déplacement borné |
 | `pdf-highlight-text.ts` | Citation d'un trait de surligneur : quelles boîtes de texte il balaie, et sur quelle plage |
 | `pdf-write.ts` | Gravure des annotations dans le PDF (ADR-0022) ; le manifeste reste la source de vérité |
+| `pdf-signatures.ts` | Signatures numériques d'un PDF : lecture des métadonnées seulement (qui, quand) — jamais un verdict de validité |
+| `pdf-area-text.ts` | Sélection de zone dans un PDF (inspirée d'Okular) : cœur pur sur boîtes normalisées, sans DOM ni pdf.js |
 | `pdf-pages.ts` | Recomposition des pages, pur : pivoter, supprimer, déplacer, insérer, résumer |
 | `pdf-content-text.ts` | Lecture et réécriture du texte dans le flux de contenu d'une page |
 
