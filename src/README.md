@@ -29,6 +29,7 @@ Frontend Svelte 5 de Doku : shell applicatif, éditeur Markdown *live preview*, 
 | `CopilotConversationList.svelte` | Navigateur compact des discussions durables : périodes, recherche, reprise, renommage et archivage |
 | `CopilotEvidence.svelte` | Trace compacte d’activité et bloc unifié des sources, réutilisés dans les réponses et le panneau temporaire |
 | `CopilotDiagram.svelte` | Carte de diagramme Doku-San : rendu SVG sûr, comparaison des variantes, sélection, aperçu, modification et export |
+| `CopilotDocument.svelte` | Carte de document Doku-San : aperçu HTML/PDF sandboxé, agrandissement, modification et export |
 | `SettingsDialog.svelte` | Réglages : modèles et fournisseurs, apparence, à propos (version lue dans `package.json`) |
 | `ConfirmDialog.svelte` | Confirmation modale générique (actions destructrices) |
 | `WikilinkPrompt.svelte` | Résolution interactive d'un `[[wikilink]]` ambigu ou absent |
@@ -80,6 +81,9 @@ Frontend Svelte 5 de Doku : shell applicatif, éditeur Markdown *live preview*, 
 | `web-citations.ts` | Normalisation HTTPS et rendu des citations Web OpenAI ou pilotées par Doku |
 | `bgraph.ts` | Contrat fournisseur-neutre, compilation WASM et assainissement strict des diagrammes bgraph |
 | `diagram-studio.ts` | Catalogue bgraph et pipeline cloud multi-passe : brief, variantes, critique, sélection et persistance |
+| `document-studio.ts` | Contrat éditorial et visuel injecté aux modèles cloud pour choisir structure, densité, direction graphique et règles print |
+| `generated-document.ts` | Contrat, validation, assainissement et rendu des documents HTML/PDF générés par le cloud |
+| `generated-document-review.ts` | Rendu hors écran, audit de mise en page, capture et contrat de critique visuelle avant publication |
 | `ollama.ts` | Client du sidecar Ollama local (ADR-0006/0012) |
 | `openai.ts` | Client IPC OpenAI : connexion du compte Codex, statut, streaming, annulation — jamais de jeton exposé |
 | `compat.ts` | Fournisseurs cloud compatibles OpenAI (ADR-0018, MiniMax) — miroir d'`openai.ts` pour le chemin « clé API » |

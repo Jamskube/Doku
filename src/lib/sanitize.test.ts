@@ -29,6 +29,12 @@ describe('sanitizeHtml', () => {
     expect(sanitizeHtml('<object data="x"></object>').toLowerCase()).not.toContain('<object')
   })
 
+  it('neutralise aussi les ancres SVG (tagName minuscule) et xlink:href', () => {
+    const out = sanitizeHtml('<svg><a href="https://evil.test/beacon" xlink:href="https://evil.test/b"><text>x</text></a><a href="#local"><text>y</text></a></svg>')
+    expect(out).not.toContain('evil.test')
+    expect(out).toContain('href="#local"')
+  })
+
   it('conserve le HTML sûr', () => {
     const out = sanitizeHtml('<h1>Titre</h1><p><strong>gras</strong> <em>ital</em></p><ul><li>a</li></ul>')
     expect(out).toContain('<h1>Titre</h1>')

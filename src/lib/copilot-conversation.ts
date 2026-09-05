@@ -1,8 +1,13 @@
 import { baseName } from './explorer'
 import type { DiagramArtifact } from './bgraph'
 import { parsePersistedDiagramStudio } from './diagram-studio'
+import type { GeneratedDocumentArtifact } from './generated-document'
+import type { GeneratedDocumentReview } from './generated-document-review'
 import { parseWorkspacePathSnapshot, type WorkspacePathSnapshot } from './session'
 import type { CopilotProvider } from './stores.svelte'
+
+// Même borne que MAX_HTML_CHARS de generated-document.ts (non importée : voir ci-dessous).
+const MAX_GENERATED_HTML_CHARS = 160 * 1024
 
 export const CONVERSATION_VERSION = 1
 export const MAX_PERSISTED_INLINE_CHARS = 8 * 1024
@@ -44,6 +49,7 @@ export interface PersistedChatMessage {
   webSearch?: boolean
   webCitedOnly?: boolean
   diagram?: DiagramArtifact
+  generatedDocument?: GeneratedDocumentArtifact
 }
 
 export interface ConversationV1 {
@@ -166,6 +172,40 @@ function parseEvidence(value: unknown): PersistedEvidence | null {
   }
 }
 
+// Relit un artefact de document généré en bornant chaque champ, SANS assainir : la
+// restauration n'applique que le contrôle d'affichage (ADR-0029), qui assainit à chaque
+// rendu. Vit ici, et non dans generated-document.ts, parce que ce module-là tire DOMPurify
+// et qu'un fichier de discussion se lit aussi hors navigateur.
+export function parsePersistedGeneratedDocument(value: unknown): GeneratedDocumentArtifact | null {
+  if (!value || typeof value !== 'object') return null
+  const record = value as Record<string, unknown>
+  const kind = record.kind === 'pdf' ? 'pdf' : record.kind === 'html' ? 'html' : null
+  if (!kind) return null
+  const html = string(record.html, MAX_GENERATED_HTML_CHARS).trim()
+  if (!html) return null
+  const reviewRecord = record.review && typeof record.review === 'object' ? record.review as Record<string, unknown> : null
+  const review: GeneratedDocumentReview | undefined = reviewRecord && (reviewRecord.status === 'passed' || reviewRecord.status === 'mechanical-only')
+    ? {
+        version: 1,
+        status: reviewRecord.status,
+        attempts: typeof reviewRecord.attempts === 'number' ? Math.max(1, Math.min(3, Math.floor(reviewRecord.attempts))) : 1,
+        visual: reviewRecord.visual === true,
+        summary: inline(reviewRecord.summary, 240),
+        warnings: Array.isArray(reviewRecord.warnings)
+          ? reviewRecord.warnings.map((item) => inline(item, 240)).filter(Boolean).slice(0, 8)
+          : [],
+      }
+    : undefined
+  return {
+    version: 1,
+    kind,
+    title: inline(record.title, 120) || (kind === 'pdf' ? 'Document PDF' : 'Page HTML'),
+    prompt: string(record.prompt, 4_096).trim(),
+    html,
+    review,
+  }
+}
+
 function parseMessage(value: unknown): PersistedChatMessage | null {
   if (!value || typeof value !== 'object') return null
   const record = value as Record<string, unknown>
@@ -198,6 +238,7 @@ function parseMessage(value: unknown): PersistedChatMessage | null {
         studio: parsePersistedDiagramStudio(diagramRecord?.studio) ?? undefined,
       }
     : undefined
+  const generatedDocument = parsePersistedGeneratedDocument(record.generatedDocument) ?? undefined
   return {
     role: record.role,
     content,
@@ -214,6 +255,7 @@ function parseMessage(value: unknown): PersistedChatMessage | null {
     webSearch: record.webSearch === true || undefined,
     webCitedOnly: record.webCitedOnly === true || undefined,
     diagram,
+    generatedDocument,
   }
 }
 

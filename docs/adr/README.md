@@ -32,3 +32,4 @@ Registre des décisions d'architecture. Une décision par fichier ; on ne suppri
 | [0026](./0026-coffre-de-secrets-multiplateforme.md) | Coffre de secrets hors Windows : Secret Service via keyring | accepted | 2026-08-18 | secret, linux, keyring, secret-service, cloud, portabilité |
 | [0027](./0027-discussions-doku-san-durables.md) | Discussions Doku-San durables et reprenables | accepted | 2026-08-20 | copilote, discussions, stockage, restauration, confidentialité |
 | [0028](./0028-diagrammes-bgraph-wasm.md) | Diagrammes Doku-San avec bgraph en WebAssembly | accepted | 2026-08-27 | copilote, diagrammes, bgraph, wasm, svg, sécurité |
+| [0029](./0029-documents-generes-html-pdf.md) | Documents HTML et PDF générés par Doku-San | accepted | 2026-08-31 | copilote, html, pdf, sandbox, export |

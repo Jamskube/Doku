@@ -169,17 +169,33 @@ import {
   type DiagramCandidatePlan,
   type DiagramStudioPlan,
 } from './diagram-studio'
+import {
+  DOCUMENT_ENVELOPE_HINT,
+  buildGeneratedDocumentPrompt,
+  extractGeneratedDocument,
+  type GeneratedDocumentArtifact,
+  type GeneratedDocumentKind,
+} from './generated-document'
+import {
+  buildGeneratedDocumentCorrectionPrompt,
+  buildGeneratedDocumentVisualReviewPrompt,
+  inspectGeneratedDocument,
+  parseGeneratedDocumentVisualVerdict,
+  type GeneratedDocumentLayoutEvidence,
+  type GeneratedDocumentVisualVerdict,
+} from './generated-document-review'
 
 // Nombre maximal de recherches Web pour UNE question. 3 laisse au modèle deux chances de
 // se corriger — au-delà, l'affinage tourne en rond et chaque tour coûte un appel de plus.
 const MAX_WEB_SEARCH_ROUNDS = 3
+const MAX_GENERATED_DOCUMENT_CORRECTIONS = 2
 
 // Un tour de conversation (14.1). `streaming` = réponse en cours (bulle en texte brut,
 // rendu Markdown à la fin) ; `failed` = carte d'erreur ; `status` = ligne de progression
 // transitoire pendant la phase « map » d'un résumé (14.2). Conversation éphémère (non persistée).
 // Portée d'une question (15.3) : le document courant ou le dossier entier (RAG).
 export type ChatScope = 'doc' | 'folder'
-export type ChatOutputMode = 'answer' | 'diagram'
+export type ChatOutputMode = 'answer' | 'diagram' | 'html' | 'pdf'
 
 export interface ChatMsg {
   role: 'user' | 'assistant'
@@ -231,6 +247,7 @@ export interface ChatMsg {
   webCitedOnly?: boolean
   webSearch?: boolean
   diagram?: DiagramArtifact
+  generatedDocument?: GeneratedDocumentArtifact
   // Posé sur une carte `failed` : ce qu'il faut rejouer pour « Réessayer » (la question ou le
   // mode de résumé). Le document est re-capturé au moment du retry (le dossier aussi, 15.3).
   retry?: {
@@ -241,6 +258,7 @@ export interface ChatMsg {
     workspaceContextKey?: string
     outputMode?: ChatOutputMode
     diagramSeed?: DiagramArtifact
+    generatedDocumentSeed?: GeneratedDocumentArtifact
   } | { kind: 'summary'; mode: SummaryMode }
 }
 
@@ -266,6 +284,7 @@ export const copilot = $state({
   webSearchEnabled: false,
   outputMode: 'answer' as ChatOutputMode,
   diagramSeed: null as DiagramArtifact | null,
+  generatedDocumentSeed: null as GeneratedDocumentArtifact | null,
   contextFolder: null as { path: string; label: string } | null,
   // Mémoire partagée volontairement avec un dossier. null = portée document, qui est
   // toujours le défaut. Séparée de l'explorateur ET du contexte : parcourir ou ajouter
@@ -344,12 +363,19 @@ export function setWebSearchEnabled(enabled: boolean): void {
 
 export function setChatOutputMode(mode: ChatOutputMode): void {
   copilot.outputMode = mode
-  if (mode === 'answer') copilot.diagramSeed = null
+  if (mode !== 'diagram') copilot.diagramSeed = null
+  if (mode !== 'html' && mode !== 'pdf') copilot.generatedDocumentSeed = null
 }
 
 export function reviseDiagram(artifact: DiagramArtifact): void {
   copilot.outputMode = 'diagram'
   copilot.diagramSeed = { ...artifact }
+}
+
+export function reviseGeneratedDocument(artifact: GeneratedDocumentArtifact): void {
+  copilot.outputMode = artifact.kind
+  copilot.generatedDocumentSeed = { ...artifact }
+  copilot.diagramSeed = null
 }
 
 export function selectDiagramCandidate(messageIndex: number, candidateId: string): void {
@@ -427,6 +453,7 @@ function persistChatMessage(message: ChatMsg): PersistedChatMessage {
     webSearch: message.webSearch,
     webCitedOnly: message.webCitedOnly,
     diagram: message.diagram,
+    generatedDocument: message.generatedDocument,
   }
 }
 
@@ -468,6 +495,7 @@ function hydrateChatMessage(message: PersistedChatMessage): ChatMsg {
     webSearch: message.webSearch,
     webCitedOnly: message.webCitedOnly,
     diagram: message.diagram,
+    generatedDocument: message.generatedDocument,
   }
 }
 
@@ -997,6 +1025,16 @@ async function resolveRuntime(provider: CopilotProvider, localModel: string): Pr
 // `onThinking` (cloud) : appelé au premier delta de raisonnement — les modèles cloud
 // pensent parfois des dizaines de secondes avant le premier token visible ; le statut
 // doit le dire (« jamais muet »). Jamais émis par Ollama (modèle local non pensant).
+// Les fournisseurs sans entrée image ne reçoivent que le texte des messages multimodaux.
+function textOnly(messages: OpenAiMessage[]): CompatMessage[] {
+  return messages.map((message) => ({
+    role: message.role,
+    content: typeof message.content === 'string'
+      ? message.content
+      : message.content.filter((part) => part.type === 'input_text').map((part) => part.text).join('\n'),
+  }))
+}
+
 function streamChat(
   runtime: ProviderRuntime,
   messages: OpenAiMessage[],
@@ -1019,12 +1057,12 @@ function streamChat(
     })
   }
   if (runtime.provider === 'minimax') {
-    return compatChat('minimax', runtime.model, messages, onToken, signal, options.onThinking, {
+    return compatChat('minimax', runtime.model, textOnly(messages), onToken, signal, options.onThinking, {
       tools: options.tools,
       onToolCalls: options.onToolCalls,
     })
   }
-  return chat(runtime.port, runtime.model, messages, onToken, signal, {
+  return chat(runtime.port, runtime.model, textOnly(messages), onToken, signal, {
     num_ctx: COPILOT_NUM_CTX,
     temperature: COPILOT_TEMPERATURE,
   })
@@ -1074,6 +1112,122 @@ async function hiddenChat(
   let output = ''
   await streamChat(runtime, messages, (token) => { output += token }, signal, {})
   return output.trim()
+}
+
+async function visualDocumentVerdict(
+  runtime: ProviderRuntime,
+  evidence: GeneratedDocumentLayoutEvidence,
+  signal: AbortSignal,
+): Promise<GeneratedDocumentVisualVerdict | null> {
+  if (runtime.provider !== 'openai' || !evidence.screenshot) return null
+  try {
+    const request: OpenAiMessage = {
+      role: 'user',
+      content: [
+        { type: 'input_text', text: buildGeneratedDocumentVisualReviewPrompt(evidence) },
+        { type: 'input_image', image_url: evidence.screenshot, detail: 'high' },
+      ],
+    }
+    let output = await hiddenChat(runtime, [request], signal)
+    let verdict = parseGeneratedDocumentVisualVerdict(output)
+    if (!verdict && !signal.aborted) {
+      output = await hiddenChat(runtime, [
+        request,
+        { role: 'assistant', content: output },
+        { role: 'user', content: 'Le verdict est illisible. Réponds uniquement avec le bloc <document-review>{"passed":true|false,"blocking":[],"warnings":[],"summary":"…"}</document-review>.' },
+      ], signal)
+      verdict = parseGeneratedDocumentVisualVerdict(output)
+    }
+    return verdict
+  } catch (error) {
+    if (signal.aborted) throw error
+    console.warn('[generated-document] critique visuelle indisponible', error)
+    return null
+  }
+}
+
+// Un tour caché qui doit rendre un document : une seule relance si la sortie n'est pas
+// exploitable, la sortie fautive rejouée pour que le modèle voie ce qu'il a produit.
+async function requestGeneratedDocument(
+  runtime: ProviderRuntime,
+  messages: OpenAiMessage[],
+  kind: GeneratedDocumentKind,
+  prompt: string,
+  signal: AbortSignal,
+  firstOutput = '',
+): Promise<GeneratedDocumentArtifact | null> {
+  const output = firstOutput || await hiddenChat(runtime, messages, signal)
+  const artifact = extractGeneratedDocument(output, kind, prompt)
+  if (artifact || signal.aborted) return artifact
+  const retried = await hiddenChat(runtime, [
+    ...messages,
+    ...(output ? [{ role: 'assistant' as const, content: output }] : []),
+    { role: 'user', content: `La sortie est illisible ou non conforme. Renvoie uniquement ${DOCUMENT_ENVELOPE_HINT}, sans commentaire.` },
+  ], signal)
+  return extractGeneratedDocument(retried, kind, prompt)
+}
+
+async function verifyGeneratedDocument(
+  runtime: ProviderRuntime,
+  baseTurn: CompatMessage[],
+  initial: GeneratedDocumentArtifact,
+  signal: AbortSignal,
+  onStatus: (status: string, detail: string, state: 'running' | 'done' | 'error') => void,
+): Promise<GeneratedDocumentArtifact> {
+  let artifact = initial
+  let lastBlocking: string[] = []
+  for (let attempt = 0; attempt <= MAX_GENERATED_DOCUMENT_CORRECTIONS; attempt += 1) {
+    onStatus(
+      attempt ? `Doku-San vérifie la correction… (${attempt}/${MAX_GENERATED_DOCUMENT_CORRECTIONS})` : 'Doku-San vérifie la mise en page…',
+      attempt ? `Contrôle ${attempt + 1}` : 'Rendu de contrôle',
+      'running',
+    )
+    const evidence = await inspectGeneratedDocument(artifact)
+    if (signal.aborted) throw new DOMException('Aborted', 'AbortError')
+    const visual = await visualDocumentVerdict(runtime, evidence, signal)
+    const mechanicalBlocking = evidence.issues
+      .filter((issue) => issue.severity === 'blocking')
+      .map((issue) => issue.message)
+    const visualBlocking = visual?.passed === false ? visual.blocking : []
+    lastBlocking = [...mechanicalBlocking, ...visualBlocking]
+    const warnings = [
+      ...evidence.issues.filter((issue) => issue.severity === 'warning').map((issue) => issue.message),
+      ...(visual?.warnings ?? []),
+    ].slice(0, 8)
+    if (!lastBlocking.length) {
+      const visualDone = visual !== null
+      const summary = visual?.summary || (visualDone
+        ? 'Mise en page vérifiée sur son rendu final.'
+        : 'Dimensions, débordements, troncatures et contrastes contrôlés automatiquement.')
+      onStatus('', visualDone ? `Vérification visuelle réussie · ${attempt + 1} passage${attempt ? 's' : ''}` : `Contrôle de mise en page réussi · ${attempt + 1} passage${attempt ? 's' : ''}`, 'done')
+      return {
+        ...artifact,
+        review: {
+          version: 1,
+          status: visualDone ? 'passed' : 'mechanical-only',
+          attempts: attempt + 1,
+          visual: visualDone,
+          summary,
+          warnings,
+        },
+      }
+    }
+    if (attempt >= MAX_GENERATED_DOCUMENT_CORRECTIONS) break
+    onStatus(
+      `Doku-San corrige la mise en page… (${attempt + 1}/${MAX_GENERATED_DOCUMENT_CORRECTIONS})`,
+      `${lastBlocking.length} défaut${lastBlocking.length > 1 ? 's' : ''} à corriger`,
+      'running',
+    )
+    const corrected = await requestGeneratedDocument(runtime, [
+      ...baseTurn,
+      { role: 'user', content: buildGeneratedDocumentCorrectionPrompt(artifact, evidence, visual) },
+    ] as OpenAiMessage[], artifact.kind, artifact.prompt, signal)
+    if (signal.aborted) throw new DOMException('Aborted', 'AbortError')
+    if (!corrected) throw new Error('La correction visuelle n’a pas produit de document exploitable.')
+    artifact = corrected
+  }
+  onStatus('', `${lastBlocking.length} défaut${lastBlocking.length > 1 ? 's' : ''} persistant${lastBlocking.length > 1 ? 's' : ''}`, 'error')
+  throw new Error(`Le document reste illisible après ${MAX_GENERATED_DOCUMENT_CORRECTIONS} corrections : ${lastBlocking.join(' ')}`)
 }
 
 async function generateDiagramCandidate(
@@ -1386,6 +1540,8 @@ export async function sendChat(
   const webSearchEnabled = copilot.webSearchEnabled
   const outputMode = copilot.outputMode
   const diagramSeed = copilot.diagramSeed ? { ...copilot.diagramSeed } : null
+  const generatedDocumentSeed = copilot.generatedDocumentSeed ? { ...copilot.generatedDocumentSeed } : null
+  const generatedDocumentKind: GeneratedDocumentKind | null = outputMode === 'html' || outputMode === 'pdf' ? outputMode : null
   const automaticDocuments = scope === 'doc' ? snapshotAutomaticDocuments() : []
   const workspaceContextKey = scope === 'doc' ? visibleContextKey() : undefined
 
@@ -1399,6 +1555,17 @@ export async function sendChat(
     })
     return
   }
+  if (generatedDocumentKind && !isCloudProvider(provider)) {
+    copilot.messages.push({ role: 'user', content: q })
+    copilot.messages.push({
+      role: 'assistant',
+      content: 'La création de documents HTML et PDF est disponible avec OpenAI ou MiniMax. Choisissez un modèle cloud puis réessayez.',
+      notice: true,
+    })
+    copilot.outputMode = 'answer'
+    copilot.generatedDocumentSeed = null
+    return
+  }
 
   copilot.generating = true
   // Le mode Diagramme est une intention pour CE tour. Le remettre immédiatement au
@@ -1406,6 +1573,7 @@ export async function sendChat(
   // conserve sa propre copie dans le message d'erreur.
   copilot.outputMode = 'answer'
   copilot.diagramSeed = null
+  copilot.generatedDocumentSeed = null
   genController = new AbortController()
   const signal = genController.signal
   ensureConversationIdentity()
@@ -1430,6 +1598,8 @@ export async function sendChat(
         ? 'Doku-San lit les documents…'
         : outputMode === 'diagram'
           ? 'Doku-San prépare le diagramme…'
+          : generatedDocumentKind
+            ? `Doku-San prépare ${generatedDocumentKind === 'pdf' ? 'le document PDF' : 'la page HTML'}…`
           : 'Doku-San lit le document…',
   })
   const idx = copilot.messages.length - 1 // index stable (generating sérialise les envois)
@@ -1502,7 +1672,7 @@ export async function sendChat(
       } else {
         message.content = copilot.error || 'Le moteur IA est indisponible.'
         message.failed = true
-        message.retry = { kind: 'chat', question: q, scope, contextRevision, workspaceContextKey, outputMode, diagramSeed: diagramSeed ?? undefined }
+        message.retry = { kind: 'chat', question: q, scope, contextRevision, workspaceContextKey, outputMode, diagramSeed: diagramSeed ?? undefined, generatedDocumentSeed: generatedDocumentSeed ?? undefined }
       }
       return
     }
@@ -1714,7 +1884,7 @@ export async function sendChat(
     setActivity({
       id: 'answer',
       kind: 'answer',
-      label: outputMode === 'diagram' ? 'Création du diagramme' : 'Rédaction de la réponse',
+      label: outputMode === 'diagram' ? 'Création du diagramme' : generatedDocumentKind ? 'Création du document' : 'Rédaction de la réponse',
       state: 'running',
     })
     // Conversation de travail de la boucle d'outil : elle grossit d'un tour d'assistant
@@ -1729,8 +1899,19 @@ export async function sendChat(
       turn = turn[0]?.role === 'system'
         ? [{ ...turn[0], content: `${turn[0].content}\n\n${instruction}` }, ...turn.slice(1)]
         : [{ role: 'system', content: instruction }, ...turn]
+    } else if (generatedDocumentKind) {
+      const instruction = buildGeneratedDocumentPrompt(generatedDocumentKind, generatedDocumentSeed?.html)
+      turn = turn[0]?.role === 'system'
+        ? [{ ...turn[0], content: `${turn[0].content}\n\n${instruction}` }, ...turn.slice(1)]
+        : [{ role: 'system', content: instruction }, ...turn]
     }
     let diagramOutput = ''
+    let generatedDocumentOutput = ''
+    // Un document de 100 Ko met plusieurs minutes à sortir : la bulle dit où on en est
+    // au lieu de rester vide jusqu'à la fin (« jamais muet »).
+    const noteDocumentProgress = (m: ChatMsg, size: number) => {
+      m.status = `Doku-San rédige ${generatedDocumentKind === 'pdf' ? 'le document PDF' : 'la page HTML'}… ${Math.max(1, Math.round(size / 1024))} Ko`
+    }
     if (agenticSearch) {
       {
         const m = copilot.messages[idx]
@@ -1746,6 +1927,7 @@ export async function sendChat(
             const m = copilot.messages[idx]
             m.status = undefined
             if (outputMode === 'diagram') roundOutput += t
+            else if (generatedDocumentKind) { roundOutput += t; noteDocumentProgress(m, roundOutput.length) }
             else m.content += t
           },
           signal,
@@ -1761,6 +1943,7 @@ export async function sendChat(
         if (signal.aborted) return
         if (!requested.length) {
           if (outputMode === 'diagram') diagramOutput = roundOutput
+          else if (generatedDocumentKind) generatedDocumentOutput = roundOutput
           break
         }
         // Le tour d'assistant doit être rejoué TEL QUEL (forme OpenAI) : sans lui, les
@@ -1825,12 +2008,14 @@ export async function sendChat(
             const m = copilot.messages[idx]
             m.status = undefined
             if (outputMode === 'diagram') finalOutput += t
+            else if (generatedDocumentKind) { finalOutput += t; noteDocumentProgress(m, finalOutput.length) }
             else m.content += t
           },
           signal,
           {},
         )
         if (outputMode === 'diagram') diagramOutput = finalOutput
+        else if (generatedDocumentKind) generatedDocumentOutput = finalOutput
       }
     } else {
     await streamChat(
@@ -1840,6 +2025,7 @@ export async function sendChat(
         const m = copilot.messages[idx]
         m.status = undefined // 1er token : le prefill est fini, le texte prend le relais
         if (outputMode === 'diagram') diagramOutput += t
+        else if (generatedDocumentKind) { generatedDocumentOutput += t; noteDocumentProgress(m, generatedDocumentOutput.length) }
         else m.content += t
       },
       signal,
@@ -1978,11 +2164,37 @@ export async function sendChat(
       }
       done.content = `Diagramme généré : ${done.diagram.title}`
       done.status = undefined
+    } else if (generatedDocumentKind) {
+      const done = copilot.messages[idx]
+      done.status = 'Doku-San finalise le document…'
+      let artifact = await requestGeneratedDocument(runtime, turn as OpenAiMessage[], generatedDocumentKind, q, signal, generatedDocumentOutput)
+      if (signal.aborted) return
+      if (!artifact) throw new Error('Doku-San n’a pas pu produire un document HTML valide.')
+      artifact = await verifyGeneratedDocument(
+        runtime,
+        turn,
+        artifact,
+        signal,
+        (status, detail, state) => {
+          if (status) done.status = status
+          setActivity({
+            id: 'document-review',
+            kind: 'answer',
+            label: 'Vérification de la mise en page',
+            detail,
+            state,
+          })
+        },
+      )
+      if (signal.aborted) return
+      done.generatedDocument = artifact
+      done.content = `${generatedDocumentKind === 'pdf' ? 'Document PDF' : 'Page HTML'} généré : ${artifact.title}`
+      done.status = undefined
     }
     setActivity({
       id: 'answer',
       kind: 'answer',
-      label: outputMode === 'diagram' ? 'Création du diagramme' : 'Rédaction de la réponse',
+      label: outputMode === 'diagram' ? 'Création du diagramme' : generatedDocumentKind ? 'Création du document' : 'Rédaction de la réponse',
       state: 'done',
     })
     // Pied « Passages consultés » déterministe (15.3) — supprimé sur refus : des sources
@@ -2067,7 +2279,7 @@ export async function sendChat(
     }
     copilot.messages[idx].content = copilot.messages[idx].content || generationFailure(e, provider, 'La génération a échoué. Vérifiez que le moteur est prêt, puis réessayez.')
     copilot.messages[idx].failed = true
-    copilot.messages[idx].retry = { kind: 'chat', question: q, scope, contextRevision, workspaceContextKey, outputMode, diagramSeed: diagramSeed ?? undefined }
+    copilot.messages[idx].retry = { kind: 'chat', question: q, scope, contextRevision, workspaceContextKey, outputMode, diagramSeed: diagramSeed ?? undefined, generatedDocumentSeed: generatedDocumentSeed ?? undefined }
     finishActivities('error')
   } finally {
     const m = copilot.messages[idx]
@@ -2893,6 +3105,7 @@ export function retryGeneration(idx: number): void {
   if (r.kind === 'chat') {
     copilot.outputMode = r.outputMode ?? 'answer'
     copilot.diagramSeed = r.diagramSeed ? { ...r.diagramSeed } : null
+    copilot.generatedDocumentSeed = r.generatedDocumentSeed ? { ...r.generatedDocumentSeed } : null
     void sendChat(r.question, doc, r.scope)
   }
   else void summarizeDoc(doc, r.mode)
@@ -2961,6 +3174,7 @@ function resetConversationDraft(): void {
   copilot.conversationWorkspace = null
   copilot.outputMode = 'answer'
   copilot.diagramSeed = null
+  copilot.generatedDocumentSeed = null
   copilot.historyOmitted = 0
 }
 

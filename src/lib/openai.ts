@@ -24,8 +24,12 @@ export interface OpenAiAuthPoll {
 
 export interface OpenAiMessage {
   role: 'system' | 'developer' | 'user' | 'assistant'
-  content: string
+  content: string | OpenAiContentPart[]
 }
+
+export type OpenAiContentPart =
+  | { type: 'input_text'; text: string }
+  | { type: 'input_image'; image_url: string; detail?: 'low' | 'high' | 'auto' }
 
 interface OpenAiStreamEvent {
   // 'thinking' : premier delta de raisonnement — signal sans texte, une fois.

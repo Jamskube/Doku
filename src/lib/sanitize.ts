@@ -15,10 +15,13 @@ import DOMPurify from 'dompurify'
 // Neutralise la navigation des ancres : un href externe dans l'aperçu = beacon au
 // clic (la sandbox bloque le top-nav mais pas la nav du frame lui-même). On ne
 // garde que les ancres de fragment (#…) ; les autres deviennent du texte inerte.
+// `tagName` est minuscule pour un <a> SVG (`<svg><a href>`), qui navigue tout autant :
+// comparaison sans casse, et `xlink:href` couvert.
 DOMPurify.addHook('afterSanitizeAttributes', (node) => {
-  if (node.tagName === 'A' && node.hasAttribute('href')) {
-    const href = node.getAttribute('href') ?? ''
-    if (!href.startsWith('#')) node.removeAttribute('href')
+  if (node.tagName.toLowerCase() !== 'a') return
+  for (const name of ['href', 'xlink:href']) {
+    const href = node.getAttribute(name)
+    if (href !== null && !href.startsWith('#')) node.removeAttribute(name)
   }
 })
 

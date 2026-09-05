@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   conversationHistoryWindow,
+  parsePersistedGeneratedDocument,
   groupConversations,
   historyBudget,
   MAX_PERSISTED_INLINE_CHARS,
@@ -73,6 +74,57 @@ describe('copilot conversation', () => {
     })
     expect(parseConversation(serializeConversation(value))?.messages[1].diagram).toEqual(value.messages[1].diagram)
     expect(parseConversation(serializeConversation(conversation()))?.messages[1].diagram).toBeUndefined()
+  })
+
+  it('round-trips a generated document while bounding its hidden source', () => {
+    const generatedDocument = {
+      version: 1 as const,
+      kind: 'html' as const,
+      title: 'Synthèse',
+      prompt: 'Crée une synthèse',
+      html: '<html><body><h1>Synthèse</h1></body></html>',
+      review: {
+        version: 1 as const,
+        status: 'passed' as const,
+        attempts: 2,
+        visual: true,
+        summary: 'Mise en page vérifiée.',
+        warnings: [],
+      },
+    }
+    const value = conversation({
+      messages: [
+        { role: 'user', content: 'Crée une synthèse', terminal: 'complete' },
+        { role: 'assistant', content: 'Page HTML générée.', terminal: 'complete', generatedDocument },
+      ],
+    })
+    expect(parseConversation(serializeConversation(value))?.messages[1].generatedDocument).toEqual(generatedDocument)
+    expect(parseConversation(serializeConversation(conversation()))?.messages[1].generatedDocument).toBeUndefined()
+  })
+
+  it('keeps a bounded verification receipt when restoring an artifact, without touching the DOM', () => {
+    const artifact = parsePersistedGeneratedDocument({
+      kind: 'pdf',
+      title: 'Rapport',
+      prompt: 'Crée un rapport',
+      html: '<main><h1>Rapport</h1></main>',
+      review: {
+        status: 'passed',
+        attempts: 99,
+        visual: true,
+        summary: ' Mise en page vérifiée. ',
+        warnings: ['A'.repeat(300)],
+      },
+    })
+    expect(artifact?.review).toEqual({
+      version: 1,
+      status: 'passed',
+      attempts: 3,
+      visual: true,
+      summary: 'Mise en page vérifiée.',
+      warnings: ['A'.repeat(240)],
+    })
+    expect(parsePersistedGeneratedDocument({ kind: 'html', html: '   ' })).toBeNull()
   })
 
   it('round-trips the cloud diagram studio candidates', () => {

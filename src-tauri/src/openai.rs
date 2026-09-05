@@ -108,7 +108,7 @@ pub struct OpenAiAuthPoll {
 #[derive(Deserialize, Serialize)]
 pub struct OpenAiMessage {
     role: String,
-    content: String,
+    content: Value,
 }
 
 #[derive(Deserialize)]
@@ -494,7 +494,8 @@ fn response_body(request: &OpenAiRequest) -> Value {
         .input
         .iter()
         .filter(|message| matches!(message.role.as_str(), "system" | "developer"))
-        .map(|message| message.content.trim())
+        .filter_map(|message| message.content.as_str())
+        .map(str::trim)
         .filter(|content| !content.is_empty())
         .collect::<Vec<_>>()
         .join("\n\n");
@@ -710,6 +711,7 @@ mod tests {
         OpenAiMessage, OpenAiRequest, SseEvent,
     };
     use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+    use serde_json::Value;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     fn jwt(claims: serde_json::Value) -> String {
@@ -755,11 +757,11 @@ mod tests {
             input: vec![
                 OpenAiMessage {
                     role: "system".into(),
-                    content: "Cadre".into(),
+                    content: Value::String("Cadre".into()),
                 },
                 OpenAiMessage {
                     role: "user".into(),
-                    content: "Question".into(),
+                    content: Value::String("Question".into()),
                 },
             ],
             reasoning_effort: Some("low".into()),
@@ -774,13 +776,33 @@ mod tests {
     }
 
     #[test]
+    fn preserves_multimodal_user_content_for_visual_review() {
+        let content = serde_json::json!([
+            { "type": "input_text", "text": "Contrôle cette page" },
+            { "type": "input_image", "image_url": "data:image/jpeg;base64,abc", "detail": "high" }
+        ]);
+        let body = response_body(&OpenAiRequest {
+            request_id: "r".into(),
+            model: "gpt-5.6-luna".into(),
+            input: vec![OpenAiMessage {
+                role: "user".into(),
+                content: content.clone(),
+            }],
+            reasoning_effort: Some("low".into()),
+            max_output_tokens: None,
+            web_search: false,
+        });
+        assert_eq!(body["input"][0]["content"], content);
+    }
+
+    #[test]
     fn enables_hosted_web_search_and_extracts_citations() {
         let body = response_body(&OpenAiRequest {
             request_id: "r".into(),
             model: "gpt-5.6-luna".into(),
             input: vec![OpenAiMessage {
                 role: "user".into(),
-                content: "Actualité".into(),
+                content: Value::String("Actualité".into()),
             }],
             reasoning_effort: Some("low".into()),
             max_output_tokens: None,

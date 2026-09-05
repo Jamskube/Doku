@@ -3,7 +3,7 @@
   import { activeEditorSelection, activeTab, app, isCloudProvider, openPath, visibleTabs, type CopilotProvider, type DocTab } from '../lib/stores.svelte'
   import { closeWindow, fileSizeAt, isTauri, minimizeWindow, openContextFilesDialog, openFolderDialog, readFileBytes, readTextFileAt, toggleMaximizeWindow } from '../lib/tauri'
   import { formatBytes } from '../lib/ollama'
-  import { addCopilotContext, beginOpenAiAuth, cancelOpenAiConnection, cancelPull, connectMinimax, copilot, disconnectMinimaxKey, disconnectOpenAiAccount, ensureCopilotReady, isEmbedModel, jumpToCitation, newChat as clearChat, pullModel, refreshMinimaxStatus, refreshModels, refreshOpenAiStatus, removeCopilotContext, removeModel, retryGeneration, reviseDiagram, saveMessageAsNote, scheduleConversationPersist, selectDiagramCandidate, sendChat, setActiveModel, setChatOutputMode, setCopilotContextFolder, setCopilotMemoryFolder, setCopilotProvider, setWebSearchEnabled, stopChat, summarizeDoc, type ChatMsg } from '../lib/copilot.svelte'
+  import { addCopilotContext, beginOpenAiAuth, cancelOpenAiConnection, cancelPull, connectMinimax, copilot, disconnectMinimaxKey, disconnectOpenAiAccount, ensureCopilotReady, isEmbedModel, jumpToCitation, newChat as clearChat, pullModel, refreshMinimaxStatus, refreshModels, refreshOpenAiStatus, removeCopilotContext, removeModel, retryGeneration, reviseDiagram, reviseGeneratedDocument, saveMessageAsNote, scheduleConversationPersist, selectDiagramCandidate, sendChat, setActiveModel, setChatOutputMode, setCopilotContextFolder, setCopilotMemoryFolder, setCopilotProvider, setWebSearchEnabled, stopChat, summarizeDoc, type ChatMsg, type ChatOutputMode } from '../lib/copilot.svelte'
   import { conversations } from '../lib/copilot-conversations.svelte'
   import { MINIMAX_DEFAULT_MODEL } from '../lib/compat'
   import { vaultLabel, vaultShortLabel } from '../lib/platform'
@@ -22,6 +22,8 @@
   import { addWebCitationMarkers, annotateWebCitations } from '../lib/web-citations'
   import CopilotEvidence from './CopilotEvidence.svelte'
   import CopilotDiagram from './CopilotDiagram.svelte'
+  import CopilotDocument from './CopilotDocument.svelte'
+  import type { GeneratedDocumentArtifact } from '../lib/generated-document'
   import type { DiagramArtifact } from '../lib/bgraph'
 
   // Rendu d'une réponse : Markdown assaini PUIS puces de citation (l'annotation opère
@@ -668,6 +670,7 @@
     activityDrawerOpen = false
     composerFace = 'question'
     verbMenuOpen = false
+    outputMenuOpen = false
     requestAnimationFrame(() => promptEl?.focus())
   }
 
@@ -803,6 +806,73 @@
     promptEl?.setSelectionRange(draft.length, draft.length)
   }
 
+  async function editGeneratedDocument(artifact: GeneratedDocumentArtifact) {
+    reviseGeneratedDocument(artifact)
+    draft = 'Modifie ce document : '
+    composerFace = 'question'
+    await tick()
+    promptEl?.focus()
+    promptEl?.setSelectionRange(draft.length, draft.length)
+  }
+
+  function chooseOutputMode(mode: ChatOutputMode) {
+    closeOutputMenu(true)
+    verbMenuOpen = false
+    setChatOutputMode(mode)
+  }
+
+  // --- Livrables ---------------------------------------------------------------------
+  // Même surface et même repère que « Ajouter du contexte » : le menu sort du composer
+  // (qui clippe ses enfants) et reste donc entier aux faibles largeurs du panneau.
+  let outputMenuOpen = $state(false)
+  let outputMenuEl = $state<HTMLElement | null>(null)
+  let outputButtonEl = $state<HTMLButtonElement | null>(null)
+  let outputMenuPos = $state<{ left: number; bottom: number } | null>(null)
+  const OUTPUT_MENU_W = 276
+
+  function closeOutputMenu(restoreFocus = false) {
+    outputMenuOpen = false
+    if (restoreFocus) outputButtonEl?.focus()
+  }
+
+  function toggleOutputMenu() {
+    outputMenuOpen = !outputMenuOpen
+    if (!outputMenuOpen || !outputButtonEl || !panelEl) return
+    addMenuOpen = false
+    verbMenuOpen = false
+    const trigger = outputButtonEl.getBoundingClientRect()
+    const panel = panelEl.getBoundingClientRect()
+    const left = Math.min(Math.max(Math.round(trigger.left - panel.left), 8), Math.round(panel.width - OUTPUT_MENU_W - 8))
+    outputMenuPos = { left, bottom: Math.round(panel.bottom - trigger.top) + 8 }
+    void tick().then(() => outputMenuEl?.querySelector<HTMLButtonElement>('.cop-add-context-action:not(:disabled)')?.focus())
+  }
+
+  function onOutputMenuKeydown(e: KeyboardEvent) {
+    if (e.key === 'Escape') {
+      e.preventDefault()
+      e.stopPropagation()
+      closeOutputMenu(true)
+      return
+    }
+    if (e.key === 'Tab') {
+      closeOutputMenu()
+      return
+    }
+    const options = Array.from(outputMenuEl?.querySelectorAll<HTMLButtonElement>('.cop-add-context-action:not(:disabled)') ?? [])
+    if (!options.length) return
+    const index = options.indexOf(document.activeElement as HTMLButtonElement)
+    if (e.key === 'ArrowDown') {
+      e.preventDefault()
+      ;(options[index + 1] ?? options[0]).focus()
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault()
+      ;(options[index - 1] ?? options.at(-1))?.focus()
+    } else if (e.key === 'Home' || e.key === 'End') {
+      e.preventDefault()
+      ;(e.key === 'Home' ? options[0] : options.at(-1))?.focus()
+    }
+  }
+
   // --- Ajouter du contexte -------------------------------------------------------------
   // Le pop vit à la racine de .cop-panel (contain: layout paint), comme les autres surfaces
   // flottantes. Les lectures sont bornées AVANT chargement et limitées à deux en parallèle.
@@ -823,6 +893,7 @@
 
   function toggleAddMenu() {
     addMenuOpen = !addMenuOpen
+    if (addMenuOpen) outputMenuOpen = false
     copilot.contextError = ''
     if (!addMenuOpen || !addButtonEl || !panelEl) return
     const r = addButtonEl.getBoundingClientRect()
@@ -1049,6 +1120,7 @@
     // Le menu vit hors du root du chip (racine du panneau) : les deux comptent comme « dedans ».
     if (verbMenuOpen && !verbMenuRootEl?.contains(t) && !verbMenuEl?.contains(t)) verbMenuOpen = false
     if (addMenuOpen && !addButtonEl?.contains(t) && !addMenuEl?.contains(t)) addMenuOpen = false
+    if (outputMenuOpen && !outputButtonEl?.contains(t) && !outputMenuEl?.contains(t)) outputMenuOpen = false
     if (identityMenuOpen && !identityButtonEl?.contains(t) && !identityMenuEl?.contains(t)) identityMenuOpen = false
   }
 
@@ -1237,6 +1309,67 @@
   {/if}
 {/snippet}
 
+{#snippet outputMenu()}
+  {#if outputMenuOpen && outputMenuPos}
+    <div
+      class="cop-add-context-menu cop-output-menu"
+      style="left:{outputMenuPos.left}px; bottom:{outputMenuPos.bottom}px"
+      role="menu"
+      tabindex="-1"
+      aria-label="Créer un livrable"
+      bind:this={outputMenuEl}
+      onkeydown={onOutputMenuKeydown}
+    >
+      <div class="cop-add-context-head">
+        <strong>Créer un livrable</strong>
+        <small>À partir du contexte de la conversation</small>
+      </div>
+      <button
+        class="cop-add-context-action"
+        class:active={copilot.outputMode === 'answer'}
+        role="menuitemradio"
+        aria-checked={copilot.outputMode === 'answer'}
+        onclick={() => chooseOutputMode('answer')}
+      >
+        <span class="msr">chat_bubble</span><span><strong>Réponse</strong><small>Continuer la conversation</small></span>
+        {#if copilot.outputMode === 'answer'}<span class="cop-add-context-check msr">check</span>{/if}
+      </button>
+      <button
+        class="cop-add-context-action"
+        class:active={copilot.outputMode === 'diagram'}
+        role="menuitemradio"
+        aria-checked={copilot.outputMode === 'diagram'}
+        onclick={() => chooseOutputMode('diagram')}
+      >
+        <span class="msr">account_tree</span><span><strong>Diagramme</strong><small>Structurer les idées visuellement</small></span>
+        {#if copilot.outputMode === 'diagram'}<span class="cop-add-context-check msr">check</span>{/if}
+      </button>
+      <button
+        class="cop-add-context-action"
+        class:active={copilot.outputMode === 'html'}
+        role="menuitemradio"
+        aria-checked={copilot.outputMode === 'html'}
+        disabled={!isCloudProvider(app.copilotProvider)}
+        onclick={() => chooseOutputMode('html')}
+      >
+        <span class="msr">html</span><span><strong>Page HTML</strong><small>{isCloudProvider(app.copilotProvider) ? 'Créer une page interactive et autonome' : 'Modèle cloud requis'}</small></span>
+        {#if copilot.outputMode === 'html'}<span class="cop-add-context-check msr">check</span>{/if}
+      </button>
+      <button
+        class="cop-add-context-action"
+        class:active={copilot.outputMode === 'pdf'}
+        role="menuitemradio"
+        aria-checked={copilot.outputMode === 'pdf'}
+        disabled={!isCloudProvider(app.copilotProvider)}
+        onclick={() => chooseOutputMode('pdf')}
+      >
+        <span class="msr">picture_as_pdf</span><span><strong>Document PDF</strong><small>{isCloudProvider(app.copilotProvider) ? 'Composer un document prêt à imprimer' : 'Modèle cloud requis'}</small></span>
+        {#if copilot.outputMode === 'pdf'}<span class="cop-add-context-check msr">check</span>{/if}
+      </button>
+    </div>
+  {/if}
+{/snippet}
+
 {#snippet identityMenu()}
   {#if identityMenuOpen && identityMenuPos}
     <div
@@ -1292,7 +1425,7 @@
 
 <!-- Échap est géré sur les triggers/pops eux-mêmes (focus toujours dedans quand ouvert)
      avec stopPropagation ; ici seul le clic extérieur, partagé par les deux menus. -->
-<svelte:window onpointerdowncapture={pickerOpen || verbMenuOpen || addMenuOpen || identityMenuOpen ? onGlobalPointerDown : undefined} />
+<svelte:window onpointerdowncapture={pickerOpen || verbMenuOpen || addMenuOpen || outputMenuOpen || identityMenuOpen ? onGlobalPointerDown : undefined} />
 
 <aside
   class="cop-panel"
@@ -2208,7 +2341,7 @@
                   <span class="cop-asst-name">Doku-San</span>
                   <div class="grow"></div>
                   {#if !m.streaming}
-                    {#if isTauri && !m.notice && m.content && !m.diagram}
+                    {#if isTauri && !m.notice && m.content && !m.diagram && !m.generatedDocument}
                       <!-- Sauver en note (21.x) : la réponse devient un fichier .md du dossier
                            courant — indexable, citable. Feedback succès (check) ET échec
                            (bannière) : jamais de bouton muet (règle Epic 19). -->
@@ -2222,7 +2355,7 @@
                         <span class="msr" style="font-size:15px">{noteSavedIdx === i ? 'check' : 'save'}</span>
                       </button>
                     {/if}
-                    {#if !m.diagram}
+                    {#if !m.diagram && !m.generatedDocument}
                       <button class="cop-copy" title="Copier" aria-label="Copier la réponse" onclick={() => copyMessage(m.content)}>
                         <span class="msr" style="font-size:15px">content_copy</span>
                       </button>
@@ -2239,6 +2372,8 @@
                     onModify={(artifact) => void editDiagram(artifact)}
                     onSelect={(candidateId) => selectDiagramCandidate(i, candidateId)}
                   />
+                {:else if m.generatedDocument}
+                  <CopilotDocument artifact={m.generatedDocument} onModify={(artifact) => void editGeneratedDocument(artifact)} />
                 {:else}
                   <!-- Réponse terminée : Markdown assaini (allowlist, 0 réseau) + puces [n].
                        svelte-ignore : clic et survol sont délégués aux <button> injectés
@@ -2370,24 +2505,31 @@
                     rows="1"
                     placeholder={copilot.outputMode === 'diagram'
                       ? 'Décrivez le diagramme à créer…'
-                      : copilot.scope === 'folder' ? 'Demandez à vos notes…' : 'Demandez à Doku-San…'}
+                      : copilot.outputMode === 'html'
+                        ? 'Décrivez la page HTML à créer…'
+                        : copilot.outputMode === 'pdf'
+                          ? 'Décrivez le document PDF à créer…'
+                          : copilot.scope === 'folder' ? 'Demandez à vos notes…' : 'Demandez à Doku-San…'}
                     aria-label={copilot.scope === 'folder' ? 'Poser une question sur le dossier de notes' : 'Poser une question sur ce document'}
                     onkeydown={onPromptKey}
                   ></textarea>
                   <div class="cop-compose-options">
                     <button
-                      class="cop-diagram-chip"
-                      class:active={copilot.outputMode === 'diagram'}
-                      aria-pressed={copilot.outputMode === 'diagram'}
-                      title={copilot.outputMode === 'diagram' ? 'Revenir à une réponse texte' : 'Créer un diagramme'}
-                      onclick={() => {
-                        verbMenuOpen = false
-                        setChatOutputMode(copilot.outputMode === 'diagram' ? 'answer' : 'diagram')
-                      }}
+                      class="cop-output-chip"
+                      class:active={copilot.outputMode !== 'answer'}
+                      class:open={outputMenuOpen}
+                      bind:this={outputButtonEl}
+                      title="Choisir un livrable"
+                      aria-label={`Type de livrable : ${copilot.outputMode === 'diagram' ? 'Diagramme' : copilot.outputMode === 'pdf' ? 'Document PDF' : copilot.outputMode === 'html' ? 'Page HTML' : 'Réponse'}`}
+                      aria-haspopup="menu"
+                      aria-expanded={outputMenuOpen}
+                      onclick={toggleOutputMenu}
                     >
-                      <span class="msr">account_tree</span><span>Diagramme</span>
+                      <span class="msr">{copilot.outputMode === 'diagram' ? 'account_tree' : copilot.outputMode === 'pdf' ? 'picture_as_pdf' : copilot.outputMode === 'html' ? 'html' : 'add'}</span>
+                      <span>{copilot.outputMode === 'diagram' ? 'Diagramme' : copilot.outputMode === 'pdf' ? 'PDF' : copilot.outputMode === 'html' ? 'HTML' : 'Créer'}</span>
+                      <span class="msr chevron">expand_more</span>
                     </button>
-                    {#if copilot.outputMode !== 'diagram'}
+                    {#if copilot.outputMode === 'answer'}
                       <!-- Le style de prose n'a aucun effet sur un artefact visuel : le
                            masquer évite un réglage trompeur et libère la largeur compacte. -->
                       <div class="cop-verb-root" bind:this={verbMenuRootEl}>
@@ -2617,6 +2759,7 @@
   {@render citePreviewCard()}
   {@render verbMenuCard()}
   {@render addContextMenu()}
+  {@render outputMenu()}
   {@render identityMenu()}
 </aside>
 
@@ -3776,7 +3919,8 @@
     margin-bottom: 3px;
     overflow: hidden;
   }
-  .cop-diagram-chip {
+  .cop-output-chip {
+    position: relative;
     min-width: 0;
     height: 26px;
     display: inline-flex;
@@ -3793,11 +3937,13 @@
     cursor: pointer;
     transition: background 120ms ease, color 120ms ease, transform 100ms ease;
   }
-  .cop-diagram-chip .msr { flex: 0 0 auto; font-size: 15px; }
-  .cop-diagram-chip:hover { background: var(--surface-hover); color: var(--ink); }
-  .cop-diagram-chip.active { background: var(--ink); color: var(--cream-content); }
-  .cop-diagram-chip:active { transform: scale(0.97); }
-  .cop-diagram-chip:focus-visible { outline: 2px solid var(--line-3); outline-offset: 1px; }
+  .cop-output-chip .msr { flex: 0 0 auto; font-size: 15px; }
+  .cop-output-chip .chevron { margin-left: -2px; font-size: 14px; transition: transform 140ms cubic-bezier(0.22, 1, 0.36, 1); }
+  .cop-output-chip.open .chevron { transform: rotate(180deg); }
+  .cop-output-chip:hover, .cop-output-chip.open { background: var(--surface-hover); color: var(--ink); }
+  .cop-output-chip.active { background: var(--ink); color: var(--cream-content); }
+  .cop-output-chip:active { transform: scale(0.97); }
+  .cop-output-chip:focus-visible { outline: 2px solid var(--line-3); outline-offset: 1px; }
   /* Style des réponses : puce compacte dans la rangée de saisie + menu vers le haut. */
   .cop-verb-root { position: relative; flex: 0 0 auto; }
   .cop-verb-chip {
@@ -4011,8 +4157,8 @@
   @container (max-width: 330px) {
     .cop-composer-note { display: none; }
     .cop-context-state { max-width: 86px; overflow: hidden; text-overflow: ellipsis; }
-    .cop-diagram-chip > span:last-child { display: none; }
-    .cop-diagram-chip { padding-inline: 7px; }
+    .cop-output-chip > span:nth-child(2) { display: none; }
+    .cop-output-chip { padding-inline: 7px; }
   }
 
   @media (pointer: coarse) {
@@ -4024,7 +4170,7 @@
     .cop-input-attach,
     .cop-input-send { width: 40px; height: 40px; }
     .cop-verb-chip { min-height: 40px; padding-inline: 11px 7px; }
-    .cop-diagram-chip { min-height: 40px; }
+    .cop-output-chip { min-height: 40px; }
   }
 
   @keyframes cop-composer-drawer-in {
@@ -4052,6 +4198,6 @@
     .cop-activity-fab,
     .cop-input-send,
     .cop-verb-chip,
-    .cop-diagram-chip { transition-duration: 0.01ms; }
+    .cop-output-chip { transition-duration: 0.01ms; }
   }
 </style>

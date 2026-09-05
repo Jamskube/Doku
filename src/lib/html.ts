@@ -5,7 +5,7 @@
 // `<iframe sandbox="">`.
 import { sanitizeHtml } from './sanitize'
 
-const CSP =
+export const CSP =
   `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:; font-src data:">`
 
 type Theme = 'light' | 'dark'
