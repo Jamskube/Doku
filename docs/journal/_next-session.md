@@ -1,18 +1,18 @@
 # Next session pointer
-_Updated: 2026-08-27 11:32_
+_Updated: 2026-08-31 15:11_
 
 ## Where I left off
 
-Le mode Diagramme de Doku-San est implémenté mais pas encore commité. OpenAI et MiniMax passent désormais par un studio cloud multi-passe : brief factuel, 2–3 genres bgraph distincts, génération par deux ouvriers, validation locale, critique indépendante, raffinement optionnel et persistance de toutes les variantes. La carte permet de comparer puis sélectionner une autre vue sans nouvelle génération ; Ollama conserve le pipeline simple à vue unique. La documentation du choix se trouve dans `docs/adr/0028-diagrammes-bgraph-wasm.md` et le plan dans `docs/plans/diagrammes-doku-san.md`.
+Le pipeline cloud de création HTML/PDF et son contrôle avant publication sont implémentés mais non commités. Doku-San produit un artefact HTML assaini, le rend hors écran, applique un audit géométrique et, avec OpenAI, une critique de capture ; deux corrections au maximum précèdent l’affichage. Le nouveau Doku Document Studio adapte Beautiful Article v0.1.0 en une injection native qui choisit structure, densité et direction visuelle, avec des règles distinctes pour l’écran et l’A4. Typecheck, 12 tests ciblés et build sont au vert, mais aucun essai réel OpenAI/MiniMax n’a encore validé la qualité des documents après cette injection.
 
 ## Open work
 
-- Branch: `main` — **48 entrées de travail non commitées** ; elles regroupent le chantier précédent de recherche Web/mémoire, le nouveau chantier diagrammes et ce journal, donc le staging devra rester délibéré.
+- Branch: `main` — 30 fichiers non commités, journal de session inclus et changements antérieurs à préserver.
 - Open PRs: aucune.
-- Drafts/plans: `docs/plans/diagrammes-doku-san.md` ; décision acceptée dans `docs/adr/0028-diagrammes-bgraph-wasm.md`.
-- Vérifications: `npm run check` sans diagnostic ; `npm test -- --run` avec 913/913 tests ; `npm run build` réussi ; contrôle visuel sombre réussi aux largeurs normale et 420 px.
-- Validation encore manquante: aucun smoke test réel n’a encore comparé la même demande de diagramme sur OpenAI et MiniMax avec restauration après redémarrage.
+- Drafts/plans: `docs/plans/documents-generes-doku-san.md` ; `docs/adr/0029-documents-generes-html-pdf.md`.
+- Vérifications au vert: `npm run check` ; 12 tests ciblés Document Studio/génération/review ; `npm run build`.
+- Non vérifié: génération complète et correction visuelle réelles avec OpenAI puis MiniMax ; export PDF final depuis l’application.
 
 ## Next concrete step
 
-Exécuter une même demande d’architecture réelle avec OpenAI puis MiniMax, vérifier la recommandation, le changement via « Autres vues » et la restauration de la discussion, puis créer des commits atomiques si les deux parcours sont validés.
+Faire une même demande de rapport PDF avec OpenAI puis MiniMax, comparer structure, cadrage et correction, ajuster le contrat sur des défauts observés, puis isoler et committer uniquement le chantier HTML/PDF.
