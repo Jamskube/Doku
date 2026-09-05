@@ -5,6 +5,7 @@
   import WorkspaceView from './components/WorkspaceView.svelte'
   import ConfirmDialog from './components/ConfirmDialog.svelte'
   import WikilinkPrompt from './components/WikilinkPrompt.svelte'
+  import { openSearchPanel } from './lib/editor/editor'
   import { activatePane, activeEditorView, app, activeTab, askSave, checkExternalChanges, cycleTab, dialog, dismissReloadPrompt, initApp, isDirty, openCopilot, openDropped, openPath, openTab, openWikilink, reloadPromptedTab, requestCloseTab, saveSession, saveSettings, saveTabOrSaveAs, toggleActiveSourceMode, togglePin, toggleSidebarView, workspace } from './lib/stores.svelte'
   import { onFileDrop, onOpenFile, onWindowCloseRequested, onWindowFocus, openFileDialog } from './lib/tauri'
   import { detectUnsupported } from './lib/encoding'
@@ -227,6 +228,15 @@
       } else if (k === 'f' && e.shiftKey) {
         e.preventDefault()
         toggleSidebarView('search')
+      } else if (k === 'f') {
+        // Ctrl+F depuis n'importe où (aperçu, barre, panneau) : le panneau de recherche
+        // de l'éditeur actif. Dans l'éditeur, son propre keymap l'a déjà pris.
+        const view = activeEditorView()
+        if (view) {
+          e.preventDefault()
+          view.focus()
+          openSearchPanel(view)
+        }
       } else if (k === 't' && e.shiftKey) {
         e.preventDefault()
         togglePin()

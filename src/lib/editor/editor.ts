@@ -1,6 +1,7 @@
 import { minimalSetup } from 'codemirror'
 import { EditorView, keymap } from '@codemirror/view'
 import { Compartment, EditorState, Prec, type Extension } from '@codemirror/state'
+import { openSearchPanel, search, searchKeymap } from '@codemirror/search'
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown'
 import { html } from '@codemirror/lang-html'
 import { languages } from '@codemirror/language-data'
@@ -43,6 +44,20 @@ const dokuHighlight = HighlightStyle.define([
 
 const dokuTheme = EditorView.theme({
   '&': { height: '100%', backgroundColor: 'transparent' },
+  // Panneau Rechercher/Remplacer (@codemirror/search) : posé en haut, dans le vocabulaire
+  // de la barre d'outils (sans-serif, filet --line-2, champs et boutons arrondis).
+  '.cm-panels': { backgroundColor: 'var(--cream-tint)', color: 'var(--ink-2)', fontFamily: 'var(--font-sans)', fontSize: '12.5px' },
+  '.cm-panels-top': { borderBottom: '1px solid var(--line-2)' },
+  '.cm-panel.cm-search': { display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '6px 8px', padding: '8px 14px' },
+  '.cm-panel.cm-search br': { display: 'none' },
+  '.cm-panel.cm-search label': { display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '12px', color: 'var(--ink-3)' },
+  '.cm-panel.cm-search [name=close]': { position: 'static', marginLeft: 'auto', fontSize: '16px', color: 'var(--ink-4)', cursor: 'pointer' },
+  '.cm-textfield': { fontFamily: 'var(--font-sans)', fontSize: '12.5px', padding: '4px 9px', border: '1px solid var(--line-2)', borderRadius: '8px', background: 'var(--cream-content)', color: 'var(--ink)' },
+  '.cm-textfield:focus': { outline: 'none', borderColor: 'var(--line-3)' },
+  '.cm-button': { fontFamily: 'var(--font-sans)', fontSize: '12px', padding: '4px 10px', border: '1px solid var(--line-2)', borderRadius: '8px', background: 'var(--cream-content)', backgroundImage: 'none', color: 'var(--ink-2)', cursor: 'pointer' },
+  '.cm-button:hover': { background: 'var(--surface-hover)', color: 'var(--ink)' },
+  '.cm-searchMatch': { backgroundColor: 'var(--accent-soft)', borderRadius: '2px' },
+  '.cm-searchMatch.cm-searchMatch-selected': { boxShadow: '0 0 0 2px var(--ink-3)' },
   '&.cm-focused': { outline: 'none' },
   '.cm-scroller': {
     fontFamily: 'var(--font-serif)',
@@ -309,6 +324,31 @@ export function serializeDoc(doc: string, eol: '\n' | '\r\n'): string {
   return eol === '\r\n' ? doc.replace(/\n/g, '\r\n') : doc
 }
 
+// Rechercher / remplacer dans le document (Ctrl+F, F3, Ctrl+H via le même panneau) :
+// le panneau de @codemirror/search, traduit. Il n'existait pas — seule la recherche de
+// dossier (Ctrl+Maj+F) était branchée.
+const searchExtensions: Extension[] = [
+  search({ top: true }),
+  keymap.of(searchKeymap),
+  EditorState.phrases.of({
+    'Find': 'Rechercher',
+    'Replace': 'Remplacer',
+    'next': 'suivant',
+    'previous': 'précédent',
+    'all': 'tout',
+    'match case': 'casse',
+    'by word': 'mot entier',
+    'regexp': 'regex',
+    'replace': 'remplacer',
+    'replace all': 'tout remplacer',
+    'close': 'fermer',
+    'current match': 'occurrence courante',
+    'replaced $ matches': '$ occurrences remplacées',
+    'replaced match on line $': 'occurrence remplacée à la ligne $',
+    'on line': 'à la ligne',
+  }),
+]
+
 // Bascule WYSIWYG ↔ source (Ctrl+/) via ce Compartment.
 export const livePreviewComp = new Compartment()
 
@@ -382,6 +422,7 @@ export function baseExtensions(sourceMode: boolean, extra: Extension[] = []): Ex
     dokuTheme,
     livePreviewComp.of(sourceMode ? sourceExtensions() : previewExtensions()),
     suppressToggleComment,
+    searchExtensions,
     // Formatage Markdown (20.4) : éditeur md seulement — un .txt n'a pas de gras,
     // un .html source non plus (les keymaps de txt/htmlSource ne l'embarquent pas).
     formatKeymap,
@@ -397,6 +438,7 @@ export function txtExtensions(extra: Extension[] = []): Extension[] {
     EditorView.lineWrapping,
     dokuTheme,
     suppressToggleComment,
+    searchExtensions,
     ...extra,
   ]
 }
@@ -411,8 +453,9 @@ export function htmlSourceExtensions(extra: Extension[] = []): Extension[] {
     dokuTheme,
     syntaxHighlighting(dokuHighlight),
     suppressToggleComment,
+    searchExtensions,
     ...extra,
   ]
 }
 
-export { EditorView, EditorState }
+export { EditorView, EditorState, openSearchPanel }
