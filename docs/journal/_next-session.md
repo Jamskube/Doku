@@ -1,23 +1,26 @@
 # Next session pointer
-_Updated: 2026-09-05_
+_Updated: 2026-09-11 08:52_
 
 ## Where I left off
 
-La recommandation du swarm du 2026-09-05 est appliquée sauf trois points qui n'appartiennent pas à l'agent : la **réparation du disque** (`chkdsk G: /scan` puis `/spotfix`, en admin, Doku fermé — le volume est marqué dirty et `node_modules\.vite` est corrompu, `tauri dev` ne démarre pas), la **publication du source du fork bgraph** (autorisation élargie consignée dans l'ADR-0028 ; publier est irréversible, c'est ton geste), et les **secrets de signature/updater** (`docs/plans/signature-et-mises-a-jour.md` dit quoi créer).
+Une revue croisée (reviewer + critique, contextes séparés) a validé le travail non commité des 6 et 9 septembre après correction : un **Critical** dans le retrait des marqueurs `[n]` (il réécrivait le CSS de chaque document généré), et six **Major** — plugin de prévisualisation qui ne rebâtissait pas après le premier enregistrement, jauge inatteignable au clavier, index RAG non re-versionné, octets d'images fuyant par la troncature et la reformulation, badge de contexte faux, Markdown portable capable d'embarquer n'importe quel fichier du disque. Tout est corrigé, verrouillé par des tests, typecheck 0 erreur, 907 tests, build OK.
 
-Le chantier HTML/PDF est revu, corrigé, commité — mais **jamais essayé avec un vrai modèle** : le disque a coupé le test. Idem pour tout ce qui a été ajouté aujourd'hui (Ctrl+F, explorateur, liens entrants, onglet des artefacts, journal `doku.log`) : typecheck, 950+ tests et build au vert, zéro essai dans l'app.
+**32 fichiers non commités** portent trois sessions de travail : composeur à sections et palette « / » (06), images collées et Markdown portable (09), correctifs de revue (11). Les installateurs 3.5.0 et 3.5.1 produits ne correspondent à aucun commit et **ne contiennent pas les correctifs du 11** : ne pas les distribuer.
 
 ## Open work
 
-- Branch: `main` — tout est commité (vérifier `git status` après ce wrap) ; **push à faire** si non fait.
+- Branch: `main` — **32 fichiers non commités**, 0 commit depuis `1f45856` (5 sept).
 - Open PRs: aucune.
-- CI : `ci.yml` neuf, jamais exécuté — le premier push dira si le runner `windows-11-arm` et les clés de cache tiennent.
-- Plans : `docs/plans/signature-et-mises-a-jour.md` (bloqué secrets), `docs/plans/documents-generes-doku-san.md` (implémenté, à valider en réel).
-- Reportés volontairement : tags/frontmatter, annotations PDF persistantes citées par le RAG (le différenciant selon la veille), découpage de `copilot.svelte.ts` (3 093 lignes, 0 test).
+- Plans : `docs/plans/signature-et-mises-a-jour.md` (bloqué secrets), `docs/plans/documents-generes-doku-san.md` (à valider en réel).
+- Jamais essayé dans l'app : menu à sections, commandes `/`, Markdown portable, images collées après enregistrement, tous les correctifs du 11.
+- Reportés : tags/frontmatter, annotations PDF → RAG, découpage de `copilot.svelte.ts`, publication du source du fork bgraph (geste du mainteneur).
+
+## Active Autopilot
+
+- Goal: none
+- Status: —
+- Next action: —
 
 ## Next concrete step
 
-1. Réparer le disque, relancer `npm run tauri dev`, et faire **une même demande de rapport PDF avec OpenAI puis MiniMax** : vérifier le contrat `<doku-document>`, la capture, la correction, l'ouverture en onglet, `Ctrl+S`.
-2. Essayer Ctrl+F, F2/Suppr dans l'explorateur, les liens entrants ; lire `%LOCALAPPDATA%\com.soundnodes.doku\logs\doku.log`.
-3. Regarder le premier run de `ci.yml` ; corriger le job ARM64 s'il n'a pas de runner.
-4. Décider de la publication du fork bgraph.
+Essayer dans l'app les cinq chantiers non vérifiés (un document PDF généré avec CSS ; une image collée dans une note neuve puis enregistrée ; `/web météo` avec la recherche déjà active ; la jauge au clavier ; un export Markdown portable rouvert), puis **committer en trois commits** (composeur + palette · images + portable · correctifs de revue), tagger `v3.5.1`, et recompiler les installateurs depuis le tag.
