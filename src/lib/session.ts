@@ -1,4 +1,5 @@
-import { canonicalPathKey } from './save-as'
+import { canonicalPathKey, type SaveableTextKind } from './save-as'
+import { isBinaryKind, type DocKind } from './doc-kind'
 import { clampWorkspaceRatio, createWorkspaceState, type PaneId, type WorkspaceState } from './workspace'
 
 export interface WorkspacePathSnapshot {
@@ -11,11 +12,24 @@ export interface WorkspacePathSnapshot {
   ratio: number
 }
 
+// Note sans chemin (ardoise, document généré) : son contenu voyage dans la session
+// puisqu'aucun fichier ne le porte. Au-delà de NOTE_MAX_CHARS elle n'est pas conservée.
+export interface SessionNote {
+  name: string
+  content: string
+  kind: SaveableTextKind
+}
+export const NOTE_MAX_CHARS = 500_000
+
 export interface SessionV2 {
   version: 2
   tabs: string[]
   activePath: string | null
   workspace: WorkspacePathSnapshot
+  notes: SessionNote[]
+  // Index dans `notes` de la note affichée par chaque volet (null = volet sur un fichier ou vide).
+  primaryNote: number | null
+  secondaryNote: number | null
 }
 
 interface LegacySession {
@@ -40,6 +54,23 @@ function uniquePaths(value: unknown): string[] {
     paths.push(path)
   }
   return paths
+}
+
+function parseNotes(value: unknown): SessionNote[] {
+  if (!Array.isArray(value)) return []
+  const notes: SessionNote[] = []
+  for (const item of value) {
+    const note = item && typeof item === 'object' ? item as Record<string, unknown> : null
+    if (!note || typeof note.name !== 'string' || typeof note.content !== 'string') continue
+    if (note.content.length > NOTE_MAX_CHARS) continue
+    const kind = note.kind === 'html' || note.kind === 'txt' ? note.kind : 'md'
+    notes.push({ name: note.name, content: note.content, kind })
+  }
+  return notes
+}
+
+function noteIndex(value: unknown, count: number): number | null {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0 && value < count ? value : null
 }
 
 export function parseWorkspacePathSnapshot(value: unknown): WorkspacePathSnapshot {
@@ -80,7 +111,7 @@ export function buildWorkspacePathSnapshot(
 
 export function parseSession(raw: string | null): SessionV2 | null {
   if (!raw) return null
-  let value: LegacySession & { version?: unknown; workspace?: unknown }
+  let value: LegacySession & { version?: unknown; workspace?: unknown; notes?: unknown; primaryNote?: unknown; secondaryNote?: unknown }
   try {
     value = JSON.parse(raw)
   } catch {
@@ -103,38 +134,68 @@ export function parseSession(raw: string | null): SessionV2 | null {
         secondaryUnsaved: false,
         ratio: 50,
       },
+      notes: [],
+      primaryNote: null,
+      secondaryNote: null,
     }
   }
+  const notes = parseNotes(value.notes)
+  const primaryNote = noteIndex(value.primaryNote, notes.length)
+  const secondaryCandidate = noteIndex(value.secondaryNote, notes.length)
   return {
     version: 2,
     tabs,
     activePath,
     workspace: parseWorkspacePathSnapshot(value.workspace),
+    notes,
+    primaryNote,
+    secondaryNote: secondaryCandidate !== primaryNote ? secondaryCandidate : null,
   }
 }
 
+export interface SessionTab {
+  id: number
+  name: string
+  path: string | null
+  kind: DocKind
+  content: string
+}
+
 export function buildSession(
-  paths: Array<string | null>,
+  openTabs: SessionTab[],
   workspace: WorkspaceState,
-  pathForTab: (tabId: number | null) => string | null,
 ): SessionV2 {
-  const tabs = uniquePaths(paths)
+  const pathForTab = (tabId: number | null) => openTabs.find((tab) => tab.id === tabId)?.path ?? null
+  const tabs = uniquePaths(openTabs.map((tab) => tab.path))
   const activePath = pathForTab(workspace[workspace.activePaneId].tabId)
+  const kept = openTabs.filter((tab) => tab.path == null && !isBinaryKind(tab.kind) && tab.content.length <= NOTE_MAX_CHARS)
+  const noteForTab = (tabId: number | null) => {
+    const i = kept.findIndex((tab) => tab.id === tabId)
+    return i >= 0 ? i : null
+  }
   return {
     version: 2,
     tabs,
     activePath,
     workspace: buildWorkspacePathSnapshot(workspace, pathForTab),
+    notes: kept.map((tab) => ({ name: tab.name, content: tab.content, kind: tab.kind as SaveableTextKind })),
+    primaryNote: noteForTab(workspace.primary.tabId),
+    secondaryNote: noteForTab(workspace.secondary.tabId),
   }
 }
 
 export function restoreWorkspace(
   session: SessionV2 | null,
   tabIdForPath: (path: string) => number | null,
+  tabIdForNote: (index: number) => number | null = () => null,
 ): WorkspaceState {
   if (!session) return createWorkspaceState()
-  const primary = session.workspace.primaryPath ? tabIdForPath(session.workspace.primaryPath) : null
-  const secondary = session.workspace.secondaryPath ? tabIdForPath(session.workspace.secondaryPath) : null
+  const primary = session.workspace.primaryPath
+    ? tabIdForPath(session.workspace.primaryPath)
+    : session.primaryNote != null ? tabIdForNote(session.primaryNote) : null
+  const secondary = session.workspace.secondaryPath
+    ? tabIdForPath(session.workspace.secondaryPath)
+    : session.secondaryNote != null ? tabIdForNote(session.secondaryNote) : null
   const state = createWorkspaceState(primary)
   state.ratio = clampWorkspaceRatio(session.workspace.ratio)
   state.secondary.tabId = secondary !== primary ? secondary : null

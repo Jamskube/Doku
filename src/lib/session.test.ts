@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildSession, buildWorkspacePathSnapshot, parseSession, restoreWorkspace } from './session'
+import { buildSession, buildWorkspacePathSnapshot, NOTE_MAX_CHARS, parseSession, restoreWorkspace } from './session'
 import { createWorkspaceState } from './workspace'
 
 describe('session workspace v2', () => {
@@ -69,9 +69,11 @@ describe('session workspace v2', () => {
     workspace.secondary.tabId = 2
     workspace.activePaneId = 'secondary'
     const session = buildSession(
-      ['C:\\Docs\\source.md', null],
+      [
+        { id: 1, name: 'source.md', path: 'C:\\Docs\\source.md', kind: 'md', content: '' },
+        { id: 2, name: 'Notes', path: null, kind: 'md', content: '' },
+      ],
       workspace,
-      (id) => id === 1 ? 'C:\\Docs\\source.md' : null,
     )
     expect(session.tabs).toEqual(['C:\\Docs\\source.md'])
     expect(session.activePath).toBeNull()
@@ -97,5 +99,48 @@ describe('session workspace v2', () => {
     expect(restored.secondary.tabId).toBeNull()
     expect(restored.activePaneId).toBe('primary')
     expect(restored.ratio).toBe(60)
+  })
+})
+
+describe('session notes sans chemin', () => {
+  const tabs = [
+    { id: 1, name: 'a.md', path: 'C:\\Docs\\a.md', kind: 'md' as const, content: '# a' },
+    { id: 2, name: 'Notes — a', path: null, kind: 'md' as const, content: 'tokens du jour' },
+    { id: 3, name: 'Rapport', path: null, kind: 'html' as const, content: '<p>x</p>' },
+    { id: 4, name: 'scan.pdf', path: null, kind: 'pdf' as const, content: '' },
+  ]
+
+  it('embarque le texte des notes sans chemin et le volet qui les affiche', () => {
+    const workspace = createWorkspaceState(2)
+    workspace.split = true
+    workspace.secondary.tabId = 3
+    const session = buildSession(tabs, workspace)
+    expect(session.tabs).toEqual(['C:\\Docs\\a.md'])
+    expect(session.notes).toEqual([
+      { name: 'Notes — a', content: 'tokens du jour', kind: 'md' },
+      { name: 'Rapport', content: '<p>x</p>', kind: 'html' },
+    ])
+    expect(session.primaryNote).toBe(0)
+    expect(session.secondaryNote).toBe(1)
+    expect(session.workspace.primaryUnsaved).toBe(true)
+  })
+
+  it('survit à un aller-retour JSON et retrouve les volets', () => {
+    const workspace = createWorkspaceState(2)
+    const parsed = parseSession(JSON.stringify(buildSession(tabs, workspace)))
+    expect(parsed?.notes.map((n) => n.name)).toEqual(['Notes — a', 'Rapport'])
+    expect(parsed?.primaryNote).toBe(0)
+    const restored = restoreWorkspace(parsed, () => null, (i) => 10 + i)
+    expect(restored.primary.tabId).toBe(10)
+  })
+
+  it('écarte une note trop grosse et un index hors bornes', () => {
+    const big = { id: 5, name: 'big', path: null, kind: 'md' as const, content: 'x'.repeat(NOTE_MAX_CHARS + 1) }
+    const session = buildSession([big, tabs[1]], createWorkspaceState(5))
+    expect(session.notes.map((n) => n.name)).toEqual(['Notes — a'])
+    expect(session.primaryNote).toBeNull()
+    const parsed = parseSession(JSON.stringify({ version: 2, tabs: [], workspace: {}, notes: [{ name: 'n', content: 'c' }], primaryNote: 4 }))
+    expect(parsed?.notes).toEqual([{ name: 'n', content: 'c', kind: 'md' }])
+    expect(parsed?.primaryNote).toBeNull()
   })
 })

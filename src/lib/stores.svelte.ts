@@ -2,7 +2,7 @@ import { DEMO_DIR, DEMO_TABS } from './demo'
 import { dropEditorRuntime, editorForPane, selectionForPane } from './editor-registry.svelte'
 import { EditorView } from '@codemirror/view'
 import { detectLineEnding } from './editor/editor'
-import { baseName, DEFAULT_SORT, isSupportedFile, joinPath, parentPath, validateExpandedPaths, type ExplorerSort, type SortKey } from './explorer'
+import { baseName, DEFAULT_SORT, isSupportedFile, joinPath, normalizeNewName, parentPath, validateExpandedPaths, type ExplorerSort, type SortKey } from './explorer'
 import { detectUnsupported } from './encoding'
 import { markdownTextLength } from './images'
 import { DEFAULT_EMBED_MODEL } from './rag'
@@ -12,7 +12,7 @@ import { makeSearchDoc, searchDocs, type SearchDoc, type SearchResult } from './
 import { snapshotKey, type SnapshotInfo } from './snapshot'
 import { canonicalPathKey, runSaveAs, type TextSaveSnapshot } from './save-as'
 import { buildSession, buildWorkspacePathSnapshot, parseSession, parseWorkspacePathSnapshot, restoreWorkspace, type WorkspacePathSnapshot } from './session'
-import { buildSearchIndex, confirmReplacePath, isTauri, listSnapshots, pathExistsAt, purgeAllSnapshots, readSnapshot, readTextFileAt, recordSnapshot, saveTextDialog, scanFiles, setAlwaysOnTop, syncSystemBackdrop, writeTextFileAtomic } from './tauri'
+import { buildSearchIndex, confirmReplacePath, isTauri, listSnapshots, pathExistsAt, purgeAllSnapshots, readSnapshot, readTextFileAt, recordSnapshot, renamePathAt, saveTextDialog, scanFiles, setAlwaysOnTop, syncSystemBackdrop, writeTextFileAtomic } from './tauri'
 import { findBacklinks, normalizeTarget, wikilinkCandidates, wikilinkFileName, type Backlink } from './wikilink'
 import { clampCopilotWidth, COPILOT_DEFAULT_WIDTH } from './copilot-width'
 import type { CopilotVerbosity } from './copilot-service'
@@ -460,16 +460,13 @@ const SESSION_KEY = 'doku-session'
 // Empêche la sauvegarde de session d'écraser l'enregistrement pendant le chargement.
 let sessionReady = false
 
-// Persiste les onglets ouverts (chemins) + l'actif. Le contenu n'est PAS stocké :
-// la source de vérité reste le fichier sur disque, relu à la restauration.
+// Persiste les onglets ouverts (chemins) + l'actif. Le contenu d'un fichier n'est PAS
+// stocké : la source de vérité reste le disque, relu à la restauration. Une note sans
+// chemin (ardoise, document généré) n'a que la session pour survivre : son texte y voyage.
 export function saveSession() {
   if (!sessionReady) return
   try {
-    const session = buildSession(
-      app.tabs.map((tab) => tab.path),
-      workspace,
-      (tabId) => app.tabs.find((tab) => tab.id === tabId)?.path ?? null,
-    )
+    const session = buildSession(app.tabs, workspace)
     localStorage.setItem(SESSION_KEY, JSON.stringify(session))
   } catch {
     // stockage indisponible : on ignore
@@ -510,15 +507,29 @@ export async function restoreSession() {
     if (detectUnsupported(content)) continue // binaire/non-UTF-8 : ne pas restaurer
     openTab(baseName(p), p, content)
   }
-  const restored = restoreWorkspace(session, (path) => {
-    const key = canonicalPathKey(path)
-    return app.tabs.find((tab) => tab.path && canonicalPathKey(tab.path) === key)?.id ?? null
-  })
+  const noteTabIds: number[] = []
+  for (const note of session?.notes ?? []) {
+    // savedContent reste vide : la note est bien « non enregistrée » (point, invite à la fermeture).
+    const tab = openTab(note.name, null, '', note.kind)
+    tab.content = note.content
+    noteTabIds.push(tab.id)
+  }
+  const restored = restoreWorkspace(
+    session,
+    (path) => {
+      const key = canonicalPathKey(path)
+      return app.tabs.find((tab) => tab.path && canonicalPathKey(tab.path) === key)?.id ?? null
+    },
+    (index) => noteTabIds[index] ?? null,
+  )
   if (restored.primary.tabId == null && app.tabs.length) {
     restored.primary.tabId = app.tabs.find((tab) => tab.path === session?.activePath)?.id ?? app.tabs[0].id
   }
   applyWorkspaceState(restored)
-  const unsavedNotRestored = Boolean(session?.workspace.primaryUnsaved || session?.workspace.secondaryUnsaved)
+  const unsavedNotRestored = Boolean(
+    (session?.workspace.primaryUnsaved && session.primaryNote == null) ||
+    (session?.workspace.secondaryUnsaved && session.secondaryNote == null),
+  )
   if (missing.length || unsavedNotRestored) {
     app.banner = {
       tone: 'warning',
@@ -1359,6 +1370,59 @@ export async function requestCloseTab(id: number) {
     if (choice === 'save' && !(await saveTabOrSaveAs(tab))) return
   }
   closeTab(id)
+}
+
+// Actions du menu contextuel d'un onglet. Renommer un onglet porté par un fichier
+// renomme le fichier (le nom d'onglet EST le nom de fichier, relocateOpenTabs le réimpose) ;
+// une note sans chemin change juste d'étiquette, qui servira de nom proposé à l'enregistrement.
+export async function renameTab(id: number, rawName: string): Promise<string | null> {
+  const tab = app.tabs.find((t) => t.id === id)
+  if (!tab) return null
+  const name = rawName.trim()
+  if (!name || name === tab.name) return null
+  if (!tab.path) {
+    tab.name = name
+    saveSession()
+    return null
+  }
+  const checked = normalizeNewName(name, 'file')
+  if (!checked.ok) return checked.error
+  const to = joinPath(parentPath(tab.path) ?? '', checked.name)
+  try {
+    if (!(await renamePathAt(tab.path, to))) return 'Ce nom existe déjà dans ce dossier.'
+  } catch {
+    return 'Renommage impossible (droits, ou fichier ouvert dans une autre application).'
+  }
+  relocateOpenTabs(tab.path, to)
+  refreshExplorer()
+  return null
+}
+
+export function duplicateTab(id: number): DocTab | null {
+  const tab = app.tabs.find((t) => t.id === id)
+  if (!tab || isBinaryKind(tab.kind)) return null
+  const base = tab.name.replace(/\.[^.]+$/, '')
+  let name = `${base} (copie)`
+  let suffix = 2
+  while (app.tabs.some((t) => t.path == null && t.name === name)) name = `${base} (copie ${suffix++})`
+  return openTab(name, null, tab.content, tab.kind)
+}
+
+// Ferme en série (chaque onglet modifié garde son invite) ; s'arrête au premier « Annuler ».
+export async function closeTabs(ids: number[]) {
+  for (const id of ids) {
+    await requestCloseTab(id)
+    if (app.tabs.some((t) => t.id === id)) return
+  }
+}
+
+export function closeOtherTabs(id: number) {
+  return closeTabs(app.tabs.filter((t) => t.id !== id).map((t) => t.id))
+}
+
+export function closeTabsToRight(id: number) {
+  const idx = app.tabs.findIndex((t) => t.id === id)
+  return closeTabs(app.tabs.slice(idx + 1).map((t) => t.id))
 }
 
 // Ouvre un artefact généré par Doku-San (document HTML/PDF, diagramme) comme un onglet
