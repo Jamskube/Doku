@@ -1,6 +1,6 @@
 <script lang="ts">
-  import { onMount, tick } from 'svelte'
-  import { app, activeTab, assignTabToPane, docxActions, isBinaryKind, openPath, openPdfPages, openPdfTextEdit, requestCloseTab, isDirty, saveTabOrSaveAs, selectTab, setColumnWidth, toggleActiveSourceMode, togglePin, toggleWorkspaceSplit, workspace, workspaceLayout, type ColumnWidth, type DocKind } from '../lib/stores.svelte'
+  import { onMount, tick, untrack } from 'svelte'
+  import { app, activeTab, assignTabToPane, closeOtherTabs, closeTabsToRight, docxActions, duplicateTab, isBinaryKind, openPath, openPdfPages, openPdfTextEdit, renameTab, requestCloseTab, isDirty, saveTabOrSaveAs, selectTab, setColumnWidth, toggleActiveSourceMode, togglePin, toggleWorkspaceSplit, workspace, workspaceLayout, type ColumnWidth, type DocKind } from '../lib/stores.svelte'
   import type { PaneId } from '../lib/workspace'
   import { tabDiscriminator } from '../lib/tabs'
   import { parentPath } from '../lib/explorer'
@@ -17,6 +17,64 @@
   // direct vers le dialogue.
   function newTab() {
     assignTabToPane(workspace.activePaneId, null)
+  }
+
+  // --- Menu contextuel d'un onglet (clic droit) : renommer, dupliquer, fermer… ---
+  let tabMenu = $state<{ id: number; x: number; y: number } | null>(null)
+  let tabMenuEl = $state<HTMLElement | null>(null)
+  let renamingId = $state<number | null>(null)
+  let renameDraft = $state('')
+  let renameInput = $state<HTMLInputElement | null>(null)
+
+  function openTabMenu(e: MouseEvent, id: number) {
+    e.preventDefault()
+    closeMenus()
+    closeTabsMenu()
+    tabMenu = { id, x: e.clientX, y: e.clientY }
+  }
+  function closeTabMenu() {
+    tabMenu = null
+  }
+  function tabMenuAction(fn: (id: number) => unknown) {
+    const id = tabMenu?.id
+    closeTabMenu()
+    if (id != null) void fn(id)
+  }
+
+  // Le nom est sélectionné sans son extension : c'est lui qu'on retape, pas le `.md`.
+  $effect(() => {
+    if (renamingId == null || !renameInput) return
+    const input = renameInput
+    // untrack : relire le brouillon à chaque frappe re-sélectionnerait tout et écraserait la saisie.
+    untrack(() => {
+      input.focus()
+      const dot = renameDraft.lastIndexOf('.')
+      input.setSelectionRange(0, dot > 0 ? dot : renameDraft.length)
+    })
+  })
+  function startRename(id: number) {
+    const tab = app.tabs.find((t) => t.id === id)
+    if (!tab) return
+    selectTab(id)
+    renamingId = id
+    renameDraft = tab.name
+  }
+  async function commitRename() {
+    const id = renamingId
+    renamingId = null
+    if (id == null) return
+    const error = await renameTab(id, renameDraft)
+    if (error) app.banner = { tone: 'error', title: 'Renommage impossible', message: error }
+  }
+  function onRenameKey(e: KeyboardEvent) {
+    e.stopPropagation()
+    if (e.key === 'Enter') {
+      e.preventDefault()
+      void commitRename()
+    } else if (e.key === 'Escape') {
+      e.preventDefault()
+      renamingId = null
+    }
   }
 
   let railHover = $state(false)
@@ -347,11 +405,13 @@
     const onPointerDown = (event: PointerEvent) => {
       if (!menuRootEl?.contains(event.target as Node | null)) closeMenus()
       if (!tabsMenuRootEl?.contains(event.target as Node | null)) closeTabsMenu()
+      if (!tabMenuEl?.contains(event.target as Node | null)) closeTabMenu()
     }
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return
       if (menuOpen) closeMenus()
       if (tabsMenuOpen) closeTabsMenu()
+      if (tabMenu) closeTabMenu()
     }
     const onWindowChange = () => {
       closeMenus()
@@ -440,9 +500,10 @@
                   aria-checked={tab.id === app.activeId}
                   title={(tab.path ?? tab.name) + (isDirty(tab) ? ' — non enregistré' : '')}
                   onclick={() => pickTab(tab.id)}
+                  oncontextmenu={(e) => openTabMenu(e, tab.id)}
                 >
                   <span class="tabs-menu-dot" class:dirty={isDirty(tab)} class:current={tab.id === app.activeId}></span>
-                  <span class="menu-label">{tab.name}</span>
+                  {#if renamingId === tab.id}{@render renameField()}{:else}<span class="menu-label">{tab.name}</span>{/if}
                   {#if parent}<span class="tabs-menu-parent">{parent}</span>{/if}
                 </button>
                 <button
@@ -469,9 +530,10 @@
           title={(tab.path ?? tab.name) + (isDirty(tab) ? ' — non enregistré' : '')}
           onclick={() => selectTab(tab.id)}
           onauxclick={(e) => { if (e.button === 1) requestCloseTab(tab.id) }}
+          oncontextmenu={(e) => openTabMenu(e, tab.id)}
         >
           {#if isDirty(tab)}<span class="dot">●</span>{/if}
-          <span class="name">{tab.name}</span>
+          {#if renamingId === tab.id}{@render renameField()}{:else}<span class="name">{tab.name}</span>{/if}
           {#if parent}<span class="parent">{parent}</span>{/if}
           <span
             class="close"
@@ -492,6 +554,54 @@
       </button>
     {/if}
   </div>
+
+  {#snippet renameField()}
+    <input
+      class="tab-rename"
+      type="text"
+      aria-label="Nouveau nom de l'onglet"
+      bind:this={renameInput}
+      bind:value={renameDraft}
+      onkeydown={onRenameKey}
+      onblur={() => void commitRename()}
+      onclick={(e) => e.stopPropagation()}
+    />
+  {/snippet}
+
+  {#if tabMenu}
+    {@const tab = app.tabs.find((t) => t.id === tabMenu?.id)}
+    {#if tab}
+      <div
+        class="app-menu tab-menu"
+        role="menu"
+        aria-label={`Actions sur ${tab.name}`}
+        style={`left: ${Math.min(tabMenu.x, window.innerWidth - 250)}px; top: ${Math.min(tabMenu.y, window.innerHeight - 260)}px`}
+        bind:this={tabMenuEl}
+      >
+        <button class="app-menu-item" role="menuitem" onclick={() => tabMenuAction(startRename)}>
+          <span class="msr">drive_file_rename_outline</span><span class="menu-label">Renommer l'onglet</span>
+        </button>
+        <button class="app-menu-item" role="menuitem" disabled={isBinaryKind(tab.kind)} onclick={() => tabMenuAction(duplicateTab)}>
+          <span class="msr">content_copy</span><span class="menu-label">Dupliquer l'onglet</span>
+        </button>
+        {#if workspace.split}
+          <button class="app-menu-item" role="menuitem" onclick={() => tabMenuAction((id) => assignTabToPane(workspace.activePaneId === 'primary' ? 'secondary' : 'primary', id))}>
+            <span class="msr">swap_horiz</span><span class="menu-label">Afficher dans l'autre volet</span>
+          </button>
+        {/if}
+        <div class="app-menu-sep" role="separator"></div>
+        <button class="app-menu-item" role="menuitem" disabled={app.tabs.length < 2} onclick={() => tabMenuAction(closeOtherTabs)}>
+          <span class="msr">tab_close</span><span class="menu-label">Fermer les autres onglets</span>
+        </button>
+        <button class="app-menu-item" role="menuitem" disabled={app.tabs.at(-1)?.id === tab.id} onclick={() => tabMenuAction(closeTabsToRight)}>
+          <span class="msr">keyboard_tab</span><span class="menu-label">Fermer les onglets à droite</span>
+        </button>
+        <button class="app-menu-item" role="menuitem" onclick={() => tabMenuAction(requestCloseTab)}>
+          <span class="msr">close</span><span class="menu-label">Fermer l'onglet</span>
+        </button>
+      </div>
+    {/if}
+  {/if}
 
   <div class="document-menu-root" bind:this={menuRootEl}>
     <button
@@ -751,6 +861,19 @@
     animation: app-menu-in 150ms cubic-bezier(0.22, 1, 0.36, 1);
   }
   .document-menu { right: 0; transform-origin: top right; }
+  .tab-menu { position: fixed; top: auto; z-index: 60; transform-origin: top left; }
+  .tab-rename {
+    min-width: 0;
+    width: 140px;
+    height: 22px;
+    padding: 0 6px;
+    border: 1px solid var(--line-3);
+    border-radius: 6px;
+    background: var(--cream-content);
+    color: var(--ink);
+    font: inherit;
+    outline: none;
+  }
   .submenu-root { position: relative; }
   .flyout-menu {
     top: -6px;
