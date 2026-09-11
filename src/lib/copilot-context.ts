@@ -1,3 +1,4 @@
+import { omitEmbeddedImageData } from './images'
 export const MAX_CONTEXT_ITEMS = 8
 export const MAX_CONTEXT_TEXT_BYTES = 2 * 1024 * 1024
 export const MAX_CONTEXT_PDF_BYTES = 25 * 1024 * 1024
@@ -88,7 +89,11 @@ export function cleanContextLabel(label: string, fallback = 'Contexte'): string 
   return (base || fallback).slice(0, 120)
 }
 
-export function truncateContextItem(text: string): { text: string; truncated: boolean } {
+// Les images `data:` sont retirées AVANT la coupe : tronquée au milieu de sa base64, une
+// data-URL n'a plus sa parenthèse fermante, la regex ne la reconnaît plus, et 240 k
+// octets d'image partaient au modèle. Vu en revue 2026-09-11.
+export function truncateContextItem(raw: string): { text: string; truncated: boolean } {
+  const text = omitEmbeddedImageData(raw)
   if (text.length <= MAX_CONTEXT_ITEM_CHARS) return { text, truncated: false }
   return { text: text.slice(0, MAX_CONTEXT_ITEM_CHARS), truncated: true }
 }

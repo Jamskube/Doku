@@ -4,7 +4,7 @@
 // Origine : spike/src/live-preview.ts, validé par mesures le 2026-07-08.
 import { syntaxTree } from '@codemirror/language'
 import type { SyntaxNode } from '@lezer/common'
-import { EditorState, Facet, type Range, StateField } from '@codemirror/state'
+import { Compartment, EditorState, Facet, type Range, StateField } from '@codemirror/state'
 import {
   Decoration,
   type DecorationSet,
@@ -25,6 +25,7 @@ import { revealScope, revealScopeField, setRevealScope } from './reveal'
 // Dossier du document courant (fourni par état, dans DocumentView) — sert à
 // résoudre les images relatives.
 export const docDirFacet = Facet.define<string, string>({ combine: (v) => v[0] ?? '' })
+export const docDirCompartment = new Compartment()
 
 // URL affichable d'une image : externe telle quelle ; locale résolue au dossier
 // puis convertie en asset:// (natif). En navigateur : chemin brut → erreur → placeholder.
@@ -656,10 +657,14 @@ export function livePreview() {
         update(update: ViewUpdate) {
           // `transactions.some(...)` est indispensable : sans lui, presser Tab changerait
           // l'état de révélation sans jamais recalculer les décorations (rien à l'écran).
+          // Le dossier du document change au PREMIER enregistrement d'une note neuve
+          // (`docDirCompartment` reconfiguré) : sans cette comparaison, les images collées
+          // restaient en placeholder jusqu'à la prochaine frappe. Vu en revue 2026-09-11.
           if (
             update.docChanged ||
             update.selectionSet ||
             update.viewportChanged ||
+            update.startState.facet(docDirFacet) !== update.state.facet(docDirFacet) ||
             update.transactions.some((tr) => tr.effects.some((e) => e.is(setRevealScope)))
           ) {
             this.decorations = buildDecorations(update.view)

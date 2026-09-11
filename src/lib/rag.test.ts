@@ -60,6 +60,13 @@ describe('chunkText', () => {
     expect(chunkText('', 900)).toEqual({ chunks: [], truncated: false })
     expect(chunkText('   \n\n  ', 900)).toEqual({ chunks: [], truncated: false })
   })
+
+  it('n’indexe pas les octets des images Markdown portables', () => {
+    expect(chunkText('Avant\n\n![Plan](data:image/png;base64,AAAA)\n\nAprès', 900).chunks.join('\n')).toContain(
+      '[Image intégrée : Plan]',
+    )
+    expect(chunkText('![Plan](data:image/png;base64,AAAA)', 900).chunks.join('\n')).not.toContain('AAAA')
+  })
 })
 
 describe('hachage', () => {

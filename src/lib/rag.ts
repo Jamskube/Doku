@@ -2,6 +2,7 @@
 // incrémental, encodage vectors.bin/meta.json, cosinus top-k. Aucune dépendance
 // Tauri/Ollama ici — tout est testable en Node ; l'I/O vit dans tauri.ts et
 // l'orchestration dans rag-index.svelte.ts.
+import { omitEmbeddedImageData } from './images'
 
 // Modèle d'embedding par défaut + repli désigné (mesurés au spike 15.1, ADR-0015).
 // Pas de tag -q4_0 : les modèles d'embedding n'en publient pas (servis F16).
@@ -19,7 +20,10 @@ export const RAG_MAX_CHUNKS_PER_FILE = 300
 // k≥3 obligatoire : c'est ce qui rattrape les pièges lexicaux à rang 2-3 (ADR-0015).
 export const RAG_TOP_K = 5
 
-export const RAG_META_VERSION = 1
+// 2 (2026-09-11) : `chunkText` retire désormais les images `data:` avant découpage. Un
+// index en version 1 garde ses chunks base64 et un hash de fichier inchangé ne les
+// re-découperait jamais — `readMeta` rend `null`, l'index se reconstruit.
+export const RAG_META_VERSION = 2
 
 // Un titre ne coupe un chunk que si le tampon a déjà de la matière : coupe
 // « préférentielle » (ADR-0015), pas absolue — évite les miettes d'un doc à sections courtes.
@@ -112,6 +116,7 @@ export function chunkText(
   target = RAG_CHUNK_TARGET,
   maxChunks = RAG_MAX_CHUNKS_PER_FILE,
 ): { chunks: string[]; truncated: boolean } {
+  text = omitEmbeddedImageData(text)
   // Un titre en milieu de bloc devient sa propre frontière de paragraphe.
   const prepared = text.replace(/\n(#{1,6} )/g, '\n\n$1')
   const paras = prepared

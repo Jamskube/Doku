@@ -29,6 +29,14 @@ describe('copilot context', () => {
     expect(pathBelongsToFolder(null, 'c:/users/nicos/desktop')).toBe(false)
   })
 
+  it('retire les images intégrées AVANT de tronquer', () => {
+    // Coupée au milieu de sa base64, une data-URL n'a plus sa parenthèse fermante et
+    // échappe à la regex : 240 k octets d'image partaient au modèle.
+    const result = truncateContextItem('avant ![p](data:image/png;base64,' + 'A'.repeat(300_000) + ') après')
+    expect(result.text).toBe('avant [Image intégrée : p] après')
+    expect(result.truncated).toBe(false)
+  })
+
   it('borne un item avant construction du payload', () => {
     const result = truncateContextItem('x'.repeat(240_001))
     expect(result.text).toHaveLength(240_000)

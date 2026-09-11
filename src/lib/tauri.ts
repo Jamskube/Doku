@@ -953,6 +953,13 @@ export async function saveHtmlDialog(defaultName: string, html: string): Promise
   return true
 }
 
+export async function saveMarkdownDialog(defaultName: string, markdown: string): Promise<boolean> {
+  const path = await saveTextDialog(defaultName, 'md')
+  if (!path) return false
+  await writeTextFileAtomic(path, markdown)
+  return true
+}
+
 export async function saveSvgDialog(defaultName: string, svg: string): Promise<boolean> {
   if (!isTauri) return false
   const { save } = await import('@tauri-apps/plugin-dialog')

@@ -36,6 +36,7 @@ import {
   type CopilotActivity,
 } from './copilot-activity'
 import { isBinaryKind } from './doc-kind'
+import { omitEmbeddedImageData } from './images'
 import { setRephrasePreview } from './editor/rephrase-preview'
 import { baseName, joinPath, parentPath } from './explorer'
 import { noteContent, noteFileName } from './notes'
@@ -1439,7 +1440,7 @@ function snapshotAutomaticDocuments(): VisibleDocumentSnapshot[] {
     .map((tab) => ({
       id: tab.id,
       name: tab.name,
-      text: tab.content,
+      text: omitEmbeddedImageData(tab.content),
       kind: tab.kind,
       path: tab.path,
       rev: tab.rev,
@@ -1522,11 +1523,12 @@ export async function sendChat(
 ): Promise<void> {
   const q = question.trim()
   if (!q || copilot.generating) return
+  doc = { ...doc, text: omitEmbeddedImageData(doc.text) }
   const provider = app.copilotProvider
   const localModel = app.activeModel
   // Snapshot synchrone avant tout await : ni retrait ni changement de dossier pendant le
   // streaming ne peut modifier le corpus de cette requête en vol.
-  let contextItems = copilot.contextItems.map((item) => ({ ...item }))
+  let contextItems = copilot.contextItems.map((item) => ({ ...item, text: omitEmbeddedImageData(item.text) }))
   const contextFolder = copilot.contextFolder ? { ...copilot.contextFolder } : null
   const memoryFolder = copilot.memoryFolder ? { ...copilot.memoryFolder } : null
   const contextRevision = copilot.contextRevision
@@ -2578,6 +2580,7 @@ export async function summarizeDoc(
   mode: SummaryMode = 'summary',
 ): Promise<void> {
   if (copilot.generating) return
+  doc = { ...doc, text: omitEmbeddedImageData(doc.text) }
   const provider = app.copilotProvider
   const localModel = app.activeModel
   const userLabel =
@@ -2794,6 +2797,16 @@ export async function rephraseSelection(mode: RephraseMode, instruction = ''): P
   if (!view) return
   const sel = view.state.selection.main
   if (sel.empty) return
+  // Une image intégrée dans la sélection : on ne peut ni l'envoyer (des Mo de base64) ni
+  // la retirer (le remplacement l'effacerait du document). On refuse, en le disant.
+  if (/!\[[^\]\r\n]*\]\(data:image\//i.test(view.state.sliceDoc(sel.from, sel.to))) {
+    app.banner = {
+      tone: 'warning',
+      title: 'Sélection avec une image',
+      message: 'Reformulez le texte sans inclure l’image dans la sélection.',
+    }
+    return
+  }
   let from = sel.from
   let to = sel.to
   // Modes structurels : étendre aux frontières de ligne — une liste « - [ ] … » insérée

@@ -4,7 +4,7 @@
   import type { PaneId } from '../lib/workspace'
   import { tabDiscriminator } from '../lib/tabs'
   import { parentPath } from '../lib/explorer'
-  import { closeWindow, minimizeWindow, readFileBytes, readImageDataUrl, readPdfAnnotationManifest, saveDocxDialog, saveHtmlDialog, savePdfDialog, toggleMaximizeWindow } from '../lib/tauri'
+  import { closeWindow, minimizeWindow, readFileBytes, readImageDataUrl, readPdfAnnotationManifest, saveDocxDialog, saveHtmlDialog, saveMarkdownDialog, savePdfDialog, toggleMaximizeWindow } from '../lib/tauri'
   import DokuMark from '../lib/DokuMark.svelte'
   import PaneTabSelector from './PaneTabSelector.svelte'
 
@@ -35,6 +35,7 @@
   // copie annotée (ADR-0022) — le menu change donc de contenu au lieu d'être grisé.
   const activeIsPdf = $derived(activeTab()?.kind === 'pdf')
   const activeIsDocx = $derived(activeTab()?.kind === 'docx')
+  const activeIsMarkdown = $derived(activeTab()?.kind === 'md')
   const canExport = $derived(!!activeTab())
   // Les deux actions PDF travaillent depuis le CHEMIN du fichier : sans chemin, elles
   // ne peuvent rien faire. On les désactive plutôt que de les laisser cliquables et
@@ -149,6 +150,40 @@
         ),
       )
       .catch((err) => console.error('Export HTML échoué', err))
+  }
+
+  function exportPortableMarkdown(tab: ExportTab) {
+    if (tab.kind !== 'md') return
+    const kind = tab.kind
+    import('../lib/export/portable-markdown')
+      .then((m) =>
+        m.exportPortableMarkdown(
+          { kind, name: tab.name, content: tab.content, dir: parentPath(tab.path ?? null) ?? '' },
+          { readImageDataUrl, save: saveMarkdownDialog },
+        ),
+      )
+      .then((result) => {
+        if (result.status !== 'saved') return
+        app.banner = result.missing.length
+          ? {
+              tone: 'warning',
+              title: 'Markdown exporté avec des images manquantes',
+              message: `${result.missing.length} image(s) locale(s) sont restées liées à leur fichier d’origine.`,
+            }
+          : {
+              tone: 'success',
+              title: 'Markdown portable enregistré',
+              message: `${result.inlined} image(s) intégrée(s) dans la copie.`,
+            }
+      })
+      .catch((err) => {
+        console.error('Export Markdown portable échoué', err)
+        app.banner = {
+          tone: 'error',
+          title: 'Export impossible',
+          message: 'Doku n’a pas pu créer la copie Markdown portable.',
+        }
+      })
   }
 
   function exportDocx(tab: ExportTab) {
@@ -528,6 +563,14 @@
                   <span class="menu-format">.pdf</span>
                 </button>
               {:else}
+                {#if activeIsMarkdown}
+                  <button class="app-menu-item" role="menuitem" onclick={() => {
+                    const tab = activeTab()
+                    if (tab) { closeMenus(); exportPortableMarkdown(tab) }
+                  }}>
+                    <span class="msr">download</span><span class="menu-label">Markdown portable</span><span class="menu-format">.md</span>
+                  </button>
+                {/if}
                 <button class="app-menu-item" role="menuitem" onclick={() => exportActive('docx')}>
                   <span class="msr">description</span><span class="menu-label">Document Word</span><span class="menu-format">.docx</span>
                 </button>

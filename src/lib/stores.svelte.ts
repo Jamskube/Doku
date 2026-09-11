@@ -4,6 +4,7 @@ import { EditorView } from '@codemirror/view'
 import { detectLineEnding } from './editor/editor'
 import { baseName, DEFAULT_SORT, isSupportedFile, joinPath, parentPath, validateExpandedPaths, type ExplorerSort, type SortKey } from './explorer'
 import { detectUnsupported } from './encoding'
+import { markdownTextLength } from './images'
 import { DEFAULT_EMBED_MODEL } from './rag'
 import { ragFileChanged } from './rag-index.svelte'
 import { classifyExternalChange } from './reload'
@@ -91,6 +92,14 @@ export interface DocTab {
 // source léger : le scroll-spy (docHeadings O(doc) à chaque scroll) et le panneau
 // Plan sont désactivés pour éviter le gel de l'UI.
 export const HEAVY_THRESHOLD = 1_500_000
+// Plafond sur les octets BRUTS, images incluses : un Markdown portable de 65 Mo garde peu
+// de texte mais ferait tourner docHeadings et le rendu sur 65 Mo à chaque frappe.
+export const HEAVY_RAW_CEILING = 8_000_000
+
+export function isHeavyContent(kind: DocKind, content: string): boolean {
+  if (content.length > HEAVY_RAW_CEILING) return true
+  return (kind === 'md' ? markdownTextLength(content) : content.length) > HEAVY_THRESHOLD
+}
 
 // Wikilink cliqué sans cible unique (4.5) : soit proposer la création, soit choisir
 // parmi plusieurs candidats homonymes.
@@ -633,16 +642,17 @@ export function openTab(
     selectTab(existing.id)
     return existing
   }
+  const resolvedKind = kind ?? kindFromName(name)
   const tab: DocTab = {
     id: nextId++,
     name,
     path,
-    kind: kind ?? kindFromName(name),
+    kind: resolvedKind,
     content,
     savedContent: content,
     eol: detectLineEnding(content),
     rev: 0,
-    heavy: content.length > HEAVY_THRESHOLD,
+    heavy: isHeavyContent(resolvedKind, content),
   }
   app.tabs.push(tab)
   if (!assignTabToPane(targetPane, tab.id)) selectTab(tab.id)

@@ -29,3 +29,18 @@ export function resolveLocalImagePath(url: string, dir: string): string {
   const rel = clean.replace(/\//g, sep)
   return dir.endsWith(sep) ? dir + rel : dir + sep + rel
 }
+
+// Une copie Markdown portable peut contenir plusieurs Mo de base64. Le modèle n'a
+// besoin que de savoir qu'une image est présente, jamais de recevoir ses octets.
+export function omitEmbeddedImageData(markdown: string): string {
+  return markdown
+    .replace(/!\[([^\]\r\n]*)\]\(data:image\/[^)\r\n]+\)/gi, (_match, alt: string) =>
+      alt.trim() ? `[Image intégrée : ${alt.trim()}]` : '[Image intégrée]',
+    )
+    // Un onglet HTML (export autonome de Doku rouvert) porte ses images en balises.
+    .replace(/<img\b[^>]*\bsrc\s*=\s*["']data:image\/[^"']*["'][^>]*>/gi, '[Image intégrée]')
+}
+
+export function markdownTextLength(markdown: string): number {
+  return omitEmbeddedImageData(markdown).length
+}

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { isBlockedImageUrl, resolveLocalImagePath } from './images'
+import { isBlockedImageUrl, markdownTextLength, omitEmbeddedImageData, resolveLocalImagePath } from './images'
 
 describe('isBlockedImageUrl', () => {
   it('bloque les schémas réseau et non-fichier', () => {
@@ -36,5 +36,17 @@ describe('resolveLocalImagePath', () => {
   })
   it('enlève query/fragment', () => {
     expect(resolveLocalImagePath('a.png?v=2', 'G:\\Notes')).toBe('G:\\Notes\\a.png')
+  })
+})
+
+describe('omitEmbeddedImageData', () => {
+  it('retire aussi les <img> HTML en data: (export autonome rouvert)', () => {
+    expect(omitEmbeddedImageData('<p>x</p><img alt="a" src="data:image/png;base64,AAAA" width="10"><p>y</p>')).toBe('<p>x</p>[Image intégrée]<p>y</p>')
+  })
+
+  it('retire les octets inline du contexte tout en conservant le sens', () => {
+    const markdown = '# Note\n![Schéma](data:image/png;base64,AAAA)\n![Photo](photo.png)'
+    expect(omitEmbeddedImageData(markdown)).toBe('# Note\n[Image intégrée : Schéma]\n![Photo](photo.png)')
+    expect(markdownTextLength(markdown)).toBeLessThan(markdown.length)
   })
 })

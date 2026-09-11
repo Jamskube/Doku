@@ -5,11 +5,12 @@
   import { app, COLUMN_PX, docHeadings, forcePreview, isDirty, openCopilot, workspace } from '../lib/stores.svelte'
   import { cacheEditorRuntime, editorRuntimeForTab, publishEditorSelection, registerEditor, registeredTabForPane, selectionForPane, unregisterEditor, updateEditorRegistration } from '../lib/editor-registry.svelte'
   import { baseExtensions, htmlSourceExtensions, livePreviewComp, previewExtensions, serializeDoc, sourceExtensions, txtExtensions } from '../lib/editor/editor'
-  import { docDirFacet } from '../lib/editor/live-preview'
+  import { docDirCompartment, docDirFacet } from '../lib/editor/live-preview'
   import { revealMatch, searchFlashField } from '../lib/editor/search-flash'
   import { isRephrasePreviewUpdate, rephrasePreviewField, setRephrasePreview, syncRephrasePreview } from '../lib/editor/rephrase-preview'
   import { parentPath } from '../lib/explorer'
   import { sandboxDoc } from '../lib/html'
+  import { markdownTextLength } from '../lib/images'
   import { writePastedImage } from '../lib/tauri'
   import { imageMarkdown, imageStamp, sniffImageExt } from '../lib/paste-image'
   import { acceptRephrase, cancelRephrase, copilot, rephrase, rephraseSelection, retryRephrase } from '../lib/copilot.svelte'
@@ -132,7 +133,9 @@
   const tab = $derived(app.tabs.find((item) => item.id === tabId))
   const paneSelection = $derived(selectionForPane(paneId))
   const sourceMode = $derived(workspace[paneId].sourceMode)
-  const splitLargeSourceMode = $derived(Boolean(workspace.split && tab && tab.content.length >= 450_000))
+  const splitLargeSourceMode = $derived(Boolean(
+    workspace.split && tab && (tab.kind === 'md' ? markdownTextLength(tab.content) : tab.content.length) >= 450_000,
+  ))
   const effectiveSourceMode = $derived(sourceMode || (tab?.heavy ?? false) || splitLargeSourceMode)
   // Onglet HTML en mode rendu : aperçu sandboxé (iframe), pas l'éditeur (FR-8).
   const htmlRender = $derived(tab?.kind === 'html' && !sourceMode)
@@ -424,7 +427,7 @@
     const tab = app.tabs.find((t) => t.id === tabId)
     const dir = parentPath(tab?.path ?? null) ?? ''
     const extra: Extension[] = [
-      docDirFacet.of(dir),
+      docDirCompartment.of(docDirFacet.of(dir)),
       searchFlashField,
       rephrasePreviewField,
       EditorView.updateListener.of((u) => {
@@ -545,6 +548,7 @@
 
   $effect(() => {
     if (!view) return
+    const currentDir = parentPath(tab?.path ?? null) ?? ''
     if (tab) {
       if (registeredId == null) registerEditor(paneId, tab.id, view)
       else updateEditorRegistration(paneId, tab.id, view)
@@ -577,6 +581,9 @@
       view.setState(makeState(tab.id, tab.content))
       renderedRev = tab.rev
       cacheEditorRuntime(tab.id, view.state, tab.rev, 0)
+    }
+    if (tab && view.state.facet(docDirFacet) !== currentDir) {
+      view.dispatch({ effects: docDirCompartment.reconfigure(docDirFacet.of(currentDir)) })
     }
     const useSource = effectiveSourceMode
     view.dispatch({ effects: livePreviewComp.reconfigure(useSource ? sourceExtensions() : previewExtensions()) })
