@@ -75,6 +75,8 @@ export const COPILOT_TEXT_PX: Record<CopilotTextSize, string> = {
 export interface DocTab {
   id: number
   name: string
+  // Étiquette d'onglet choisie par l'utilisateur (null = nom du fichier). Ne touche pas au disque.
+  label: string | null
   path: string | null
   kind: DocKind
   content: string
@@ -519,6 +521,9 @@ export async function restoreSession() {
     if (detectUnsupported(content)) continue // binaire/non-UTF-8 : ne pas restaurer
     openTab(baseName(p), p, content)
   }
+  for (const tab of app.tabs) {
+    if (tab.path) tab.label = session?.labels[canonicalPathKey(tab.path)] ?? null
+  }
   // Notes sans chemin : remises à leur place dans la barre ; `pristine` distingue une note
   // jamais touchée (ou un document généré tel quel) d'une note en cours de rédaction.
   const noteTabIds: Array<number | null> = []
@@ -528,6 +533,7 @@ export async function restoreSession() {
       continue
     }
     const tab = openTab(note.name, null, note.content, note.kind)
+    tab.label = note.label
     if (!note.pristine) tab.savedContent = ''
     const idx = app.tabs.indexOf(tab)
     app.tabs.splice(idx, 1)
@@ -677,6 +683,7 @@ export function openTab(
   const tab: DocTab = {
     id: nextId++,
     name,
+    label: null,
     path,
     kind: resolvedKind,
     content,
@@ -1416,33 +1423,19 @@ export async function requestCloseTab(id: number) {
   closeTab(id)
 }
 
-// Actions du menu contextuel d'un onglet. Renommer un onglet porté par un fichier
-// renomme le fichier (le nom d'onglet EST le nom de fichier, relocateOpenTabs le réimpose) ;
-// une note sans chemin change juste d'étiquette, qui servira de nom proposé à l'enregistrement.
-export async function renameTab(id: number, rawName: string): Promise<string | null> {
+// « Renommer l'onglet » ne renomme QUE l'onglet, dans Doku : le fichier garde son nom
+// (l'explorateur renomme les fichiers). Une note sans chemin change de nom tout court —
+// c'est ce nom qui sera proposé à l'enregistrement. Vide = retour au nom du fichier.
+export function renameTab(id: number, rawLabel: string): void {
   const tab = app.tabs.find((t) => t.id === id)
-  if (!tab) return null
-  const name = rawName.trim()
-  if (!name || name === tab.name) return null
+  if (!tab) return
+  const label = rawLabel.trim()
   if (!tab.path) {
-    tab.name = name
-    saveSession()
-    return null
+    if (label) tab.name = label
+  } else {
+    tab.label = label && label !== tab.name ? label : null
   }
-  const checked = normalizeNewName(name, 'file')
-  if (!checked.ok) return checked.error
-  const from = tab.path
-  const to = joinPath(parentPath(from) ?? '', checked.name)
-  const conflict = renameKindConflict(from, to)
-  if (conflict) return conflict
-  try {
-    if (!(await renamePathAt(from, to))) return 'Ce nom existe déjà dans ce dossier.'
-  } catch {
-    return 'Renommage impossible (droits, ou fichier ouvert dans une autre application).'
-  }
-  relocateOpenTabs(from, to)
-  refreshExplorer()
-  return null
+  saveSession()
 }
 
 export function duplicateTab(id: number): DocTab | null {

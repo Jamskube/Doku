@@ -1,5 +1,11 @@
 import type { DocTab } from './stores.svelte'
 
+// Étiquette affichée dans la barre : le nom choisi par l'utilisateur pour l'onglet (« Renommer
+// l'onglet » — purement Doku, le fichier ne bouge pas), sinon le nom du fichier.
+export function tabLabel(tab: Pick<DocTab, 'name' | 'label'>): string {
+  return tab.label ?? tab.name
+}
+
 // Nom du dossier parent d'un chemin (séparateurs \ ou /). '' si racine/inconnu.
 export function parentFolder(path: string | null): string {
   if (!path) return ''

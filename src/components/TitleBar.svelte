@@ -2,7 +2,7 @@
   import { onMount, tick, untrack } from 'svelte'
   import { app, activeTab, assignTabToPane, closeOtherTabs, closeTabsToRight, docxActions, duplicateTab, isBinaryKind, openPath, openPdfPages, openPdfTextEdit, renameTab, requestCloseTab, isDirty, saveTabOrSaveAs, selectTab, setColumnWidth, swapPanes, toggleActiveSourceMode, togglePin, toggleWorkspaceSplit, workspace, workspaceLayout, type ColumnWidth, type DocKind } from '../lib/stores.svelte'
   import type { PaneId } from '../lib/workspace'
-  import { tabDiscriminator } from '../lib/tabs'
+  import { tabDiscriminator, tabLabel } from '../lib/tabs'
   import { parentPath } from '../lib/explorer'
   import { closeWindow, minimizeWindow, readFileBytes, readImageDataUrl, readPdfAnnotationManifest, saveDocxDialog, saveHtmlDialog, saveMarkdownDialog, savePdfDialog, toggleMaximizeWindow } from '../lib/tauri'
   import DokuMark from '../lib/DokuMark.svelte'
@@ -67,29 +67,22 @@
     else assignTabToPane(workspace.activePaneId === 'primary' ? 'secondary' : 'primary', id)
   }
 
-  // Le nom est sélectionné sans son extension : c'est lui qu'on retape, pas le `.md`.
   $effect(() => {
     if (!renaming || !renameInput) return
-    const input = renameInput
-    // untrack : relire le brouillon à chaque frappe re-sélectionnerait tout et écraserait la saisie.
-    untrack(() => {
-      input.focus()
-      const dot = renameDraft.lastIndexOf('.')
-      input.setSelectionRange(0, dot > 0 ? dot : renameDraft.length)
-    })
+    renameInput.focus()
+    renameInput.select()
   })
+  // On renomme l'ONGLET, pas le fichier : le brouillon ne montre jamais l'extension.
   function startRename(anchor: TabAnchor) {
     const tab = app.tabs.find((t) => t.id === anchor.id)
     if (!tab) return
-    renameDraft = tab.name
+    renameDraft = tab.label ?? (tab.path ? tab.name.replace(/\.[^.]+$/, '') : tab.name)
     renaming = anchor
   }
-  async function commitRename() {
+  function commitRename() {
     const id = renaming?.id
     renaming = null
-    if (id == null) return
-    const error = await renameTab(id, renameDraft)
-    if (error) app.banner = { tone: 'error', title: 'Renommage impossible', message: error }
+    if (id != null) renameTab(id, renameDraft)
   }
   function onRenameKey(e: KeyboardEvent) {
     e.stopPropagation()
@@ -431,7 +424,7 @@
       if (!menuRootEl?.contains(event.target as Node | null)) closeMenus()
       if (!tabsMenuRootEl?.contains(event.target as Node | null)) closeTabsMenu()
       if (!tabMenuEl?.contains(event.target as Node | null)) closeTabMenu()
-      if (renaming && !renameInput?.contains(event.target as Node | null)) void commitRename()
+      if (renaming && !renameInput?.contains(event.target as Node | null)) commitRename()
     }
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return
@@ -513,7 +506,7 @@
           onkeydown={openTabsMenuFromKeyboard}
         >
           {#if active && isDirty(active)}<span class="dot">●</span>{/if}
-          <span class="name">{active?.name ?? ''}</span>
+          <span class="name">{active ? tabLabel(active) : ''}</span>
           {#if app.tabs.length > 1}<span class="tabs-overflow-count">+{app.tabs.length - 1}</span>{/if}
           <span class="msr tabs-overflow-chev">expand_more</span>
         </button>
@@ -531,7 +524,7 @@
                   oncontextmenu={(e) => openTabMenu(e, tab.id)}
                 >
                   <span class="tabs-menu-dot" class:dirty={isDirty(tab)} class:current={tab.id === app.activeId}></span>
-                  <span class="menu-label">{tab.name}</span>
+                  <span class="menu-label">{tabLabel(tab)}</span>
                   {#if parent}<span class="tabs-menu-parent">{parent}</span>{/if}
                 </button>
                 <button
@@ -561,7 +554,7 @@
           oncontextmenu={(e) => openTabMenu(e, tab.id)}
         >
           {#if isDirty(tab)}<span class="dot">●</span>{/if}
-          <span class="name">{tab.name}</span>
+          <span class="name">{tabLabel(tab)}</span>
           {#if parent}<span class="parent">{parent}</span>{/if}
           <span
             class="close"
@@ -592,7 +585,7 @@
         bind:this={renameInput}
         bind:value={renameDraft}
         onkeydown={onRenameKey}
-        onblur={() => void commitRename()}
+        onblur={commitRename}
       />
     </div>
   {/if}
@@ -604,7 +597,7 @@
         class="app-menu tab-menu"
         role="menu"
         tabindex="-1"
-        aria-label={`Actions sur ${tab.name}`}
+        aria-label={`Actions sur ${tabLabel(tab)}`}
         style={`left: ${Math.min(tabMenu.x, window.innerWidth - 250)}px; top: ${Math.min(tabMenu.y, window.innerHeight - 260)}px`}
         bind:this={tabMenuEl}
         onkeydown={handleTabMenuKeydown}

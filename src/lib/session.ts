@@ -16,6 +16,7 @@ export interface WorkspacePathSnapshot {
 // puisqu'aucun fichier ne le porte. Au-delà de NOTE_MAX_CHARS elle n'est pas conservée.
 export interface SessionNote {
   name: string
+  label: string | null
   content: string
   kind: SaveableTextKind
   // Position dans la barre d'onglets (les fichiers et les notes s'y mêlent).
@@ -32,6 +33,8 @@ export interface SessionV2 {
   workspace: WorkspacePathSnapshot
   // Un trou (null) garde les index stables quand une note est écartée (trop grosse).
   notes: Array<SessionNote | null>
+  // Étiquettes d'onglet choisies pour des fichiers, par clé canonique de chemin.
+  labels: Record<string, string>
   // Index dans `notes` de la note affichée par chaque volet (null = volet sur un fichier ou vide).
   primaryNote: number | null
   secondaryNote: number | null
@@ -69,8 +72,24 @@ function parseNotes(value: unknown): Array<SessionNote | null> {
     if (note.content.length > NOTE_MAX_CHARS) return null
     const kind = note.kind === 'html' || note.kind === 'txt' ? note.kind : 'md'
     const at = typeof note.at === 'number' && Number.isInteger(note.at) && note.at >= 0 ? note.at : Number.MAX_SAFE_INTEGER
-    return { name: note.name, content: note.content, kind, at, pristine: note.pristine === true }
+    return {
+      name: note.name,
+      label: typeof note.label === 'string' && note.label.trim() ? note.label : null,
+      content: note.content,
+      kind,
+      at,
+      pristine: note.pristine === true,
+    }
   })
+}
+
+function parseLabels(value: unknown): Record<string, string> {
+  const labels: Record<string, string> = {}
+  if (!value || typeof value !== 'object') return labels
+  for (const [path, label] of Object.entries(value as Record<string, unknown>)) {
+    if (typeof label === 'string' && label.trim() && path.trim()) labels[canonicalPathKey(path)] = label
+  }
+  return labels
 }
 
 function noteIndex(value: unknown, count: number): number | null {
@@ -126,7 +145,7 @@ export function buildWorkspacePathSnapshot(
 
 export function parseSession(raw: string | null): SessionV2 | null {
   if (!raw) return null
-  let value: LegacySession & { version?: unknown; workspace?: unknown; notes?: unknown; primaryNote?: unknown; secondaryNote?: unknown }
+  let value: LegacySession & { version?: unknown; workspace?: unknown; notes?: unknown; labels?: unknown; primaryNote?: unknown; secondaryNote?: unknown }
   try {
     value = JSON.parse(raw)
   } catch {
@@ -150,6 +169,7 @@ export function parseSession(raw: string | null): SessionV2 | null {
         ratio: 50,
       },
       notes: [],
+      labels: {},
       primaryNote: null,
       secondaryNote: null,
     }
@@ -168,6 +188,7 @@ export function parseSession(raw: string | null): SessionV2 | null {
       ? withNoteInSecondary(workspace, ws.split === true, ws.activePaneId === 'secondary')
       : workspace,
     notes,
+    labels: parseLabels(value.labels),
     primaryNote,
     secondaryNote,
   }
@@ -176,6 +197,7 @@ export function parseSession(raw: string | null): SessionV2 | null {
 export interface SessionTab {
   id: number
   name: string
+  label: string | null
   path: string | null
   kind: DocKind
   content: string
@@ -204,8 +226,12 @@ export function buildSession(
     workspace: secondaryNote != null
       ? withNoteInSecondary(snapshot, workspace.split, workspace.activePaneId === 'secondary')
       : snapshot,
+    labels: Object.fromEntries(
+      openTabs.filter((tab) => tab.path && tab.label).map((tab) => [canonicalPathKey(tab.path as string), tab.label as string]),
+    ),
     notes: kept.map((tab) => ({
       name: tab.name,
+      label: tab.label,
       content: tab.content,
       kind: tab.kind,
       at: openTabs.indexOf(tab),

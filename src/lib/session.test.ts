@@ -70,8 +70,8 @@ describe('session workspace v2', () => {
     workspace.activePaneId = 'secondary'
     const session = buildSession(
       [
-        { id: 1, name: 'source.md', path: 'C:\\Docs\\source.md', kind: 'md', content: '', savedContent: '' },
-        { id: 2, name: 'Notes', path: null, kind: 'md', content: '', savedContent: '' },
+        { id: 1, name: 'source.md', path: 'C:\\Docs\\source.md', kind: 'md', content: '', savedContent: '', label: null },
+        { id: 2, name: 'Notes', path: null, kind: 'md', content: '', savedContent: '', label: null },
       ],
       workspace,
     )
@@ -107,10 +107,10 @@ describe('session workspace v2', () => {
 
 describe('session notes sans chemin', () => {
   const tabs = [
-    { id: 2, name: 'Notes — a', path: null, kind: 'md' as const, content: 'tokens du jour', savedContent: '' },
-    { id: 1, name: 'a.md', path: 'C:\\Docs\\a.md', kind: 'md' as const, content: '# a', savedContent: '# a' },
-    { id: 3, name: 'Rapport', path: null, kind: 'html' as const, content: '<p>x</p>', savedContent: '<p>x</p>' },
-    { id: 4, name: 'scan.pdf', path: null, kind: 'pdf' as const, content: '', savedContent: '' },
+    { id: 2, name: 'Notes — a', path: null, kind: 'md' as const, content: 'tokens du jour', savedContent: '', label: null },
+    { id: 1, name: 'a.md', path: 'C:\\Docs\\a.md', kind: 'md' as const, content: '# a', savedContent: '# a', label: null },
+    { id: 3, name: 'Rapport', path: null, kind: 'html' as const, content: '<p>x</p>', savedContent: '<p>x</p>', label: null },
+    { id: 4, name: 'scan.pdf', path: null, kind: 'pdf' as const, content: '', savedContent: '', label: null },
   ]
 
   it('embarque le texte des notes sans chemin, leur place et le volet qui les affiche', () => {
@@ -120,8 +120,8 @@ describe('session notes sans chemin', () => {
     const session = buildSession(tabs, workspace)
     expect(session.tabs).toEqual(['C:\\Docs\\a.md'])
     expect(session.notes).toEqual([
-      { name: 'Notes — a', content: 'tokens du jour', kind: 'md', at: 0, pristine: false },
-      { name: 'Rapport', content: '<p>x</p>', kind: 'html', at: 2, pristine: true },
+      { name: 'Notes — a', label: null, content: 'tokens du jour', kind: 'md', at: 0, pristine: false },
+      { name: 'Rapport', label: null, content: '<p>x</p>', kind: 'html', at: 2, pristine: true },
     ])
     expect(session.primaryNote).toBe(0)
     expect(session.secondaryNote).toBe(1)
@@ -147,12 +147,12 @@ describe('session notes sans chemin', () => {
   })
 
   it('écarte une note trop grosse et un index hors bornes', () => {
-    const big = { id: 5, name: 'big', path: null, kind: 'md' as const, content: 'x'.repeat(NOTE_MAX_CHARS + 1), savedContent: '' }
+    const big = { id: 5, name: 'big', path: null, kind: 'md' as const, content: 'x'.repeat(NOTE_MAX_CHARS + 1), savedContent: '', label: null }
     const session = buildSession([big, tabs[0]], createWorkspaceState(5))
     expect(session.notes.map((n) => n?.name)).toEqual(['Notes — a'])
     expect(session.primaryNote).toBeNull()
     const parsed = parseSession(JSON.stringify({ version: 2, tabs: [], workspace: {}, notes: [{ name: 'n', content: 'c' }], primaryNote: 4 }))
-    expect(parsed?.notes).toEqual([{ name: 'n', content: 'c', kind: 'md', at: Number.MAX_SAFE_INTEGER, pristine: false }])
+    expect(parsed?.notes).toEqual([{ name: 'n', label: null, content: 'c', kind: 'md', at: Number.MAX_SAFE_INTEGER, pristine: false }])
     expect(parsed?.primaryNote).toBeNull()
   })
 
@@ -170,5 +170,14 @@ describe('session notes sans chemin', () => {
     const restored = restoreWorkspace(parsed, () => null, (i) => (i === 1 ? 11 : null))
     expect(restored.primary.tabId).toBeNull()
     expect(restored.secondary.tabId).toBe(11)
+  })
+
+  it("garde l'étiquette choisie pour un onglet de fichier, sans toucher au chemin", () => {
+    const session = buildSession([{ ...tabs[1], label: 'Ma recette' }], createWorkspaceState(1))
+    expect(session.tabs).toEqual(['C:\\Docs\\a.md'])
+    expect(session.labels).toEqual({ 'c:\\docs\\a.md': 'Ma recette' })
+    const parsed = parseSession(JSON.stringify(session))
+    expect(parsed?.labels['c:\\docs\\a.md']).toBe('Ma recette')
+    expect(parseSession(JSON.stringify({ version: 2, tabs: [], workspace: {}, labels: { x: 3, ' ': 'y' } }))?.labels).toEqual({})
   })
 })

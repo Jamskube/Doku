@@ -10,7 +10,7 @@
     swapPanes,
     workspace,
   } from '../lib/stores.svelte'
-  import { tabDiscriminator } from '../lib/tabs'
+  import { tabDiscriminator, tabLabel } from '../lib/tabs'
   import { otherPane, type PaneId } from '../lib/workspace'
 
   let {
@@ -166,7 +166,7 @@
     }}
   >
     {#if tab && isDirty(tab)}<span class="dirty-dot">●</span>{/if}
-    <span class="name">{tab?.name ?? 'Choisir un document'}</span>
+    <span class="name">{tab ? tabLabel(tab) : 'Choisir un document'}</span>
     {#if app.tabs.length > 1}<span class="count">+{app.tabs.length - 1}</span>{/if}
     <span class="msr chevron" aria-hidden="true">expand_more</span>
   </button>
@@ -198,7 +198,7 @@
               oncontextmenu={onTabMenu ? (event) => { close(); onTabMenu(event, candidate.id) } : undefined}
             >
               <span class="state-dot" class:dirty={isDirty(candidate)} class:current={workspace[paneId].tabId === candidate.id}></span>
-              <span class="menu-label">{candidate.name}</span>
+              <span class="menu-label">{tabLabel(candidate)}</span>
               {#if parent}<span class="parent">{parent}</span>{/if}
             </button>
             <button class="close" title={`Fermer ${candidate.name}`} aria-label={`Fermer ${candidate.name}`} onclick={() => requestCloseTab(candidate.id)}>
