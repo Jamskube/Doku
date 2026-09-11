@@ -1,3 +1,4 @@
+import { stripMarkersInText } from './citations'
 import { CSP, injectHead, paperCss, sandboxDoc } from './html'
 import { sanitizeHtml } from './sanitize'
 import { escapeHtml } from './export/print'
@@ -68,8 +69,37 @@ function defaultTitle(kind: GeneratedDocumentKind): string {
   return kind === 'pdf' ? 'Document PDF' : 'Page HTML'
 }
 
+// Le prompt système du chat demande de citer les extraits en [n] ; l'instruction de
+// document est ajoutée APRÈS lui dans le même message système, et le modèle obéit aux
+// deux. Ces numéros désignent des extraits de la conversation : dans un document autonome
+// ils ne pointent vers rien. On les retire plutôt que de les redemander.
+//
+// Sur les NŒUDS TEXTE du DOM, jamais sur la chaîne HTML : appliqué à la chaîne, le
+// nettoyage de l'espace orpheline (« [1] . » → « . ») réécrivait aussi les feuilles de
+// style — `.card .title` devenait `.card.title`, `margin: 0 .5em` devenait `0.5em` — et
+// les tracés SVG. Vécu en revue le 2026-09-11, sur la fonctionnalité phare de la 3.5.
+// ponytail: retire AUSSI un [1] de bibliographie volontaire ; si le cas se présente,
+// ne retirer que les numéros absents de la liste de références du document.
+const MARKER_FREE_ANCESTORS = 'style, script, code, pre, svg, textarea'
+
+function stripChatCitationMarkers(doc: Document): void {
+  const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT)
+  const targets: Text[] = []
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    const text = node as Text
+    if (!text.data.includes('[')) continue
+    if (text.parentElement?.closest(MARKER_FREE_ANCESTORS)) continue
+    targets.push(text)
+  }
+  for (const text of targets) {
+    const next = stripMarkersInText(text.data)
+    if (next !== text.data) text.data = next
+  }
+}
+
 function removeNetworkReferences(html: string): string {
   const doc = new DOMParser().parseFromString(html, 'text/html')
+  stripChatCitationMarkers(doc)
   doc.querySelectorAll('*').forEach((node) => {
     for (const name of RESOURCE_ATTRIBUTES) {
       const value = node.getAttribute(name)

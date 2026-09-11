@@ -37,6 +37,7 @@ Contraintes Doku :
 - HTML et CSS autonomes uniquement : aucun JavaScript, canvas, iframe, formulaire, composant React, dépendance, import, ressource distante, URL http(s), police ou image externe ;
 - les images éventuelles sont des data: ; les SVG sont inline, sans référence externe ;
 - le document reste lisible sans interaction, sans hover et sans chargement différé ;
+- AUCUN repère de citation entre crochets ([1], [2, 3]) : ce sont les numéros d'extraits de la conversation, ils ne désignent rien dans un document autonome. Attribue une source en toutes lettres dans la phrase si c'est utile ;
 - le corps ne reçoit ni largeur fixe ni hauteur fixe. Les grilles se replient en une colonne sur petit écran ; tableaux et code ne débordent pas horizontalement ;
 - assure un contraste lisible, des titres hiérarchisés, des alt/aria-label pertinents et des libellés explicites.
 

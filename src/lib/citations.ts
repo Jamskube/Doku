@@ -53,6 +53,12 @@ export function annotateCitations(html: string, count: number): string {
     .join('')
 }
 
+// Un NŒUD TEXTE d'un document déjà parsé : l'appelant a choisi le nœud (et donc exclu
+// code, style, svg…), il ne reste qu'à retirer les marqueurs et l'espace orpheline.
+export function stripMarkersInText(text: string): string {
+  return text.replace(MARKER, '').replace(/ +([.,])/g, '$1')
+}
+
 // Retire TOUS les marqueurs [n] d'un texte Markdown BRUT (sauvegarde en note : hors du
 // panneau, les puces ne pointent vers rien — les laisser serait des références mortes).
 // Les zones de code (blocs ``` et `inline`) sont préservées — un [1] y est du code.

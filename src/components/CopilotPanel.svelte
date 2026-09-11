@@ -1,11 +1,13 @@
 <script lang="ts">
   import { tick, untrack } from 'svelte'
-  import { activeEditorSelection, activeTab, app, isCloudProvider, openPath, visibleTabs, type CopilotProvider, type DocTab } from '../lib/stores.svelte'
+  import { activeEditorSelection, activeTab, app, isCloudProvider, openPath, visibleTabs, type CopilotProvider, type DocKind, type DocTab } from '../lib/stores.svelte'
   import { closeWindow, fileSizeAt, isTauri, minimizeWindow, openContextFilesDialog, openFolderDialog, readFileBytes, readTextFileAt, toggleMaximizeWindow } from '../lib/tauri'
   import { formatBytes } from '../lib/ollama'
   import { addCopilotContext, beginOpenAiAuth, cancelOpenAiConnection, cancelPull, connectMinimax, copilot, disconnectMinimaxKey, disconnectOpenAiAccount, ensureCopilotReady, isEmbedModel, jumpToCitation, newChat as clearChat, pullModel, refreshMinimaxStatus, refreshModels, refreshOpenAiStatus, removeCopilotContext, removeModel, retryGeneration, reviseDiagram, reviseGeneratedDocument, saveMessageAsNote, scheduleConversationPersist, selectDiagramCandidate, sendChat, setActiveModel, setChatOutputMode, setCopilotContextFolder, setCopilotMemoryFolder, setCopilotProvider, setWebSearchEnabled, stopChat, summarizeDoc, type ChatMsg, type ChatOutputMode } from '../lib/copilot.svelte'
   import { conversations } from '../lib/copilot-conversations.svelte'
   import { MINIMAX_DEFAULT_MODEL } from '../lib/compat'
+  import { markdownTextLength } from '../lib/images'
+  import { cloudOnlyMode, matchSlashCommand, OUTPUT_MODES, OUTPUT_ORDER, slashQuery, suggestSlashCommands, type SlashCommand, type SlashSuggestion } from '../lib/composer-commands'
   import { vaultLabel, vaultShortLabel } from '../lib/platform'
   import { clampCopilotWidth, COPILOT_DEFAULT_WIDTH, COPILOT_MAX_WIDTH, COPILOT_MIN_WIDTH } from '../lib/copilot-width'
   import { DEFAULT_EMBED_MODEL, FALLBACK_EMBED_MODEL, noteTitle } from '../lib/rag'
@@ -463,7 +465,7 @@
   // modèle) — un « je ne trouve pas » peut alors venir de la partie non lue, pas d'une absence.
   const docTruncated = $derived.by(() => {
     const t = activeTab()
-    return !!t && t.kind !== 'pdf' && t.content.length > docBudget
+    return !!t && t.kind !== 'pdf' && textLengthOf(t) > docBudget
   })
 
   const contextDetails = $derived.by(() => {
@@ -488,7 +490,7 @@
       return { count: 1, name: t.name, meta: 'PDF · texte lu à la demande', state: 'Document PDF' }
     }
     const format = t.kind === 'md' ? 'Markdown' : t.kind === 'html' ? 'HTML' : 'Texte'
-    const readableChars = Math.min(t.content.length, docBudget)
+    const readableChars = Math.min(textLengthOf(t), docBudget)
     return {
       count: 1,
       name: t.name,
@@ -498,7 +500,7 @@
       // « 12 000 caractères transmis » à côté de « Document entier » serait contradictoire.
       meta:
         docTruncated && docIndexAvailable
-          ? `${format} · ${numberFormatter.format(t.content.length)} caractères couverts par l'index`
+          ? `${format} · ${numberFormatter.format(textLengthOf(t))} caractères couverts par l'index`
           : `${format} · ${numberFormatter.format(readableChars)} caractères transmis`,
       state: docTruncated ? (docIndexAvailable ? 'Document entier (index)' : 'Lecture partielle') : 'Document entier',
     }
@@ -527,7 +529,7 @@
   function automaticContextMeta(tab: DocTab): string {
     if (tab.kind === 'pdf') return 'PDF · texte lu à la demande · volet visible'
     const format = tab.kind === 'md' ? 'Markdown' : tab.kind === 'html' ? 'HTML' : 'Texte'
-    return `${format} · ${numberFormatter.format(tab.content.length)} caractères · volet visible`
+    return `${format} · ${numberFormatter.format(textLengthOf(tab))} caractères · volet visible`
   }
   const memoryDocument = $derived.by(() => {
     const tab = activeTab()
@@ -669,8 +671,7 @@
     draft = ''
     activityDrawerOpen = false
     composerFace = 'question'
-    verbMenuOpen = false
-    outputMenuOpen = false
+    addMenuOpen = false
     requestAnimationFrame(() => promptEl?.focus())
   }
 
@@ -816,61 +817,114 @@
   }
 
   function chooseOutputMode(mode: ChatOutputMode) {
-    closeOutputMenu(true)
-    verbMenuOpen = false
     setChatOutputMode(mode)
+    closeAddMenu(true)
   }
 
-  // --- Livrables ---------------------------------------------------------------------
-  // Même surface et même repère que « Ajouter du contexte » : le menu sort du composer
-  // (qui clippe ses enfants) et reste donc entier aux faibles largeurs du panneau.
-  let outputMenuOpen = $state(false)
-  let outputMenuEl = $state<HTMLElement | null>(null)
-  let outputButtonEl = $state<HTMLButtonElement | null>(null)
-  let outputMenuPos = $state<{ left: number; bottom: number } | null>(null)
-  const OUTPUT_MENU_W = 276
-
-  function closeOutputMenu(restoreFocus = false) {
-    outputMenuOpen = false
-    if (restoreFocus) outputButtonEl?.focus()
+  // Commandes « / » du composeur : la reconnaissance est pure (`composer-commands.ts`),
+  // la décision reste ici — un livrable cloud demandé en local se dit au lieu de basculer.
+  function runSlashCommand(command: SlashCommand, withSuffix = false): boolean {
+    const action = command.action
+    if (action.kind === 'mode') {
+      if (cloudOnlyMode(action.mode) && !isCloudProvider(app.copilotProvider)) {
+        // Bannière de l'app et non `contextError`, qui ne s'affiche que dans le volet
+        // Contexte : le message doit apparaître là où la commande vient d'être tapée.
+        app.banner = {
+          tone: 'warning',
+          title: `${OUTPUT_MODES[action.mode].label} demande un modèle cloud`,
+          message: 'Choisissez OpenAI ou MiniMax dans Modèles, puis retapez la commande.',
+        }
+        return false
+      }
+      setChatOutputMode(action.mode)
+      return true
+    }
+    if (action.kind === 'verbosity') {
+      app.copilotVerbosity = action.value
+      return true
+    }
+    if (action.kind === 'web') {
+      // « /web » seul bascule ; « /web quelle météo » veut la recherche ACTIVE — la basculer
+      // l'aurait coupée si elle l'était déjà.
+      setWebSearchEnabled(withSuffix ? true : !copilot.webSearchEnabled)
+      return true
+    }
+    if (contextLoading) {
+      app.banner = { tone: 'warning', title: 'Contexte en cours de lecture', message: 'Attendez la fin du chargement avant d’ajouter d’autres sources.' }
+      return false
+    }
+    if (action.target === 'selection') {
+      if (!selectionAvailable) {
+        app.banner = { tone: 'warning', title: 'Aucune sélection', message: 'Sélectionnez du texte dans le document, puis retapez la commande.' }
+        return false
+      }
+      addSelection()
+      return true
+    }
+    if (action.target === 'files') void addFiles()
+    else if (action.target === 'folder') void addFolder()
+    else void addClipboard()
+    return true
   }
 
-  function toggleOutputMenu() {
-    outputMenuOpen = !outputMenuOpen
-    if (!outputMenuOpen || !outputButtonEl || !panelEl) return
-    addMenuOpen = false
-    verbMenuOpen = false
-    const trigger = outputButtonEl.getBoundingClientRect()
+  function consumeSlashCommand(terminal: boolean): boolean {
+    const found = matchSlashCommand(draft, terminal)
+    if (!found) return false
+    const before = draft
+    if (!runSlashCommand(found.command, found.rest.trim().length > 0)) return false
+    // `addSelection` et consorts ne touchent pas au brouillon : on le nettoie ici, et
+    // seulement si la commande a réussi ET que le champ n'a pas bougé entre-temps.
+    if (draft === before) draft = found.rest
+    // Les actions de contexte referment le menu du « + » en rendant le focus à SON bouton.
+    // Après une commande tapée, le curseur doit rester là où l'on écrivait.
+    promptEl?.focus()
+    return true
+  }
+
+  // Autocomplétion : dès la barre oblique, les commandes qui correspondent s'affichent
+  // sous le composeur. Sans elle, il faut connaître le mot par cœur avant de le taper.
+  let slashDismissed = $state(false)
+  let slashIndex = $state(0)
+  let composerFrontEl = $state<HTMLElement | null>(null)
+  // Même repère que les autres pops : `.cop-card` est en `overflow: hidden`, une carte
+  // posée dans le composeur serait coupée en haut. On mesure donc dans le panneau.
+  let slashPos = $state<{ left: number; bottom: number; width: number } | null>(null)
+  const slashPartial = $derived(slashDismissed ? null : slashQuery(draft))
+  const slashSuggestions = $derived(slashPartial === null ? [] : suggestSlashCommands(slashPartial))
+
+  // Recalculée à chaque frappe : le champ grandit avec le texte, donc le haut du
+  // composeur bouge sous la carte.
+  $effect(() => {
+    void draft
+    if (!slashSuggestions.length || !composerFrontEl || !panelEl) {
+      slashPos = null
+      return
+    }
+    // Ancrée au haut de la CARTE DE SAISIE, pas du composeur entier : la liste passe
+    // ainsi devant le bandeau « Contexte » au lieu de le repousser vers le haut.
+    const front = composerFrontEl.getBoundingClientRect()
     const panel = panelEl.getBoundingClientRect()
-    const left = Math.min(Math.max(Math.round(trigger.left - panel.left), 8), Math.round(panel.width - OUTPUT_MENU_W - 8))
-    outputMenuPos = { left, bottom: Math.round(panel.bottom - trigger.top) + 8 }
-    void tick().then(() => outputMenuEl?.querySelector<HTMLButtonElement>('.cop-add-context-action:not(:disabled)')?.focus())
+    slashPos = {
+      left: Math.round(front.left - panel.left),
+      width: Math.round(front.width),
+      bottom: Math.round(panel.bottom - front.top) + 8,
+    }
+  })
+
+  function applySlash(suggestion: SlashSuggestion) {
+    if (!runSlashCommand(suggestion.command)) return
+    draft = ''
+    slashDismissed = false
+    slashIndex = 0
+    promptEl?.focus()
   }
 
-  function onOutputMenuKeydown(e: KeyboardEvent) {
-    if (e.key === 'Escape') {
-      e.preventDefault()
-      e.stopPropagation()
-      closeOutputMenu(true)
-      return
-    }
-    if (e.key === 'Tab') {
-      closeOutputMenu()
-      return
-    }
-    const options = Array.from(outputMenuEl?.querySelectorAll<HTMLButtonElement>('.cop-add-context-action:not(:disabled)') ?? [])
-    if (!options.length) return
-    const index = options.indexOf(document.activeElement as HTMLButtonElement)
-    if (e.key === 'ArrowDown') {
-      e.preventDefault()
-      ;(options[index + 1] ?? options[0]).focus()
-    } else if (e.key === 'ArrowUp') {
-      e.preventDefault()
-      ;(options[index - 1] ?? options.at(-1))?.focus()
-    } else if (e.key === 'Home' || e.key === 'End') {
-      e.preventDefault()
-      ;(e.key === 'Home' ? options[0] : options.at(-1))?.focus()
-    }
+  // La frappe rouvre toujours la liste (une commande abandonnée puis reprise doit
+  // suggérer à nouveau) et repart du premier choix, la saisie ayant changé.
+  function onPromptInput() {
+    slashDismissed = false
+    slashIndex = 0
+    consumeSlashCommand(false)
   }
 
   // --- Ajouter du contexte -------------------------------------------------------------
@@ -883,8 +937,22 @@
   let browserFolderEl = $state<HTMLInputElement | null>(null)
   let contextLoading = $state(false)
   let addMenuPos = $state<{ left: number; bottom: number } | null>(null)
-  const ADD_MENU_W = 276
+  const ADD_MENU_W = 288
+  // Le menu du « + » porte trois sections dépliables — Créer, Contexte, Style — sur le
+  // motif du menu de compte de OnePortal : une seule ouverte à la fois, chacune montrant
+  // sa valeur courante en sous-titre pour que l'état se lise sans rien déplier.
+  type MenuSection = 'create' | 'context' | 'verb'
+  let menuSection = $state<MenuSection | null>(null)
+
+  function toggleMenuSection(id: MenuSection) {
+    menuSection = menuSection === id ? null : id
+    // La jauge prend le focus dès que sa section s'ouvre : flèches immédiatement opérantes.
+    if (menuSection === 'verb') void tick().then(() => addMenuEl?.querySelector<HTMLInputElement>('.cop-verb-slider')?.focus())
+  }
   const selectionAvailable = $derived(!!activeEditorSelection().text.trim() && activeTab()?.kind !== 'pdf')
+  // Ce que le modèle reçoit : le texte SANS les octets d'images intégrées. Le badge doit
+  // compter la même chose, sinon il annonce une lecture partielle d'un document envoyé entier.
+  const textLengthOf = (t: { kind: DocKind; content: string }) => (t.kind === 'md' ? markdownTextLength(t.content) : t.content.length)
 
   function closeAddMenu(restoreFocus = false) {
     addMenuOpen = false
@@ -893,7 +961,7 @@
 
   function toggleAddMenu() {
     addMenuOpen = !addMenuOpen
-    if (addMenuOpen) outputMenuOpen = false
+    if (addMenuOpen) menuSection = null
     copilot.contextError = ''
     if (!addMenuOpen || !addButtonEl || !panelEl) return
     const r = addButtonEl.getBoundingClientRect()
@@ -914,7 +982,10 @@
       closeAddMenu()
       return
     }
-    const options = Array.from(addMenuEl?.querySelectorAll<HTMLButtonElement>('.cop-add-context-action:not(:disabled)') ?? [])
+    // Les flèches appartiennent au <input type="range"> quand il a le focus : ce sont
+    // ses crans, pas la navigation du menu.
+    if ((document.activeElement as HTMLElement | null)?.matches('input[type="range"]')) return
+    const options = Array.from(addMenuEl?.querySelectorAll<HTMLButtonElement>('.cop-sec, .cop-add-context-action:not(:disabled)') ?? [])
     if (!options.length) return
     const index = options.indexOf(document.activeElement as HTMLButtonElement)
     if (e.key === 'ArrowDown') {
@@ -1064,63 +1135,56 @@
   }
 
   function onPromptKey(e: KeyboardEvent) {
+    // La liste de commandes capte d'abord les flèches, Entrée et Tab : tant qu'elle est
+    // ouverte, Entrée complète la commande au lieu d'envoyer une demande incomplète.
+    if (slashSuggestions.length) {
+      const count = slashSuggestions.length
+      if (e.key === 'ArrowDown') {
+        e.preventDefault()
+        slashIndex = (slashIndex + 1) % count
+        return
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault()
+        slashIndex = (slashIndex - 1 + count) % count
+        return
+      }
+      if (e.key === 'Tab' || (e.key === 'Enter' && !e.shiftKey)) {
+        e.preventDefault()
+        // « / » seul puis Entrée : rien n'a été choisi, on n'arme pas la première ligne
+        // à l'aveugle — la liste reste, c'est elle la réponse.
+        if (e.key === 'Enter' && slashPartial === '' && slashIndex === 0) return
+        applySlash(slashSuggestions[Math.min(slashIndex, count - 1)])
+        return
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        e.stopPropagation()
+        slashDismissed = true
+        return
+      }
+    }
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
+      // « /pdf » seul dans le champ : la commande arme le livrable, elle n'envoie rien.
+      if (consumeSlashCommand(true)) return
       send()
     }
   }
 
-  // Style des réponses (verbosité) : puce compacte DANS la rangée de saisie — clic =
-  // petit menu vers le haut (même famille que le sélecteur de modèle des chats connus).
+  // Style des réponses (verbosité) : jauge à trois crans, rangée dans la section « Style
+  // des réponses » du menu du « + ».
   const VERBOSITY_CHOICES = [
     { value: 'brief', label: 'Bref', hint: "Droit à l'essentiel", icon: 'short_text' },
     { value: 'balanced', label: 'Équilibré', hint: 'Longueur naturelle', icon: 'subject' },
     { value: 'detailed', label: 'Détaillé', hint: 'Développé et structuré', icon: 'notes' },
   ] as const
-  const verbosityLabel = $derived(VERBOSITY_CHOICES.find((c) => c.value === app.copilotVerbosity)?.label ?? 'Équilibré')
-  let verbMenuOpen = $state(false)
-  let verbMenuRootEl = $state<HTMLElement | null>(null)
-  let verbMenuEl = $state<HTMLElement | null>(null)
-  let verbChipEl = $state<HTMLButtonElement | null>(null)
-  // Position du menu dans le repère du PANNEAU (contain: layout = bloc conteneur du
-  // fixed) : en absolu il serait clippé par les overflow du composer (vécu — seule la
-  // dernière entrée émergeait) ; en fixed, les clips intermédiaires ne s'appliquent pas.
-  let verbMenuPos = $state<{ left: number; bottom: number } | null>(null)
-  const VERB_MENU_W = 216
-
-  function toggleVerbMenu() {
-    verbMenuOpen = !verbMenuOpen
-    if (verbMenuOpen && verbChipEl && panelEl) {
-      const r = verbChipEl.getBoundingClientRect()
-      const a = panelEl.getBoundingClientRect()
-      // Ancré au bord gauche du chip, serré dans le panneau (contain: paint clippe à ses bords).
-      const left = Math.min(Math.max(Math.round(r.left - a.left), 8), Math.round(a.width - VERB_MENU_W - 8))
-      verbMenuPos = { left, bottom: Math.round(a.bottom - r.top) + 8 }
-      // Le curseur prend le focus : flèches immédiatement opérantes au clavier.
-      void tick().then(() => verbMenuEl?.querySelector<HTMLInputElement>('.cop-verb-slider')?.focus())
-    }
-  }
-
-  // Les flèches restent au <input type="range"> (gauche/droite ET haut/bas natifs) —
-  // seuls Échap et Tab ferment.
-  function onVerbMenuKeydown(e: KeyboardEvent) {
-    if (e.key === 'Escape') {
-      e.preventDefault()
-      e.stopPropagation()
-      verbMenuOpen = false
-      verbChipEl?.focus()
-    } else if (e.key === 'Tab') {
-      verbMenuOpen = false
-    }
-  }
   // Fermeture au clic extérieur : partagée avec le dropdown Modèle (un seul svelte:window).
   function onGlobalPointerDown(e: PointerEvent) {
     const t = e.target as Node | null
     if (pickerOpen && !pickerRootEl?.contains(t)) pickerOpen = false
-    // Le menu vit hors du root du chip (racine du panneau) : les deux comptent comme « dedans ».
-    if (verbMenuOpen && !verbMenuRootEl?.contains(t) && !verbMenuEl?.contains(t)) verbMenuOpen = false
+    // Le menu vit hors du bouton (racine du panneau) : les deux comptent comme « dedans ».
     if (addMenuOpen && !addButtonEl?.contains(t) && !addMenuEl?.contains(t)) addMenuOpen = false
-    if (outputMenuOpen && !outputButtonEl?.contains(t) && !outputMenuEl?.contains(t)) outputMenuOpen = false
     if (identityMenuOpen && !identityButtonEl?.contains(t) && !identityMenuEl?.contains(t)) identityMenuOpen = false
   }
 
@@ -1216,156 +1280,165 @@
   </section>
 {/snippet}
 
-{#snippet verbMenuCard()}
-  {#if verbMenuOpen && verbMenuPos}
-    {@const vIdx = Math.max(VERBOSITY_CHOICES.findIndex((c) => c.value === app.copilotVerbosity), 0)}
-    {@const vCur = VERBOSITY_CHOICES[vIdx]}
-    <!-- Rendu à la racine du panneau : dans le composer, le flip des faces (transform)
-         devient bloc conteneur et clippe/déplace le menu (vécu). Ici, repère = panneau. -->
+{#snippet slashMenu()}
+  {#if slashSuggestions.length && slashPos}
     <div
-      class="cop-verb-menu"
-      style="left:{verbMenuPos.left}px; bottom:{verbMenuPos.bottom}px"
-      role="menu"
-      tabindex="-1"
-      aria-label="Style des réponses"
-      bind:this={verbMenuEl}
-      onkeydown={onVerbMenuKeydown}
+      class="cop-slash"
+      style="left:{slashPos.left}px; bottom:{slashPos.bottom}px; width:{slashPos.width}px"
+      role="listbox"
+      aria-label="Commandes de livrable"
     >
-      <div class="cop-verb-sliderwrap">
-        <!-- Ticks au-dessus de la piste, en ton inverse quand le remplissage les couvre :
-             les crans déjà parcourus restent visibles À TRAVERS la barre. -->
-        <div class="cop-verb-ticks" aria-hidden="true">
-          {#each VERBOSITY_CHOICES as c, i (c.value)}
-            <!-- Cran courant : masqué (le pouce est dessus) ; crans parcourus : ton
-                 inverse à travers le remplissage ; crans restants : discrets. -->
-            <span class:lit={i < vIdx} class:under-thumb={i === vIdx}></span>
-          {/each}
-        </div>
-        <input
-          class="cop-verb-slider"
-          type="range"
-          min="0"
-          max="2"
-          step="1"
-          value={vIdx}
-          style="--fill: calc(13px + (100% - 26px) * {vIdx / 2})"
-          aria-label="Style des réponses"
-          aria-valuetext={`${vCur.label} — ${vCur.hint}`}
-          oninput={(e) => {
-            const c = VERBOSITY_CHOICES[Number.parseInt((e.currentTarget as HTMLInputElement).value, 10)]
-            if (c) app.copilotVerbosity = c.value
-          }}
-        />
-      </div>
-      <div class="cop-verb-current">
-        <span class="cop-verb-item-ic"><span class="msr">{vCur.icon}</span></span>
-        <span class="cop-verb-item-copy">
-          <strong>{vCur.label}</strong>
-          <small>{vCur.hint}</small>
-        </span>
-      </div>
+      {#each slashSuggestions as suggestion, index (suggestion.token)}
+        {@const action = suggestion.command.action}
+        {@const blocked = action.kind === 'mode' && cloudOnlyMode(action.mode) && !isCloudProvider(app.copilotProvider)}
+        <button
+          class="cop-slash-row"
+          class:sel={index === slashIndex}
+          role="option"
+          aria-selected={index === slashIndex}
+          onmouseenter={() => (slashIndex = index)}
+          onclick={() => applySlash(suggestion)}
+        >
+          <span class="msr cop-slash-ic">{suggestion.command.icon}</span>
+          <span class="cop-slash-name"
+            ><b>/{suggestion.token.slice(0, slashPartial?.length ?? 0)}</b>{suggestion.token.slice(slashPartial?.length ?? 0)}</span
+          >
+          <span class="cop-slash-hint">{blocked ? 'Modèle cloud requis' : suggestion.command.hint}</span>
+        </button>
+      {/each}
     </div>
   {/if}
 {/snippet}
 
 {#snippet addContextMenu()}
   {#if addMenuOpen && addMenuPos}
+    {@const vIdx = Math.max(VERBOSITY_CHOICES.findIndex((c) => c.value === app.copilotVerbosity), 0)}
+    {@const vCur = VERBOSITY_CHOICES[vIdx]}
+    {@const current = OUTPUT_MODES[copilot.outputMode]}
     <div
       class="cop-add-context-menu"
       style="left:{addMenuPos.left}px; bottom:{addMenuPos.bottom}px"
       role="menu"
       tabindex="-1"
-      aria-label="Ajouter du contexte"
+      aria-label="Créer, contexte et style"
       bind:this={addMenuEl}
       onkeydown={onAddMenuKeydown}
     >
-      <div class="cop-add-context-head">
-        <strong>Ajouter du contexte</strong>
-        {#if cloudDestination}<small>Sera envoyé à {cloudDestination}</small>{:else if copilot.webSearchEnabled}<small>Documents locaux · recherche en ligne</small>{:else}<small>Reste sur cet appareil</small>{/if}
-      </div>
       <button
-        class="cop-add-context-action"
-        class:active={copilot.webSearchEnabled}
-        role="menuitemcheckbox"
-        aria-checked={copilot.webSearchEnabled}
-        onclick={() => { setWebSearchEnabled(!copilot.webSearchEnabled); closeAddMenu(true) }}
+        class="cop-sec"
+        class:open={menuSection === 'create'}
+        aria-expanded={menuSection === 'create'}
+        onclick={() => toggleMenuSection('create')}
       >
-        <span class="msr">search</span><span><strong>Recherche Web</strong><small>Informations actuelles avec sources</small></span>
-        <span class="cop-add-context-check msr">{copilot.webSearchEnabled ? 'check' : 'add'}</span>
+        <span class="cop-sec-ic"><span class="msr">{copilot.outputMode === 'answer' ? 'auto_awesome' : current.icon}</span></span>
+        <span class="cop-sec-copy">
+          <strong>Créer</strong>
+          <small>{copilot.outputMode === 'answer' ? 'Réponse dans la conversation' : current.label}</small>
+        </span>
+        <span class="msr cop-sec-chev">expand_more</span>
       </button>
-      <button class="cop-add-context-action" role="menuitem" disabled={!selectionAvailable || contextLoading} onclick={addSelection}>
-        <span class="msr">notes</span><span><strong>Sélection actuelle</strong><small>Capturer le texte sélectionné</small></span>
-      </button>
-      <button class="cop-add-context-action" role="menuitem" disabled={contextLoading} onclick={() => void addFiles()}>
-        <span class="msr">description</span><span><strong>Fichiers…</strong><small>Markdown, texte, HTML ou PDF</small></span>
-      </button>
-      <button class="cop-add-context-action" role="menuitem" disabled={contextLoading} onclick={() => void addFolder()}>
-        <span class="msr">folder</span><span><strong>Dossier de notes…</strong><small>Utiliser son index sémantique</small></span>
-      </button>
-      <button class="cop-add-context-action" role="menuitem" disabled={contextLoading} onclick={() => void addClipboard()}>
-        <span class="msr">content_paste</span><span><strong>Texte du presse-papiers</strong><small>Créer un instantané temporaire</small></span>
-      </button>
-    </div>
-  {/if}
-{/snippet}
+      {#if menuSection === 'create'}
+        <div class="cop-sec-body">
+          {#each OUTPUT_ORDER as id (id)}
+            {@const option = OUTPUT_MODES[id]}
+            {@const blocked = cloudOnlyMode(id) && !isCloudProvider(app.copilotProvider)}
+            <button
+              class="cop-add-context-action"
+              class:active={copilot.outputMode === id}
+              role="menuitemradio"
+              aria-checked={copilot.outputMode === id}
+              disabled={blocked}
+              onclick={() => chooseOutputMode(id)}
+            >
+              <span class="msr">{option.icon}</span>
+              <span><strong>{option.label}</strong><small>{blocked ? 'Modèle cloud requis' : option.hint}</small></span>
+              {#if copilot.outputMode === id}<span class="cop-add-context-check msr">check</span>{/if}
+            </button>
+          {/each}
+        </div>
+      {/if}
 
-{#snippet outputMenu()}
-  {#if outputMenuOpen && outputMenuPos}
-    <div
-      class="cop-add-context-menu cop-output-menu"
-      style="left:{outputMenuPos.left}px; bottom:{outputMenuPos.bottom}px"
-      role="menu"
-      tabindex="-1"
-      aria-label="Créer un livrable"
-      bind:this={outputMenuEl}
-      onkeydown={onOutputMenuKeydown}
-    >
-      <div class="cop-add-context-head">
-        <strong>Créer un livrable</strong>
-        <small>À partir du contexte de la conversation</small>
-      </div>
       <button
-        class="cop-add-context-action"
-        class:active={copilot.outputMode === 'answer'}
-        role="menuitemradio"
-        aria-checked={copilot.outputMode === 'answer'}
-        onclick={() => chooseOutputMode('answer')}
+        class="cop-sec"
+        class:open={menuSection === 'context'}
+        aria-expanded={menuSection === 'context'}
+        onclick={() => toggleMenuSection('context')}
       >
-        <span class="msr">chat_bubble</span><span><strong>Réponse</strong><small>Continuer la conversation</small></span>
-        {#if copilot.outputMode === 'answer'}<span class="cop-add-context-check msr">check</span>{/if}
+        <span class="cop-sec-ic"><span class="msr">layers</span></span>
+        <span class="cop-sec-copy">
+          <strong>Contexte</strong>
+          <small>{#if cloudDestination}{contextSummary} · envoyé à {cloudDestination}{:else}{contextSummary} · reste sur cet appareil{/if}</small>
+        </span>
+        <span class="msr cop-sec-chev">expand_more</span>
       </button>
+      {#if menuSection === 'context'}
+        <div class="cop-sec-body">
+          <button
+            class="cop-add-context-action"
+            class:active={copilot.webSearchEnabled}
+            role="menuitemcheckbox"
+            aria-checked={copilot.webSearchEnabled}
+            onclick={() => { setWebSearchEnabled(!copilot.webSearchEnabled); closeAddMenu(true) }}
+          >
+            <span class="msr">search</span><span><strong>Recherche Web</strong><small>Informations actuelles avec sources</small></span>
+            <span class="cop-add-context-check msr">{copilot.webSearchEnabled ? 'check' : 'add'}</span>
+          </button>
+          <button class="cop-add-context-action" role="menuitem" disabled={!selectionAvailable || contextLoading} onclick={addSelection}>
+            <span class="msr">notes</span><span><strong>Sélection actuelle</strong><small>Capturer le texte sélectionné</small></span>
+          </button>
+          <button class="cop-add-context-action" role="menuitem" disabled={contextLoading} onclick={() => void addFiles()}>
+            <span class="msr">description</span><span><strong>Fichiers…</strong><small>Markdown, texte, HTML ou PDF</small></span>
+          </button>
+          <button class="cop-add-context-action" role="menuitem" disabled={contextLoading} onclick={() => void addFolder()}>
+            <span class="msr">folder</span><span><strong>Dossier de notes…</strong><small>Utiliser son index sémantique</small></span>
+          </button>
+          <button class="cop-add-context-action" role="menuitem" disabled={contextLoading} onclick={() => void addClipboard()}>
+            <span class="msr">content_paste</span><span><strong>Texte du presse-papiers</strong><small>Créer un instantané temporaire</small></span>
+          </button>
+        </div>
+      {/if}
+
       <button
-        class="cop-add-context-action"
-        class:active={copilot.outputMode === 'diagram'}
-        role="menuitemradio"
-        aria-checked={copilot.outputMode === 'diagram'}
-        onclick={() => chooseOutputMode('diagram')}
+        class="cop-sec"
+        class:open={menuSection === 'verb'}
+        aria-expanded={menuSection === 'verb'}
+        onclick={() => toggleMenuSection('verb')}
       >
-        <span class="msr">account_tree</span><span><strong>Diagramme</strong><small>Structurer les idées visuellement</small></span>
-        {#if copilot.outputMode === 'diagram'}<span class="cop-add-context-check msr">check</span>{/if}
+        <span class="cop-sec-ic"><span class="msr">{vCur.icon}</span></span>
+        <span class="cop-sec-copy">
+          <strong>Style des réponses</strong>
+          <small>{vCur.label} — {vCur.hint}</small>
+        </span>
+        <span class="msr cop-sec-chev">expand_more</span>
       </button>
-      <button
-        class="cop-add-context-action"
-        class:active={copilot.outputMode === 'html'}
-        role="menuitemradio"
-        aria-checked={copilot.outputMode === 'html'}
-        disabled={!isCloudProvider(app.copilotProvider)}
-        onclick={() => chooseOutputMode('html')}
-      >
-        <span class="msr">html</span><span><strong>Page HTML</strong><small>{isCloudProvider(app.copilotProvider) ? 'Créer une page interactive et autonome' : 'Modèle cloud requis'}</small></span>
-        {#if copilot.outputMode === 'html'}<span class="cop-add-context-check msr">check</span>{/if}
-      </button>
-      <button
-        class="cop-add-context-action"
-        class:active={copilot.outputMode === 'pdf'}
-        role="menuitemradio"
-        aria-checked={copilot.outputMode === 'pdf'}
-        disabled={!isCloudProvider(app.copilotProvider)}
-        onclick={() => chooseOutputMode('pdf')}
-      >
-        <span class="msr">picture_as_pdf</span><span><strong>Document PDF</strong><small>{isCloudProvider(app.copilotProvider) ? 'Composer un document prêt à imprimer' : 'Modèle cloud requis'}</small></span>
-        {#if copilot.outputMode === 'pdf'}<span class="cop-add-context-check msr">check</span>{/if}
-      </button>
+      {#if menuSection === 'verb'}
+        <div class="cop-sec-body">
+          <div class="cop-verb-sliderwrap">
+            <!-- Ticks au-dessus de la piste, en ton inverse quand le remplissage les couvre :
+                 les crans déjà parcourus restent visibles À TRAVERS la barre. -->
+            <div class="cop-verb-ticks" aria-hidden="true">
+              {#each VERBOSITY_CHOICES as c, i (c.value)}
+                <span class:lit={i < vIdx} class:under-thumb={i === vIdx}></span>
+              {/each}
+            </div>
+            <input
+              class="cop-verb-slider"
+              type="range"
+              min="0"
+              max="2"
+              step="1"
+              value={vIdx}
+              style="--fill: calc(13px + (100% - 26px) * {vIdx / 2})"
+              aria-label="Style des réponses"
+              aria-valuetext={`${vCur.label} — ${vCur.hint}`}
+              oninput={(e) => {
+                const c = VERBOSITY_CHOICES[Number.parseInt((e.currentTarget as HTMLInputElement).value, 10)]
+                if (c) app.copilotVerbosity = c.value
+              }}
+            />
+          </div>
+        </div>
+      {/if}
     </div>
   {/if}
 {/snippet}
@@ -1425,7 +1498,7 @@
 
 <!-- Échap est géré sur les triggers/pops eux-mêmes (focus toujours dedans quand ouvert)
      avec stopPropagation ; ici seul le clic extérieur, partagé par les deux menus. -->
-<svelte:window onpointerdowncapture={pickerOpen || verbMenuOpen || addMenuOpen || outputMenuOpen || identityMenuOpen ? onGlobalPointerDown : undefined} />
+<svelte:window onpointerdowncapture={pickerOpen || addMenuOpen || identityMenuOpen ? onGlobalPointerDown : undefined} />
 
 <aside
   class="cop-panel"
@@ -2444,7 +2517,7 @@
           {/if}
 
           {#key composerFace}
-            <section class="cop-composer-front">
+            <section class="cop-composer-front" bind:this={composerFrontEl}>
               {#if composerFace === 'question'}
                 <button
                   id="cop-question-tab"
@@ -2492,8 +2565,8 @@
                     class:open={addMenuOpen}
                     bind:this={addButtonEl}
                     disabled={contextLoading}
-                    title="Ajouter du contexte"
-                    aria-label="Ajouter du contexte"
+                    title="Créer un livrable, ajouter du contexte, régler le style"
+                    aria-label="Créer, contexte et style"
                     aria-haspopup="menu"
                     aria-expanded={addMenuOpen}
                     onclick={toggleAddMenu}
@@ -2512,47 +2585,21 @@
                           : copilot.scope === 'folder' ? 'Demandez à vos notes…' : 'Demandez à Doku-San…'}
                     aria-label={copilot.scope === 'folder' ? 'Poser une question sur le dossier de notes' : 'Poser une question sur ce document'}
                     onkeydown={onPromptKey}
+                    oninput={onPromptInput}
                   ></textarea>
                   <div class="cop-compose-options">
-                    <button
-                      class="cop-output-chip"
-                      class:active={copilot.outputMode !== 'answer'}
-                      class:open={outputMenuOpen}
-                      bind:this={outputButtonEl}
-                      title="Choisir un livrable"
-                      aria-label={`Type de livrable : ${copilot.outputMode === 'diagram' ? 'Diagramme' : copilot.outputMode === 'pdf' ? 'Document PDF' : copilot.outputMode === 'html' ? 'Page HTML' : 'Réponse'}`}
-                      aria-haspopup="menu"
-                      aria-expanded={outputMenuOpen}
-                      onclick={toggleOutputMenu}
-                    >
-                      <span class="msr">{copilot.outputMode === 'diagram' ? 'account_tree' : copilot.outputMode === 'pdf' ? 'picture_as_pdf' : copilot.outputMode === 'html' ? 'html' : 'add'}</span>
-                      <span>{copilot.outputMode === 'diagram' ? 'Diagramme' : copilot.outputMode === 'pdf' ? 'PDF' : copilot.outputMode === 'html' ? 'HTML' : 'Créer'}</span>
-                      <span class="msr chevron">expand_more</span>
-                    </button>
-                    {#if copilot.outputMode === 'answer'}
-                      <!-- Le style de prose n'a aucun effet sur un artefact visuel : le
-                           masquer évite un réglage trompeur et libère la largeur compacte. -->
-                      <div class="cop-verb-root" bind:this={verbMenuRootEl}>
+                    <!-- Un livrable armé se voit ici, et nulle part ailleurs : le menu du
+                         « + » porte le choix, cette pastille porte l'état. -->
+                    {#if copilot.outputMode !== 'answer'}
+                      {@const current = OUTPUT_MODES[copilot.outputMode]}
+                      <span class="cop-mode-pill">
+                        <span class="msr">{current.icon}</span>{current.short}
                         <button
-                          class="cop-verb-chip"
-                          class:open={verbMenuOpen}
-                          bind:this={verbChipEl}
-                          title="Style des réponses"
-                          aria-haspopup="menu"
-                          aria-expanded={verbMenuOpen}
-                          aria-label={`Style des réponses : ${verbosityLabel}`}
-                          onclick={toggleVerbMenu}
-                          onkeydown={(e) => {
-                            if (e.key === 'Escape' && verbMenuOpen) {
-                              e.stopPropagation()
-                              verbMenuOpen = false
-                            }
-                          }}
-                        >
-                          <span>{verbosityLabel}</span>
-                          <span class="msr">expand_more</span>
-                        </button>
-                      </div>
+                          title="Revenir à une réponse"
+                          aria-label={`Retirer le livrable ${current.label}`}
+                          onclick={() => setChatOutputMode('answer')}
+                        ><span class="msr">close</span></button>
+                      </span>
                     {/if}
                   </div>
                   {#if copilot.generating}
@@ -2565,6 +2612,11 @@
                     </button>
                   {/if}
                 </div>
+                <!-- Une commande « / » de contexte qui échoue (presse-papiers vide, fichier
+                     illisible) écrit ici : le message doit se lire sans changer de volet. -->
+                {#if copilot.contextError && composerFace === 'question'}
+                  <p class="cop-context-error cop-context-error-inline" role="alert">{copilot.contextError}</p>
+                {/if}
 
                 <div
                   id="cop-context-panel"
@@ -2757,9 +2809,8 @@
   <!-- Hors de .cop-card (overflow hidden) : ces surfaces flottantes se positionnent dans
        le repère du panneau (contain: layout) au-dessus de tout le contenu. -->
   {@render citePreviewCard()}
-  {@render verbMenuCard()}
+  {@render slashMenu()}
   {@render addContextMenu()}
-  {@render outputMenu()}
   {@render identityMenu()}
 </aside>
 
@@ -3908,6 +3959,91 @@
   .cop-scope:focus-visible { outline: 2px solid var(--line-3); outline-offset: -2px; }
   .cop-scope.sel { background: var(--accent-soft); }
 
+  /* Autocomplétion des commandes « / » : une barre posée sous le composeur, dans son
+     vocabulaire (rayon 14, surface du composeur, ligne dense). */
+  .cop-slash {
+    position: absolute;
+    z-index: 45;
+    /* Douze commandes sur une barre seule : la carte défile plutôt que de couvrir
+       la conversation entière. */
+    max-height: min(320px, 42vh);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding: 5px;
+    border-radius: 16px;
+    background: var(--cream-tint);
+    box-shadow: 0 0 0 1px var(--elevation-ring-soft), 0 14px 34px rgba(var(--shadow-rgb), 0.18);
+    animation: cop-picker-in 140ms cubic-bezier(0.22, 1, 0.36, 1);
+  }
+  .cop-slash-row {
+    width: 100%;
+    min-height: 38px;
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    padding: 4px 9px;
+    border: 0;
+    border-radius: 10px;
+    background: transparent;
+    color: var(--ink-3);
+    font-family: var(--font-sans);
+    font-size: 12px;
+    text-align: left;
+    cursor: pointer;
+  }
+  .cop-slash-row.sel { background: var(--accent-soft); color: var(--ink); }
+  .cop-slash-row:focus-visible { outline: 2px solid var(--line-3); outline-offset: -2px; }
+  .cop-slash-ic { flex: 0 0 auto; font-size: 16px; color: var(--ink-4); }
+  .cop-slash-row.sel .cop-slash-ic { color: var(--ink-3); }
+  /* Le préfixe déjà tapé en gras, la fin en clair : on voit ce qu'il reste à écrire. */
+  .cop-slash-name { flex: 0 0 auto; font-weight: 400; color: var(--ink-4); }
+  .cop-slash-name b { font-weight: 650; color: var(--ink); }
+  .cop-slash-hint {
+    flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    font-size: 11.5px; color: var(--ink-5);
+  }
+
+  /* Sections dépliables du menu du « + » : en-tête cliquable, corps indenté. */
+  .cop-sec {
+    width: 100%; min-height: 46px; display: flex; align-items: center; gap: 10px; padding: 7px 9px;
+    border: 0; border-radius: 10px; background: transparent; color: var(--ink);
+    font-family: var(--font-sans); text-align: left; cursor: pointer;
+  }
+  .cop-sec:hover { background: var(--surface-hover); }
+  .cop-sec:focus-visible { outline: 2px solid var(--line-3); outline-offset: -2px; }
+  .cop-sec-ic {
+    width: 28px; height: 28px; flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center;
+    border-radius: 8px; background: var(--surface-2); color: var(--ink-3);
+    transition: background 120ms ease, color 120ms ease;
+  }
+  .cop-sec.open .cop-sec-ic { background: var(--accent-soft); color: var(--ink); }
+  .cop-sec-ic .msr { font-size: 16px; }
+  .cop-sec-copy { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+  .cop-sec-copy strong { font-size: 12px; font-weight: 600; }
+  .cop-sec-copy small {
+    font-size: 10.5px; color: var(--ink-4);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .cop-sec-chev {
+    flex: 0 0 auto; font-size: 17px; color: var(--ink-4);
+    transition: transform 180ms cubic-bezier(0.22, 1, 0.36, 1);
+  }
+  .cop-sec.open .cop-sec-chev { transform: rotate(180deg); }
+  .cop-sec-body { padding: 0 2px 6px 8px; }
+  /* Pastille du livrable armé, dans la rangée de saisie. */
+  .cop-mode-pill {
+    display: inline-flex; align-items: center; gap: 5px; height: 26px; padding: 0 4px 0 9px;
+    border-radius: 999px; background: var(--ink); color: var(--cream-content);
+    font: 550 11px var(--font-sans); white-space: nowrap;
+  }
+  .cop-mode-pill > .msr { font-size: 14px; }
+  .cop-mode-pill button {
+    width: 18px; height: 18px; display: inline-flex; align-items: center; justify-content: center;
+    border: 0; border-radius: 50%; background: transparent; color: inherit; cursor: pointer; opacity: 0.7;
+  }
+  .cop-mode-pill button:hover { opacity: 1; background: rgba(255, 255, 255, 0.16); }
+  .cop-mode-pill button:focus-visible { opacity: 1; outline: 2px solid var(--cream-content); outline-offset: 1px; }
+  .cop-mode-pill button .msr { font-size: 13px; }
   .cop-compose-options {
     grid-column: 2;
     grid-row: 2;
@@ -3918,52 +4054,6 @@
     gap: 4px;
     margin-bottom: 3px;
     overflow: hidden;
-  }
-  .cop-output-chip {
-    position: relative;
-    min-width: 0;
-    height: 26px;
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    padding: 0 9px 0 7px;
-    overflow: hidden;
-    border: 0;
-    border-radius: 999px;
-    background: transparent;
-    color: var(--ink-4);
-    font: 500 11px/1 var(--font-sans);
-    white-space: nowrap;
-    cursor: pointer;
-    transition: background 120ms ease, color 120ms ease, transform 100ms ease;
-  }
-  .cop-output-chip .msr { flex: 0 0 auto; font-size: 15px; }
-  .cop-output-chip .chevron { margin-left: -2px; font-size: 14px; transition: transform 140ms cubic-bezier(0.22, 1, 0.36, 1); }
-  .cop-output-chip.open .chevron { transform: rotate(180deg); }
-  .cop-output-chip:hover, .cop-output-chip.open { background: var(--surface-hover); color: var(--ink); }
-  .cop-output-chip.active { background: var(--ink); color: var(--cream-content); }
-  .cop-output-chip:active { transform: scale(0.97); }
-  .cop-output-chip:focus-visible { outline: 2px solid var(--line-3); outline-offset: 1px; }
-  /* Style des réponses : puce compacte dans la rangée de saisie + menu vers le haut. */
-  .cop-verb-root { position: relative; flex: 0 0 auto; }
-  .cop-verb-chip {
-    display: inline-flex; align-items: center; gap: 3px; height: 26px; padding: 0 4px 0 9px;
-    border: 0; border-radius: 999px; background: var(--surface-2); color: var(--ink-3);
-    font-family: var(--font-sans); font-size: 11px; font-weight: 500; cursor: pointer;
-    transition: background 120ms ease, color 120ms ease, transform 100ms ease;
-  }
-  .cop-verb-chip:hover, .cop-verb-chip.open { background: var(--accent-soft); color: var(--ink); }
-  .cop-verb-chip:active { transform: scale(0.97); }
-  .cop-verb-chip:focus-visible { outline: 2px solid var(--line-3); outline-offset: 1px; }
-  .cop-verb-chip .msr { font-size: 15px; color: var(--ink-4); }
-  .cop-verb-menu {
-    position: absolute; z-index: 40;
-    width: 236px; padding: 6px;
-    border-radius: 14px; background: var(--cream-tint);
-    box-shadow:
-      0 0 0 1px var(--elevation-ring-soft),
-      0 12px 30px rgba(var(--shadow-rgb), 0.16);
-    animation: cop-picker-in 140ms cubic-bezier(0.22, 1, 0.36, 1);
   }
   /* Curseur à 3 crans (essai façon « effort ») : piste pleine jusqu'au pouce, ticks.
      Pas d'en-tête : le libellé courant sous le curseur dit déjà tout. */
@@ -3993,15 +4083,6 @@
     background: #fff;
     box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.08), 0 2px 6px rgba(0, 0, 0, 0.25);
   }
-  .cop-verb-current { display: flex; align-items: center; gap: 10px; padding: 8px 6px 4px; }
-  .cop-verb-item-ic {
-    width: 28px; height: 28px; flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center;
-    border-radius: 8px; background: var(--surface-2); color: var(--ink-3);
-  }
-  .cop-verb-item-ic .msr { font-size: 16px; }
-  .cop-verb-item-copy { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
-  .cop-verb-item-copy strong { font-size: 12px; font-weight: 600; color: var(--ink); }
-  .cop-verb-item-copy small { font-size: 10.5px; color: var(--ink-4); }
   .cop-context-icon {
     width: 36px; height: 36px; flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center;
     border-radius: 10px; background: var(--surface-2); color: var(--ink-3);
@@ -4045,6 +4126,7 @@
   .cop-context-destination { display: flex; align-items: center; gap: 5px; }
   .cop-context-destination .msr { font-size: 14px; }
   .cop-context-error { color: var(--danger-text); }
+  .cop-context-error-inline { margin: 4px 14px 8px; }
   .cop-disclaimer { text-align: center; font-size: 10.5px; line-height: 1.35; color: var(--ink-4); margin-top: 8px; }
 
   .cop-add-context-menu {
@@ -4053,9 +4135,6 @@
     box-shadow: 0 0 0 1px var(--elevation-ring-soft), 0 14px 34px rgba(var(--shadow-rgb), 0.18);
     animation: cop-picker-in 140ms cubic-bezier(0.22, 1, 0.36, 1);
   }
-  .cop-add-context-head { display: flex; flex-direction: column; gap: 2px; padding: 8px 10px 7px; }
-  .cop-add-context-head strong { font-size: 12px; font-weight: 650; color: var(--ink); }
-  .cop-add-context-head small { font-size: 10px; color: var(--ink-4); }
   .cop-add-context-action {
     width: 100%; min-height: 48px; display: flex; align-items: center; gap: 10px; padding: 7px 9px;
     border: 0; border-radius: 10px; background: transparent; color: var(--ink); text-align: left; cursor: pointer;
@@ -4157,8 +4236,7 @@
   @container (max-width: 330px) {
     .cop-composer-note { display: none; }
     .cop-context-state { max-width: 86px; overflow: hidden; text-overflow: ellipsis; }
-    .cop-output-chip > span:nth-child(2) { display: none; }
-    .cop-output-chip { padding-inline: 7px; }
+    .cop-mode-pill { padding-left: 7px; }
   }
 
   @media (pointer: coarse) {
@@ -4169,8 +4247,7 @@
     }
     .cop-input-attach,
     .cop-input-send { width: 40px; height: 40px; }
-    .cop-verb-chip { min-height: 40px; padding-inline: 11px 7px; }
-    .cop-output-chip { min-height: 40px; }
+    .cop-sec { min-height: 52px; }
   }
 
   @keyframes cop-composer-drawer-in {
@@ -4197,7 +4274,7 @@
     .cop-dismiss,
     .cop-activity-fab,
     .cop-input-send,
-    .cop-verb-chip,
-    .cop-output-chip { transition-duration: 0.01ms; }
+    .cop-sec-chev,
+    .cop-sec-ic { transition-duration: 0.01ms; }
   }
 </style>

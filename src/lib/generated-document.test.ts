@@ -32,6 +32,18 @@ describe('generated documents', () => {
     expect(clean).toContain('data:image/png')
   })
 
+  it('strips the chat citation markers, but never inside code, style or SVG', () => {
+    const clean = sanitizeGeneratedDocumentHtml('<html><head><style>.card .title{margin:0 .5em}</style></head><body><main><p>Le chiffre est de 12 % [1], confirmé [2, 3].</p><pre><code>const a = t[1]</code></pre><svg viewBox="0 0 10 10"><path d="M 10 .5"/><text>[2]</text></svg><p style="margin:0 .5em">x</p></main></body></html>')
+    expect(clean).toContain('12 %, confirmé.')
+    expect(clean).toContain('t[1]')
+    // Le nettoyage de l'espace orpheline ne doit JAMAIS toucher une feuille de style :
+    // `.card .title` est un sélecteur descendant, `0 .5em` un raccourci à deux valeurs.
+    expect(clean).toContain('.card .title{margin:0 .5em}')
+    expect(clean).toContain('margin:0 .5em"')
+    expect(clean).toContain('M 10 .5')
+    expect(clean).toContain('<text>[2]</text>')
+  })
+
   it('keeps the display and standalone gates isolated', () => {
     const artifact = extractGeneratedDocument('<doku-document title="Page"><main><h1>Bonjour</h1></main></doku-document>', 'html', 'Page')!
     expect(generatedDocumentPreview(artifact, 'dark')).toContain("default-src 'none'")

@@ -129,7 +129,12 @@
   footer button:hover, .document-dialog header button:hover { background: var(--surface-hover); color: var(--ink); }
   footer .msr, .document-dialog header .msr { font-size: 15px; }
   .spacer { flex: 1; }
-  .document-dialog { width: min(1180px, calc(100vw - 48px)); height: min(900px, calc(100vh - 48px)); padding: 0; overflow: hidden; border: 0; border-radius: 18px; background: var(--cream-tint); color: var(--ink); box-shadow: 0 24px 80px rgba(var(--shadow-rgb), .34); }
+  /* `margin: auto` et les `max-*` ne sont PAS décoratifs : le reset universel d'app.css
+     (`*, *::before, *::after { margin: 0 }`) écrase le `margin: auto` que le navigateur
+     pose sur <dialog> pour le centrer, et la modale retombe en haut à gauche. Les bornes
+     de l'agent utilisateur (`calc(100% - 6px - 2em)`) rogneraient en plus la taille
+     demandée. Toutes les autres modales de Doku posent les trois pour la même raison. */
+  .document-dialog { width: min(1180px, calc(100vw - 48px)); height: min(900px, calc(100vh - 48px)); max-width: none; max-height: none; margin: auto; padding: 0; overflow: hidden; border: 0; border-radius: 18px; background: var(--cream-tint); color: var(--ink); box-shadow: 0 24px 80px rgba(var(--shadow-rgb), .34); }
   .document-dialog::backdrop { background: rgba(0, 0, 0, .42); backdrop-filter: blur(2px); }
   .document-dialog > header { height: 54px; display: flex; align-items: center; gap: 12px; padding: 0 10px 0 16px; }
   .document-dialog > header > div:first-child { min-width: 0; flex: 1; display: flex; flex-direction: column; }
