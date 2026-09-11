@@ -18,6 +18,10 @@ export interface SessionNote {
   name: string
   content: string
   kind: SaveableTextKind
+  // Position dans la barre d'onglets (les fichiers et les notes s'y mêlent).
+  at: number
+  // content === savedContent au moment de la sauvegarde (document généré intact, note vide).
+  pristine: boolean
 }
 export const NOTE_MAX_CHARS = 500_000
 
@@ -26,7 +30,8 @@ export interface SessionV2 {
   tabs: string[]
   activePath: string | null
   workspace: WorkspacePathSnapshot
-  notes: SessionNote[]
+  // Un trou (null) garde les index stables quand une note est écartée (trop grosse).
+  notes: Array<SessionNote | null>
   // Index dans `notes` de la note affichée par chaque volet (null = volet sur un fichier ou vide).
   primaryNote: number | null
   secondaryNote: number | null
@@ -56,21 +61,31 @@ function uniquePaths(value: unknown): string[] {
   return paths
 }
 
-function parseNotes(value: unknown): SessionNote[] {
+function parseNotes(value: unknown): Array<SessionNote | null> {
   if (!Array.isArray(value)) return []
-  const notes: SessionNote[] = []
-  for (const item of value) {
+  return value.map((item): SessionNote | null => {
     const note = item && typeof item === 'object' ? item as Record<string, unknown> : null
-    if (!note || typeof note.name !== 'string' || typeof note.content !== 'string') continue
-    if (note.content.length > NOTE_MAX_CHARS) continue
+    if (!note || typeof note.name !== 'string' || typeof note.content !== 'string') return null
+    if (note.content.length > NOTE_MAX_CHARS) return null
     const kind = note.kind === 'html' || note.kind === 'txt' ? note.kind : 'md'
-    notes.push({ name: note.name, content: note.content, kind })
-  }
-  return notes
+    const at = typeof note.at === 'number' && Number.isInteger(note.at) && note.at >= 0 ? note.at : Number.MAX_SAFE_INTEGER
+    return { name: note.name, content: note.content, kind, at, pristine: note.pristine === true }
+  })
 }
 
 function noteIndex(value: unknown, count: number): number | null {
   return typeof value === 'number' && Number.isInteger(value) && value >= 0 && value < count ? value : null
+}
+
+function isTextTab(tab: SessionTab): tab is SessionTab & { kind: SaveableTextKind } {
+  return !isBinaryKind(tab.kind)
+}
+
+// Le volet secondaire compte comme occupé s'il porte un fichier OU une note conservée :
+// sans cela, scinder sur une note se perdait au redémarrage.
+function withNoteInSecondary(workspace: WorkspacePathSnapshot, split: boolean, activeSecondary: boolean): WorkspacePathSnapshot {
+  if (workspace.secondaryPath !== null || !split) return workspace
+  return { ...workspace, split: true, activePaneId: activeSecondary ? 'secondary' : 'primary' }
 }
 
 export function parseWorkspacePathSnapshot(value: unknown): WorkspacePathSnapshot {
@@ -142,14 +157,19 @@ export function parseSession(raw: string | null): SessionV2 | null {
   const notes = parseNotes(value.notes)
   const primaryNote = noteIndex(value.primaryNote, notes.length)
   const secondaryCandidate = noteIndex(value.secondaryNote, notes.length)
+  const secondaryNote = secondaryCandidate !== primaryNote ? secondaryCandidate : null
+  const ws = value.workspace as Record<string, unknown>
+  const workspace = parseWorkspacePathSnapshot(ws)
   return {
     version: 2,
     tabs,
     activePath,
-    workspace: parseWorkspacePathSnapshot(value.workspace),
+    workspace: secondaryNote != null && notes[secondaryNote]
+      ? withNoteInSecondary(workspace, ws.split === true, ws.activePaneId === 'secondary')
+      : workspace,
     notes,
     primaryNote,
-    secondaryNote: secondaryCandidate !== primaryNote ? secondaryCandidate : null,
+    secondaryNote,
   }
 }
 
@@ -159,6 +179,7 @@ export interface SessionTab {
   path: string | null
   kind: DocKind
   content: string
+  savedContent: string
 }
 
 export function buildSession(
@@ -168,19 +189,30 @@ export function buildSession(
   const pathForTab = (tabId: number | null) => openTabs.find((tab) => tab.id === tabId)?.path ?? null
   const tabs = uniquePaths(openTabs.map((tab) => tab.path))
   const activePath = pathForTab(workspace[workspace.activePaneId].tabId)
-  const kept = openTabs.filter((tab) => tab.path == null && !isBinaryKind(tab.kind) && tab.content.length <= NOTE_MAX_CHARS)
+  const kept = openTabs.filter(isTextTab).filter((tab) => tab.path == null && tab.content.length <= NOTE_MAX_CHARS)
   const noteForTab = (tabId: number | null) => {
     const i = kept.findIndex((tab) => tab.id === tabId)
     return i >= 0 ? i : null
   }
+  const primaryNote = noteForTab(workspace.primary.tabId)
+  const secondaryNote = noteForTab(workspace.secondary.tabId)
+  const snapshot = buildWorkspacePathSnapshot(workspace, pathForTab)
   return {
     version: 2,
     tabs,
     activePath,
-    workspace: buildWorkspacePathSnapshot(workspace, pathForTab),
-    notes: kept.map((tab) => ({ name: tab.name, content: tab.content, kind: tab.kind as SaveableTextKind })),
-    primaryNote: noteForTab(workspace.primary.tabId),
-    secondaryNote: noteForTab(workspace.secondary.tabId),
+    workspace: secondaryNote != null
+      ? withNoteInSecondary(snapshot, workspace.split, workspace.activePaneId === 'secondary')
+      : snapshot,
+    notes: kept.map((tab) => ({
+      name: tab.name,
+      content: tab.content,
+      kind: tab.kind,
+      at: openTabs.indexOf(tab),
+      pristine: tab.content === tab.savedContent,
+    })),
+    primaryNote,
+    secondaryNote,
   }
 }
 

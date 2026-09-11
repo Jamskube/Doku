@@ -463,13 +463,25 @@ let sessionReady = false
 // Persiste les onglets ouverts (chemins) + l'actif. Le contenu d'un fichier n'est PAS
 // stocké : la source de vérité reste le disque, relu à la restauration. Une note sans
 // chemin (ardoise, document généré) n'a que la session pour survivre : son texte y voyage.
-export function saveSession() {
-  if (!sessionReady) return
+// Rend false quand rien n'a été écrit (quota localStorage dépassé, stockage indisponible,
+// restauration pas terminée) : le quit ne doit alors PAS considérer les notes comme à l'abri.
+let sessionWriteWarned = false
+export function saveSession(): boolean {
+  if (!sessionReady) return false
   try {
     const session = buildSession(app.tabs, workspace)
     localStorage.setItem(SESSION_KEY, JSON.stringify(session))
+    return true
   } catch {
-    // stockage indisponible : on ignore
+    if (!sessionWriteWarned && app.tabs.some((tab) => tab.path == null)) {
+      sessionWriteWarned = true
+      app.banner = {
+        tone: 'warning',
+        title: 'Session non enregistrée',
+        message: 'Doku ne peut plus mémoriser les notes ouvertes (espace de stockage plein). Enregistrez-les dans un fichier ou fermez des documents générés.',
+      }
+    }
+    return false
   }
 }
 
@@ -507,11 +519,19 @@ export async function restoreSession() {
     if (detectUnsupported(content)) continue // binaire/non-UTF-8 : ne pas restaurer
     openTab(baseName(p), p, content)
   }
-  const noteTabIds: number[] = []
+  // Notes sans chemin : remises à leur place dans la barre ; `pristine` distingue une note
+  // jamais touchée (ou un document généré tel quel) d'une note en cours de rédaction.
+  const noteTabIds: Array<number | null> = []
   for (const note of session?.notes ?? []) {
-    // savedContent reste vide : la note est bien « non enregistrée » (point, invite à la fermeture).
-    const tab = openTab(note.name, null, '', note.kind)
-    tab.content = note.content
+    if (!note) {
+      noteTabIds.push(null)
+      continue
+    }
+    const tab = openTab(note.name, null, note.content, note.kind)
+    if (!note.pristine) tab.savedContent = ''
+    const idx = app.tabs.indexOf(tab)
+    app.tabs.splice(idx, 1)
+    app.tabs.splice(Math.min(note.at, app.tabs.length), 0, tab)
     noteTabIds.push(tab.id)
   }
   const restored = restoreWorkspace(
@@ -526,9 +546,9 @@ export async function restoreSession() {
     restored.primary.tabId = app.tabs.find((tab) => tab.path === session?.activePath)?.id ?? app.tabs[0].id
   }
   applyWorkspaceState(restored)
+  const noteLost = (unsaved: boolean, index: number | null) => unsaved && (index == null || noteTabIds[index] == null)
   const unsavedNotRestored = Boolean(
-    (session?.workspace.primaryUnsaved && session.primaryNote == null) ||
-    (session?.workspace.secondaryUnsaved && session.secondaryNote == null),
+    session && (noteLost(session.workspace.primaryUnsaved, session.primaryNote) || noteLost(session.workspace.secondaryUnsaved, session.secondaryNote)),
   )
   if (missing.length || unsavedNotRestored) {
     app.banner = {
@@ -666,10 +686,13 @@ export function openTab(
     heavy: isHeavyContent(resolvedKind, content),
   }
   app.tabs.push(tab)
+  // On rend le PROXY $state (pas l'objet brut) : une écriture sur le brut après une première
+  // lecture réactive ne serait plus vue par l'interface.
+  const stored = app.tabs[app.tabs.length - 1]
   if (!assignTabToPane(targetPane, tab.id)) selectTab(tab.id)
   // Ouvrir un fichier resynchronise l'explorateur sur son dossier.
   app.explorerDir = null
-  return tab
+  return stored
 }
 
 export function createWorkspaceNote(targetPane: PaneId): DocTab {
@@ -956,13 +979,34 @@ export function tabsUnder(path: string): DocTab[] {
 // Après un renommage ou un déplacement : les onglets suivent le fichier, le contenu et
 // l'état « modifié » restent intacts. L'historique de versions, indexé par chemin, repart
 // de zéro pour le nouveau nom — les anciennes versions restent sur disque sous l'ancien.
+// Une extension changée fait suivre le kind (l'éditeur se rebâtit via rev) — sauf entre texte
+// et binaire, refusé en amont par renameKindConflict.
 export function relocateOpenTabs(from: string, to: string): void {
   for (const tab of tabsUnder(from)) {
     if (!tab.path) continue
     tab.path = to + tab.path.slice(from.length)
     tab.name = baseName(tab.path)
+    const kind = kindFromName(tab.name)
+    if (kind !== tab.kind && isBinaryKind(kind) === isBinaryKind(tab.kind)) {
+      tab.kind = kind
+      tab.heavy = isHeavyContent(kind, tab.content)
+      tab.rev++
+    }
   }
   saveSession()
+}
+
+// Renommer `notes.md` en `notes.pdf` ferait écrire du Markdown dans un « PDF » au prochain
+// Ctrl+S, et l'inverse ouvrirait un binaire dans l'éditeur texte : à refuser avant le disque.
+export function renameKindConflict(from: string, to: string): string | null {
+  for (const tab of tabsUnder(from)) {
+    if (!tab.path) continue
+    const next = kindFromName(baseName(to + tab.path.slice(from.length)))
+    if (isBinaryKind(next) !== isBinaryKind(tab.kind)) {
+      return `« ${tab.name} » est ouvert : changer son extension en .${next} le ferait changer de format. Fermez-le d'abord.`
+    }
+  }
+  return null
 }
 
 export function cycleTab(dir: 1 | -1) {
@@ -1387,13 +1431,16 @@ export async function renameTab(id: number, rawName: string): Promise<string | n
   }
   const checked = normalizeNewName(name, 'file')
   if (!checked.ok) return checked.error
-  const to = joinPath(parentPath(tab.path) ?? '', checked.name)
+  const from = tab.path
+  const to = joinPath(parentPath(from) ?? '', checked.name)
+  const conflict = renameKindConflict(from, to)
+  if (conflict) return conflict
   try {
-    if (!(await renamePathAt(tab.path, to))) return 'Ce nom existe déjà dans ce dossier.'
+    if (!(await renamePathAt(from, to))) return 'Ce nom existe déjà dans ce dossier.'
   } catch {
     return 'Renommage impossible (droits, ou fichier ouvert dans une autre application).'
   }
-  relocateOpenTabs(tab.path, to)
+  relocateOpenTabs(from, to)
   refreshExplorer()
   return null
 }
@@ -1422,6 +1469,7 @@ export function closeOtherTabs(id: number) {
 
 export function closeTabsToRight(id: number) {
   const idx = app.tabs.findIndex((t) => t.id === id)
+  if (idx < 0) return Promise.resolve()
   return closeTabs(app.tabs.slice(idx + 1).map((t) => t.id))
 }
 
@@ -1429,7 +1477,7 @@ export function closeTabsToRight(id: number) {
 // non enregistré : Ctrl+S proposera l'enregistrement. Un second clic sur le même artefact
 // revient à l'onglet déjà ouvert au lieu d'en empiler un autre.
 export function openGeneratedTab(name: string, html: string): DocTab {
-  const existing = app.tabs.find((tab) => tab.path === null && tab.name === name && tab.savedContent === html)
+  const existing = app.tabs.find((tab) => tab.path === null && tab.name === name && tab.content === html)
   if (existing) {
     selectTab(existing.id)
     return existing

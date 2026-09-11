@@ -70,7 +70,7 @@
   let sessionTimer: ReturnType<typeof setTimeout> | undefined
   $effect(() => {
     void [
-      app.tabs.map((t) => t.path ?? t.content).join('|'),
+      app.tabs.map((t) => t.path ?? t.content),
       workspace.split,
       workspace.activePaneId,
       workspace.primary.tabId,
@@ -137,9 +137,10 @@
         }
         return false
       }
-      saveSession() // flush au quit (au-delà du débounce)
-      // Une note sans chemin voyage dans la session (comme le Bloc-notes) : pas d'invite pour elle.
-      const dirty = app.tabs.filter((t) => isDirty(t) && !(t.path == null && t.content.length <= NOTE_MAX_CHARS))
+      // Flush au quit (au-delà du débounce). Une note sans chemin voyage dans la session
+      // (comme le Bloc-notes) : pas d'invite pour elle — SI l'écriture a réellement eu lieu.
+      const persisted = saveSession()
+      const dirty = app.tabs.filter((t) => isDirty(t) && !(persisted && t.path == null && t.content.length <= NOTE_MAX_CHARS))
       if (dirty.length === 0) return true
       const choice = await askSave(
         'Enregistrer les modifications ?',
@@ -150,6 +151,7 @@
       if (choice === 'cancel') return false
       if (choice === 'save') {
         for (const t of dirty) if (!(await saveTabOrSaveAs(t))) return false
+        saveSession() // les notes enregistrées ici ont maintenant un chemin
       }
       return true
     })

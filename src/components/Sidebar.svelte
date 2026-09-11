@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { app, activeTab, closeTab, collapseExplorer, docHeadings, isDirty, loadBacklinksForActive, loadSnapshotsForActive, openPath, openSearchHit, openSettings, refreshExplorer, relocateOpenTabs, restoreSnapshot, runSearch, scrollToLine, setExplorerSort, tabsUnder, toggleExplorerExpanded, toggleSidebarView } from '../lib/stores.svelte'
+  import { app, activeTab, closeTab, collapseExplorer, docHeadings, isDirty, loadBacklinksForActive, loadSnapshotsForActive, openPath, openSearchHit, openSettings, refreshExplorer, relocateOpenTabs, renameKindConflict, restoreSnapshot, runSearch, scrollToLine, setExplorerSort, tabsUnder, toggleExplorerExpanded, toggleSidebarView } from '../lib/stores.svelte'
   import { baseName, flattenTree, joinPath, nameExists, normalizeNewName, parentPath, pathCrumbs, reachableExpanded, type FsEntry, type SortKey, type TreeRow } from '../lib/explorer'
   import { confirmAction, createDirAt, createFileAt, isTauri, openFolderDialog, readDirectory, renamePathAt, trashPathAt } from '../lib/tauri'
   import { DEMO_DIR } from '../lib/demo'
@@ -304,6 +304,11 @@
       return
     }
     const newPath = joinPath(parentPath(oldPath) ?? targetDir ?? '', checked.name)
+    const conflict = renameKindConflict(oldPath, newPath)
+    if (conflict) {
+      renameError = conflict
+      return
+    }
     busy = true
     try {
       if (!(await renamePathAt(oldPath, newPath))) {
