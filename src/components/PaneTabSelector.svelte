@@ -17,10 +17,13 @@
     paneId,
     onOpen,
     local = false,
+    onTabMenu,
   }: {
     paneId: PaneId
     onOpen: () => void
     local?: boolean
+    // Clic droit sur l'onglet affiché ou sur une entrée de la liste (menu contextuel d'onglet).
+    onTabMenu?: (event: MouseEvent, tabId: number) => void
   } = $props()
 
   let open = $state(false)
@@ -154,6 +157,7 @@
     aria-expanded={open}
     aria-label={`${tab?.name ?? 'Choisir un document'} — ${app.tabs.length} onglets ouverts`}
     onclick={() => void toggle()}
+    oncontextmenu={tab && onTabMenu ? (event) => { close(); onTabMenu(event, tab.id) } : undefined}
     onkeydown={(event) => {
       if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
         event.preventDefault()
@@ -191,6 +195,7 @@
               disabled={shownElsewhere}
               title={shownElsewhere ? 'Déjà affiché dans l’autre volet' : candidate.path ?? candidate.name}
               onclick={() => pick(candidate.id)}
+              oncontextmenu={onTabMenu ? (event) => { close(); onTabMenu(event, candidate.id) } : undefined}
             >
               <span class="state-dot" class:dirty={isDirty(candidate)} class:current={workspace[paneId].tabId === candidate.id}></span>
               <span class="menu-label">{candidate.name}</span>
