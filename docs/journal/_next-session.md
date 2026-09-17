@@ -1,19 +1,18 @@
 # Next session pointer
-_Updated: 2026-09-11 08:52_
+_Updated: 2026-09-11 10:20_
 
 ## Where I left off
 
-Une revue croisée (reviewer + critique, contextes séparés) a validé le travail non commité des 6 et 9 septembre après correction : un **Critical** dans le retrait des marqueurs `[n]` (il réécrivait le CSS de chaque document généré), et six **Major** — plugin de prévisualisation qui ne rebâtissait pas après le premier enregistrement, jauge inatteignable au clavier, index RAG non re-versionné, octets d'images fuyant par la troncature et la reformulation, badge de contexte faux, Markdown portable capable d'embarquer n'importe quel fichier du disque. Tout est corrigé, verrouillé par des tests, typecheck 0 erreur, 907 tests, build OK.
-
-**32 fichiers non commités** portent trois sessions de travail : composeur à sections et palette « / » (06), images collées et Markdown portable (09), correctifs de revue (11). Les installateurs 3.5.0 et 3.5.1 produits ne correspondent à aucun commit et **ne contiennent pas les correctifs du 11** : ne pas les distribuer.
+Doku **3.5.2** est committée, poussée et compilée (arm64 24,3 Mo, x64 28,6 Mo, bâtis sur `40ad8ee`, arbre propre). Deux des **23 souhaits** du mainteneur sont livrés : les notes non enregistrées survivent au redémarrage (session `localStorage`, ≤ 500 k caractères, volet et place conservés), et un clic droit sur un onglet renomme (étiquette Doku, le fichier ne bouge pas — décision prise à l'essai), duplique, envoie dans l'autre volet, ferme les autres / à droite. Revue croisée (reviewer + critique) : trois Majors convergents corrigés (scindage perdu sur une note, invite de quit sautée sur écriture avalée, renommage sans champ en barre repliée). Le mainteneur n'a pas encore dicté les 21 souhaits restants.
 
 ## Open work
 
-- Branch: `main` — **32 fichiers non commités**, 0 commit depuis `1f45856` (5 sept).
+- Branch: `main` — 44 fichiers non commités = pass `/wrap` (journal, 40 records complétés en schéma, 1 record projet neuf, index, projection AGENTS −1).
 - Open PRs: aucune.
 - Plans : `docs/plans/signature-et-mises-a-jour.md` (bloqué secrets), `docs/plans/documents-generes-doku-san.md` (à valider en réel).
-- Jamais essayé dans l'app : menu à sections, commandes `/`, Markdown portable, images collées après enregistrement, tous les correctifs du 11.
-- Reportés : tags/frontmatter, annotations PDF → RAG, découpage de `copilot.svelte.ts`, publication du source du fork bgraph (geste du mainteneur).
+- **Non vérifié dans l'app** (chemin Tauri seulement) : restauration des notes au redémarrage, scindage sur une note, bannière quota.
+- Reportés : couleur d'onglet, tags/frontmatter, annotations PDF → RAG, découpage de `copilot.svelte.ts`, publication du source du fork bgraph, tag `v3.5.2`.
+- Curate projet : cursor 40/89 — 45 records sans champs de schéma et 7 Rules > 40 mots (LES-20260828-001/002, 20260905-001/002, 20260911-001/002/003) attendent la prochaine passe.
 
 ## Active Autopilot
 
@@ -23,4 +22,4 @@ Une revue croisée (reviewer + critique, contextes séparés) a validé le trava
 
 ## Next concrete step
 
-Essayer dans l'app les cinq chantiers non vérifiés (un document PDF généré avec CSS ; une image collée dans une note neuve puis enregistrée ; `/web météo` avec la recherche déjà active ; la jauge au clavier ; un export Markdown portable rouvert), puis **committer en trois commits** (composeur + palette · images + portable · correctifs de revue), tagger `v3.5.1`, et recompiler les installateurs depuis le tag.
+Committer la passe `/wrap` (`docs: journal, knowledge curate pass 1/3`), tagger `v3.5.2`, puis demander au mainteneur le troisième des 23 souhaits — après un essai réel de la restauration des notes (`npm run tauri dev`, créer une note, quitter, relancer).

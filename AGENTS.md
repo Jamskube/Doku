@@ -58,7 +58,6 @@ Before non-trivial work, retrieve by task terms and affected paths; load at most
 
 ### Active critical lessons
 <!-- knowledge:generated:start -->
-- [LES-20260716-001] Le « done » d'un spike doit énumérer ce qu'il NE couvre PAS.
 - [LES-20260818-001] Jeter la cause d'un échec coûte un aller-retour complet avec l'utilisateur — un message honnête sur le FAIT mais muet sur la RAISON ne vaut guère mieux que le silence.
 - [LES-20260818-002] Un repli qui n'est jamais exercé n'est pas un repli : c'est LE comportement.
 - [LES-20260820-001] Rendre une dimension RÉGLABLE ouvre un domaine de valeurs que personne n'avait jamais exploré — et le défaut qui y dormait devient un défaut livré.
