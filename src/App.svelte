@@ -7,7 +7,7 @@
   import WikilinkPrompt from './components/WikilinkPrompt.svelte'
   import { openSearchPanel } from './lib/editor/editor'
   import { NOTE_MAX_CHARS } from './lib/session'
-  import { activatePane, activeEditorView, app, activeTab, askSave, checkExternalChanges, cycleTab, dialog, dismissReloadPrompt, initApp, isDirty, newWindow, openCopilot, openDropped, openPath, openTab, openWikilink, reloadPromptedTab, requestCloseTab, saveSession, saveSettings, saveTabOrSaveAs, toggleActiveSourceMode, togglePin, toggleSidebarView, workspace } from './lib/stores.svelte'
+  import { activatePane, activeEditorView, app, activeTab, askSave, checkExternalChanges, cycleTab, dialog, dismissReloadPrompt, initApp, isDirty, newWindow, openCopilot, openDropped, openPath, openTab, openWikilink, reloadPromptedTab, requestCloseTab, saveSession, saveSettings, saveTabOrSaveAs, toggleActiveSourceMode, togglePin, toggleSidebarView, workspace, zoomDocText } from './lib/stores.svelte'
   import { isTauri, onFileDrop, onOpenFile, onWindowCloseRequested, onWindowFocus, openFileDialog } from './lib/tauri'
   import { detectUnsupported } from './lib/encoding'
   import { isBinaryDocumentName } from './lib/doc-kind'
@@ -205,6 +205,15 @@
       const mod = e.ctrlKey || e.metaKey
       if (!mod) return
       const k = e.key.toLowerCase()
+      // Zoom du texte (Ctrl+0 / Ctrl+= / Ctrl+-) sur un document texte ; le PDF garde le sien.
+      // `code` pour le 0 : sur un clavier AZERTY, la touche 0 sans Maj donne « à ».
+      const zoomStep = e.key === '+' || e.key === '=' ? 1 : e.key === '-' ? -1 : e.code === 'Digit0' || e.code === 'Numpad0' ? 0 : null
+      const zoomTab = activeTab()
+      if (zoomStep !== null && !e.altKey && zoomTab && (zoomTab.kind === 'md' || zoomTab.kind === 'txt' || (zoomTab.kind === 'html' && app.sourceMode))) {
+        e.preventDefault()
+        zoomDocText(zoomStep)
+        return
+      }
       if (k === 's') {
         e.preventDefault()
         await saveActive()

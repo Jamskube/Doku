@@ -2,7 +2,7 @@
   import { onMount, tick } from 'svelte'
   import { EditorView } from '@codemirror/view'
   import { EditorState, type Extension } from '@codemirror/state'
-  import { app, COLUMN_PX, docHeadings, forcePreview, isDirty, openCopilot, workspace } from '../lib/stores.svelte'
+  import { app, COLUMN_PX, docHeadings, forcePreview, isDirty, openCopilot, workspace, zoomDocText } from '../lib/stores.svelte'
   import { cacheEditorRuntime, editorRuntimeForTab, publishEditorSelection, registerEditor, registeredTabForPane, selectionForPane, unregisterEditor, updateEditorRegistration } from '../lib/editor-registry.svelte'
   import { baseExtensions, htmlSourceExtensions, livePreviewComp, previewExtensions, serializeDoc, sourceExtensions, txtExtensions } from '../lib/editor/editor'
   import { docDirCompartment, docDirFacet } from '../lib/editor/live-preview'
@@ -482,6 +482,22 @@
     app.activeHeadingLine = active
   }
 
+  // Le zoom change la hauteur des lignes : CodeMirror remesure (curseur, défilement), et le
+  // volet actif affiche brièvement le niveau — y compris au clavier (Ctrl+0/=/-).
+  let zoomBadge = $state(false)
+  let zoomBadgeTimer: ReturnType<typeof setTimeout> | undefined
+  let seenZoom = app.docZoom
+  $effect(() => {
+    const zoom = app.docZoom
+    view?.requestMeasure()
+    if (zoom === seenZoom) return
+    seenZoom = zoom
+    if (paneId !== workspace.activePaneId) return
+    zoomBadge = true
+    clearTimeout(zoomBadgeTimer)
+    zoomBadgeTimer = setTimeout(() => (zoomBadge = false), 1400)
+  })
+
   onMount(() => {
     view = new EditorView({ parent: host! })
     if (tabId != null) {
@@ -525,6 +541,25 @@
       }
       if (selectionMenu) hideSelectionMenu()
     }
+    // Ctrl+molette : zoom du texte, ancré sur la ligne sous le pointeur (elle reste sous la
+    // souris au lieu de glisser). Écouté sur l'éditeur seul : PDF, Word et aperçu HTML le
+    // masquent et gardent leur propre zoom. Throttle : un pavé tactile émet des rafales.
+    let lastWheelZoom = 0
+    const onWheel = (event: WheelEvent) => {
+      if (!(event.ctrlKey || event.metaKey) || !event.deltaY || !view) return
+      event.preventDefault()
+      const now = Date.now()
+      if (now - lastWheelZoom < 90) return
+      lastWheelZoom = now
+      const anchor = view.posAtCoords({ x: event.clientX, y: event.clientY })
+      const offset = event.clientY - view.scrollDOM.getBoundingClientRect().top
+      if (!zoomDocText(event.deltaY < 0 ? 1 : -1) || anchor == null) return
+      requestAnimationFrame(() => {
+        view?.requestMeasure()
+        view?.dispatch({ effects: EditorView.scrollIntoView(anchor, { y: 'start', yMargin: offset }) })
+      })
+    }
+    view.dom.addEventListener('wheel', onWheel, { passive: false })
     view.scrollDOM.addEventListener('scroll', onScroll, { passive: true })
     // Pas de listener keyup : toute sélection clavier passe par un dispatch CM6, déjà
     // couvert par l'updateListener (selectionSet) — le keyup doublait chaque publication.
@@ -534,7 +569,9 @@
     document.addEventListener('keydown', onKeyDown)
     return () => {
       clearTimeout(selectionMenuTimer)
+      view?.dom.removeEventListener('wheel', onWheel)
       view?.scrollDOM.removeEventListener('scroll', onScroll)
+      clearTimeout(zoomBadgeTimer)
       view?.dom.removeEventListener('pointerup', onSelectionIntent)
       window.removeEventListener('resize', hideSelectionMenu)
       document.removeEventListener('pointerdown', onPointerDown)
@@ -676,6 +713,9 @@
 </script>
 
 <div class="doc">
+  {#if zoomBadge}
+    <button class="zoom-badge" title="Revenir à 100 % (Ctrl+0)" onclick={() => zoomDocText(0)}>{Math.round(app.docZoom * 100)} %</button>
+  {/if}
   {#if tab?.heavy && !app.focus}
     <div class="heavy-notice" role="status">
       <span class="msr" style="font-size:16px">bolt</span>
@@ -894,6 +934,14 @@
 
 <style>
   .doc { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; background: var(--cream-content); }
+  .zoom-badge {
+    position: absolute; z-index: 20; left: 50%; bottom: 22px; transform: translateX(-50%);
+    padding: 6px 13px; border: 0; border-radius: 999px; background: var(--ink); color: var(--cream-content);
+    font: 600 12px var(--font-sans); font-variant-numeric: tabular-nums; cursor: pointer;
+    box-shadow: 0 6px 18px rgba(var(--shadow-rgb), 0.18); animation: zoom-badge-in 120ms ease-out;
+  }
+  @keyframes zoom-badge-in { from { opacity: 0; translate: 0 4px; } to { opacity: 1; translate: 0 0; } }
+  @media (prefers-reduced-motion: reduce) { .zoom-badge { animation: none; } }
 
   .heavy-notice {
     flex: none;

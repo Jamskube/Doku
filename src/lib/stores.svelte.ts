@@ -23,6 +23,7 @@ import { activateWorkspacePane, assignWorkspaceTab, closeWorkspaceTab, createWor
 // historiques n'ont pas à savoir qu'il a déménagé.
 export { isBinaryKind, kindFromName, type BinaryKind, type DocKind } from './doc-kind'
 import { isBinaryKind, kindFromName, type DocKind } from './doc-kind'
+import { nextDocZoom, parseDocZoom } from './doc-zoom'
 // Actions du document Word actif, publiées par `DocxView` au montage. Sans ce relais,
 // « Enregistrer » et « Exporter en PDF » ne pouvaient vivre que dans des boutons collés
 // à la vue : ni le menu, ni Ctrl+S ne les atteignaient. Un `.docx` n'était donc pas
@@ -119,6 +120,8 @@ export const app = $state({
   sidebarOpen: false,
   sidebarView: 'files' as SidebarView,
   columnWidth: 'narrow' as ColumnWidth,
+  // Zoom du texte des documents (doc-zoom.ts) : 1 = 100 %.
+  docZoom: 1,
   // Modèle IA actif (copilote, 13.4) ; persisté (settings). '' = aucun choisi.
   activeModel: '',
   // Modèle d'EMBEDDING (index sémantique 15.2, ADR-0015) — réglage distinct du modèle
@@ -417,12 +420,14 @@ export function loadSettings() {
         app.explorerSort = { key: sort.key, order: sort.order === 'desc' ? 'desc' : 'asc' }
       }
       app.explorerExpanded = validateExpandedPaths(s.explorerExpanded)
+      app.docZoom = parseDocZoom(s.docZoom)
     }
   } catch {
     // settings corrompus/indisponibles : valeurs par défaut
   }
   applyTheme()
   applyColumnWidth()
+  applyDocZoom()
   applyCopilotTextSize()
 }
 
@@ -435,6 +440,7 @@ export function saveSettings() {
         sidebarOpen: app.sidebarOpen,
         sidebarView: app.sidebarView,
         columnWidth: app.columnWidth,
+        docZoom: app.docZoom,
         activeModel: app.activeModel,
         embedModel: app.embedModel,
         copilotProvider: app.copilotProvider,
@@ -456,6 +462,19 @@ export function saveSettings() {
 
 export function applyColumnWidth() {
   document.documentElement.style.setProperty('--doc-width', COLUMN_PX[app.columnWidth])
+}
+
+export function applyDocZoom() {
+  document.documentElement.style.setProperty('--doc-zoom', String(app.docZoom))
+}
+
+// Rend vrai si le zoom a changé (déjà au plus petit, au plus grand ou à 100 % : rien à faire).
+export function zoomDocText(step: 1 | -1 | 0): boolean {
+  const next = nextDocZoom(app.docZoom, step)
+  if (next === app.docZoom) return false
+  app.docZoom = next
+  applyDocZoom()
+  return true
 }
 
 export function applyCopilotTextSize() {

@@ -11,11 +11,15 @@ import { formatKeymap } from './format-commands'
 import { livePreview } from './live-preview'
 import { revealScope, revealScopeField, setRevealScope } from './reveal'
 
+// Taille du TEXTE du document, multipliée par le zoom (Ctrl+molette, doc-zoom.ts). Les
+// commandes posées dans l'éditeur (recherche, outils de tableau, reformulation) gardent la leur.
+const docPx = (px: number) => `calc(${px}px * var(--doc-zoom, 1))`
+
 // Typographie du document — source : maquette W1 (article Source Serif 4).
 const dokuHighlight = HighlightStyle.define([
-  { tag: tags.heading1, fontFamily: 'var(--font-serif)', fontWeight: '600', fontSize: '38px', letterSpacing: '-0.012em', color: 'var(--ink)' },
-  { tag: tags.heading2, fontFamily: 'var(--font-serif)', fontWeight: '600', fontSize: '25px', letterSpacing: '-0.008em', color: 'var(--ink)' },
-  { tag: tags.heading3, fontFamily: 'var(--font-serif)', fontWeight: '600', fontSize: '21px', color: 'var(--ink)' },
+  { tag: tags.heading1, fontFamily: 'var(--font-serif)', fontWeight: '600', fontSize: docPx(38), letterSpacing: '-0.012em', color: 'var(--ink)' },
+  { tag: tags.heading2, fontFamily: 'var(--font-serif)', fontWeight: '600', fontSize: docPx(25), letterSpacing: '-0.008em', color: 'var(--ink)' },
+  { tag: tags.heading3, fontFamily: 'var(--font-serif)', fontWeight: '600', fontSize: docPx(21), color: 'var(--ink)' },
   { tag: [tags.heading4, tags.heading5, tags.heading6], fontFamily: 'var(--font-serif)', fontWeight: '600', color: 'var(--ink)' },
   { tag: tags.emphasis, fontStyle: 'italic' },
   { tag: tags.strong, fontWeight: '600', color: 'var(--ink)' },
@@ -65,10 +69,12 @@ const dokuTheme = EditorView.theme({
     overflow: 'auto',
   },
   '.cm-content': {
-    maxWidth: 'var(--doc-width, 680px)',
+    // La colonne suit le zoom : même nombre de caractères par ligne, comme un vrai zoom.
+    // Largeur « pleine » (none) : le calc devient invalide et retombe sur « aucune limite ».
+    maxWidth: 'calc(var(--doc-width, 680px) * var(--doc-zoom, 1))',
     margin: '0 auto',
     padding: '18px 40px 120px',
-    fontSize: '18.5px',
+    fontSize: docPx(18.5),
     color: 'var(--ink-2)',
     caretColor: 'var(--ink)',
   },
@@ -146,7 +152,7 @@ const dokuTheme = EditorView.theme({
   '.cm-lp-h3': { paddingTop: '20px', paddingBottom: '4px' },
   '.cm-lp-codeblock': {
     fontFamily: 'var(--font-mono)',
-    fontSize: '13.5px',
+    fontSize: docPx(13.5),
     lineHeight: '1.7',
     backgroundColor: 'var(--code-bg)',
     padding: '0 18px',
@@ -177,7 +183,7 @@ const dokuTheme = EditorView.theme({
     width: '100%',
     margin: '12px 0',
     fontFamily: 'var(--font-sans)',
-    fontSize: '14.5px',
+    fontSize: docPx(14.5),
   },
   '.cm-lp-table th, .cm-lp-table td': {
     border: '1px solid var(--line-2)',
