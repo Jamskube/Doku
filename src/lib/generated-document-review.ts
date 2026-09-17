@@ -1,5 +1,5 @@
 import type { GeneratedDocumentArtifact, GeneratedDocumentKind } from './generated-document'
-import { DOCUMENT_ENVELOPE_HINT, generatedDocumentPreview } from './generated-document'
+import { DOCUMENT_EDIT_CONTRACT, generatedDocumentPreview, numberedDocumentHtml } from './generated-document'
 
 export type GeneratedDocumentReviewStatus = 'passed' | 'mechanical-only'
 
@@ -287,8 +287,10 @@ export function buildGeneratedDocumentCorrectionPrompt(
 Défauts observés dans son rendu réel :
 ${issues.map((issue) => `- ${issue}`).join('\n') || '- Aucun défaut mécanique ; améliore uniquement les problèmes décrits par le contrôle visuel.'}
 
-Contraintes : préserve les faits et le contenu utile, supprime les largeurs fixes qui débordent, renforce les contrastes trop faibles et évite tout contenu tronqué. Renvoie uniquement ${DOCUMENT_ENVELOPE_HINT}.
+Contraintes : préserve les faits et le contenu utile, supprime les largeurs fixes qui débordent, renforce les contrastes trop faibles et évite tout contenu tronqué. Ne touche qu'aux blocs fautifs.
+
+${DOCUMENT_EDIT_CONTRACT}
 
 Version actuelle :
-${artifact.html}`
+${numberedDocumentHtml(artifact.html)}`
 }

@@ -165,10 +165,13 @@ import {
 } from './diagram-studio'
 import {
   DOCUMENT_ENVELOPE_HINT,
+  applyGeneratedDocumentEdit,
   buildGeneratedDocumentPrompt,
   extractGeneratedDocument,
+  type DocumentBlockTarget,
   type GeneratedDocumentArtifact,
   type GeneratedDocumentKind,
+  type GeneratedDocumentSeed,
 } from './generated-document'
 import {
   buildGeneratedDocumentCorrectionPrompt,
@@ -252,7 +255,7 @@ export interface ChatMsg {
     workspaceContextKey?: string
     outputMode?: ChatOutputMode
     diagramSeed?: DiagramArtifact
-    generatedDocumentSeed?: GeneratedDocumentArtifact
+    generatedDocumentSeed?: GeneratedDocumentSeed
   } | { kind: 'summary'; mode: SummaryMode }
 }
 
@@ -278,7 +281,7 @@ export const copilot = $state({
   webSearchEnabled: false,
   outputMode: 'answer' as ChatOutputMode,
   diagramSeed: null as DiagramArtifact | null,
-  generatedDocumentSeed: null as GeneratedDocumentArtifact | null,
+  generatedDocumentSeed: null as GeneratedDocumentSeed | null,
   contextFolder: null as { path: string; label: string } | null,
   // Mémoire partagée volontairement avec un dossier. null = portée document, qui est
   // toujours le défaut. Séparée de l'explorateur ET du contexte : parcourir ou ajouter
@@ -366,10 +369,15 @@ export function reviseDiagram(artifact: DiagramArtifact): void {
   copilot.diagramSeed = { ...artifact }
 }
 
-export function reviseGeneratedDocument(artifact: GeneratedDocumentArtifact): void {
+// `target` : la partie désignée d'un clic dans l'aperçu ; sans elle, la demande vise le document.
+export function reviseGeneratedDocument(artifact: GeneratedDocumentArtifact, target?: DocumentBlockTarget): void {
   copilot.outputMode = artifact.kind
-  copilot.generatedDocumentSeed = { ...artifact }
+  copilot.generatedDocumentSeed = { ...artifact, target }
   copilot.diagramSeed = null
+}
+
+export function clearGeneratedDocumentTarget(): void {
+  if (copilot.generatedDocumentSeed) copilot.generatedDocumentSeed = { ...copilot.generatedDocumentSeed, target: undefined }
 }
 
 export function selectDiagramCandidate(messageIndex: number, candidateId: string): void {
@@ -1142,6 +1150,8 @@ async function visualDocumentVerdict(
 
 // Un tour caché qui doit rendre un document : une seule relance si la sortie n'est pas
 // exploitable, la sortie fautive rejouée pour que le modèle voie ce qu'il a produit.
+// Avec `base` (modification), la sortie peut être un <doku-edit> appliqué à ce document ;
+// une modification inapplicable fait redemander le document complet, jamais l'abandon.
 async function requestGeneratedDocument(
   runtime: ProviderRuntime,
   messages: OpenAiMessage[],
@@ -1149,16 +1159,27 @@ async function requestGeneratedDocument(
   prompt: string,
   signal: AbortSignal,
   firstOutput = '',
+  base?: GeneratedDocumentArtifact,
 ): Promise<GeneratedDocumentArtifact | null> {
+  const read = (text: string) => {
+    const edit = base ? applyGeneratedDocumentEdit(text, base, kind, prompt) : null
+    if (edit && 'artifact' in edit) return { artifact: edit.artifact, editError: '' }
+    return { artifact: extractGeneratedDocument(text, kind, prompt), editError: edit?.error ?? '' }
+  }
   const output = firstOutput || await hiddenChat(runtime, messages, signal)
-  const artifact = extractGeneratedDocument(output, kind, prompt)
-  if (artifact || signal.aborted) return artifact
+  const first = read(output)
+  if (first.artifact || signal.aborted) return first.artifact
   const retried = await hiddenChat(runtime, [
     ...messages,
     ...(output ? [{ role: 'assistant' as const, content: output }] : []),
-    { role: 'user', content: `La sortie est illisible ou non conforme. Renvoie uniquement ${DOCUMENT_ENVELOPE_HINT}, sans commentaire.` },
+    {
+      role: 'user',
+      content: first.editError
+        ? `La modification n'a pas pu être appliquée (${first.editError}). Renvoie une modification corrigée <doku-edit> (extraits <from> recopiés à l'identique depuis le document numéroté) ou, à défaut, le document complet ${DOCUMENT_ENVELOPE_HINT} en conservant exactement son style. Sans commentaire.`
+        : `La sortie est illisible ou non conforme. Renvoie uniquement ${DOCUMENT_ENVELOPE_HINT}, sans commentaire.`,
+    },
   ], signal)
-  return extractGeneratedDocument(retried, kind, prompt)
+  return read(retried).artifact
 }
 
 async function verifyGeneratedDocument(
@@ -1215,7 +1236,7 @@ async function verifyGeneratedDocument(
     const corrected = await requestGeneratedDocument(runtime, [
       ...baseTurn,
       { role: 'user', content: buildGeneratedDocumentCorrectionPrompt(artifact, evidence, visual) },
-    ] as OpenAiMessage[], artifact.kind, artifact.prompt, signal)
+    ] as OpenAiMessage[], artifact.kind, artifact.prompt, signal, '', artifact)
     if (signal.aborted) throw new DOMException('Aborted', 'AbortError')
     if (!corrected) throw new Error('La correction visuelle n’a pas produit de document exploitable.')
     artifact = corrected
@@ -1895,7 +1916,7 @@ export async function sendChat(
         ? [{ ...turn[0], content: `${turn[0].content}\n\n${instruction}` }, ...turn.slice(1)]
         : [{ role: 'system', content: instruction }, ...turn]
     } else if (generatedDocumentKind) {
-      const instruction = buildGeneratedDocumentPrompt(generatedDocumentKind, generatedDocumentSeed?.html)
+      const instruction = buildGeneratedDocumentPrompt(generatedDocumentKind, generatedDocumentSeed ?? undefined)
       turn = turn[0]?.role === 'system'
         ? [{ ...turn[0], content: `${turn[0].content}\n\n${instruction}` }, ...turn.slice(1)]
         : [{ role: 'system', content: instruction }, ...turn]
@@ -2162,7 +2183,7 @@ export async function sendChat(
     } else if (generatedDocumentKind) {
       const done = copilot.messages[idx]
       done.status = 'Doku-San finalise le document…'
-      let artifact = await requestGeneratedDocument(runtime, turn as OpenAiMessage[], generatedDocumentKind, q, signal, generatedDocumentOutput)
+      let artifact = await requestGeneratedDocument(runtime, turn as OpenAiMessage[], generatedDocumentKind, q, signal, generatedDocumentOutput, generatedDocumentSeed ?? undefined)
       if (signal.aborted) return
       if (!artifact) throw new Error('Doku-San n’a pas pu produire un document HTML valide.')
       artifact = await verifyGeneratedDocument(

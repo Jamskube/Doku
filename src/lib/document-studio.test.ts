@@ -32,9 +32,9 @@ describe('Doku Document Studio', () => {
 
   it('keeps revisions scoped to the existing artifact', () => {
     const existing = '<html><body><h1>Version existante</h1></body></html>'
-    const prompt = buildGeneratedDocumentPrompt('html', existing)
-    expect(prompt).toContain('Conserve ce qui n\'est pas concerné')
-    expect(prompt).toContain(existing)
+    const prompt = buildGeneratedDocumentPrompt('html', { version: 1, kind: 'html', title: 'Page', prompt: 'Page', html: existing })
+    expect(prompt).toContain('ne recopie jamais un bloc inchangé')
+    expect(prompt).toContain('<h1 data-doku-id="1">Version existante</h1>')
     expect(prompt).toContain('<doku-document title=')
   })
 })

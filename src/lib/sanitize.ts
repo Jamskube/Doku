@@ -30,6 +30,9 @@ export function sanitizeHtml(dirty: string): string {
     WHOLE_DOCUMENT: true,
     FORBID_TAGS: ['script', 'meta', 'base', 'iframe', 'object', 'embed', 'form', 'link'],
     ALLOW_DATA_ATTR: false,
+    // Repère de bloc des documents générés (inerte) : l'aperçu cliquable le lit pour
+    // désigner une partie à Doku-San.
+    ADD_ATTR: ['data-doku-id'],
   })
 }
 

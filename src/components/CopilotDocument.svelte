@@ -5,6 +5,7 @@
     generatedDocumentPrintSource,
     generatedDocumentPreview,
     generatedDocumentStandalone,
+    type DocumentBlockTarget,
     type GeneratedDocumentArtifact,
   } from '../lib/generated-document'
   import { exportViaPrint } from '../lib/export/print'
@@ -13,7 +14,7 @@
 
   let { artifact, onModify }: {
     artifact: GeneratedDocumentArtifact
-    onModify: (artifact: GeneratedDocumentArtifact) => void
+    onModify: (artifact: GeneratedDocumentArtifact, target?: DocumentBlockTarget) => void
   } = $props()
 
   let expanded = $state(false)
@@ -32,6 +33,61 @@
   function closeExpanded() {
     previewDialog?.close()
     expanded = false
+  }
+
+  // --- Désigner une partie : dans l'aperçu agrandi, un clic choisit un bloc (repère
+  // data-doku-id posé par generatedDocumentPreview). L'iframe reste sans script (sandbox sans
+  // allow-scripts, CSP default-src 'none') ; allow-same-origin laisse seulement Doku écouter
+  // ses clics et marquer le bloc de l'extérieur.
+  const BLOCK = '[data-doku-id]:not(style)'
+  const PICK_CSS = `${BLOCK}{cursor:pointer}[data-doku-hover]{outline:1px dashed #b45309!important;outline-offset:2px}[data-doku-picked]{outline:2px solid #b45309!important;outline-offset:2px}`
+  let picked = $state<DocumentBlockTarget | null>(null)
+  let canWiden = $state(false)
+  let pickedEl: Element | null = null
+
+  function describeBlock(el: Element): string {
+    // innerText (texte rendu) sépare les blocs ; textContent collerait « Ingrédients1 pot… ».
+    const text = ((el as HTMLElement).innerText ?? el.textContent ?? '').replace(/\s+/g, ' ').trim()
+    if (text) return text.length > 80 ? `${text.slice(0, 79)}…` : text
+    const tag = el.tagName.toLowerCase()
+    return tag === 'svg' || tag === 'figure' ? 'Illustration' : tag === 'table' ? 'Tableau' : tag === 'hr' ? 'Séparateur' : 'Bloc sans texte'
+  }
+
+  function pick(el: Element | null) {
+    pickedEl?.removeAttribute('data-doku-picked')
+    pickedEl = el
+    el?.setAttribute('data-doku-picked', '')
+    picked = el ? { id: el.getAttribute('data-doku-id') ?? '', excerpt: describeBlock(el) } : null
+    canWiden = Boolean(el?.parentElement?.closest(BLOCK))
+  }
+
+  function attachPicker(frame: HTMLIFrameElement) {
+    pick(null)
+    const doc = frame.contentDocument
+    if (!doc?.head) return
+    const style = doc.createElement('style')
+    style.textContent = PICK_CSS
+    doc.head.append(style)
+    // Éléments d'un autre royaume JS : `instanceof Element` échouerait, on teste `closest`.
+    const blockAt = (target: EventTarget | null) => (target as Element | null)?.closest?.(BLOCK) ?? null
+    let hovered: Element | null = null
+    const hover = (block: Element | null) => {
+      hovered?.removeAttribute('data-doku-hover')
+      hovered = block
+      block?.setAttribute('data-doku-hover', '')
+    }
+    doc.addEventListener('mouseover', (event) => hover(blockAt(event.target)))
+    doc.documentElement.addEventListener('mouseleave', () => hover(null))
+    doc.addEventListener('click', (event) => {
+      event.preventDefault()
+      pick(blockAt(event.target))
+    })
+  }
+
+  function designate() {
+    if (!picked) return
+    onModify(artifact, picked)
+    closeExpanded()
   }
 
   // Le document devient un onglet HTML non enregistré, avec la CSP et la feuille papier
@@ -80,11 +136,12 @@
   <footer>
     <button onclick={openInTab}><span class="msr">open_in_new</span>Ouvrir</button>
     <button onclick={() => onModify(artifact)}><span class="msr">edit</span>Modifier</button>
+    <button title="Désigner une partie à modifier" aria-label={`Désigner une partie de ${artifact.title} à modifier`} onclick={openExpanded}><span class="msr">ads_click</span>Cibler</button>
     <span class="spacer"></span>
     {#if artifact.kind === 'html'}
-      <button onclick={() => void exportHtml()}><span class="msr">{saved ? 'check' : 'download'}</span>{saved ? 'Enregistré' : 'Exporter HTML'}</button>
+      <button onclick={() => void exportHtml()}><span class="msr">{saved ? 'check' : 'download'}</span>{saved ? 'Enregistré' : 'Exporter'}</button>
     {:else}
-      <button onclick={exportPdf}><span class="msr">picture_as_pdf</span>Exporter PDF</button>
+      <button onclick={exportPdf}><span class="msr">picture_as_pdf</span>Exporter</button>
     {/if}
   </footer>
 </section>
@@ -103,7 +160,17 @@
       </div>
     </header>
     <div class="dialog-stage" class:paper={artifact.kind === 'pdf'}>
-      <iframe title={`Document ${artifact.title}`} sandbox="" srcdoc={preview}></iframe>
+      <iframe title={`Document ${artifact.title}`} sandbox="allow-same-origin" srcdoc={preview} onload={(event) => attachPicker(event.currentTarget as HTMLIFrameElement)}></iframe>
+    </div>
+    <div class="pick-bar" class:active={picked}>
+      <span class="msr">ads_click</span>
+      {#if picked}
+        <span class="pick-text" title={picked.excerpt}>{picked.excerpt}</span>
+        <button disabled={!canWiden} onclick={() => pick(pickedEl?.parentElement?.closest(BLOCK) ?? null)}><span class="msr">unfold_more</span>Élargir</button>
+        <button class="primary" onclick={designate}><span class="msr">edit</span>Modifier cette partie</button>
+      {:else}
+        <span class="pick-text">Cliquez sur une partie du document pour la désigner à Doku-San.</span>
+      {/if}
     </div>
   </dialog>
 {/if}
@@ -125,7 +192,7 @@
   .preview.paper iframe { width: 180%; height: 180%; transform: scale(.5556); }
   .preview-shield { position: absolute; inset: 0; }
   footer { min-height: 45px; display: flex; align-items: center; gap: 3px; padding: 6px 8px; }
-  footer button, .document-dialog header button { min-height: 30px; display: inline-flex; align-items: center; justify-content: center; gap: 5px; padding: 0 9px; border: 0; border-radius: 9px; background: transparent; color: var(--ink-3); font-size: 11px; font-weight: 550; cursor: pointer; }
+  footer button, .document-dialog header button { white-space: nowrap; min-height: 30px; display: inline-flex; align-items: center; justify-content: center; gap: 5px; padding: 0 9px; border: 0; border-radius: 9px; background: transparent; color: var(--ink-3); font-size: 11px; font-weight: 550; cursor: pointer; }
   footer button:hover, .document-dialog header button:hover { background: var(--surface-hover); color: var(--ink); }
   footer .msr, .document-dialog header .msr { font-size: 15px; }
   .spacer { flex: 1; }
@@ -139,7 +206,17 @@
   .document-dialog > header { height: 54px; display: flex; align-items: center; gap: 12px; padding: 0 10px 0 16px; }
   .document-dialog > header > div:first-child { min-width: 0; flex: 1; display: flex; flex-direction: column; }
   .dialog-actions { display: flex; align-items: center; gap: 3px; }
-  .dialog-stage { height: calc(100% - 54px); padding: 12px; background: var(--cream-content); }
+  .dialog-stage { height: calc(100% - 54px - 48px); padding: 12px; background: var(--cream-content); }
+  .pick-bar { height: 48px; display: flex; align-items: center; gap: 8px; padding: 0 10px 0 16px; color: var(--ink-4); font: 400 12px/1.3 var(--font-sans); }
+  .pick-bar.active { color: var(--ink); }
+  .pick-bar > .msr { font-size: 17px; }
+  .pick-text { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .pick-bar button { min-height: 30px; display: inline-flex; align-items: center; gap: 5px; padding: 0 10px; border: 0; border-radius: 9px; background: transparent; color: var(--ink-3); font: 550 11.5px var(--font-sans); cursor: pointer; }
+  .pick-bar button:hover:not(:disabled) { background: var(--surface-hover); color: var(--ink); }
+  .pick-bar button:disabled { opacity: .45; cursor: default; }
+  .pick-bar button.primary { background: var(--ink); color: var(--cream-content); }
+  .pick-bar button.primary:hover { background: var(--ink); color: var(--cream-content); opacity: .9; }
+  .pick-bar .msr { font-size: 15px; }
   .dialog-stage.paper { overflow: auto; background: var(--surface-2); }
   .dialog-stage iframe { width: 100%; height: 100%; border: 0; border-radius: 10px; background: var(--cream-content); }
   /* 794 px de feuille + la scrollbar verticale du document : sans cette réserve,

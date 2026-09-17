@@ -3,7 +3,7 @@
   import { activeEditorSelection, activeTab, app, isCloudProvider, openPath, visibleTabs, type CopilotProvider, type DocKind, type DocTab } from '../lib/stores.svelte'
   import { closeWindow, fileSizeAt, isTauri, minimizeWindow, openContextFilesDialog, openFolderDialog, readFileBytes, readTextFileAt, toggleMaximizeWindow } from '../lib/tauri'
   import { formatBytes } from '../lib/ollama'
-  import { addCopilotContext, beginOpenAiAuth, cancelOpenAiConnection, cancelPull, connectMinimax, copilot, disconnectMinimaxKey, disconnectOpenAiAccount, ensureCopilotReady, isEmbedModel, jumpToCitation, newChat as clearChat, pullModel, refreshMinimaxStatus, refreshModels, refreshOpenAiStatus, removeCopilotContext, removeModel, retryGeneration, reviseDiagram, reviseGeneratedDocument, saveMessageAsNote, scheduleConversationPersist, selectDiagramCandidate, sendChat, setActiveModel, setChatOutputMode, setCopilotContextFolder, setCopilotMemoryFolder, setCopilotProvider, setWebSearchEnabled, stopChat, summarizeDoc, type ChatMsg, type ChatOutputMode } from '../lib/copilot.svelte'
+  import { addCopilotContext, beginOpenAiAuth, cancelOpenAiConnection, cancelPull, clearGeneratedDocumentTarget, connectMinimax, copilot, disconnectMinimaxKey, disconnectOpenAiAccount, ensureCopilotReady, isEmbedModel, jumpToCitation, newChat as clearChat, pullModel, refreshMinimaxStatus, refreshModels, refreshOpenAiStatus, removeCopilotContext, removeModel, retryGeneration, reviseDiagram, reviseGeneratedDocument, saveMessageAsNote, scheduleConversationPersist, selectDiagramCandidate, sendChat, setActiveModel, setChatOutputMode, setCopilotContextFolder, setCopilotMemoryFolder, setCopilotProvider, setWebSearchEnabled, stopChat, summarizeDoc, type ChatMsg, type ChatOutputMode } from '../lib/copilot.svelte'
   import { conversations } from '../lib/copilot-conversations.svelte'
   import { MINIMAX_DEFAULT_MODEL } from '../lib/compat'
   import { markdownTextLength } from '../lib/images'
@@ -25,7 +25,7 @@
   import CopilotEvidence from './CopilotEvidence.svelte'
   import CopilotDiagram from './CopilotDiagram.svelte'
   import CopilotDocument from './CopilotDocument.svelte'
-  import type { GeneratedDocumentArtifact } from '../lib/generated-document'
+  import type { DocumentBlockTarget, GeneratedDocumentArtifact } from '../lib/generated-document'
   import type { DiagramArtifact } from '../lib/bgraph'
 
   // Rendu d'une réponse : Markdown assaini PUIS puces de citation (l'annotation opère
@@ -807,9 +807,9 @@
     promptEl?.setSelectionRange(draft.length, draft.length)
   }
 
-  async function editGeneratedDocument(artifact: GeneratedDocumentArtifact) {
-    reviseGeneratedDocument(artifact)
-    draft = 'Modifie ce document : '
+  async function editGeneratedDocument(artifact: GeneratedDocumentArtifact, target?: DocumentBlockTarget) {
+    reviseGeneratedDocument(artifact, target)
+    draft = target ? 'Modifie cette partie : ' : 'Modifie ce document : '
     composerFace = 'question'
     await tick()
     promptEl?.focus()
@@ -2446,7 +2446,7 @@
                     onSelect={(candidateId) => selectDiagramCandidate(i, candidateId)}
                   />
                 {:else if m.generatedDocument}
-                  <CopilotDocument artifact={m.generatedDocument} onModify={(artifact) => void editGeneratedDocument(artifact)} />
+                  <CopilotDocument artifact={m.generatedDocument} onModify={(artifact, target) => void editGeneratedDocument(artifact, target)} />
                 {:else}
                   <!-- Réponse terminée : Markdown assaini (allowlist, 0 réseau) + puces [n].
                        svelte-ignore : clic et survol sont délégués aux <button> injectés
@@ -2598,6 +2598,17 @@
                           title="Revenir à une réponse"
                           aria-label={`Retirer le livrable ${current.label}`}
                           onclick={() => setChatOutputMode('answer')}
+                        ><span class="msr">close</span></button>
+                      </span>
+                    {/if}
+                    {#if copilot.generatedDocumentSeed?.target}
+                      {@const target = copilot.generatedDocumentSeed.target}
+                      <span class="cop-mode-pill cop-target-pill" title={`Partie désignée : ${target.excerpt}`}>
+                        <span class="msr">ads_click</span><span class="cop-target-text">{target.excerpt}</span>
+                        <button
+                          title="Viser tout le document"
+                          aria-label="Retirer la partie désignée"
+                          onclick={clearGeneratedDocumentTarget}
                         ><span class="msr">close</span></button>
                       </span>
                     {/if}
@@ -4044,6 +4055,8 @@
   .cop-mode-pill button:hover { opacity: 1; background: rgba(255, 255, 255, 0.16); }
   .cop-mode-pill button:focus-visible { opacity: 1; outline: 2px solid var(--cream-content); outline-offset: 1px; }
   .cop-mode-pill button .msr { font-size: 13px; }
+  .cop-target-pill { min-width: 0; }
+  .cop-target-text { min-width: 0; max-width: 160px; overflow: hidden; text-overflow: ellipsis; }
   .cop-compose-options {
     grid-column: 2;
     grid-row: 2;
