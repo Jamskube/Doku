@@ -1,13 +1,15 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Capabilities de la fenêtre principale Doku",
+  "description": "Capabilities des fenêtres Doku (principale et « Nouvelle fenêtre » doku-N)",
   "windows": [
-    "main"
+    "main",
+    "doku-*"
   ],
   "permissions": [
     "core:default",
     "core:event:default",
+    "core:window:allow-show",
     "core:window:allow-minimize",
     "core:window:allow-toggle-maximize",
     "core:window:allow-close",

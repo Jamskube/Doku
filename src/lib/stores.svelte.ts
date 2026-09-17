@@ -12,7 +12,7 @@ import { makeSearchDoc, searchDocs, type SearchDoc, type SearchResult } from './
 import { snapshotKey, type SnapshotInfo } from './snapshot'
 import { canonicalPathKey, runSaveAs, type TextSaveSnapshot } from './save-as'
 import { buildSession, buildWorkspacePathSnapshot, parseSession, parseWorkspacePathSnapshot, restoreWorkspace, type WorkspacePathSnapshot } from './session'
-import { buildSearchIndex, confirmReplacePath, isTauri, listSnapshots, pathExistsAt, purgeAllSnapshots, readSnapshot, readTextFileAt, recordSnapshot, renamePathAt, saveTextDialog, scanFiles, setAlwaysOnTop, syncSystemBackdrop, writeTextFileAtomic } from './tauri'
+import { buildSearchIndex, confirmReplacePath, confirmTabMoved, isMainWindow, isTauri, listSnapshots, onTabMoved, pathExistsAt, openNewWindow, purgeAllSnapshots, readSnapshot, readTextFileAt, recordSnapshot, renamePathAt, saveTextDialog, scanFiles, setAlwaysOnTop, syncSystemBackdrop, takeHandoff, writeTextFileAtomic } from './tauri'
 import { findBacklinks, normalizeTarget, wikilinkCandidates, wikilinkFileName, type Backlink } from './wikilink'
 import { clampCopilotWidth, COPILOT_DEFAULT_WIDTH } from './copilot-width'
 import type { CopilotVerbosity } from './copilot-service'
@@ -577,8 +577,15 @@ export function waitForAppReady(): Promise<void> {
 
 export function initApp(): Promise<void> {
   if (isTauri) {
-    appReadyPromise = restoreSession()
-    void purgeAllSnapshots(Date.now()) // purge de démarrage de l'historique (ADR-0003)
+    // Seule la fenêtre principale restaure et écrit la session : une fenêtre de plus démarre
+    // vide (ou avec l'onglet qu'on y déplace) et `sessionReady` y reste faux, sinon deux
+    // fenêtres s'écraseraient la même clé.
+    // Ses notes sans chemin passent donc par l'invite d'enregistrement à la fermeture.
+    appReadyPromise = isMainWindow().then((main) => {
+      if (!main) return receiveMovedTab()
+      void purgeAllSnapshots(Date.now()) // purge de démarrage de l'historique (ADR-0003)
+      return restoreSession()
+    })
     return appReadyPromise
   }
   // Mode navigateur (design/dev) : contenu de démonstration.
@@ -613,6 +620,57 @@ export function setColumnWidth(width: ColumnWidth) {
 export function setCopilotTextSize(size: CopilotTextSize) {
   app.copilotTextSize = size
   applyCopilotTextSize()
+}
+
+function newWindowFailed(error: unknown) {
+  console.error('Nouvelle fenêtre impossible', error)
+  app.banner = { tone: 'error', title: 'Nouvelle fenêtre impossible', message: String(error) }
+}
+
+// Ouvre une fenêtre Doku de plus, vide (menu « … » et Ctrl+Maj+N).
+export function newWindow() {
+  openNewWindow().catch(newWindowFailed)
+}
+
+// Onglet envoyé tel quel (contenu, état modifié, fins de ligne, étiquette). Il ne quitte
+// cette fenêtre qu'à l'accusé de réception : si la nouvelle fenêtre échoue, il reste ici.
+// PDF et Word n'ont pas de contenu texte : ils voyagent par leur chemin et sont relus là-bas
+// (les annotations PDF sont déjà sur disque).
+type TabHandoff = Pick<DocTab, 'name' | 'label' | 'path' | 'kind' | 'content' | 'savedContent' | 'eol'> & { token: string }
+
+export function canMoveTabToNewWindow(tab: DocTab): boolean {
+  return !isBinaryKind(tab.kind) || tab.path != null
+}
+
+export function moveTabToNewWindow(id: number) {
+  const tab = app.tabs.find((t) => t.id === id)
+  if (!tab || !canMoveTabToNewWindow(tab)) return
+  // Les modifications d'un .docx vivent dans l'éditeur Word affiché, pas dans l'onglet :
+  // les déplacer sans enregistrer les perdrait.
+  if (tab.kind === 'docx' && docxActions.tabId === id && docxActions.dirty) {
+    app.banner = { tone: 'warning', title: 'Document Word modifié', message: `Enregistrez « ${tab.label ?? tab.name} » avant de le détacher dans une nouvelle fenêtre.` }
+    return
+  }
+  const { name, label, path, kind, content, savedContent, eol } = tab
+  const token = crypto.randomUUID()
+  const handoff: TabHandoff = { token, name, label, path, kind, content, savedContent, eol }
+  onTabMoved(token, () => {
+    // Frappe arrivée pendant le transfert : l'onglet reste aussi ici plutôt que de la perdre.
+    if (app.tabs.find((t) => t.id === id)?.content === content) closeTab(id)
+  })
+    .then(() => openNewWindow(JSON.stringify(handoff)))
+    .catch(newWindowFailed)
+}
+
+async function receiveMovedTab() {
+  const raw = await takeHandoff()
+  if (!raw) return
+  const moved = JSON.parse(raw) as TabHandoff
+  const tab = openTab(moved.name, moved.path, moved.content, moved.kind)
+  tab.label = moved.label
+  tab.savedContent = moved.savedContent
+  tab.eol = moved.eol
+  await confirmTabMoved(moved.token)
 }
 
 // Épingle la fenêtre au-dessus des autres apps (FR-11). Logique partagée entre le

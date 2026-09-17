@@ -7,8 +7,8 @@
   import WikilinkPrompt from './components/WikilinkPrompt.svelte'
   import { openSearchPanel } from './lib/editor/editor'
   import { NOTE_MAX_CHARS } from './lib/session'
-  import { activatePane, activeEditorView, app, activeTab, askSave, checkExternalChanges, cycleTab, dialog, dismissReloadPrompt, initApp, isDirty, openCopilot, openDropped, openPath, openTab, openWikilink, reloadPromptedTab, requestCloseTab, saveSession, saveSettings, saveTabOrSaveAs, toggleActiveSourceMode, togglePin, toggleSidebarView, workspace } from './lib/stores.svelte'
-  import { onFileDrop, onOpenFile, onWindowCloseRequested, onWindowFocus, openFileDialog } from './lib/tauri'
+  import { activatePane, activeEditorView, app, activeTab, askSave, checkExternalChanges, cycleTab, dialog, dismissReloadPrompt, initApp, isDirty, newWindow, openCopilot, openDropped, openPath, openTab, openWikilink, reloadPromptedTab, requestCloseTab, saveSession, saveSettings, saveTabOrSaveAs, toggleActiveSourceMode, togglePin, toggleSidebarView, workspace } from './lib/stores.svelte'
+  import { isTauri, onFileDrop, onOpenFile, onWindowCloseRequested, onWindowFocus, openFileDialog } from './lib/tauri'
   import { detectUnsupported } from './lib/encoding'
   import { isBinaryDocumentName } from './lib/doc-kind'
   import { otherPane, type PaneId } from './lib/workspace'
@@ -244,6 +244,9 @@
       } else if (k === 't' && e.shiftKey) {
         e.preventDefault()
         togglePin()
+      } else if (k === 'n' && e.shiftKey && isTauri) {
+        e.preventDefault()
+        newWindow()
       }
     }
 

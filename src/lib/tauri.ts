@@ -50,8 +50,10 @@ export function syncSystemBackdrop(theme: 'light' | 'dark'): Promise<boolean> {
 // Écoute les demandes d'ouverture de fichier venues de l'hôte Rust (double-clic,
 // association, 2e instance). Émet `doku://ready` pour déclencher l'ouverture du
 // fichier de lancement une fois le listener en place. Renvoie un unlisten.
+// L'hôte n'adresse ces demandes qu'à la fenêtre principale : une fenêtre de plus n'écoute pas
+// (un `listen` global recevrait aussi les événements ciblés vers `main`).
 export async function onOpenFile(handler: (path: string) => void): Promise<() => void> {
-  if (!isTauri) return () => {}
+  if (!isTauri || !(await isMainWindow())) return () => {}
   const { listen, emit } = await import('@tauri-apps/api/event')
   const unlisten = await listen<string>('doku://open', (event) => handler(event.payload))
   await emit('doku://ready')
@@ -284,6 +286,42 @@ export async function toggleMaximizeWindow() {
   if (!isTauri) return
   const { getCurrentWindow } = await import('@tauri-apps/api/window')
   await getCurrentWindow().toggleMaximize()
+}
+
+// La fenêtre créée au lancement porte la session d'onglets ; « Nouvelle fenêtre » en ouvre
+// d'autres (doku-N) qui démarrent vides. Vrai en navigateur (une seule page).
+export async function isMainWindow(): Promise<boolean> {
+  if (!isTauri) return true
+  const { getCurrentWindow } = await import('@tauri-apps/api/window')
+  return getCurrentWindow().label === 'main'
+}
+
+// `handoff` : onglet déplacé (JSON), repris par la nouvelle fenêtre via `takeHandoff`.
+export async function openNewWindow(handoff?: string) {
+  if (!isTauri) return
+  const { invoke } = await import('@tauri-apps/api/core')
+  await invoke('new_window', { handoff })
+}
+
+export async function takeHandoff(): Promise<string | null> {
+  if (!isTauri) return null
+  const { invoke } = await import('@tauri-apps/api/core')
+  return invoke<string | null>('take_handoff')
+}
+
+// Accusé de réception d'un onglet déplacé : la fenêtre d'origine ne le ferme qu'après.
+export async function onTabMoved(token: string, handler: () => void): Promise<void> {
+  const { listen } = await import('@tauri-apps/api/event')
+  const unlisten = await listen<string>('doku://tab-moved', (event) => {
+    if (event.payload !== token) return
+    unlisten()
+    handler()
+  })
+}
+
+export async function confirmTabMoved(token: string) {
+  const { emit } = await import('@tauri-apps/api/event')
+  await emit('doku://tab-moved', token)
 }
 
 export async function closeWindow() {

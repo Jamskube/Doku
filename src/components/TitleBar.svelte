@@ -1,10 +1,10 @@
 <script lang="ts">
   import { onMount, tick, untrack } from 'svelte'
-  import { app, activeTab, assignTabToPane, closeOtherTabs, closeTabsToRight, docxActions, duplicateTab, isBinaryKind, openPath, openPdfPages, openPdfTextEdit, renameTab, requestCloseTab, isDirty, saveTabOrSaveAs, selectTab, setColumnWidth, swapPanes, toggleActiveSourceMode, togglePin, toggleWorkspaceSplit, workspace, workspaceLayout, type ColumnWidth, type DocKind } from '../lib/stores.svelte'
+  import { app, activeTab, assignTabToPane, closeOtherTabs, closeTabsToRight, docxActions, duplicateTab, canMoveTabToNewWindow, isBinaryKind, moveTabToNewWindow, newWindow, openPath, openPdfPages, openPdfTextEdit, renameTab, requestCloseTab, isDirty, saveTabOrSaveAs, selectTab, setColumnWidth, swapPanes, toggleActiveSourceMode, togglePin, toggleWorkspaceSplit, workspace, workspaceLayout, type ColumnWidth, type DocKind } from '../lib/stores.svelte'
   import type { PaneId } from '../lib/workspace'
   import { tabDiscriminator, tabLabel } from '../lib/tabs'
   import { parentPath } from '../lib/explorer'
-  import { closeWindow, minimizeWindow, readFileBytes, readImageDataUrl, readPdfAnnotationManifest, saveDocxDialog, saveHtmlDialog, saveMarkdownDialog, savePdfDialog, toggleMaximizeWindow } from '../lib/tauri'
+  import { closeWindow, isTauri, minimizeWindow, readFileBytes, readImageDataUrl, readPdfAnnotationManifest, saveDocxDialog, saveHtmlDialog, saveMarkdownDialog, savePdfDialog, toggleMaximizeWindow } from '../lib/tauri'
   import DokuMark from '../lib/DokuMark.svelte'
   import PaneTabSelector from './PaneTabSelector.svelte'
 
@@ -613,6 +613,11 @@
             <span class="msr">swap_horiz</span><span class="menu-label">Afficher dans l'autre volet</span>
           </button>
         {/if}
+        {#if isTauri}
+          <button class="app-menu-item" role="menuitem" disabled={!canMoveTabToNewWindow(tab)} onclick={() => tabMenuAction((a) => moveTabToNewWindow(a.id))}>
+            <span class="msr">open_in_new</span><span class="menu-label">Détacher l'onglet</span>
+          </button>
+        {/if}
         <div class="app-menu-sep" role="separator"></div>
         <button class="app-menu-item" role="menuitem" disabled={app.tabs.length < 2} onclick={() => tabMenuAction((a) => closeOtherTabs(a.id))}>
           <span class="msr">tab_close</span><span class="menu-label">Fermer les autres onglets</span>
@@ -768,6 +773,13 @@
             </div>
           {/if}
         </div>
+
+        {#if isTauri}
+          <div class="app-menu-sep"></div>
+          <button class="app-menu-item" role="menuitem" onmouseenter={() => (submenu = null)} onclick={() => runMenuAction(newWindow)}>
+            <span class="msr">open_in_new</span><span class="menu-label">Nouvelle fenêtre</span><kbd>Ctrl+Maj+N</kbd>
+          </button>
+        {/if}
       </div>
     {/if}
   </div>
