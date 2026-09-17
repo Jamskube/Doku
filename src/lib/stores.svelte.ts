@@ -12,7 +12,7 @@ import { makeSearchDoc, searchDocs, type SearchDoc, type SearchResult } from './
 import { snapshotKey, type SnapshotInfo } from './snapshot'
 import { canonicalPathKey, runSaveAs, type TextSaveSnapshot } from './save-as'
 import { buildSession, buildWorkspacePathSnapshot, parseSession, parseWorkspacePathSnapshot, restoreWorkspace, type WorkspacePathSnapshot } from './session'
-import { buildSearchIndex, confirmReplacePath, confirmTabMoved, isMainWindow, isTauri, listSnapshots, onTabMoved, pathExistsAt, openNewWindow, purgeAllSnapshots, readSnapshot, readTextFileAt, recordSnapshot, renamePathAt, saveTextDialog, scanFiles, setAlwaysOnTop, syncSystemBackdrop, takeHandoff, writeTextFileAtomic } from './tauri'
+import { buildSearchIndex, confirmReplacePath, confirmTabMoved, isMainWindow, isTauri, setBackgroundMode, listSnapshots, onTabMoved, pathExistsAt, openNewWindow, purgeAllSnapshots, readSnapshot, readTextFileAt, recordSnapshot, renamePathAt, saveTextDialog, scanFiles, setAlwaysOnTop, syncSystemBackdrop, takeHandoff, writeTextFileAtomic } from './tauri'
 import { findBacklinks, normalizeTarget, wikilinkCandidates, wikilinkFileName, type Backlink } from './wikilink'
 import { clampCopilotWidth, COPILOT_DEFAULT_WIDTH } from './copilot-width'
 import type { CopilotVerbosity } from './copilot-service'
@@ -122,6 +122,8 @@ export const app = $state({
   columnWidth: 'narrow' as ColumnWidth,
   // Zoom du texte des documents (doc-zoom.ts) : 1 = 100 %.
   docZoom: 1,
+  // Mode veille : fermer la fenêtre principale la masque dans la zone de notification.
+  backgroundMode: false,
   // Modèle IA actif (copilote, 13.4) ; persisté (settings). '' = aucun choisi.
   activeModel: '',
   // Modèle d'EMBEDDING (index sémantique 15.2, ADR-0015) — réglage distinct du modèle
@@ -421,6 +423,7 @@ export function loadSettings() {
       }
       app.explorerExpanded = validateExpandedPaths(s.explorerExpanded)
       app.docZoom = parseDocZoom(s.docZoom)
+      if (typeof s.backgroundMode === 'boolean') app.backgroundMode = s.backgroundMode
     }
   } catch {
     // settings corrompus/indisponibles : valeurs par défaut
@@ -441,6 +444,7 @@ export function saveSettings() {
         sidebarView: app.sidebarView,
         columnWidth: app.columnWidth,
         docZoom: app.docZoom,
+        backgroundMode: app.backgroundMode,
         activeModel: app.activeModel,
         embedModel: app.embedModel,
         copilotProvider: app.copilotProvider,
@@ -462,6 +466,16 @@ export function saveSettings() {
 
 export function applyColumnWidth() {
   document.documentElement.style.setProperty('--doc-width', COLUMN_PX[app.columnWidth])
+}
+
+export async function setBackgroundModeSetting(enabled: boolean): Promise<void> {
+  try {
+    await setBackgroundMode(enabled)
+    app.backgroundMode = enabled
+  } catch (error) {
+    console.error('Mode veille indisponible', error)
+    app.banner = { tone: 'error', title: 'Mode veille indisponible', message: 'L’icône de la zone de notification n’a pas pu être créée sur ce système.' }
+  }
 }
 
 export function applyDocZoom() {

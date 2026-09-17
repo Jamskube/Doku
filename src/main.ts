@@ -7,7 +7,7 @@ import '@fontsource/geist-mono/latin-500.css'
 import './app.css'
 import { mount } from 'svelte'
 import App from './App.svelte'
-import { isTauri, syncSystemBackdrop } from './lib/tauri'
+import { backgroundModeActive, isTauri, launchedAtStartup, syncSystemBackdrop } from './lib/tauri'
 
 if (isTauri) {
   document.documentElement.dataset.dokuRuntime = 'tauri'
@@ -43,6 +43,14 @@ if (isTauri) {
         await syncSystemBackdrop(theme)
       } catch {
         // Le fond CSS de repli est déjà prêt ; l'échec natif n'empêche pas l'ouverture.
+      }
+      // Lancée avec la session en mode veille, la fenêtre principale reste masquée — Mica est
+      // déjà posé pour son premier affichage : Doku attend dans la zone de notification.
+      // Sans icône (création refusée), elle s'affiche quand même.
+      const { app: settings, setBackgroundModeSetting } = await import('./lib/stores.svelte')
+      if (getCurrentWindow().label === 'main' && settings.backgroundMode && (await launchedAtStartup())) {
+        await setBackgroundModeSetting(true)
+        if (await backgroundModeActive()) return
       }
       await getCurrentWindow().show()
     } catch {

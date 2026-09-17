@@ -7,8 +7,8 @@
   import WikilinkPrompt from './components/WikilinkPrompt.svelte'
   import { openSearchPanel } from './lib/editor/editor'
   import { NOTE_MAX_CHARS } from './lib/session'
-  import { activatePane, activeEditorView, app, activeTab, askSave, checkExternalChanges, cycleTab, dialog, dismissReloadPrompt, initApp, isDirty, newWindow, openCopilot, openDropped, openPath, openTab, openWikilink, reloadPromptedTab, requestCloseTab, saveSession, saveSettings, saveTabOrSaveAs, toggleActiveSourceMode, togglePin, toggleSidebarView, workspace, zoomDocText } from './lib/stores.svelte'
-  import { isTauri, onFileDrop, onOpenFile, onWindowCloseRequested, onWindowFocus, openFileDialog } from './lib/tauri'
+  import { activatePane, activeEditorView, app, activeTab, askSave, checkExternalChanges, cycleTab, dialog, dismissReloadPrompt, initApp, isDirty, newWindow, openCopilot, openDropped, openPath, openTab, openWikilink, reloadPromptedTab, requestCloseTab, saveSession, saveSettings, setBackgroundModeSetting, saveTabOrSaveAs, toggleActiveSourceMode, togglePin, toggleSidebarView, workspace, zoomDocText } from './lib/stores.svelte'
+  import { backgroundModeActive, closeWindow, hideWindow, isMainWindow, isTauri, onFileDrop, onOpenFile, onQuitRequested, onWindowCloseRequested, onWindowFocus, openFileDialog, showWindow } from './lib/tauri'
   import { detectUnsupported } from './lib/encoding'
   import { isBinaryDocumentName } from './lib/doc-kind'
   import { otherPane, type PaneId } from './lib/workspace'
@@ -120,8 +120,26 @@
     if ('requestIdleCallback' in window) requestIdleCallback(() => void loadCopilotPanel(), { timeout: 3000 })
     else setTimeout(() => void loadCopilotPanel(), 1000)
 
-    let unlistenClose: (() => void) | null = null
-    onWindowCloseRequested(async () => {
+    // Mode veille : la fenêtre principale se contente de se masquer, sauf quand « Quitter Doku »
+    // (icône de la zone de notification) demande une vraie fermeture de chaque fenêtre.
+    let quitting = false
+    void isMainWindow().then((main) => {
+      if (main && app.backgroundMode) void setBackgroundModeSetting(true)
+    })
+    let unlistenQuit: (() => void) | null = null
+    onQuitRequested(() => {
+      quitting = true
+      void closeWindow()
+    })
+      .then((u) => (unlistenQuit = u))
+      .catch((err) => console.error('Écoute de « Quitter Doku » échouée', err))
+
+    const closeGuard = async (): Promise<boolean> => {
+      if (!quitting && (await isMainWindow()) && (await backgroundModeActive())) {
+        saveSession()
+        await hideWindow()
+        return false
+      }
       try {
         const [{ flushActiveConversation }, { flushConversationWrites }] = await Promise.all([
           import('./lib/copilot.svelte'),
@@ -130,6 +148,7 @@
         await flushActiveConversation()
         await flushConversationWrites()
       } catch (error) {
+        if (quitting) await showWindow()
         app.banner = {
           tone: 'error',
           title: 'Discussion non enregistrée',
@@ -142,6 +161,8 @@
       const persisted = saveSession()
       const dirty = app.tabs.filter((t) => isDirty(t) && !(persisted && t.path == null && t.content.length <= NOTE_MAX_CHARS))
       if (dirty.length === 0) return true
+      // Fermeture demandée depuis l'icône : la fenêtre peut être masquée, l'invite doit se voir.
+      if (quitting) await showWindow()
       const choice = await askSave(
         'Enregistrer les modifications ?',
         dirty.length === 1
@@ -154,6 +175,13 @@
         saveSession() // les notes enregistrées ici ont maintenant un chemin
       }
       return true
+    }
+    let unlistenClose: (() => void) | null = null
+    onWindowCloseRequested(async () => {
+      const allowed = await closeGuard()
+      // Invite annulée : un prochain × doit retrouver le comportement normal (veille comprise).
+      if (!allowed) quitting = false
+      return allowed
     })
       .then((u) => (unlistenClose = u))
       .catch((err) => console.error('Enregistrement du garde de fermeture échoué', err))
@@ -267,6 +295,7 @@
     window.addEventListener('doku:wikilink', onWikilink)
     return () => {
       unlistenClose?.()
+      unlistenQuit?.()
       unlistenOpen?.()
       unlistenFocus?.()
       unlistenDrop?.()

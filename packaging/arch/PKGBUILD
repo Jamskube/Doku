@@ -23,7 +23,8 @@ arch=('x86_64')
 url="https://github.com/Jamskube/Doku"
 license=('AGPL-3.0-or-later')
 depends=('webkit2gtk-4.1' 'gtk3' 'libsoup3' 'openssl')
-optdepends=('ollama: copilote IA local')
+optdepends=('ollama: copilote IA local'
+            'libayatana-appindicator: icône de veille dans la zone de notification')
 options=('!strip' '!debug')
 
 # Tout vient du dépôt lui-même : aucune source à télécharger.

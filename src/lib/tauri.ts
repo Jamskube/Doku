@@ -330,6 +330,62 @@ export async function closeWindow() {
   await getCurrentWindow().close()
 }
 
+export async function hideWindow() {
+  if (!isTauri) return
+  const { getCurrentWindow } = await import('@tauri-apps/api/window')
+  await getCurrentWindow().hide()
+}
+
+export async function showWindow() {
+  if (!isTauri) return
+  const { getCurrentWindow } = await import('@tauri-apps/api/window')
+  await getCurrentWindow().show()
+}
+
+// --- Démarrage de session et mode veille (hôte : main.rs, plugin autostart) ---
+
+// Vrai si Doku a été lancé par l'ouverture de session (argument --autostart).
+export async function launchedAtStartup(): Promise<boolean> {
+  if (!isTauri) return false
+  const { invoke } = await import('@tauri-apps/api/core')
+  return invoke<boolean>('launched_at_startup')
+}
+
+// Crée ou retire l'icône de la zone de notification. Sa présence EST le mode veille pour
+// l'hôte : `backgroundModeActive` la relit au moment de fermer.
+export async function setBackgroundMode(enabled: boolean): Promise<void> {
+  if (!isTauri) return
+  const { invoke } = await import('@tauri-apps/api/core')
+  await invoke('set_background_mode', { enabled })
+}
+
+export async function backgroundModeActive(): Promise<boolean> {
+  if (!isTauri) return false
+  const { invoke } = await import('@tauri-apps/api/core')
+  return invoke<boolean>('background_mode')
+}
+
+// « Quitter Doku » depuis l'icône : chaque fenêtre ferme elle-même (et garde ses invites).
+export async function onQuitRequested(handler: () => void): Promise<() => void> {
+  if (!isTauri) return () => {}
+  const { listen } = await import('@tauri-apps/api/event')
+  return listen('doku://quit', () => handler())
+}
+
+// Lancement avec la session : la source de vérité est le système (registre sous Windows),
+// jamais un réglage local qui pourrait mentir après une désactivation hors de Doku.
+export async function autostartEnabled(): Promise<boolean> {
+  if (!isTauri) return false
+  const { isEnabled } = await import('@tauri-apps/plugin-autostart')
+  return isEnabled()
+}
+
+export async function setAutostart(enabled: boolean): Promise<void> {
+  if (!isTauri) return
+  const { disable, enable } = await import('@tauri-apps/plugin-autostart')
+  await (enabled ? enable() : disable())
+}
+
 export async function setAlwaysOnTop(value: boolean) {
   if (!isTauri) return
   const { getCurrentWindow } = await import('@tauri-apps/api/window')

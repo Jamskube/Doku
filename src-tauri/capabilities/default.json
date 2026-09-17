@@ -10,6 +10,7 @@
     "core:default",
     "core:event:default",
     "core:window:allow-show",
+    "core:window:allow-hide",
     "core:window:allow-minimize",
     "core:window:allow-toggle-maximize",
     "core:window:allow-close",
@@ -19,6 +20,9 @@
     "dialog:default",
     "opener:default",
     "log:default",
+    "autostart:allow-enable",
+    "autostart:allow-disable",
+    "autostart:allow-is-enabled",
     "fs:default",
     {
       "identifier": "fs:allow-read-text-file",

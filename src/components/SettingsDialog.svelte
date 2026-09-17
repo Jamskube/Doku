@@ -1,11 +1,11 @@
 <script lang="ts">
-  import { app, closeSettings, COPILOT_TEXT_PX, setColumnWidth, setCopilotTextSize, setTheme } from '../lib/stores.svelte'
+  import { app, closeSettings, COPILOT_TEXT_PX, setBackgroundModeSetting, setColumnWidth, setCopilotTextSize, setTheme } from '../lib/stores.svelte'
   import { deleteAllRagIndexes } from '../lib/rag-index.svelte'
-  import { isTauri, purgeSnapshotsHard } from '../lib/tauri'
+  import { autostartEnabled, isTauri, purgeSnapshotsHard, setAutostart } from '../lib/tauri'
   import { version } from '../../package.json'
   import DokuMark from '../lib/DokuMark.svelte'
 
-  type SettingsSection = 'appearance' | 'data' | 'about'
+  type SettingsSection = 'appearance' | 'system' | 'data' | 'about'
   type Job = 'snapshots' | 'rag' | 'conversations'
 
   let dlg = $state<HTMLDialogElement | null>(null)
@@ -16,6 +16,7 @@
 
   const NAV_ITEMS = [
     { key: 'appearance' as const, label: 'Apparence', icon: 'palette' },
+    { key: 'system' as const, label: 'Système', icon: 'computer' },
     { key: 'data' as const, label: 'Données', icon: 'database' },
     { key: 'about' as const, label: 'À propos', icon: 'info' },
   ]
@@ -55,6 +56,32 @@
   $effect(() => {
     if (app.settingsOpen && app.settingsFocus === 'about') activeSection = 'about'
   })
+
+  // Lancement avec la session : relu au système à chaque ouverture de la section (il peut
+  // avoir été coupé hors de Doku, dans le Gestionnaire des tâches).
+  let autostart = $state<boolean | null>(null)
+  let autostartBusy = $state(false)
+  let autostartError = $state('')
+  $effect(() => {
+    if (activeSection !== 'system' || !app.settingsOpen || !isTauri) return
+    autostartEnabled()
+      .then((enabled) => { autostart = enabled; autostartError = '' })
+      .catch(() => { autostart = null; autostartError = 'Réglage du système illisible.' })
+  })
+
+  async function toggleAutostart() {
+    if (autostart === null || autostartBusy) return
+    autostartBusy = true
+    try {
+      await setAutostart(!autostart)
+      autostart = await autostartEnabled()
+      autostartError = ''
+    } catch {
+      autostartError = 'Le système a refusé de modifier le démarrage automatique.'
+    } finally {
+      autostartBusy = false
+    }
+  }
 
   function selectSection(section: SettingsSection) {
     activeSection = section
@@ -206,6 +233,56 @@
                     </button>
                   {/each}
                 </div>
+              </div>
+            </div>
+          </section>
+        {:else if activeSection === 'system'}
+          <section class="pane" aria-labelledby="system-title">
+            <div class="pane-heading">
+              <h3 id="system-title">Système</h3>
+              <p>Gardez Doku à portée de main, dès l’ouverture de votre session.</p>
+            </div>
+
+            <div class="preference-list">
+              <div class="preference toggle">
+                <div class="preference-copy">
+                  <span class="preference-icon msr" aria-hidden="true">power_settings_new</span>
+                  <div>
+                    <strong>Ouvrir Doku au démarrage</strong>
+                    <small>
+                      {app.backgroundMode
+                        ? 'Doku se lance avec votre session et attend en veille, sans ouvrir de fenêtre.'
+                        : 'Doku se lance et s’ouvre avec votre session.'}
+                    </small>
+                    {#if autostartError}<small class="switch-error" role="alert">{autostartError}</small>{/if}
+                  </div>
+                </div>
+                <button
+                  class="switch"
+                  role="switch"
+                  aria-checked={autostart === true}
+                  aria-label="Ouvrir Doku au démarrage"
+                  disabled={!isTauri || autostart === null || autostartBusy}
+                  onclick={() => void toggleAutostart()}
+                ><span class="knob"></span></button>
+              </div>
+
+              <div class="preference toggle">
+                <div class="preference-copy">
+                  <span class="preference-icon msr" aria-hidden="true">bedtime</span>
+                  <div>
+                    <strong>Rester en veille à la fermeture</strong>
+                    <small>Fermer la fenêtre la masque : Doku reste prêt dans la zone de notification, près de l’horloge. Pour quitter, clic droit sur son icône puis « Quitter Doku ».</small>
+                  </div>
+                </div>
+                <button
+                  class="switch"
+                  role="switch"
+                  aria-checked={app.backgroundMode}
+                  aria-label="Rester en veille à la fermeture"
+                  disabled={!isTauri}
+                  onclick={() => void setBackgroundModeSetting(!app.backgroundMode)}
+                ><span class="knob"></span></button>
               </div>
             </div>
           </section>
@@ -498,6 +575,22 @@
     box-shadow: 0 1px 4px rgba(var(--shadow-rgb), 0.12), 0 0 0 1px var(--elevation-ring);
   }
   .widths button { min-width: 112px; }
+  /* Réglage oui/non : texte à gauche, interrupteur à droite. */
+  .preference.toggle { flex-direction: row; align-items: center; justify-content: space-between; gap: 18px; }
+  .switch {
+    position: relative; flex: 0 0 auto; width: 40px; height: 22px; padding: 0; border: 0; border-radius: 999px;
+    background: var(--line-3); cursor: pointer; transition: background 140ms ease;
+  }
+  .switch .knob {
+    position: absolute; top: 3px; left: 3px; width: 16px; height: 16px; border-radius: 50%;
+    background: var(--cream-content); box-shadow: 0 1px 3px rgba(var(--shadow-rgb), 0.25); transition: translate 140ms ease;
+  }
+  .switch[aria-checked="true"] { background: var(--ink); }
+  .switch[aria-checked="true"] .knob { translate: 18px 0; }
+  .switch:disabled { opacity: 0.5; cursor: default; }
+  .switch:focus-visible { outline: 2px solid var(--line-3); outline-offset: 2px; }
+  .switch-error { display: block; margin-top: 4px; color: var(--err-text); }
+  @media (prefers-reduced-motion: reduce) { .switch, .switch .knob { transition: none; } }
   .text-sizes button { min-width: 88px; gap: 7px; }
   /* Échantillon rendu à la taille qu'il propose : le bouton montre son effet au lieu
      de le nommer. Hauteur de ligne à 1 pour que « Très grand » ne creuse pas la pilule. */

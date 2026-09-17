@@ -17,6 +17,8 @@ use sidecar::OllamaState;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
+use tauri::menu::{Menu, MenuItem};
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{Emitter, Listener, Manager, RunEvent, WebviewWindowBuilder};
 
 // Le matériau Mica est rendu par le DWM, pas simulé dans la webview. Doku ne
@@ -120,26 +122,98 @@ fn take_handoff(window: tauri::WebviewWindow, handoffs: tauri::State<'_, Handoff
     handoffs.0.lock().unwrap_or_else(|e| e.into_inner()).remove(window.label())
 }
 
+// Remonte la fenêtre principale (masquée par la veille, réduite ou derrière d'autres), ou la
+// recrée si elle a été fermée pendant qu'une autre fenêtre vivait : elle rapporte la session.
+// Rend vrai si elle existait déjà, donc prête à recevoir un événement tout de suite.
+fn show_main(app: &tauri::AppHandle) -> bool {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.show();
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+        true
+    } else {
+        let _ = create_window(app, "main");
+        false
+    }
+}
+
+// Argument posé par le lancement automatique de session (plugin autostart).
+const AUTOSTART_FLAG: &str = "--autostart";
+
+#[tauri::command]
+fn launched_at_startup() -> bool {
+    std::env::args().any(|arg| arg == AUTOSTART_FLAG)
+}
+
+// Mode veille : fermer la fenêtre principale la masque au lieu de quitter, et l'icône de la
+// zone de notification la rouvre. L'icône n'existe QUE dans ce mode : sa présence est l'état,
+// lu par la fenêtre au moment de fermer — un réglage changé depuis une autre fenêtre compte.
+const TRAY_ID: &str = "doku";
+
+// async : le menu se construit sur le fil principal ; depuis une commande synchrone (qui y
+// tourne déjà) l'attente bloquerait la boucle d'événements sous Windows.
+#[tauri::command]
+async fn set_background_mode(app: tauri::AppHandle, enabled: bool) -> Result<(), String> {
+    if !enabled {
+        let _ = app.remove_tray_by_id(TRAY_ID);
+        return Ok(());
+    }
+    if app.tray_by_id(TRAY_ID).is_some() {
+        return Ok(());
+    }
+    let open = MenuItem::with_id(&app, "open", "Ouvrir Doku", true, None::<&str>).map_err(|e| e.to_string())?;
+    let quit = MenuItem::with_id(&app, "quit", "Quitter Doku", true, None::<&str>).map_err(|e| e.to_string())?;
+    let menu = Menu::with_items(&app, &[&open, &quit]).map_err(|e| e.to_string())?;
+    let mut tray = TrayIconBuilder::with_id(TRAY_ID)
+        .tooltip("Doku")
+        .menu(&menu)
+        .show_menu_on_left_click(false)
+        .on_menu_event(|app, event| match event.id().as_ref() {
+            "open" => {
+                show_main(app);
+            }
+            // Quitter passe par chaque fenêtre : ses modifications non enregistrées ont droit
+            // à leur invite avant que le processus ne s'arrête.
+            "quit" => {
+                let _ = app.emit("doku://quit", ());
+            }
+            _ => {}
+        })
+        .on_tray_icon_event(|tray, event| {
+            if let TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. } = event {
+                show_main(tray.app_handle());
+            }
+        });
+    if let Some(icon) = app.default_window_icon() {
+        tray = tray.icon(icon.clone());
+    }
+    tray.build(&app).map(|_| ()).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn background_mode(app: tauri::AppHandle) -> bool {
+    app.tray_by_id(TRAY_ID).is_some()
+}
+
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
             // 2e lancement (ex. double-clic alors que l'app tourne) : on remonte la fenêtre
             // principale et on y ouvre le fichier passé — pas de 2e processus. Si elle a été
             // fermée pendant qu'une autre fenêtre vivait, on la recrée : elle rapporte la session.
-            let path = file_from_args(&args);
-            if let Some(window) = app.get_webview_window("main") {
-                let _ = window.show();
-                let _ = window.unminimize();
-                let _ = window.set_focus();
-                if let Some(path) = path {
+            let existed = show_main(app);
+            if let Some(path) = file_from_args(&args) {
+                if existed {
                     let _ = app.emit_to("main", "doku://open", path);
-                }
-            } else if create_window(app, "main").is_ok() {
-                if let Some(path) = path {
+                } else {
                     open_in_main_when_ready(app, path);
                 }
             }
         }))
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            Some(vec![AUTOSTART_FLAG]),
+        ))
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
@@ -167,6 +241,9 @@ fn main() {
             move_to_trash,
             new_window,
             take_handoff,
+            launched_at_startup,
+            set_background_mode,
+            background_mode,
             sidecar::start_ollama,
             openai::openai_status,
             openai::openai_auth_start,
@@ -188,7 +265,9 @@ fn main() {
             if let Some(path) = file_from_args(&args) {
                 open_in_main_when_ready(app.handle(), path);
             }
-            if let Some(window) = app.get_webview_window("main") {
+            // Lancement de session : la fenêtre peut rester en veille (main.ts décide) ; le
+            // filet de sécurité l'afficherait au bout de 4 s.
+            if let Some(window) = app.get_webview_window("main").filter(|_| !launched_at_startup()) {
                 show_if_still_hidden(window);
             }
             Ok(())
