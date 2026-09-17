@@ -158,9 +158,9 @@ export function openAiChat(
   onToken: (token: string) => void,
   signal?: AbortSignal,
   onThinking?: () => void,
-  options: Pick<OpenAiStreamOptions, 'webSearch' | 'onSearching' | 'onCitations'> = {},
+  options: Pick<OpenAiStreamOptions, 'webSearch' | 'onSearching' | 'onCitations' | 'reasoningEffort'> = {},
 ): Promise<string> {
-  return streamOpenAi(messages, onToken, signal, { reasoningEffort: 'low', onThinking, ...options })
+  return streamOpenAi(messages, onToken, signal, { onThinking, ...options, reasoningEffort: options.reasoningEffort ?? 'low' })
 }
 
 export function openAiGenerate(

@@ -1049,10 +1049,15 @@ function streamChat(
     onCitations?: (citations: WebCitation[]) => void
     tools?: unknown
     onToolCalls?: (calls: CompatToolCall[]) => void
+    // Bouton « Réfléchir » : réservé aux tours visibles. Les appels internes (titres,
+    // mémoire, contrôle visuel) restent bridés, sinon chaque tour coûterait plusieurs
+    // réflexions longues.
+    thinking?: boolean
   } = {},
 ): Promise<string> {
   if (runtime.provider === 'openai') {
     return openAiChat(messages, onToken, signal, options.onThinking, {
+      reasoningEffort: options.thinking ? 'high' : undefined,
       webSearch: options.webSearch,
       onSearching: options.onSearching,
       onCitations: (raw) => options.onCitations?.(normalizeWebCitations(raw)),
@@ -1062,6 +1067,7 @@ function streamChat(
     return compatChat('minimax', runtime.model, textOnly(messages), onToken, signal, options.onThinking, {
       tools: options.tools,
       onToolCalls: options.onToolCalls,
+      thinking: options.thinking,
     })
   }
   return chat(runtime.port, runtime.model, textOnly(messages), onToken, signal, {
@@ -1554,6 +1560,7 @@ export async function sendChat(
   const memoryFolder = copilot.memoryFolder ? { ...copilot.memoryFolder } : null
   const contextRevision = copilot.contextRevision
   const webSearchEnabled = copilot.webSearchEnabled
+  const thinking = app.copilotThinking && isCloudProvider(provider)
   const outputMode = copilot.outputMode
   const diagramSeed = copilot.diagramSeed ? { ...copilot.diagramSeed } : null
   const generatedDocumentSeed = copilot.generatedDocumentSeed ? { ...copilot.generatedDocumentSeed } : null
@@ -1948,6 +1955,7 @@ export async function sendChat(
           },
           signal,
           {
+            thinking,
             tools: [WEB_SEARCH_TOOL],
             onToolCalls: (calls) => { requested = calls },
             onThinking: () => {
@@ -2028,7 +2036,7 @@ export async function sendChat(
             else m.content += t
           },
           signal,
-          {},
+          { thinking },
         )
         if (outputMode === 'diagram') diagramOutput = finalOutput
         else if (generatedDocumentKind) generatedDocumentOutput = finalOutput
@@ -2046,6 +2054,7 @@ export async function sendChat(
       },
       signal,
       {
+        thinking,
         webSearch: webSearchEnabled,
         onThinking: () => {
         // Réflexion cloud : efface « lit le document… » — les points chorégraphiés seuls

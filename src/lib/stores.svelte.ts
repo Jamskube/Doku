@@ -131,6 +131,8 @@ export const app = $state({
   minimaxModel: '',
   // Style des réponses du copilote (bref / équilibré / détaillé) — persisté.
   copilotVerbosity: 'balanced' as CopilotVerbosity,
+  // Bouton « Réfléchir » du copilote cloud : laisse le modèle raisonner (plus lent, plus cher).
+  copilotThinking: false,
   // Mémoire de travail automatisée : uniquement utilisée par les fournisseurs cloud.
   // Le réglage est global, mais les souvenirs restent compartimentés par dossier.
   cloudMemoryEnabled: true,
@@ -399,6 +401,7 @@ export function loadSettings() {
       if (typeof s.minimaxModel === 'string') app.minimaxModel = s.minimaxModel
       if (s.copilotVerbosity === 'brief' || s.copilotVerbosity === 'balanced' || s.copilotVerbosity === 'detailed')
         app.copilotVerbosity = s.copilotVerbosity
+      if (typeof s.copilotThinking === 'boolean') app.copilotThinking = s.copilotThinking
       if (typeof s.cloudMemoryEnabled === 'boolean') app.cloudMemoryEnabled = s.cloudMemoryEnabled
       if (typeof s.copilotOpen === 'boolean') app.copilotOpen = s.copilotOpen
       if (typeof s.copilotWidth === 'number') app.copilotWidth = clampCopilotWidth(s.copilotWidth)
@@ -437,6 +440,7 @@ export function saveSettings() {
         copilotProvider: app.copilotProvider,
         minimaxModel: app.minimaxModel,
         copilotVerbosity: app.copilotVerbosity,
+        copilotThinking: app.copilotThinking,
         cloudMemoryEnabled: app.cloudMemoryEnabled,
         copilotOpen: app.copilotOpen,
         copilotWidth: app.copilotWidth,

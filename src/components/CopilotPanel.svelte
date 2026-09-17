@@ -5,7 +5,7 @@
   import { formatBytes } from '../lib/ollama'
   import { addCopilotContext, beginOpenAiAuth, cancelOpenAiConnection, cancelPull, clearGeneratedDocumentTarget, connectMinimax, copilot, disconnectMinimaxKey, disconnectOpenAiAccount, ensureCopilotReady, isEmbedModel, jumpToCitation, newChat as clearChat, pullModel, refreshMinimaxStatus, refreshModels, refreshOpenAiStatus, removeCopilotContext, removeModel, retryGeneration, reviseDiagram, reviseGeneratedDocument, saveMessageAsNote, scheduleConversationPersist, selectDiagramCandidate, sendChat, setActiveModel, setChatOutputMode, setCopilotContextFolder, setCopilotMemoryFolder, setCopilotProvider, setWebSearchEnabled, stopChat, summarizeDoc, type ChatMsg, type ChatOutputMode } from '../lib/copilot.svelte'
   import { conversations } from '../lib/copilot-conversations.svelte'
-  import { MINIMAX_DEFAULT_MODEL } from '../lib/compat'
+  import { MINIMAX_DEFAULT_MODEL, minimaxThinkingSwitchable } from '../lib/compat'
   import { markdownTextLength } from '../lib/images'
   import { cloudOnlyMode, matchSlashCommand, OUTPUT_MODES, OUTPUT_ORDER, slashQuery, suggestSlashCommands, type SlashCommand, type SlashSuggestion } from '../lib/composer-commands'
   import { vaultLabel, vaultShortLabel } from '../lib/platform'
@@ -199,6 +199,34 @@
   function dismissCitePreview() {
     clearTimeout(citePreviewTimer)
     if (citePreview) citePreview = null
+  }
+
+  // Bouton « Réfléchir » et son info-bulle : même carte flottante que l'aperçu de citation,
+  // positionnée dans le repère du panneau (la rangée d'options rogne ce qui en dépasse).
+  const thinkModel = $derived(app.copilotProvider === 'openai' ? OPENAI_MODEL : app.minimaxModel || MINIMAX_DEFAULT_MODEL)
+  const thinkAlways = $derived(app.copilotProvider === 'minimax' && !minimaxThinkingSwitchable(thinkModel))
+  const thinkTipText = $derived(
+    thinkAlways
+      ? { title: 'Réflexion permanente', text: `${thinkModel} réfléchit toujours avant de répondre : sa réflexion ne peut pas être coupée.`, hint: 'Choisissez MiniMax-M3 pour la piloter' }
+      : app.copilotThinking
+        ? { title: 'Réflexion activée', text: `${thinkModel} raisonne avant chaque réponse : plus fouillée, mais plus lente et plus coûteuse.`, hint: 'Cliquer pour revenir aux réponses rapides' }
+        : { title: 'Réfléchir', text: 'Laisse le modèle raisonner avant de répondre, pour les questions difficiles. Réponses plus lentes et plus coûteuses.', hint: 'Désactivé · réponses rapides' },
+  )
+  let thinkTip = $state<{ x: number; y: number } | null>(null)
+  let thinkTipTimer: ReturnType<typeof setTimeout> | undefined
+  function showThinkTip(button: HTMLElement) {
+    clearTimeout(thinkTipTimer)
+    thinkTipTimer = setTimeout(() => {
+      if (!panelEl || !button.isConnected) return
+      const r = button.getBoundingClientRect()
+      const a = panelEl.getBoundingClientRect()
+      const half = 130
+      thinkTip = { x: Math.min(Math.max(r.left + r.width / 2 - a.left, half + 8), a.width - half - 8), y: r.top - a.top - 8 }
+    }, 250)
+  }
+  function hideThinkTip() {
+    clearTimeout(thinkTipTimer)
+    thinkTip = null
   }
 
   // Modèle conseillé (carte d'onboarding) + suggestions. Toujours des tags -q4_0 explicites
@@ -2588,6 +2616,24 @@
                     oninput={onPromptInput}
                   ></textarea>
                   <div class="cop-compose-options">
+                    <!-- Réflexion des modèles cloud : un bouton à bascule, visible en permanence
+                         parce qu'il change le coût et la durée de chaque réponse. -->
+                    {#if isCloudProvider(app.copilotProvider)}
+                      <!-- aria-disabled et non disabled : un bouton désactivé ne reçoit aucun
+                           survol, et l'info-bulle doit justement expliquer pourquoi. -->
+                      <button
+                        class="cop-think-toggle"
+                        class:on={app.copilotThinking || thinkAlways}
+                        aria-pressed={app.copilotThinking || thinkAlways}
+                        aria-disabled={thinkAlways}
+                        aria-describedby={thinkTip ? 'cop-think-tip' : undefined}
+                        onclick={() => { if (!thinkAlways) app.copilotThinking = !app.copilotThinking }}
+                        onmouseenter={(event) => showThinkTip(event.currentTarget)}
+                        onmouseleave={hideThinkTip}
+                        onfocus={(event) => showThinkTip(event.currentTarget)}
+                        onblur={hideThinkTip}
+                      ><span class="msr">psychology</span>Réfléchir</button>
+                    {/if}
                     <!-- Un livrable armé se voit ici, et nulle part ailleurs : le menu du
                          « + » porte le choix, cette pastille porte l'état. -->
                     {#if copilot.outputMode !== 'answer'}
@@ -2820,6 +2866,16 @@
   <!-- Hors de .cop-card (overflow hidden) : ces surfaces flottantes se positionnent dans
        le repère du panneau (contain: layout) au-dessus de tout le contenu. -->
   {@render citePreviewCard()}
+  {#if thinkTip}
+    <div id="cop-think-tip" class="cop-cite-preview cop-think-tip" style="left:{thinkTip.x}px; top:{thinkTip.y}px" role="tooltip">
+      <div class="cop-cite-preview-head">
+        <span class="msr">psychology</span>
+        <span class="cop-cite-preview-name">{thinkTipText.title}</span>
+      </div>
+      <p class="cop-cite-preview-text">{thinkTipText.text}</p>
+      <div class="cop-cite-preview-hint">{thinkTipText.hint}</div>
+    </div>
+  {/if}
   {@render slashMenu()}
   {@render addContextMenu()}
   {@render identityMenu()}
@@ -4055,6 +4111,19 @@
   .cop-mode-pill button:hover { opacity: 1; background: rgba(255, 255, 255, 0.16); }
   .cop-mode-pill button:focus-visible { opacity: 1; outline: 2px solid var(--cream-content); outline-offset: 1px; }
   .cop-mode-pill button .msr { font-size: 13px; }
+  .cop-think-toggle {
+    flex: 0 0 auto; display: inline-flex; align-items: center; gap: 4px; height: 26px; padding: 0 9px 0 7px;
+    border: 1px solid var(--line-3); border-radius: 999px; background: transparent; color: var(--ink-3);
+    font: 550 11px var(--font-sans); white-space: nowrap; cursor: pointer;
+  }
+  .cop-think-toggle .msr { font-size: 15px; }
+  .cop-think-toggle:hover:not([aria-disabled='true']) { background: var(--surface-hover); color: var(--ink); }
+  .cop-think-toggle.on { border-color: var(--ink); background: var(--ink); color: var(--cream-content); }
+  .cop-think-toggle.on:hover:not([aria-disabled='true']) { background: var(--ink); color: var(--cream-content); opacity: 0.9; }
+  .cop-think-toggle[aria-disabled='true'] { cursor: default; opacity: 0.75; }
+  .cop-cite-preview.cop-think-tip { width: 260px; }
+  .cop-think-tip .cop-cite-preview-head .msr { font-size: 15px; color: var(--ink-3); }
+  .cop-think-toggle:focus-visible { outline: 2px solid var(--line-3); outline-offset: 1px; }
   .cop-target-pill { min-width: 0; }
   .cop-target-text { min-width: 0; max-width: 160px; overflow: hidden; text-overflow: ellipsis; }
   .cop-compose-options {

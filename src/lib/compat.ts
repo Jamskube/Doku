@@ -81,6 +81,14 @@ export interface CompatOptions {
   tools?: unknown
   /** Appelé quand le modèle demande des outils au lieu de répondre. */
   onToolCalls?: (calls: CompatToolCall[]) => void
+  /** Bouton « Réfléchir » : ne pas couper la pensée des modèles qui acceptent de la couper. */
+  thinking?: boolean
+}
+
+// Seuls les M3 acceptent qu'on coupe leur pensée (même règle que `honors_thinking` côté
+// hôte) : un M2.x réfléchit toujours, le bouton le dit au lieu de ne rien faire.
+export function minimaxThinkingSwitchable(model: string): boolean {
+  return model.includes('M3')
 }
 
 function parseToolCalls(payload: string): CompatToolCall[] {
@@ -160,6 +168,7 @@ export async function compatChat(
         messages: payload,
         maxOutputTokens: options.maxOutputTokens,
         tools: options.tools,
+        thinking: options.thinking ?? false,
       },
       onEvent,
     })

@@ -145,6 +145,10 @@ pub struct CompatRequest {
     /// l'hôte ne fait que transporter (ADR-0004).
     #[serde(default)]
     tools: Option<Value>,
+    /// Réflexion demandée par l'utilisateur (bouton « Réfléchir ») : on ne coupe plus la
+    /// pensée des modèles qui acceptent de la couper. Absent = appel ordinaire, bridé.
+    #[serde(default)]
+    thinking: bool,
 }
 
 #[derive(Serialize, Clone)]
@@ -531,7 +535,7 @@ fn chat_body(def: &ProviderDef, request: &CompatRequest) -> Value {
         // contenu. Le modèle réfléchit autant ; on ne le voit simplement plus.
         "reasoning_split": true,
     });
-    if def.thinking_param && honors_thinking(&request.model) {
+    if def.thinking_param && honors_thinking(&request.model) && !request.thinking {
         // Le pendant du `reasoning: {effort: "low"}` envoyé à OpenAI : sans lui, la
         // surface compatible réfléchissait à pleine profondeur pendant que l'autre
         // fournisseur était bridé — d'où « MiniMax est lent, OpenAI est rapide », qui
@@ -710,6 +714,7 @@ mod tests {
                 }],
                 max_output_tokens: None,
                 tools: None,
+                thinking: false,
             },
         );
         assert_eq!(body["stream"], true);
@@ -739,11 +744,31 @@ mod tests {
                 }],
                 max_output_tokens: None,
                 tools: None,
+                thinking: false,
             },
         );
         // Le pendant du `reasoning: {effort: "low"}` d'OpenAI. Sans lui, M3 réfléchissait
         // à pleine profondeur sur CHACUN des appels d'un tour.
         assert_eq!(body["thinking"]["type"], "disabled");
+    }
+
+    #[test]
+    fn chat_body_lets_m3_think_on_request() {
+        let def = provider("minimax").unwrap();
+        let body = chat_body(
+            def,
+            &CompatRequest {
+                request_id: "r".into(),
+                provider: "minimax".into(),
+                model: "MiniMax-M3".into(),
+                messages: vec![],
+                max_output_tokens: None,
+                tools: None,
+                thinking: true,
+            },
+        );
+        // Bouton « Réfléchir » : la pensée n'est plus coupée, le modèle garde son défaut.
+        assert!(body.get("thinking").is_none());
     }
 
     #[test]
@@ -763,6 +788,7 @@ mod tests {
                 }],
                 max_output_tokens: Some(512),
                 tools: None,
+                thinking: false,
             },
         );
         assert_eq!(body["max_completion_tokens"], 512);
@@ -823,6 +849,7 @@ mod tests {
                 messages: vec![],
                 max_output_tokens: None,
                 tools: Some(serde_json::json!([{ "type": "function" }])),
+                thinking: false,
             },
         );
         assert_eq!(with_tools["tool_choice"], "auto");
