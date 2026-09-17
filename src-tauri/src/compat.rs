@@ -552,6 +552,197 @@ fn chat_body(def: &ProviderDef, request: &CompatRequest) -> Value {
     body
 }
 
+// Échec d'une tentative de flux. `retryable` = panne passagère (surcharge, coupure réseau,
+// flux tronqué, limite de débit) qu'une nouvelle tentative règle, par opposition à une clé
+// refusée ou une requête invalide qui échoueraient à l'identique.
+struct StreamFailure {
+    message: String,
+    retryable: bool,
+}
+
+impl StreamFailure {
+    fn transient(message: impl Into<String>) -> Self {
+        Self { message: message.into(), retryable: true }
+    }
+    fn fatal(message: impl Into<String>) -> Self {
+        Self { message: message.into(), retryable: false }
+    }
+}
+
+// Deux relances (0,8 s puis 2,4 s) : MiniMax renvoie par intermittence une surcharge ou coupe
+// le flux pendant la réflexion. Sans relance, chaque panne passagère devenait une carte
+// « La génération a échoué » à relancer à la main.
+const MAX_STREAM_RETRIES: u32 = 2;
+
+fn retryable_status(status: u16) -> bool {
+    matches!(status, 408 | 429 | 500 | 502 | 503 | 504 | 529)
+}
+
+// Codes `base_resp` passagers de MiniMax : erreur inconnue, délai dépassé, limites de débit
+// (requêtes, tokens, connexions, croissance), erreur interne ou système.
+fn is_transient_code(code: i64) -> bool {
+    matches!(code, 1000 | 1001 | 1002 | 1024 | 1033 | 1039 | 1041 | 2045)
+}
+
+// Erreur envoyée DANS le flux (`{"error": {...}}`) : passagère si elle porte un statut HTTP
+// de surcharge ou un type « serveur ».
+fn transient_stream_error(json: &Value) -> bool {
+    let http = json
+        .pointer("/error/http_code")
+        .and_then(|value| value.as_u64().or_else(|| value.as_str()?.parse().ok()));
+    let kind = json.pointer("/error/type").and_then(Value::as_str).unwrap_or("");
+    http.is_some_and(|code| u16::try_from(code).is_ok_and(retryable_status))
+        || matches!(kind, "overloaded_error" | "api_error" | "rate_limit_error" | "server_error")
+}
+
+// Une tentative complète. `visible` passe à vrai dès qu'un texte ou un appel d'outil est parti
+// vers le frontend : au-delà, relancer dupliquerait la réponse, l'erreur remonte telle quelle.
+async fn stream_attempt(
+    def: &ProviderDef,
+    key: &str,
+    body: &Value,
+    on_event: &Channel<CompatStreamEvent>,
+    cancel_rx: &mut oneshot::Receiver<()>,
+    visible: &mut bool,
+) -> Result<(), StreamFailure> {
+    let response = stream_client()
+        .post(format!("{}/chat/completions", def.base_url))
+        .bearer_auth(key)
+        .json(body)
+        .send()
+        .await
+        .map_err(|error| {
+            StreamFailure::transient(format!(
+                "Connexion au fournisseur cloud impossible ({}).",
+                transport_reason(&error)
+            ))
+        })?;
+    let status = response.status();
+    if !status.is_success() {
+        let text = response.text().await.unwrap_or_default();
+        return Err(StreamFailure {
+            message: api_error(def, status, &text),
+            retryable: retryable_status(status.as_u16()),
+        });
+    }
+
+    let event = |kind: &'static str, text: Option<String>| {
+        send_event(on_event, kind, text).map_err(StreamFailure::fatal)
+    };
+    let mut stream = response.bytes_stream();
+    let mut buffer = Vec::<u8>::new();
+    let mut thinking_sent = false;
+    let mut pending_tool_calls: Vec<PendingToolCall> = Vec::new();
+    loop {
+        tokio::select! {
+            _ = &mut *cancel_rx => return Ok(()),
+            chunk = stream.next() => {
+                let Some(chunk) = chunk else { break };
+                let chunk = chunk.map_err(|_| StreamFailure::transient("Le flux du fournisseur a été interrompu."))?;
+                buffer.extend_from_slice(&chunk);
+                while let Some((index, delimiter_len)) = find_sse_boundary(&buffer) {
+                    let raw = buffer[..index].to_vec();
+                    buffer.drain(..index + delimiter_len);
+                    let json = match parse_sse_event(&raw).map_err(StreamFailure::transient)? {
+                        SseEvent::Json(json) => json,
+                        SseEvent::Done => return finish(&event, &pending_tool_calls, visible),
+                        SseEvent::Empty => continue,
+                    };
+                    if let Some(message) = json.pointer("/error/message").and_then(Value::as_str) {
+                        return Err(StreamFailure {
+                            message: message.to_string(),
+                            retryable: transient_stream_error(&json),
+                        });
+                    }
+                    // MiniMax : erreur applicative en plein 200 (`base_resp`).
+                    if let Some((code, msg)) = base_resp_error(&json) {
+                        if is_auth_code(code) {
+                            return Err(StreamFailure::fatal(api_error(def, reqwest::StatusCode::UNAUTHORIZED, "")));
+                        }
+                        return Err(StreamFailure { message: msg, retryable: is_transient_code(code) });
+                    }
+                    // `choices` peut être vide (chunk final d'usage) : accès défensif.
+                    if let Some(delta) = json
+                        .pointer("/choices/0/delta/content")
+                        .and_then(Value::as_str)
+                    {
+                        if !delta.is_empty() {
+                            *visible = true;
+                            event("delta", Some(delta.to_string()))?;
+                        }
+                    }
+                    // `delta.reasoning_content` (reasoning_split) : le TEXTE reste ignoré,
+                    // mais le PREMIER delta signale la phase de réflexion au front — les
+                    // M-series pensent longuement avant d'écrire, un statut muet se lirait
+                    // comme un blocage (« jamais muet »).
+                    if !thinking_sent
+                        && json
+                            .pointer("/choices/0/delta/reasoning_content")
+                            .and_then(Value::as_str)
+                            .is_some_and(|s| !s.is_empty())
+                    {
+                        thinking_sent = true;
+                        event("thinking", None)?;
+                    }
+                    absorb_tool_call_deltas(&json, &mut pending_tool_calls);
+                }
+            }
+        }
+    }
+    // Flux clos sans `[DONE]` : les appels reconstitués seraient perdus alors qu'ils sont
+    // complets. Le repli n'est pas théorique — un fournisseur peut fermer la connexion sur
+    // le dernier chunk.
+    finish(&event, &pending_tool_calls, visible)
+}
+
+// Fin de flux. Les appels d'outils partent AVANT `done` : le frontend doit savoir qu'il a des
+// recherches à exécuter au moment où il apprend que le tour est terminé. Un flux terminé sans
+// texte ni outil (toute la réponse partie en réflexion) est une panne passagère.
+fn finish(
+    event: &impl Fn(&'static str, Option<String>) -> Result<(), StreamFailure>,
+    pending_tool_calls: &[PendingToolCall],
+    visible: &mut bool,
+) -> Result<(), StreamFailure> {
+    if let Some(payload) = tool_calls_payload(pending_tool_calls) {
+        *visible = true;
+        event("toolCalls", Some(payload))?;
+    }
+    if !*visible {
+        return Err(StreamFailure::transient("Le modèle n’a renvoyé aucun texte de réponse."));
+    }
+    event("done", None)
+}
+
+// Relance les pannes passagères tant que rien n'est encore affiché (voir StreamFailure).
+async fn stream_with_retries(
+    def: &ProviderDef,
+    key: &str,
+    body: &Value,
+    on_event: &Channel<CompatStreamEvent>,
+    cancel_rx: &mut oneshot::Receiver<()>,
+) -> Result<(), String> {
+    let mut attempt = 0;
+    loop {
+        let mut visible = false;
+        match stream_attempt(def, key, body, on_event, cancel_rx, &mut visible).await {
+            Ok(()) => break Ok(()),
+            Err(failure) if failure.retryable && !visible && attempt < MAX_STREAM_RETRIES => {
+                attempt += 1;
+                log::warn!("{} : tentative {attempt} échouée, nouvel essai — {}", def.id, failure.message);
+                // Attente croissante, annulable : « Arrêter » n'attend pas la fin du délai.
+                tokio::select! {
+                    _ = &mut *cancel_rx => break Ok(()),
+                    _ = tokio::time::sleep(Duration::from_millis(800 * 3u64.pow(attempt - 1))) => {}
+                }
+            }
+            Err(failure) => {
+                log::error!("{} : génération échouée après {} tentative(s) — {}", def.id, attempt + 1, failure.message);
+                break Err(failure.message);
+            }
+        }
+    }
+}
+
 #[tauri::command]
 pub async fn stream_compat(
     request: CompatRequest,
@@ -573,103 +764,7 @@ pub async fn stream_compat(
     }
     let body = chat_body(def, &request);
 
-    let result = async {
-        let response = stream_client()
-            .post(format!("{}/chat/completions", def.base_url))
-            .bearer_auth(&key)
-            .json(&body)
-            .send()
-            .await
-            .map_err(|error| {
-                format!("Connexion au fournisseur cloud impossible ({}).", transport_reason(&error))
-            })?;
-        let status = response.status();
-        if !status.is_success() {
-            let text = response.text().await.unwrap_or_default();
-            return Err(api_error(def, status, &text));
-        }
-
-        let mut stream = response.bytes_stream();
-        let mut buffer = Vec::<u8>::new();
-        let mut completed = false;
-        let mut thinking_sent = false;
-        let mut pending_tool_calls: Vec<PendingToolCall> = Vec::new();
-        let mut tool_calls_sent = false;
-        loop {
-            tokio::select! {
-                _ = &mut cancel_rx => break,
-                chunk = stream.next() => {
-                    let Some(chunk) = chunk else { break };
-                    let chunk = chunk.map_err(|_| "Le flux du fournisseur a été interrompu.".to_string())?;
-                    buffer.extend_from_slice(&chunk);
-                    while let Some((index, delimiter_len)) = find_sse_boundary(&buffer) {
-                        let event = buffer[..index].to_vec();
-                        buffer.drain(..index + delimiter_len);
-                        let json = match parse_sse_event(&event)? {
-                            SseEvent::Json(json) => json,
-                            SseEvent::Done => {
-                                completed = true;
-                                // Les appels d'outils partent AVANT `done` : le frontend
-                                // doit savoir qu'il a des recherches à exécuter au moment
-                                // où il apprend que le tour est terminé.
-                                if let Some(payload) = tool_calls_payload(&pending_tool_calls) {
-                                    tool_calls_sent = true;
-                                    send_event(&on_event, "toolCalls", Some(payload))?;
-                                }
-                                send_event(&on_event, "done", None)?;
-                                break;
-                            }
-                            SseEvent::Empty => continue,
-                        };
-                        if let Some(message) = json.pointer("/error/message").and_then(Value::as_str) {
-                            return Err(message.to_string());
-                        }
-                        // MiniMax : erreur applicative en plein 200 (`base_resp`).
-                        if let Some((code, msg)) = base_resp_error(&json) {
-                            if is_auth_code(code) {
-                                return Err(api_error(def, reqwest::StatusCode::UNAUTHORIZED, ""));
-                            }
-                            return Err(msg);
-                        }
-                        // `choices` peut être vide (chunk final d'usage) : accès défensif.
-                        if let Some(delta) = json
-                            .pointer("/choices/0/delta/content")
-                            .and_then(Value::as_str)
-                        {
-                            if !delta.is_empty() {
-                                send_event(&on_event, "delta", Some(delta.to_string()))?;
-                            }
-                        }
-                        // `delta.reasoning_content` (reasoning_split) : le TEXTE reste ignoré,
-                        // mais le PREMIER delta signale la phase de réflexion au front — les
-                        // M-series pensent longuement avant d'écrire, un statut muet se lirait
-                        // comme un blocage (« jamais muet »).
-                        if !thinking_sent
-                            && json
-                                .pointer("/choices/0/delta/reasoning_content")
-                                .and_then(Value::as_str)
-                                .is_some_and(|s| !s.is_empty())
-                        {
-                            thinking_sent = true;
-                            send_event(&on_event, "thinking", None)?;
-                        }
-                        absorb_tool_call_deltas(&json, &mut pending_tool_calls);
-                    }
-                    if completed { break; }
-                }
-            }
-        }
-        // Flux clos sans `[DONE]` : les appels reconstitués seraient perdus alors qu'ils
-        // sont complets. Le repli n'est pas théorique — un fournisseur peut fermer la
-        // connexion sur le dernier chunk.
-        if !tool_calls_sent {
-            if let Some(payload) = tool_calls_payload(&pending_tool_calls) {
-                send_event(&on_event, "toolCalls", Some(payload))?;
-            }
-        }
-        Ok(())
-    }
-    .await;
+    let result = stream_with_retries(def, &key, &body, &on_event, &mut cancel_rx).await;
 
     state
         .cancellations
@@ -685,9 +780,29 @@ pub async fn stream_compat(
 #[cfg(test)]
 mod tests {
     use super::{
-        absorb_tool_call_deltas, chat_body, provider, tool_calls_payload, CompatMessage,
-        CompatRequest, Value,
+        absorb_tool_call_deltas, chat_body, is_transient_code, provider, retryable_status,
+        tool_calls_payload, transient_stream_error, CompatMessage, CompatRequest, Value,
     };
+
+    #[test]
+    fn retries_only_passing_failures() {
+        // Surcharge, limite de débit, panne serveur : une relance a une chance.
+        for status in [429, 500, 502, 503, 504, 529] {
+            assert!(retryable_status(status), "{status}");
+        }
+        // Clé refusée, requête invalide : échouerait pareil.
+        for status in [400, 401, 403, 404, 422] {
+            assert!(!retryable_status(status), "{status}");
+        }
+        assert!(is_transient_code(1002) && is_transient_code(1033));
+        assert!(!is_transient_code(1004) && !is_transient_code(2013) && !is_transient_code(1026));
+        let overloaded: Value = serde_json::json!({ "error": { "type": "overloaded_error", "message": "busy" } });
+        let busy: Value = serde_json::json!({ "error": { "http_code": "529", "message": "high load" } });
+        let invalid: Value = serde_json::json!({ "error": { "type": "invalid_request_error", "http_code": "400", "message": "bad" } });
+        assert!(transient_stream_error(&overloaded));
+        assert!(transient_stream_error(&busy));
+        assert!(!transient_stream_error(&invalid));
+    }
 
     #[test]
     fn registry_knows_minimax_and_rejects_unknown() {
@@ -854,5 +969,137 @@ mod tests {
         );
         assert_eq!(with_tools["tool_choice"], "auto");
         assert_eq!(with_tools["tools"][0]["type"], "function");
+    }
+
+    // --- Relances du flux, contre un faux serveur local (réponses HTTP brutes, une par
+    // connexion) : le vrai chemin reqwest + SSE + canal, sans réseau.
+    mod retries {
+        use super::super::{stream_with_retries, CompatStreamEvent, ProviderDef};
+        use serde_json::Value;
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+        use std::sync::{
+            atomic::{AtomicUsize, Ordering},
+            Arc, Mutex,
+        };
+        use tauri::ipc::{Channel, InvokeResponseBody};
+
+        fn fake_provider(responses: Vec<String>) -> (&'static ProviderDef, Arc<AtomicUsize>) {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let port = listener.local_addr().unwrap().port();
+            let served = Arc::new(AtomicUsize::new(0));
+            let counter = served.clone();
+            std::thread::spawn(move || {
+                for response in responses {
+                    let Ok((mut socket, _)) = listener.accept() else { return };
+                    let mut request = Vec::new();
+                    let mut chunk = [0u8; 4096];
+                    // En-têtes puis corps (Content-Length) : répondre avant d'avoir tout lu
+                    // ferait couper la connexion côté client.
+                    loop {
+                        let read = socket.read(&mut chunk).unwrap_or(0);
+                        if read == 0 { break }
+                        request.extend_from_slice(&chunk[..read]);
+                        let text = String::from_utf8_lossy(&request);
+                        if let Some(head_end) = text.find("\r\n\r\n") {
+                            let length = text[..head_end]
+                                .lines()
+                                .find_map(|line| line.to_ascii_lowercase().strip_prefix("content-length:").map(|v| v.trim().parse::<usize>().unwrap_or(0)))
+                                .unwrap_or(0);
+                            if request.len() >= head_end + 4 + length { break }
+                        }
+                    }
+                    counter.fetch_add(1, Ordering::SeqCst);
+                    let _ = socket.write_all(response.as_bytes());
+                }
+            });
+            let def = Box::leak(Box::new(ProviderDef {
+                id: "test",
+                what: "la clé de test",
+                base_url: Box::leak(format!("http://127.0.0.1:{port}").into_boxed_str()),
+                key_target: "test",
+                default_models: &[],
+                probe_model: "m",
+                thinking_param: false,
+            }));
+            (def, served)
+        }
+
+        fn http(status: &str, content_type: &str, body: &str) -> String {
+            format!("HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len())
+        }
+
+        fn sse(events: &[&str]) -> String {
+            http("200 OK", "text/event-stream", &events.iter().map(|e| format!("data: {e}\n\n")).collect::<String>())
+        }
+
+        fn run(def: &'static ProviderDef) -> (Result<(), String>, Vec<Value>) {
+            let events = Arc::new(Mutex::new(Vec::new()));
+            let sink = events.clone();
+            let channel = Channel::<CompatStreamEvent>::new(move |body| {
+                if let InvokeResponseBody::Json(json) = body {
+                    sink.lock().unwrap().push(serde_json::from_str(&json).unwrap());
+                }
+                Ok(())
+            });
+            let (_cancel_tx, mut cancel_rx) = tokio::sync::oneshot::channel();
+            let body = serde_json::json!({ "model": "m", "messages": [], "stream": true });
+            let result = tauri::async_runtime::block_on(stream_with_retries(def, "cle", &body, &channel, &mut cancel_rx));
+            let collected = events.lock().unwrap().clone();
+            (result, collected)
+        }
+
+        const HELLO: &str = r#"{"choices":[{"delta":{"content":"Bonjour"}}]}"#;
+
+        #[test]
+        fn retries_an_overload_before_any_text() {
+            let (def, served) = fake_provider(vec![
+                http("529 Overloaded", "application/json", r#"{"error":{"message":"The server cluster is currently under high load"}}"#),
+                sse(&[r#"{"choices":[{"delta":{"reasoning_content":"hmm"}}]}"#, HELLO, "[DONE]"]),
+            ]);
+            let (result, events) = run(def);
+            assert_eq!(result, Ok(()));
+            assert_eq!(served.load(Ordering::SeqCst), 2);
+            let kinds: Vec<&str> = events.iter().filter_map(|e| e["kind"].as_str()).collect();
+            assert_eq!(kinds, ["thinking", "delta", "done"]);
+            assert_eq!(events[1]["text"], "Bonjour");
+        }
+
+        #[test]
+        fn retries_a_stream_that_ends_with_reasoning_only() {
+            let (def, served) = fake_provider(vec![
+                sse(&[r#"{"choices":[{"delta":{"reasoning_content":"hmm"}}]}"#, "[DONE]"]),
+                sse(&[HELLO, "[DONE]"]),
+            ]);
+            let (result, _) = run(def);
+            assert_eq!(result, Ok(()));
+            assert_eq!(served.load(Ordering::SeqCst), 2);
+        }
+
+        #[test]
+        fn never_retries_once_text_is_visible() {
+            let (def, served) = fake_provider(vec![
+                sse(&[HELLO, r#"{"error":{"type":"overloaded_error","message":"busy"}}"#]),
+                sse(&[HELLO, "[DONE]"]),
+            ]);
+            let (result, events) = run(def);
+            assert_eq!(result, Err("busy".to_string()));
+            assert_eq!(served.load(Ordering::SeqCst), 1);
+            assert_eq!(events.iter().filter(|e| e["kind"] == "delta").count(), 1);
+        }
+
+        #[test]
+        fn fails_at_once_on_a_rejected_key_and_gives_up_after_two_retries() {
+            let (def, served) = fake_provider(vec![http("401 Unauthorized", "application/json", "{}")]);
+            let (result, _) = run(def);
+            assert!(result.unwrap_err().contains("n'est plus acceptée"));
+            assert_eq!(served.load(Ordering::SeqCst), 1);
+
+            let overload = http("503 Service Unavailable", "application/json", r#"{"error":{"message":"indisponible"}}"#);
+            let (def, served) = fake_provider(vec![overload.clone(), overload.clone(), overload]);
+            let (result, _) = run(def);
+            assert_eq!(result, Err("indisponible".to_string()));
+            assert_eq!(served.load(Ordering::SeqCst), 3);
+        }
     }
 }
