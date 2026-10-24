@@ -1,10 +1,9 @@
-// UI en Inter Variable (un seul woff2 variable couvre 400-700 — Geist Sans jugée trop
-// massive à petite taille). Geist Mono reste pour le code, en variantes LATINES.
-// Inter, Source Serif et Material Symbols sont déclarés dans app.css : latin seul pour
-// les deux premières, sous-ensemble généré (scripts/subset-icons.mjs) pour la dernière.
+// UI en police système (kit Kube). Geist Mono reste pour le code, en variantes LATINES ;
+// Source Serif est déclarée dans app.css (latin seul).
 import '@fontsource/geist-mono/latin-400.css'
 import '@fontsource/geist-mono/latin-500.css'
 import './app.css'
+import iconSprite from './assets/icons.svg?raw'
 import { mount } from 'svelte'
 import App from './App.svelte'
 import { backgroundModeActive, isTauri, launchedAtStartup, syncSystemBackdrop } from './lib/tauri'
@@ -27,6 +26,20 @@ if (isTauri) {
     console.warn = (...args: unknown[]) => { originalWarn(...args); void warn(args.map(describe).join(' ')) }
   }).catch(() => {})
 }
+
+// Sprite Lucide dans le DOM de chaque fenêtre : les <use href="#i-…"> le résolvent sans
+// requête réseau (scripts/subset-icons.mjs).
+document.body.insertAdjacentHTML('afterbegin', iconSprite)
+
+// Sur un appareil hybride (Surface : écran tactile + Type Cover), `(any-pointer: coarse)`
+// est TOUJOURS vrai : le dessin tactile ne peut pas en dépendre. On suit le dernier
+// pointeur réellement utilisé ; les changements VISIBLES pour le doigt (rangées plus
+// hautes, actions révélées) se posent sous `:root[data-input='touch']`. Défaut : souris.
+document.documentElement.dataset.input = 'mouse'
+window.addEventListener('pointerdown', (event) => {
+  const input = event.pointerType === 'mouse' ? 'mouse' : 'touch'
+  if (document.documentElement.dataset.input !== input) document.documentElement.dataset.input = input
+}, { capture: true, passive: true })
 
 const app = mount(App, { target: document.getElementById('app')! })
 

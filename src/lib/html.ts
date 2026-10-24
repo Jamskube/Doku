@@ -2,7 +2,8 @@
 // (sanitizeHtml) puis on injecte une CSP stricte (aucun script, aucun réseau) + une
 // feuille de base pour que le rendu habite la même colonne « papier » que le reste
 // de Doku (au lieu du défaut navigateur Times/collé-à-gauche). Rendu dans un
-// `<iframe sandbox="">`.
+// `<iframe sandbox="allow-same-origin">` : aucun script, mais le parent peut y révéler une citation.
+import { locateTextSpan } from './citations'
 import { sanitizeHtml } from './sanitize'
 
 export const CSP =
@@ -66,4 +67,69 @@ export function sandboxDoc(html: string, theme: Theme = 'light', maxWidth = '680
   // retire script/meta-refresh/base/form et neutralise les ancres externes.
   const clean = sanitizeHtml(html)
   return injectHead(clean, CSP + baseStyle(theme, maxWidth))
+}
+
+// Révèle un passage cité dans l'aperçu HTML (iframe `allow-same-origin`, sans script) :
+// défile jusqu'à lui et pose des repères qui s'effacent, comme le surlignage PDF. `passage`
+// est un extrait du SOURCE (balises comprises) : on compare son texte au texte rendu.
+// 'pending' tant que srcdoc n'est pas chargé (l'appelant réessaie au `load`).
+export function revealHtmlPassage(frame: HTMLIFrameElement, passage: string, dark: boolean): 'pending' | 'missing' | 'shown' {
+  const doc = frame.contentDocument
+  const win = frame.contentWindow
+  if (!doc?.body || !win || doc.URL !== 'about:srcdoc' || doc.readyState !== 'complete') return 'pending'
+  // Extrait coupé au milieu d'une balise (`ss="x">Texte`) : on retire ce reste avant d'en lire le texte.
+  const wanted = new DOMParser().parseFromString(passage.replace(/^[^<]*?>/, ''), 'text/html').body.textContent ?? ''
+  const nodes: Text[] = []
+  const owner: number[] = []
+  const offset: number[] = []
+  let text = ''
+  const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT, {
+    acceptNode: (node) =>
+      node.parentElement?.closest('style, script, noscript, template') ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT,
+  })
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    const value = node.nodeValue ?? ''
+    for (let i = 0; i < value.length; i++) {
+      const space = /\s/.test(value[i])
+      if (space && (text === '' || text.endsWith(' '))) continue
+      text += space ? ' ' : value[i]
+      owner.push(nodes.length)
+      offset.push(i)
+    }
+    nodes.push(node as Text)
+  }
+  const span = locateTextSpan(text, wanted)
+  if (!span) return 'missing'
+  // Un Range sur toute l'étendue rendrait aussi la boîte des blocs qu'il contient (cartes
+  // entières surlignées) : rectangles pris nœud texte par nœud texte.
+  const rects: DOMRect[] = []
+  const last = owner[span.end - 1]
+  for (let n = owner[span.start]; n <= last && rects.length < 300; n++) {
+    const range = doc.createRange()
+    range.setStart(nodes[n], n === owner[span.start] ? offset[span.start] : 0)
+    range.setEnd(nodes[n], n === last ? offset[span.end - 1] + 1 : nodes[n].length)
+    rects.push(...[...range.getClientRects()].filter((r) => r.width > 0 && r.height > 0))
+  }
+  if (!rects.length) return 'missing'
+  const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches
+  win.scrollTo({ top: rects[0].top + win.scrollY - win.innerHeight / 3, behavior: reduced ? 'auto' : 'smooth' })
+  // Une citation remplace la précédente : empilées en multiply, les marques fonçaient.
+  doc.querySelectorAll('[data-doku-cite]').forEach((m) => m.remove())
+  for (const r of rects) {
+    const mark = doc.createElement('div')
+    mark.dataset.dokuCite = ''
+    // Coordonnées du document (et non de la fenêtre) : le défilement ne décale pas les repères.
+    mark.style.cssText =
+      `position:absolute;left:${r.left + win.scrollX}px;top:${r.top + win.scrollY}px;width:${r.width}px;height:${r.height}px;` +
+      `border-radius:2px;pointer-events:none;z-index:2147483647;` +
+      (dark ? 'background:rgba(255,205,84,.28)' : 'background:rgba(255,205,84,.42);mix-blend-mode:multiply')
+    doc.documentElement.appendChild(mark)
+    // Même courbe que le repère PDF (`ease`), portée par l'image clé : en option, elle
+    // s'appliquerait à toute l'animation. Durée gardée en mouvement réduit : c'est un fondu.
+    mark.animate(
+      [{ opacity: 1 }, { opacity: 1, offset: 0.65, easing: 'ease' }, { opacity: 0 }],
+      { duration: 4200, fill: 'forwards' },
+    ).onfinish = () => mark.remove()
+  }
+  return 'shown'
 }

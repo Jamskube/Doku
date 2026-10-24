@@ -276,11 +276,11 @@ export function pdfNotes(manifest: PdfAnnotationManifest): PdfNote[] {
 }
 
 // Regroupe les épingles trop proches pour rester lisibles dans la gouttière.
-export function clusterPdfNotePins(notes: PdfNote[], pageHeight: number, minimumGap = 34): PdfNote[][] {
+export function clusterPdfNotePins<T extends PdfNote>(notes: T[], pageHeight: number, minimumGap = 34): T[][] {
   const ordered = notes
     .filter((note) => note.status === 'active' && Boolean(note.comment))
     .sort((left, right) => left.top - right.top)
-  const clusters: PdfNote[][] = []
+  const clusters: T[][] = []
   const safeHeight = Math.max(pageHeight, 1)
   for (const note of ordered) {
     const previous = clusters.at(-1)?.at(-1)
@@ -291,4 +291,40 @@ export function clusterPdfNotePins(notes: PdfNote[], pageHeight: number, minimum
     }
   }
   return clusters
+}
+
+// Commentaires ÉCRITS dans le fichier PDF (pense-bêtes : export de Doku, Acrobat…). pdf.js
+// ne les dessine pas sur le canvas, il les confie à une couche d'annotations que le lecteur
+// ne monte pas (ADR-0011) : on les lit comme simples données, épinglés en lecture seule.
+export interface PdfFileComment extends PdfNote {
+  box: PdfDrawingRect
+}
+
+export interface PdfFileAnnotation {
+  subtype?: string
+  contentsObj?: { str?: string } | null
+  rect?: number[]
+  state?: unknown
+}
+
+export function pdfFileComments(
+  annotations: PdfFileAnnotation[],
+  page: number,
+  toViewport: (x: number, y: number) => number[],
+  size: { width: number; height: number },
+): PdfFileComment[] {
+  return annotations.flatMap((annotation, index) => {
+    const comment = annotation.contentsObj?.str?.trim().slice(0, MAX_COMMENT)
+    // Un état de relecture (« Accepted set by… ») est une trace d'outil, pas un commentaire.
+    if (annotation.subtype !== 'Text' || !comment || annotation.state || annotation.rect?.length !== 4) return []
+    const [x1, y1] = toViewport(annotation.rect[0], annotation.rect[1])
+    const [x2, y2] = toViewport(annotation.rect[2], annotation.rect[3])
+    const box = {
+      left: Math.min(x1, x2) / size.width,
+      top: Math.min(y1, y2) / size.height,
+      width: Math.abs(x2 - x1) / size.width,
+      height: Math.abs(y2 - y1) / size.height,
+    }
+    return [{ id: `file:${page}:${index}`, page, kind: 'rectangle' as const, quote: '', comment, top: box.top, status: 'active' as const, createdAt: '', box }]
+  })
 }

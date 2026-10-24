@@ -303,6 +303,67 @@ export async function openNewWindow(handoff?: string) {
   await invoke('new_window', { handoff })
 }
 
+export async function currentWindowLabel(): Promise<string> {
+  if (!isTauri) return 'main'
+  const { getCurrentWindow } = await import('@tauri-apps/api/window')
+  return getCurrentWindow().label
+}
+
+// Glisser d'onglet (voir drag_tab_window côté hôte). `grab` : point tenu, px CSS depuis le coin.
+export async function tearOffTabWindow(handoff: string, grab: [number, number]): Promise<string> {
+  const { invoke } = await import('@tauri-apps/api/core')
+  return invoke<string>('tear_off_tab', { handoff, grab })
+}
+
+// `target` : fenêtre dont la barre est sous le curseur ; `shown` : fenêtre glissée déjà peinte.
+export async function dragTabWindow(label: string, grab: [number, number]): Promise<{ target: string | null; shown: boolean }> {
+  const { invoke } = await import('@tauri-apps/api/core')
+  return invoke('drag_tab_window', { label, grab })
+}
+
+export async function dropTabWindow(label: string) {
+  const { invoke } = await import('@tauri-apps/api/core')
+  await invoke('drop_tab_window', { label })
+}
+
+export async function giveTab(target: string, handoff: string) {
+  const { invoke } = await import('@tauri-apps/api/core')
+  await invoke('give_tab', { target, handoff })
+}
+
+// Cette fenêtre, glissée par son onglet, a été lâchée sur la barre d'une autre : label visé.
+export async function takeMerge(): Promise<string | null> {
+  if (!isTauri) return null
+  const { invoke } = await import('@tauri-apps/api/core')
+  return invoke<string | null>('take_merge')
+}
+
+export async function onMergeInto(handler: () => void) {
+  if (!isTauri) return
+  const { getCurrentWebviewWindow } = await import('@tauri-apps/api/webviewWindow')
+  await getCurrentWebviewWindow().listen('doku://merge-into', handler)
+}
+
+// Onglet en approche au-dessus de la barre d'une fenêtre (son nom), ou `null` quand il s'éloigne.
+export async function signalTabHover(target: string, name: string | null) {
+  const { emitTo } = await import('@tauri-apps/api/event')
+  await emitTo(target, 'doku://tab-hover', name)
+}
+
+export async function onTabHover(handler: (name: string | null) => void) {
+  if (!isTauri) return
+  const { getCurrentWebviewWindow } = await import('@tauri-apps/api/webviewWindow')
+  await getCurrentWebviewWindow().listen<string | null>('doku://tab-hover', (event) => handler(event.payload))
+}
+
+// Onglet lâché sur la barre de CETTE fenêtre. Écoute propre à la fenêtre : un `listen` global
+// recevrait aussi les onglets destinés aux autres.
+export async function onTabDropped(handler: (handoff: string) => void) {
+  if (!isTauri) return
+  const { getCurrentWebviewWindow } = await import('@tauri-apps/api/webviewWindow')
+  await getCurrentWebviewWindow().listen<string>('doku://tab-dropped', (event) => handler(event.payload))
+}
+
 export async function takeHandoff(): Promise<string | null> {
   if (!isTauri) return null
   const { invoke } = await import('@tauri-apps/api/core')

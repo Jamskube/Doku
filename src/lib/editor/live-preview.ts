@@ -4,7 +4,7 @@
 // Origine : spike/src/live-preview.ts, validé par mesures le 2026-07-08.
 import { syntaxTree } from '@codemirror/language'
 import type { SyntaxNode } from '@lezer/common'
-import { Compartment, EditorState, Facet, type Range, StateField } from '@codemirror/state'
+import { Compartment, EditorState, Facet, type Range, StateField, type Transaction } from '@codemirror/state'
 import {
   Decoration,
   type DecorationSet,
@@ -587,15 +587,23 @@ class TableWidget extends WidgetType {
 // qu'un `ViewPlugin` ne peut pas fournir. On passe donc par un `StateField` dédié.
 // Le widget n'est posé que hors ligne active (curseur absent) : sinon la source
 // markdown reste éditable en place.
-// Itère l'arbre complet (non borné au viewport, contrairement au ViewPlugin) : borné
-// en pratique par la coupure live-preview des gros fichiers (≥ 1,5 Mo → mode source).
-function buildTableDecorations(state: EditorState): DecorationSet {
+// Seuls blocs où un tableau peut se nicher : on ne descend que dans eux. Paragraphes,
+// blocs de code (et leurs arbres de langage montés) ou HTML sont sautés d'un bloc — c'est
+// ce qui rend le parcours proportionnel au nombre de BLOCS, pas de nœuds inline.
+const TABLE_CONTAINERS = new Set(['Document', 'Blockquote', 'BulletList', 'OrderedList', 'ListItem'])
+
+// Non borné au viewport, contrairement au ViewPlugin : borné en pratique par la coupure
+// live-preview des gros fichiers (≥ 1,5 Mo → mode source). `from`/`to` restreignent le
+// parcours aux tableaux qui recoupent cette plage (mise à jour incrémentale).
+function collectTables(state: EditorState, from?: number, to?: number): Range<Decoration>[] {
   const decos: Range<Decoration>[] = []
   const activeLines = activeLineSet(state)
   const preview = rephrasePreviewRange(state)
   syntaxTree(state).iterate({
+    from,
+    to,
     enter(node) {
-      if (node.name !== 'Table') return
+      if (node.name !== 'Table') return TABLE_CONTAINERS.has(node.name)
       // Un block-replace DOIT couvrir des lignes entières : ancrer sur les frontières
       // de ligne (un tableau indenté a un node.from en milieu de ligne).
       const from = state.doc.lineAt(node.from).from
@@ -619,10 +627,84 @@ function buildTableDecorations(state: EditorState): DecorationSet {
       return false // ne pas descendre dans les cellules
     },
   })
-  return Decoration.set(decos, true)
+  return decos
 }
 
-const tableField = StateField.define<DecorationSet>({
+// Exporté pour les tests (égalité incrémental / reconstruction complète).
+export function buildTableDecorations(state: EditorState): DecorationSet {
+  return Decoration.set(collectTables(state), true)
+}
+
+// Frappe ordinaire : on décale les widgets existants et on ne reparcourt que la zone
+// touchée, au lieu de tout l'arbre à chaque touche (21 % du dispatch sur 180 Ko).
+// `null` = cas non prouvé sûr → reconstruction complète par l'appelant.
+function updateTableDecorations(deco: DecorationSet, tr: Transaction): DecorationSet | null {
+  const { state, startState, changes } = tr
+  const { doc } = state
+  const tree = syntaxTree(state)
+  const oldTree = syntaxTree(startState)
+  // Arbre partiel (gros fichier en cours d'analyse) : des tableaux restent à découvrir.
+  if (tree.length < doc.length || oldTree.length < startState.doc.length) return null
+
+  let a = doc.length
+  let b = 0
+  changes.iterChangedRanges((_fA, _tA, fB, tB) => {
+    a = Math.min(a, fB)
+    b = Math.max(b, tB)
+  })
+  // Une ligne de contexte de chaque côté : effacer la ligne qui précède un en-tête ou une
+  // ligne vide entre deux blocs crée/défait un tableau qui ne touche pas la modification.
+  let from = doc.line(Math.max(1, doc.lineAt(a).number - 1)).from
+  let to = doc.line(Math.min(doc.lines, doc.lineAt(b).number + 1)).to
+
+  // Point de resynchronisation : le premier bloc de premier niveau qui suit la zone. S'il
+  // est identique (type, bornes décalées) dans l'ancien arbre, l'analyse en aval est la même
+  // — elle ne dépend que du texte qui suit, inchangé. Sinon (« ``` » ouvert au-dessus d'un
+  // tableau, qui avale la suite du document), on reconstruit tout.
+  let next = tree.topNode.childAfter(to)
+  while (next && next.from <= to) next = next.nextSibling
+  if (next) {
+    const oldFrom = changes.invertedDesc.mapPos(next.from)
+    const old = oldTree.topNode.childAfter(oldFrom)
+    if (!old || old.from !== oldFrom || old.name !== next.name || changes.mapPos(old.to) !== next.to) return null
+    to = next.from - 1
+  } else {
+    to = doc.length
+  }
+
+  deco = deco.map(changes)
+  // Un tableau qui commence avant la zone (ou un ancien widget qui la déborde) l'étend,
+  // jusqu'à stabilité : sinon un widget périmé et le nouveau se chevaucheraient.
+  for (;;) {
+    let f = from
+    let t = to
+    deco.between(from, to, (df, dt) => {
+      f = Math.min(f, df)
+      t = Math.max(t, dt)
+    })
+    tree.iterate({
+      from,
+      to,
+      enter(node) {
+        if (node.name !== 'Table') return TABLE_CONTAINERS.has(node.name)
+        f = Math.min(f, doc.lineAt(node.from).from)
+        t = Math.max(t, doc.lineAt(node.to).to)
+        return false
+      },
+    })
+    if (f === from && t === to) break
+    from = f
+    to = t
+  }
+  return deco.update({
+    filter: (f, t) => t < from || f > to,
+    filterFrom: from,
+    filterTo: to,
+    add: collectTables(state, from, to),
+  })
+}
+
+export const tableField = StateField.define<DecorationSet>({
   create: (state) => buildTableDecorations(state),
   update(deco, tr) {
     // Recalcul sur édition, avancée du parseur (le tableau peut être sous la frontière
@@ -631,11 +713,23 @@ const tableField = StateField.define<DecorationSet>({
     // compte que si une révélation est active (ADR-0017 : sinon activeLineSet est vide,
     // le rendu serait identique — inutile de re-parcourir l'arbre à chaque flèche).
     const revealActive = revealScope(tr.state) !== 'none'
+    const effects = tr.effects.some((e) => e.is(setRephrasePreview) || e.is(setRevealScope))
+    // L'arbre change d'objet à CHAQUE édition (réanalyse incrémentale dans la même
+    // transaction) : seul un changement d'arbre SANS édition signale l'avancée du parseur.
+    // États annexes testés au DÉPART et à l'ARRIVÉE : une édition étrangère vide l'aperçu
+    // SANS effet, et le tableau qu'il bloquait, loin de la zone éditée, doit revenir.
+    if (
+      tr.docChanged && !effects &&
+      !revealActive && revealScope(tr.startState) === 'none' &&
+      !rephrasePreviewRange(tr.state) && !rephrasePreviewRange(tr.startState)
+    ) {
+      return updateTableDecorations(deco, tr) ?? buildTableDecorations(tr.state)
+    }
     if (
       tr.docChanged ||
+      effects ||
       (tr.selection && revealActive) ||
-      syntaxTree(tr.state) !== syntaxTree(tr.startState) ||
-      tr.effects.some((e) => e.is(setRephrasePreview) || e.is(setRevealScope))
+      syntaxTree(tr.state) !== syntaxTree(tr.startState)
     ) {
       return buildTableDecorations(tr.state)
     }

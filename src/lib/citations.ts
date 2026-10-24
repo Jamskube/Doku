@@ -100,6 +100,10 @@ export function locateOffset(content: string, passage: string): { index: number;
     .map((l) => l.trim())
     .find((l) => l.length > 0)
   if (!firstLine) return null
+  // Passage intact d'abord : sa première ligne seule (« <div class="card"> », « --- »)
+  // peut se répéter et enverrait au premier bloc venu.
+  const whole = content.indexOf(passage.trim())
+  if (whole >= 0) return { index: whole, length: firstLine.length }
   const probes = [firstLine]
   if (firstLine.length > 80) probes.push(firstLine.slice(0, 80))
   if (firstLine.length > 40) probes.push(firstLine.slice(0, 40))
@@ -108,6 +112,28 @@ export function locateOffset(content: string, passage: string): { index: number;
     if (idx >= 0) return { index: idx, length: probe.length }
   }
   return null
+}
+
+// Passage (texte brut, sorti de son HTML) → étendue dans le texte RENDU d'une page, espaces
+// normalisés des deux côtés. Passage entier d'abord ; sinon on part de sa première ligne
+// UNIQUE (un « Total » répété viserait la première carte) et on étend aux lignes qui la
+// suivent de près. Les lignes sans rendu (CSS d'un extrait coupé) sont simplement sautées.
+export function locateTextSpan(text: string, passage: string): { start: number; end: number } | null {
+  const whole = passage.replace(/\s+/g, ' ').trim()
+  if (!whole) return null
+  const at = text.indexOf(whole)
+  if (at >= 0) return { start: at, end: at + whole.length }
+  const lines = passage.split('\n').map((line) => line.replace(/\s+/g, ' ').trim()).filter(Boolean)
+  const found = lines.filter((line) => text.includes(line))
+  const first = found.find((line) => text.indexOf(line) === text.lastIndexOf(line)) ?? found[0]
+  if (!first) return null
+  const start = text.indexOf(first)
+  let end = start + first.length
+  for (const line of found.slice(found.indexOf(first) + 1)) {
+    const i = text.indexOf(line, end)
+    if (i >= 0 && i - end <= 80) end = i + line.length
+  }
+  return { start, end }
 }
 
 export function locatePassage(content: string, passage: string): PassageLocation | null {

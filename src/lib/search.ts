@@ -19,7 +19,7 @@ export interface SearchHit {
   // snippet fenêtré) + longueur du terme : position exacte pour le saut/surlignage éditeur.
   col: number
   length: number
-  // Extrait de contexte (la ligne, fenêtrée si très longue).
+  // Extrait de contexte : la ligne, fenêtrée pour que le terme tombe près du début.
   snippet: string
   // Bornes du terme DANS le snippet, pour le surlignage de l'extrait (start incl., end excl.).
   start: number
@@ -45,12 +45,16 @@ export function makeSearchDoc(path: string, name: string, content: string): Sear
   return { path, name, content, lower: lower.length === content.length ? lower : content }
 }
 
-// Longueur max d'un extrait ; au-delà on fenêtre autour du match.
+// Longueur max d'un extrait.
 const SNIPPET_MAX = 160
-const CONTEXT_BEFORE = 40
+// Contexte gardé avant le terme. Court parce que la barre latérale coupe l'extrait
+// sur UNE ligne d'environ 28 caractères : avec plus de contexte, le terme surligné
+// tombait après l'ellipse de fin et le résultat ne montrait pas ce qu'on cherchait.
+const CONTEXT_BEFORE = 12
 
-// Construit un extrait autour d'un match : la ligne entière, ou une fenêtre avec
-// ellipses si la ligne dépasse SNIPPET_MAX. `start`/`end` repèrent le terme DANS
+// Construit un extrait autour d'un match : la ligne entière si le terme est près du
+// début et la ligne courte, sinon une fenêtre avec ellipses qui ouvre CONTEXT_BEFORE
+// caractères avant le terme. `start`/`end` repèrent le terme DANS
 // le snippet renvoyé (décalés si un préfixe « … » a été ajouté). `line` est fourni
 // par l'appelant (compté incrémentalement — un match en fin de gros fichier ne
 // re-balaye pas tout le contenu depuis le début).
@@ -62,8 +66,11 @@ function buildHit(content: string, matchIndex: number, matchLen: number, line: n
   const col = matchIndex - lineStart // colonne dans la ligne du document (saut éditeur)
   let snippet = rawLine
   let start = col // offset du terme dans le snippet (peut différer de col si fenêtré)
-  if (rawLine.length > SNIPPET_MAX) {
-    const winStart = Math.max(0, col - CONTEXT_BEFORE)
+  if (col > CONTEXT_BEFORE || rawLine.length > SNIPPET_MAX) {
+    let winStart = Math.max(0, col - CONTEXT_BEFORE)
+    // Ne pas ouvrir la fenêtre au milieu d'une paire de substitution (emoji) : la
+    // demi-paire orpheline s'afficherait en « � ».
+    if (winStart > 0 && (rawLine.charCodeAt(winStart) & 0xfc00) === 0xdc00) winStart--
     const prefix = winStart > 0 ? '…' : ''
     const winEnd = winStart + SNIPPET_MAX
     const suffix = winEnd < rawLine.length ? '…' : ''

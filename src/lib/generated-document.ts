@@ -1,7 +1,7 @@
 import { stripMarkersInText } from './citations'
 import { CSP, injectHead, paperCss, sandboxDoc } from './html'
 import { sanitizeHtml } from './sanitize'
-import { escapeHtml } from './export/print'
+import { escapeHtml } from './html-escape'
 import type { GeneratedDocumentReview } from './generated-document-review'
 import { buildDocumentRevisionInstruction, buildDocumentStudioInstruction } from './document-studio'
 

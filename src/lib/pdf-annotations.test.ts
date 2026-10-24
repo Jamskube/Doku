@@ -4,6 +4,7 @@ import {
   emptyPdfAnnotationManifest,
   parsePdfAnnotationManifest,
   pdfAnnotationIdentity,
+  pdfFileComments,
   pdfNotes,
   removeOrphanedPdfDrawings,
   removePdfDrawing,
@@ -194,5 +195,28 @@ describe('notes et épingles', () => {
       { ...base, id: 'c', top: 0.60, comment: 'z' },
     ]
     expect(clusterPdfNotePins(close, 1_000).map((c) => c.map((n) => n.id))).toEqual([['a', 'b'], ['c']])
+  })
+})
+
+describe('commentaires écrits dans le fichier PDF', () => {
+  // Repère d'écran factice : page de 600 × 800, y inversé comme le viewport de pdf.js.
+  const toViewport = (x: number, y: number) => [x, 800 - y]
+  const size = { width: 600, height: 800 }
+
+  it('lit les pense-bêtes avec leur texte et leur place sur la page affichée', () => {
+    const [comment] = pdfFileComments([{ subtype: 'Text', contentsObj: { str: '  À revoir  ' }, rect: [30, 600, 48, 618] }], 3, toViewport, size)
+    expect(comment).toMatchObject({ page: 3, comment: 'À revoir', status: 'active' })
+    expect(comment.box.left).toBeCloseTo(0.05)
+    expect(comment.box.top).toBeCloseTo(182 / 800)
+    expect(comment.top).toBeCloseTo(182 / 800)
+  })
+
+  it('écarte liens, notes vides et états de relecture', () => {
+    const rect = [0, 0, 10, 10]
+    expect(pdfFileComments([
+      { subtype: 'Link', contentsObj: { str: 'lien' }, rect },
+      { subtype: 'Text', contentsObj: { str: '   ' }, rect },
+      { subtype: 'Text', contentsObj: { str: 'Accepted set by Anne' }, rect, state: 'Accepted' },
+    ], 1, toViewport, size)).toEqual([])
   })
 })

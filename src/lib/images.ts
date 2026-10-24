@@ -32,7 +32,11 @@ export function resolveLocalImagePath(url: string, dir: string): string {
 
 // Une copie Markdown portable peut contenir plusieurs Mo de base64. Le modèle n'a
 // besoin que de savoir qu'une image est présente, jamais de recevoir ses octets.
+// Appelée à chaque frappe : un seul balayage sans capture écarte le cas courant (aucune
+// image intégrée), les deux remplacements exigeant tous deux `data:image/`.
+const EMBEDDED_IMAGE = /data:image\//i
 export function omitEmbeddedImageData(markdown: string): string {
+  if (!EMBEDDED_IMAGE.test(markdown)) return markdown
   return markdown
     .replace(/!\[([^\]\r\n]*)\]\(data:image\/[^)\r\n]+\)/gi, (_match, alt: string) =>
       alt.trim() ? `[Image intégrée : ${alt.trim()}]` : '[Image intégrée]',

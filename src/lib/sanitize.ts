@@ -45,15 +45,35 @@ export function sanitizeHtml(dirty: string): string {
 // `style` est hors ALLOWED_ATTR (pas de `background:url(...)`). Le hook module-level
 // `afterSanitizeAttributes` ci-dessus s'applique AUSSI ici → les ancres externes perdent
 // leur href (liens LLM inertes = pas de navigation/déchargement de la fenêtre principale).
+//
+// Le HTML rendu est ensuite RÉÉCRIT par regex (puces de citation `[n]`/`[web:n]`, habillage
+// des <pre>/<table>) : une valeur d'attribut contenant `<`, `>` ou `[` y serait prise pour du
+// markup et en ressortirait active (`<td align="<table><img onerror>">`). Ces valeurs n'ont
+// rien de légitime dans une réponse de chat : l'attribut entier est retiré.
+const CHAT_ATTR_MARKUP = /[<>[]/
+const CHAT_ALIGN = /^(left|center|right)$/
+
+function dropChatMarkupAttrs(_node: Element, data: { attrName: string; attrValue: string; keepAttr: boolean }) {
+  if (CHAT_ATTR_MARKUP.test(data.attrValue) || (data.attrName === 'align' && !CHAT_ALIGN.test(data.attrValue))) {
+    data.keepAttr = false
+  }
+}
+
 export function sanitizeChatHtml(dirty: string): string {
-  return DOMPurify.sanitize(dirty, {
-    ALLOWED_TAGS: [
-      'p', 'br', 'a', 'ul', 'ol', 'li', 'blockquote', 'pre', 'code', 'em', 'strong',
-      'b', 'i', 'del', 's', 'hr', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
-      'table', 'thead', 'tbody', 'tr', 'th', 'td', 'input',
-    ],
-    ALLOWED_ATTR: ['href', 'type', 'checked', 'disabled', 'align'],
-    ALLOW_DATA_ATTR: false,
-    ALLOW_UNKNOWN_PROTOCOLS: false,
-  })
+  // Hook posé le temps de CET appel seulement : sanitizeHtml (aperçu) ne doit pas en hériter.
+  DOMPurify.addHook('uponSanitizeAttribute', dropChatMarkupAttrs)
+  try {
+    return DOMPurify.sanitize(dirty, {
+      ALLOWED_TAGS: [
+        'p', 'br', 'a', 'ul', 'ol', 'li', 'blockquote', 'pre', 'code', 'em', 'strong',
+        'b', 'i', 'del', 's', 'hr', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
+        'table', 'thead', 'tbody', 'tr', 'th', 'td', 'input',
+      ],
+      ALLOWED_ATTR: ['href', 'type', 'checked', 'disabled', 'align'],
+      ALLOW_DATA_ATTR: false,
+      ALLOW_UNKNOWN_PROTOCOLS: false,
+    })
+  } finally {
+    DOMPurify.removeHook('uponSanitizeAttribute', dropChatMarkupAttrs)
+  }
 }

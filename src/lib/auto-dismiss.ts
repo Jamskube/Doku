@@ -3,17 +3,18 @@
 // affiche à trois endroits (bandeau de l'app, mémoire mise à jour, mémoire
 // indisponible) et aucun ne s'effaçait seul.
 //
-// Le compte à rebours se SUSPEND au survol et au focus clavier : sans ça, un message
-// long disparaît pendant qu'on le lit — et c'est le reproche que fait naître un
-// auto-effacement mal réglé, pas l'auto-effacement lui-même.
+// Le compte à rebours se SUSPEND au survol, au focus clavier, et tant que la fenêtre n'a
+// pas le focus ou est masquée (mode veille, autre application devant) : sans ça, un
+// message disparaît pendant qu'on le lit, ou avant même d'avoir été vu.
 import type { NoticeTone } from './stores.svelte'
 
-// Durées par ton. Un succès n'a qu'à confirmer ; une erreur doit laisser le temps de
-// lire une phrase entière avant de partir.
+// Durées par ton. Un succès n'a qu'à confirmer. Une erreur ne part JAMAIS seule (0) :
+// elle attend d'être fermée, comme le Toast de Kube — une cause effacée avant d'être lue
+// coûte un aller-retour avec l'utilisateur.
 export const NOTICE_DELAY: Record<NoticeTone, number> = {
   success: 5_000,
   warning: 8_000,
-  error: 10_000,
+  error: 0,
 }
 
 export interface DismissTimer {
@@ -39,18 +40,20 @@ const CLOCK_PAR_DEFAUT: DismissClock = {
   now: () => globalThis.performance?.now?.() ?? Date.now(),
 }
 
+/** Un délai nul ou négatif veut dire « persistante » : le minuteur ne s'arme jamais. */
 export function startDismissTimer(
   delay: number,
   onDismiss: () => void,
   clock: DismissClock = CLOCK_PAR_DEFAUT,
 ): DismissTimer {
+  const persistante = delay <= 0
   let restant = Math.max(0, delay)
   let debut = clock.now()
   let id: number | null = null
   let fini = false
 
   const armer = () => {
-    if (fini || id !== null) return
+    if (persistante || fini || id !== null) return
     debut = clock.now()
     id = clock.setTimeout(() => {
       id = null
@@ -77,7 +80,7 @@ export function startDismissTimer(
       desarmer()
       fini = true
     },
-    remaining: () => (fini ? 0 : id === null ? restant : Math.max(0, restant - (clock.now() - debut))),
+    remaining: () => (persistante && !fini ? Infinity : fini ? 0 : id === null ? restant : Math.max(0, restant - (clock.now() - debut))),
   }
 }
 
@@ -100,6 +103,10 @@ export interface AutoDismissParams {
  * Le compte à rebours suit la VIE de l'élément — il part au montage, s'arrête au
  * démontage — donc une notification retirée ne laisse jamais un timer orphelin qui
  * viendrait effacer la suivante.
+ *
+ * Pendant la suspension, l'élément porte `data-paused` : c'est l'UNIQUE signal que le CSS
+ * doit suivre pour figer son filet de vie. Un `:hover` CSS divergerait au doigt, où le
+ * survol reste collé après le toucher alors que le compte à rebours a repris.
  */
 export function autoDismiss(
   node: HTMLElement,
@@ -108,12 +115,37 @@ export function autoDismiss(
   let courant = params
   let timer = startDismissTimer(courant.delay, () => courant.onDismiss())
 
-  const pause = () => timer.pause()
-  const resume = () => timer.resume()
-  node.addEventListener('pointerenter', pause)
-  node.addEventListener('pointerleave', resume)
-  node.addEventListener('focusin', pause)
-  node.addEventListener('focusout', resume)
+  // Survol, focus et fenêtre absente suspendent : lever l'un ne reprend pas tant
+  // qu'un autre tient.
+  let hovered = false
+  let focused = false
+  const away = () => document.visibilityState === 'hidden' || !document.hasFocus()
+  const sync = () => {
+    if (hovered || focused || away()) {
+      timer.pause()
+      node.dataset.paused = ''
+    } else {
+      timer.resume()
+      delete node.dataset.paused
+    }
+  }
+  const pointerEnter = () => { hovered = true; sync() }
+  const pointerLeave = () => { hovered = false; sync() }
+  const focusIn = () => { focused = true; sync() }
+  const focusOut = (e: FocusEvent) => {
+    // Le focus qui passe d'un bouton à l'autre DANS la notification ne la relâche pas.
+    focused = node.contains(e.relatedTarget as Node | null)
+    sync()
+  }
+  node.addEventListener('pointerenter', pointerEnter)
+  node.addEventListener('pointerleave', pointerLeave)
+  node.addEventListener('focusin', focusIn)
+  node.addEventListener('focusout', focusOut)
+  window.addEventListener('blur', sync)
+  window.addEventListener('focus', sync)
+  document.addEventListener('visibilitychange', sync)
+  // Une notification née fenêtre masquée part suspendue.
+  sync()
 
   return {
     update(p) {
@@ -124,14 +156,18 @@ export function autoDismiss(
       if (nouvelle) {
         timer.stop()
         timer = startDismissTimer(p.delay, () => courant.onDismiss())
+        sync()
       }
     },
     destroy() {
       timer.stop()
-      node.removeEventListener('pointerenter', pause)
-      node.removeEventListener('pointerleave', resume)
-      node.removeEventListener('focusin', pause)
-      node.removeEventListener('focusout', resume)
+      node.removeEventListener('pointerenter', pointerEnter)
+      node.removeEventListener('pointerleave', pointerLeave)
+      node.removeEventListener('focusin', focusIn)
+      node.removeEventListener('focusout', focusOut)
+      window.removeEventListener('blur', sync)
+      window.removeEventListener('focus', sync)
+      document.removeEventListener('visibilitychange', sync)
     },
   }
 }

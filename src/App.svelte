@@ -1,6 +1,8 @@
 <script lang="ts">
-  import { onMount, type Component } from 'svelte'
-  import Sidebar from './components/Sidebar.svelte'
+  import { onMount, untrack, type Component } from 'svelte'
+  import { fly } from 'svelte/transition'
+  import { cubicOut } from 'svelte/easing'
+  import Sidebar, { snapSidebarToggle } from './components/Sidebar.svelte'
   import TitleBar from './components/TitleBar.svelte'
   import WorkspaceView from './components/WorkspaceView.svelte'
   import ConfirmDialog from './components/ConfirmDialog.svelte'
@@ -13,6 +15,12 @@
   import { isBinaryDocumentName } from './lib/doc-kind'
   import { otherPane, type PaneId } from './lib/workspace'
   import { NOTICE_DELAY, autoDismiss } from './lib/auto-dismiss'
+  import { tooltip } from './lib/tooltip'
+  import { COPILOT_MIN_DOCUMENT_WIDTH, SIDEBAR_OPEN_WIDTH, copilotMaxWidthCss, copilotWidthCss } from './lib/copilot-width'
+
+  // Les transitions Svelte passent par WAAPI et échappent à la règle reduced-motion d'app.css.
+  // Lu à chaque transition : la préférence système peut changer pendant que l'app tourne.
+  const reducedMotion = () => matchMedia('(prefers-reduced-motion: reduce)').matches
 
   // Persiste les préférences (thème, état sidebar) à chaque changement — les lectures
   // de app.* dans saveSettings sont suivies par l'effet.
@@ -33,6 +41,83 @@
     // Panneau restauré ouvert au boot (settings) : marquer monté pour que la fermeture
     // garde le DOM (slide de sortie) au lieu de démonter brutalement.
     if (app.copilotOpen && !app.copilotMounted) app.copilotMounted = true
+  })
+
+  // Plein écran du copilote : `.main` anime flex-grow 0↔1 et CodeMirror remesurait sa
+  // largeur à chaque image (4 images perdues au retour, 50 ms au pire à CPU×4). La scène
+  // garde sa largeur de vue partagée pendant le rideau ; `.main` (overflow: hidden) ne
+  // fait que la découvrir ou la recouvrir.
+  let mainEl: HTMLElement | undefined = $state()
+  let stageEl: HTMLElement | undefined = $state()
+  let sharedWidth = 0
+  let sharedWidthAt = 0
+  let releaseStage: (() => void) | null = null
+  let lastExpanded = false
+  // `.pre` : la mesure doit précéder la bascule de classe, sinon `.main` est déjà à 0.
+  $effect.pre(() => {
+    const expanded = app.copilotExpanded
+    untrack(() => {
+      if (expanded === lastExpanded) return
+      lastExpanded = expanded
+      freezeStage(expanded)
+    })
+  })
+  function freezeStage(expanded: boolean) {
+    const main = mainEl
+    const stage = stageEl
+    if (!main || !stage) return
+    // Rideau interrompu : la largeur déjà figée est la bonne, pas celle de mi-course.
+    if (expanded && !releaseStage) {
+      sharedWidth = main.getBoundingClientRect().width
+      sharedWidthAt = innerWidth
+    }
+    // ponytail: seule la largeur de fenêtre est rattrapée ; une barre latérale basculée
+    // pendant le plein écran (Ctrl+Maj+E) coûte un remesurage en fin de course.
+    const width = sharedWidth + (expanded ? 0 : innerWidth - sharedWidthAt)
+    releaseStage?.()
+    if (width <= 0) return
+    stage.style.minWidth = `${width}px`
+    const onEnd = (event: TransitionEvent) => {
+      if (event.target === main && event.propertyName === 'flex-grow') releaseStage?.()
+    }
+    // Filet : en mouvement réduit, flex-grow ne transitionne pas et rien ne finit.
+    // Pas de `transitioncancel` : à l'inversion du rideau, celui de l'ANCIENNE transition
+    // arrive après la pose de ces écouteurs et libérerait la scène en pleine course ; une
+    // annulation sans relance est couverte par ce minuteur.
+    const timer = setTimeout(() => releaseStage?.(), 400)
+    main.addEventListener('transitionend', onEnd)
+    releaseStage = () => {
+      clearTimeout(timer)
+      main.removeEventListener('transitionend', onEnd)
+      stage.style.minWidth = ''
+      releaseStage = null
+    }
+  }
+
+  // Copilote ouvert sur une fenêtre trop étroite pour barre latérale + document + copilote :
+  // la barre latérale se replie, sans toucher la préférence enregistrée (saveSettings relit
+  // `sidebarAutoCollapsed`). Elle revient quand la place le permet, ou quand on la rouvre.
+  function fitSidebar(opening: boolean, booting = false) {
+    const fits = !app.copilotOpen || innerWidth >= SIDEBAR_OPEN_WIDTH + COPILOT_MIN_DOCUMENT_WIDTH + app.copilotWidth
+    if (fits) {
+      if (!app.sidebarAutoCollapsed) return
+      app.sidebarAutoCollapsed = false
+      app.sidebarOpen = true
+    } else if (opening && app.sidebarOpen) {
+      // Au démarrage, la barre naît repliée : pas de rideau qui se ferme sous les yeux.
+      if (booting) snapSidebarToggle()
+      app.sidebarOpen = false
+      app.sidebarAutoCollapsed = true
+    }
+  }
+  let sidebarFitBooted = false
+  $effect(() => {
+    const open = app.copilotOpen
+    untrack(() => fitSidebar(open, !sidebarFitBooted))
+    sidebarFitBooted = true
+  })
+  $effect(() => {
+    if (app.sidebarOpen) untrack(() => (app.sidebarAutoCollapsed = false))
   })
 
   // Même schéma pour la modale Paramètres : chargée au premier besoin, démontée à la
@@ -259,15 +344,19 @@
         await openFromDialog()
       } else if (k === 'e' && e.shiftKey) {
         e.preventDefault()
+        snapSidebarToggle()
         toggleSidebarView('files')
       } else if (k === 'p' && e.shiftKey) {
         e.preventDefault()
+        snapSidebarToggle()
         toggleSidebarView('plan')
       } else if (k === 'h' && e.shiftKey) {
         e.preventDefault()
+        snapSidebarToggle()
         toggleSidebarView('history')
       } else if (k === 'f' && e.shiftKey) {
         e.preventDefault()
+        snapSidebarToggle()
         toggleSidebarView('search')
       } else if (k === 'f') {
         // Ctrl+F depuis n'importe où (aperçu, barre, panneau) : le panneau de recherche
@@ -291,9 +380,13 @@
       openWikilink((e as CustomEvent<string>).detail)
     }
 
+    const onResize = () => fitSidebar(false)
+
     window.addEventListener('keydown', onKey)
     window.addEventListener('doku:wikilink', onWikilink)
+    window.addEventListener('resize', onResize)
     return () => {
+      window.removeEventListener('resize', onResize)
       unlistenClose?.()
       unlistenQuit?.()
       unlistenOpen?.()
@@ -307,11 +400,18 @@
 
 <div class="app">
   {#if !app.focus}<Sidebar />{/if}
-  <div class="main" class:copilot-expanded={app.copilotExpanded}>
+  <div class="main" class:copilot-expanded={app.copilotExpanded} bind:this={mainEl}>
     {#if !app.focus}<TitleBar onOpen={openFromDialog} />{/if}
-    {#if !app.focus && (app.banner || app.reloadPrompt)}
-      <div class="notice-stack" aria-live="polite">
+    {#if !app.focus}
+      <!-- Pile toujours montée (vide, elle ne capte rien) : la sortie de la notification
+           peut se jouer. Pas d'aria-live ici : les rôles alert/status des cartes annoncent
+           déjà, la région en plus doublait l'annonce. -->
+      <div class="notice-stack">
         {#if app.banner}
+          <!-- Sortie sur l'enveloppe : elle ne joue qu'à l'effacement. Au remplacement, la
+               carte reste montée (pas de nouvelle entrée) ; seul le filet de vie repart, et
+               autoDismiss remet le minuteur à zéro par `key`. -->
+          <div class="notice-slot" out:fly={{ y: 8, opacity: 0, duration: reducedMotion() ? 0 : 150, easing: cubicOut }}>
           <div
             class="notice"
             class:error={app.banner.tone === 'error'}
@@ -324,41 +424,46 @@
               onDismiss: () => (app.banner = null),
             }}
           >
-            <span class="notice-icon msr" aria-hidden="true">
-              {app.banner.tone === 'success' ? 'check' : app.banner.tone === 'warning' ? 'warning' : 'priority_high'}
-            </span>
+            <svg class="icon notice-icon" aria-hidden="true"><use href="#i-{app.banner.tone === 'success' ? 'check' : app.banner.tone === 'warning' ? 'triangle-alert' : 'circle-alert'}" /></svg>
             <span class="notice-copy">
               <strong>{app.banner.title}</strong>
               <span>{app.banner.message}</span>
             </span>
             <button class="notice-close" onclick={() => (app.banner = null)} aria-label="Fermer la notification">
-              <span class="msr" aria-hidden="true">close</span>
+              <svg class="icon" aria-hidden="true"><use href="#i-x" /></svg>
             </button>
-            <span class="notice-life" aria-hidden="true" style:animation-duration="{NOTICE_DELAY[app.banner.tone]}ms"></span>
+            <!-- Pas de filet sur une notification persistante (erreur) : il promettrait un
+                 effacement qui ne viendra pas. -->
+            {#if NOTICE_DELAY[app.banner.tone] > 0}
+              {#key app.banner}
+                <span class="notice-life" aria-hidden="true" style:animation-duration="{NOTICE_DELAY[app.banner.tone]}ms"></span>
+              {/key}
+            {/if}
+          </div>
           </div>
         {/if}
         {#if app.reloadPrompt}
           <div class="notice reload" role="status">
-            <span class="notice-icon msr" aria-hidden="true">sync</span>
+            <svg class="icon notice-icon" aria-hidden="true"><use href="#i-refresh-cw" /></svg>
             <span class="notice-copy">
               <strong>Fichier modifié sur le disque</strong>
               <span>« {app.reloadPrompt.name} » a changé ailleurs. Le recharger remplacera vos modifications locales.</span>
             </span>
             <button class="notice-action" onclick={() => void reloadPromptedTab()}>Recharger</button>
             <button class="notice-close" onclick={dismissReloadPrompt} aria-label="Ignorer la notification">
-              <span class="msr" aria-hidden="true">close</span>
+              <svg class="icon" aria-hidden="true"><use href="#i-x" /></svg>
             </button>
           </div>
         {/if}
       </div>
     {/if}
-    <div class="stage">
+    <div class="stage" bind:this={stageEl}>
       <div class="page" class:with-copilot={app.copilotOpen}>
         {#if !app.focus}
           <button
             class="collapse-btn"
             class:on={app.copilotOpen}
-            title="Copilote — panneau latéral"
+            use:tooltip={'Copilote — panneau latéral'}
             aria-label="Copilote"
             aria-pressed={app.copilotOpen}
             onclick={() => {
@@ -378,11 +483,16 @@
       </div>
     </div>
   </div>
-  {#if !app.focus && (app.copilotMounted || app.copilotOpen) && CopilotPanelComp}<CopilotPanelComp />{/if}
+  {#if !app.focus && (app.copilotMounted || app.copilotOpen) && CopilotPanelComp}<CopilotPanelComp />
+  {:else if !app.focus && app.copilotOpen}
+    <!-- Panneau restauré ouvert, module pas encore chargé : sa place est réservée à la même
+         largeur effective, sinon la colonne de texte saute de côté à son arrivée. -->
+    <div class="cop-placeholder" style:flex-basis={copilotWidthCss(app.copilotWidth)} style:max-width={copilotMaxWidthCss(app.sidebarOpen)}></div>
+  {/if}
   {#if app.dragging}
     <div class="drop-overlay" role="presentation">
       <div class="drop-hint">
-        <span class="msr" style="font-size:30px">file_download</span>
+        <svg class="icon" aria-hidden="true"><use href="#i-file-down" /></svg>
         Déposez le fichier pour l'ouvrir
       </div>
     </div>
@@ -416,22 +526,25 @@
     overflow: hidden;
     opacity: 1;
     transition:
-      flex-grow 300ms cubic-bezier(0.22, 1, 0.36, 1),
-      opacity 110ms ease-out;
+      flex-grow var(--duration-relaxed) var(--ease-curtain),
+      opacity 100ms var(--ease-enter-snappy);
   }
   .main.copilot-expanded { flex-grow: 0; opacity: 0; pointer-events: none; }
+  .cop-placeholder { flex: 0 0 auto; min-width: 0; }
   .drop-overlay {
     position: absolute;
     inset: 8px;
-    z-index: 50;
+    z-index: var(--z-overlay);
     display: flex;
     align-items: center;
     justify-content: center;
-    border-radius: 14px;
+    border-radius: var(--radius-2xl);
     border: 2px dashed var(--line-3);
     background: rgba(var(--ink-rgb), 0.06);
     backdrop-filter: blur(1px);
     pointer-events: none;
+    /* Entrée seulement : au lâcher, le fichier s'ouvre, le voile part sec. */
+    animation: doku-fade-in var(--duration-basic) var(--ease-enter-snappy);
   }
   .drop-hint {
     display: inline-flex;
@@ -439,17 +552,20 @@
     align-items: center;
     gap: 8px;
     padding: 20px 28px;
-    border-radius: 12px;
-    background: var(--cream-content);
-    box-shadow: 0 12px 32px rgba(var(--shadow-rgb), 0.18);
-    color: var(--ink-2);
-    font-size: 14px;
+    border-radius: var(--radius-xl);
+    background: var(--surface);
+    box-shadow: var(--shadow-xl);
+    color: var(--ink);
+    font-size: var(--text-md);
+    animation: doku-pop-in var(--duration-moderate) var(--ease-enter-snappy);
   }
-  .drop-hint > .msr { color: var(--ink-3); }
+  .drop-hint > .icon { color: var(--ink-3); font-size: 28px; stroke-width: 1.5; }
+  /* En BAS de la zone document : en haut, la carte recouvrait le titre du document qu'on lit.
+     `.main` exclut le copilote : le composer n'est jamais masqué. */
   .notice-stack {
     position: absolute;
-    z-index: 30;
-    top: calc(var(--chrome-titlebar-height) + 12px);
+    z-index: var(--z-toast);
+    bottom: 16px;
     left: 50%;
     width: min(540px, calc(100% - 32px));
     display: grid;
@@ -457,6 +573,9 @@
     pointer-events: none;
     transform: translateX(-50%);
   }
+  /* Notification (motif Toast de Kube) : surface élevée, pastille d'icône teintée par le ton,
+     entrée qui monte en fondu depuis le bord bas. */
+  @keyframes notice-in { from { opacity: 0; transform: translateY(6px) scale(0.98); } }
   .notice {
     pointer-events: auto;
     position: relative;
@@ -464,27 +583,23 @@
     display: flex;
     align-items: center;
     gap: 12px;
-    min-height: 58px;
-    padding: 10px 10px 10px 12px;
-    border-radius: 16px;
-    background: var(--cream-base);
-    color: var(--ink-2);
-    box-shadow:
-      0 0 0 1px var(--elevation-ring),
-      0 12px 32px rgba(var(--shadow-rgb), 0.22);
-    animation: notice-in 180ms cubic-bezier(0.22, 1, 0.36, 1) both;
+    min-height: 52px;
+    padding: 8px;
+    border-radius: var(--radius-2xl);
+    background: var(--surface);
+    color: var(--ink);
+    box-shadow: var(--shadow-xl);
+    animation: notice-in var(--duration-moderate) var(--ease-enter);
   }
+  /* Pastille de 36 px : le padding ramène le glyphe (qui remplit la boîte de contenu du svg) à 16 px. */
   .notice-icon {
     flex: none;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 34px;
-    height: 34px;
-    border-radius: 11px;
+    width: 36px;
+    height: 36px;
+    padding: 10px;
+    border-radius: var(--radius-md);
     background: var(--accent-soft);
     color: var(--ink-3);
-    font-size: 18px;
   }
   .notice.error .notice-icon { background: color-mix(in srgb, var(--err) 14%, transparent); color: var(--err-text); }
   .notice.warning .notice-icon { background: color-mix(in srgb, var(--warn) 16%, transparent); color: var(--warn-text); }
@@ -494,74 +609,65 @@
     min-width: 0;
     display: grid;
     gap: 2px;
-    font-size: 12px;
-    line-height: 1.35;
+    font-size: var(--text-xs);
+    line-height: var(--leading-snug);
+    /* Un message d'erreur se copie (chemin, cause) : le body interdit la sélection. */
+    user-select: text;
   }
-  .notice-copy strong { color: var(--ink); font-size: 12.5px; font-weight: 620; }
-  .notice-copy > span { color: var(--ink-3); overflow-wrap: anywhere; }
+  .notice-copy strong { color: var(--ink); font-size: var(--text-sm); font-weight: var(--weight-strong); text-wrap: balance; }
+  .notice-copy > span { color: var(--ink-3); overflow-wrap: anywhere; text-wrap: pretty; }
+  /* Rayon concentrique : carte 16 − padding 8 = 8. */
   .notice-action {
     flex: none;
-    min-height: 32px;
-    padding: 6px 14px;
-    border-radius: 999px;
+    height: var(--control-sm);
+    padding: 0 12px;
+    border-radius: var(--radius-md);
     border: 0;
     background: var(--ink);
     color: var(--cream-content);
-    font: 600 12px var(--font-sans);
+    font: var(--weight-control) var(--text-sm) var(--font-sans);
     cursor: pointer;
-    transition: transform 100ms ease, opacity 140ms ease;
+    transition: background-color var(--duration-basic) ease, transform var(--duration-basic) var(--ease-enter-snappy);
   }
-  .notice-action:hover { opacity: 0.88; }
-  .notice-action:active { transform: scale(0.97); }
+  .notice-action:hover { background: var(--ink-2); }
   .notice-close {
     flex: none;
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 30px;
-    height: 30px;
+    width: var(--control-sm);
+    height: var(--control-sm);
     border: 0;
     background: transparent;
     color: var(--ink-4);
     cursor: pointer;
-    border-radius: 999px;
-    transition: background 140ms ease, color 140ms ease, transform 100ms ease;
+    border-radius: var(--radius-md);
+    transition: background-color var(--duration-basic) ease, color var(--duration-basic) ease, transform var(--duration-basic) var(--ease-enter-snappy);
   }
-  .notice-close .msr { font-size: 17px; }
-  .notice-close:hover { background: var(--surface-hover); color: var(--ink); }
-  .notice-close:active { transform: scale(0.94); }
-  .notice-action:focus-visible,
-  .notice-close:focus-visible { outline: 2px solid var(--line-3); outline-offset: 2px; }
+  .notice-close .icon { font-size: 16px; }
+  .notice-close:hover { background: var(--fill-hover); color: var(--ink); }
+  .notice-action:active,
+  .notice-close:active,
+  .collapse-btn:active { transform: scale(0.97); }
   /* Filet de vie : dit que la notification est TRANSITOIRE, et combien de temps il
      reste. Sans lui, l'effacement automatique surprend au lieu d'être attendu. Il se
-     fige avec le compte à rebours JS — même déclencheur (survol, focus), donc jamais de
-     barre qui court sur une minuterie suspendue. */
+     fige sur `data-paused`, posé par le compte à rebours JS lui-même : jamais de barre
+     qui court sur une minuterie suspendue, ni l'inverse (survol collant au doigt). */
   .notice-life {
     position: absolute;
     left: 0; right: 0; bottom: 0;
     height: 2px;
     background: var(--line-2);
     transform-origin: left center;
-    animation: notice-life linear forwards;
+    animation: doku-life linear forwards;
   }
   .notice.error .notice-life { background: color-mix(in srgb, var(--err) 45%, transparent); }
   .notice.warning .notice-life { background: color-mix(in srgb, var(--warn) 45%, transparent); }
   .notice.success .notice-life { background: color-mix(in srgb, var(--ok) 45%, transparent); }
-  .notice:hover .notice-life,
-  .notice:focus-within .notice-life { animation-play-state: paused; }
-  @keyframes notice-life {
-    from { transform: scaleX(1); }
-    to { transform: scaleX(0); }
-  }
-  @keyframes notice-in {
-    from { opacity: 0; transform: translateY(-7px) scale(0.98); }
-    to { opacity: 1; transform: translateY(0) scale(1); }
-  }
+  .notice:global([data-paused]) .notice-life { animation-play-state: paused; }
   @media (prefers-reduced-motion: reduce) {
-    .notice { animation: none; }
     /* La notification part toujours seule ; seule l'ANIMATION du filet disparaît. */
     .notice-life { animation: none; transform: scaleX(1); opacity: 0.5; }
-    .main { transition-duration: 0.01ms; }
   }
   .stage { flex: 1; min-height: 0; display: flex; background: transparent; }
   .page {
@@ -569,38 +675,38 @@
     flex: 1;
     min-width: 0;
     background: var(--cream-content);
-    border-radius: 14px 14px 0 0;
+    border-radius: var(--radius-2xl) var(--radius-2xl) 0 0;
     overflow: hidden;
     display: flex;
     flex-direction: column;
-    transition: border-radius 240ms cubic-bezier(0.22, 1, 0.36, 1);
+    /* Couplé au rideau du copilote : même durée, même courbe. */
+    transition: border-radius var(--duration-curtain) var(--ease-curtain);
   }
   /* Panneau copilote ouvert : la jonction document↔chat est à angle droit. */
-  .page.with-copilot { border-radius: 14px 0 0 0; }
+  .page.with-copilot { border-radius: var(--radius-2xl) 0 0 0; }
+  /* PdfView aligne ses contrôles flottants sur ce bouton (top 8, hauteur 32). */
   .collapse-btn {
     position: absolute;
     top: 8px;
     right: 12px;
     z-index: 5;
-    width: 32px;
-    height: 32px;
+    width: var(--control-md);
+    height: var(--control-md);
     display: inline-flex;
     align-items: center;
     justify-content: center;
     border: 0;
-    border-radius: 9px;
-    background: var(--cream-base);
-    color: var(--ink-2);
-    box-shadow: 0 0 0 1px var(--elevation-ring), 0 4px 12px rgba(var(--shadow-rgb), 0.16);
+    /* Même famille que les capsules flottantes du PDF : rond, ombre de carte. */
+    border-radius: var(--radius-full);
+    background: var(--surface);
+    color: var(--ink-3);
+    box-shadow: var(--shadow-card);
     cursor: pointer;
-    transition: background-color 140ms ease, color 140ms ease, box-shadow 140ms ease, transform 100ms ease;
+    transition: background-color var(--duration-basic) ease, color var(--duration-basic) ease, transform var(--duration-basic) var(--ease-enter-snappy);
   }
   .collapse-btn:hover,
   .collapse-btn.on {
     background: var(--cream-tint);
     color: var(--ink);
-    box-shadow: 0 0 0 1px var(--elevation-ring), 0 5px 14px rgba(var(--shadow-rgb), 0.20);
   }
-  .collapse-btn:active { transform: scale(0.96); }
-  .collapse-btn:focus-visible { outline: 2px solid var(--line-3); outline-offset: 2px; }
 </style>

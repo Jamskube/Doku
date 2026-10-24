@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { annotateCitations, citedNumbers, locatePassage } from './citations'
+import { annotateCitations, citedNumbers, locatePassage, locateTextSpan } from './citations'
 
 describe('annotateCitations', () => {
   it('remplace un marqueur valide par une puce', () => {
@@ -86,5 +86,32 @@ describe('locatePassage', () => {
 
   it('null sur un passage vide', () => {
     expect(locatePassage(doc, '\n  \n')).toBeNull()
+  })
+
+  it('vise le bon bloc quand sa première ligne se répète (balise HTML)', () => {
+    const html = '<div class="card">\n  <h3>Budget</h3>\n</div>\n\n<div class="card">\n  <h3>Jours estimés</h3>\n</div>\n'
+    expect(locatePassage(html, '<div class="card">\n  <h3>Jours estimés</h3>\n</div>')?.line).toBe(5)
+  })
+})
+
+describe('locateTextSpan', () => {
+  const page = 'Budget 3 000 € Jours estimés 12 jours Total Livraison en mars Total'
+
+  it('retrouve le passage entier, espaces normalisés', () => {
+    expect(locateTextSpan(page, 'Jours estimés\n   12 jours')).toEqual({ start: 15, end: 37 })
+  })
+
+  it('part d’une ligne unique plutôt que d’une ligne répétée, puis étend aux suivantes', () => {
+    const span = locateTextSpan(page, 'Total\nLivraison en mars\nligne absente\nTotal')
+    expect(page.slice(span!.start, span!.end)).toBe('Livraison en mars Total')
+  })
+
+  it('ignore les lignes sans rendu (CSS d’un extrait coupé)', () => {
+    const span = locateTextSpan(page, '.card { color: red }\nJours estimés')
+    expect(page.slice(span!.start, span!.end)).toBe('Jours estimés')
+  })
+
+  it('null quand rien ne correspond', () => {
+    expect(locateTextSpan(page, 'absent\n\n')).toBeNull()
   })
 })

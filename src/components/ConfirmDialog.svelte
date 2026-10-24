@@ -45,8 +45,8 @@
 >
   <section class="panel">
     <div class="heading">
-      <span class="icon" aria-hidden="true">
-        <span class="msr">edit_note</span>
+      <span class="tile" aria-hidden="true">
+        <svg class="icon" aria-hidden="true"><use href="#i-save" /></svg>
       </span>
       <div class="copy">
         <h2 id="dlg-title">{dialog.title}</h2>
@@ -76,56 +76,55 @@
     overflow: visible;
   }
 
+  /* Voile discret, comme toutes les modales de Doku : la fenêtre se détache par son
+     ombre, pas par l'assombrissement du document derrière elle. */
   .confirm-dialog::backdrop {
-    background: rgb(0 0 0 / 0.38);
-    -webkit-backdrop-filter: blur(3px);
-    backdrop-filter: blur(3px);
+    background: var(--scrim);
+    animation: doku-fade-in var(--duration-dialog) var(--ease-enter-snappy);
   }
 
   .panel {
     padding: 20px;
-    border-radius: 16px;
-    background: var(--cream-base);
-    box-shadow:
-      0 0 0 1px var(--elevation-ring),
-      0 24px 64px rgba(var(--shadow-rgb), 0.34),
-      0 5px 18px rgba(var(--shadow-rgb), 0.16);
-    animation: dialog-in 180ms cubic-bezier(0.22, 1, 0.36, 1);
+    border-radius: var(--radius-2xl);
+    background: var(--surface);
+    box-shadow: var(--shadow-dialog);
+    animation: doku-dialog-in var(--duration-dialog) var(--ease-enter-snappy);
   }
 
   .heading {
     display: flex;
     align-items: flex-start;
-    gap: 13px;
+    gap: 12px;
   }
 
-  .icon {
+  .tile {
     width: 36px;
     height: 36px;
     flex: 0 0 auto;
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    border-radius: 10px;
+    border-radius: var(--radius-xl);
     background: var(--accent-soft);
-    color: var(--ink-2);
+    color: var(--ink);
+    font-size: 18px;
   }
-  .icon .msr { font-size: 20px; }
 
-  .copy { min-width: 0; padding-top: 1px; }
+  .copy { min-width: 0; padding-top: 2px; }
   h2 {
-    margin: 0 0 5px;
-    font-size: 15px;
-    line-height: 1.35;
-    font-weight: 600;
+    margin: 0 0 4px;
+    font-size: var(--text-lg);
+    line-height: var(--leading-tight);
+    font-weight: var(--weight-strong);
+    letter-spacing: var(--tracking-tight);
     color: var(--ink);
     text-wrap: balance;
   }
   p {
     margin: 0;
     max-width: 46ch;
-    font-size: 13px;
-    line-height: 1.5;
+    font-size: var(--text-md);
+    line-height: var(--leading-normal);
     color: var(--ink-3);
     text-wrap: pretty;
   }
@@ -135,56 +134,36 @@
     align-items: center;
     justify-content: space-between;
     gap: 12px;
-    margin-top: 22px;
+    margin-top: 20px;
   }
-  .actions-primary { display: flex; gap: 7px; }
+  .actions-primary { display: flex; gap: 8px; }
 
   .button {
-    min-height: 34px;
-    padding: 0 16px;
+    height: var(--control-md);
+    padding: 0 12px;
     border: 0;
-    border-radius: 999px;
+    border-radius: var(--radius-lg);
     font: inherit;
-    font-size: 12.5px;
-    font-weight: 500;
+    font-size: var(--text-sm);
+    font-weight: var(--weight-control);
     white-space: nowrap;
     cursor: pointer;
-    transition:
-      background-color 140ms ease,
-      color 140ms ease,
-      box-shadow 140ms ease,
-      transform 100ms ease;
+    transition: background-color var(--duration-basic) ease, color var(--duration-basic) ease, transform var(--duration-basic) var(--ease-enter-snappy);
   }
   .button:active { transform: scale(0.97); }
-  .button:focus-visible {
-    outline: 2px solid var(--line-3);
-    outline-offset: 2px;
-  }
 
-  .discard { background: transparent; color: var(--danger-action-text); font-weight: 600; }
-  .discard:hover { background: color-mix(in srgb, var(--err) 11%, transparent); }
-  .cancel {
-    background: var(--surface);
-    color: var(--ink-2);
-    box-shadow: inset 0 0 0 1px var(--line-2);
-  }
-  .cancel:hover { background: var(--surface-hover); color: var(--ink); }
+  /* Le refus perd le travail : rouge d'action du système, en bouton fantôme pour que
+     « Enregistrer » reste la seule action pleine. */
+  .discard { background: transparent; color: var(--danger-action-text); }
+  .discard:hover { background: color-mix(in srgb, var(--danger-action-text) 10%, transparent); }
+  .cancel { background: var(--accent-soft); color: var(--ink); }
+  .cancel:hover { background: var(--fill-pressed); }
   .save { background: var(--ink); color: var(--cream-content); }
   .save:hover { background: var(--ink-2); }
-
-  @keyframes dialog-in {
-    from { opacity: 0; transform: translateY(5px) scale(0.985); }
-    to { opacity: 1; transform: translateY(0) scale(1); }
-  }
 
   @media (max-width: 460px) {
     .actions { align-items: stretch; flex-direction: column-reverse; }
     .actions-primary { display: grid; grid-template-columns: 1fr 1fr; }
     .button { width: 100%; }
-  }
-
-  @media (prefers-reduced-motion: reduce) {
-    .panel { animation: none; }
-    .button { transition: none; }
   }
 </style>

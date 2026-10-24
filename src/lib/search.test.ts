@@ -73,6 +73,31 @@ describe('searchDocs', () => {
     expect(long.slice(hit.col, hit.col + hit.length)).toBe('CIBLE')
   })
 
+  it('fenêtre aussi une ligne courte pour que le terme ouvre l’extrait', () => {
+    const line = 'Une phrase assez longue avant d’arriver enfin au mot CIBLE puis la suite'
+    const [res] = searchDocs([makeSearchDoc('c.md', 'c.md', line)], 'cible')
+    const hit = res.hits[0]
+    expect(hit.snippet.startsWith('…')).toBe(true)
+    expect(hit.start).toBe(13) // « … » + 12 caractères de contexte
+    expect(hit.snippet.slice(hit.start, hit.end)).toBe('CIBLE')
+    expect(line.slice(hit.col, hit.col + hit.length)).toBe('CIBLE')
+  })
+
+  it('garde la ligne entière quand le terme est déjà près du début', () => {
+    const [res] = searchDocs([makeSearchDoc('d.md', 'd.md', 'Le mot CIBLE puis une très longue suite de texte')], 'cible')
+    expect(res.hits[0].snippet).toBe('Le mot CIBLE puis une très longue suite de texte')
+    expect(res.hits[0].start).toBe(7)
+  })
+
+  it('ne coupe pas un emoji en ouvrant la fenêtre', () => {
+    // L'emoji occupe deux unités UTF-16 : la fenêtre tomberait sur sa seconde moitié.
+    const line = 'abcdefghijklmnopqrstuvwxyz0123456789😀' + 'x'.repeat(11) + 'CIBLE'
+    const [res] = searchDocs([makeSearchDoc('e.md', 'e.md', line)], 'cible')
+    const hit = res.hits[0]
+    expect(hit.snippet.startsWith('…😀')).toBe(true)
+    expect(hit.snippet.slice(hit.start, hit.end)).toBe('CIBLE')
+  })
+
   it('borne le nombre de fichiers résultats (maxResults)', () => {
     const many = Array.from({ length: 10 }, (_, i) => makeSearchDoc(`f${i}.md`, `f${i}.md`, 'terme commun'))
     expect(searchDocs(many, 'terme', { maxResults: 3 })).toHaveLength(3)

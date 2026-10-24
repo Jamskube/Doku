@@ -17,6 +17,7 @@
 // pendant l'impression, et ne retirer l'iframe qu'en différé (jamais synchroniquement
 // pendant l'impression). Le timing exact du teardown est ce que l'essai NATIF valide.
 import { paperCss, injectHead } from '../html'
+import { escapeHtml } from '../html-escape'
 import { sanitizeHtml } from '../sanitize'
 import { renderMarkdown } from './render-md'
 
@@ -47,12 +48,8 @@ const PRINT_CSS = `
   pre, blockquote, table, img, ul, ol, li, tr { break-inside: avoid; }
   pre { white-space: pre-wrap; word-break: break-word; }`
 
-export function escapeHtml(s: string): string {
-  return s
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-}
+// Ré-exporté pour les appelants historiques (standalone, CopilotDiagram).
+export { escapeHtml }
 
 // Construit le document HTML « papier » prêt à imprimer pour un onglet.
 // - `.html` : contenu assaini (DOMPurify) — chemin fidèle, identique à l'aperçu existant.

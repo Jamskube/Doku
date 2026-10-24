@@ -1,14 +1,22 @@
 <script lang="ts">
   import { onMount, tick, untrack } from 'svelte'
-  import { app, activeTab, assignTabToPane, closeOtherTabs, closeTabsToRight, docxActions, duplicateTab, canMoveTabToNewWindow, isBinaryKind, moveTabToNewWindow, newWindow, openPath, openPdfPages, openPdfTextEdit, renameTab, requestCloseTab, isDirty, saveTabOrSaveAs, selectTab, setColumnWidth, swapPanes, toggleActiveSourceMode, togglePin, toggleWorkspaceSplit, workspace, workspaceLayout, type ColumnWidth, type DocKind } from '../lib/stores.svelte'
+  import { fade } from 'svelte/transition'
+  import { quintOut } from 'svelte/easing'
+  import { app, activeTab, assignTabToPane, closeOtherTabs, closeTabsToRight, docxActions, duplicateTab, canMoveTabToNewWindow, isBinaryKind, moveTabToNewWindow, newWindow, openPath, tearOffTab, openPdfPages, openPdfTextEdit, renameTab, requestCloseTab, isDirty, saveTabOrSaveAs, selectTab, setColumnWidth, swapPanes, toggleActiveSourceMode, togglePin, toggleWorkspaceSplit, workspace, workspaceLayout, type ColumnWidth, type DocKind, type DocTab } from '../lib/stores.svelte'
   import type { PaneId } from '../lib/workspace'
   import { tabDiscriminator, tabLabel } from '../lib/tabs'
+  import { middleTruncate } from '../lib/middle-truncate'
+  import { tooltip } from '../lib/tooltip'
   import { parentPath } from '../lib/explorer'
-  import { closeWindow, isTauri, minimizeWindow, readFileBytes, readImageDataUrl, readPdfAnnotationManifest, saveDocxDialog, saveHtmlDialog, saveMarkdownDialog, savePdfDialog, toggleMaximizeWindow } from '../lib/tauri'
+  import { closeWindow, currentWindowLabel, dragTabWindow, dropTabWindow, isTauri, minimizeWindow, onTabHover, signalTabHover, readFileBytes, readImageDataUrl, readPdfAnnotationManifest, saveDocxDialog, saveHtmlDialog, saveMarkdownDialog, savePdfDialog, toggleMaximizeWindow } from '../lib/tauri'
   import DokuMark from '../lib/DokuMark.svelte'
   import PaneTabSelector from './PaneTabSelector.svelte'
 
   let { onOpen }: { onOpen: (paneId?: PaneId) => void } = $props()
+
+  // Les transitions Svelte passent par WAAPI et échappent à la règle reduced-motion d'app.css.
+  // Lu à chaque transition : la préférence système peut changer pendant que l'app tourne.
+  const reducedMotion = () => matchMedia('(prefers-reduced-motion: reduce)').matches
 
   // « + » détache le volet actif de son onglet plutôt que d'ouvrir directement le
   // sélecteur de fichiers : on retombe sur l'écran d'accueil du volet, qui laisse
@@ -98,6 +106,9 @@
   let railHover = $state(false)
   let menuOpen = $state(false)
   let submenu = $state<'export' | 'width' | null>(null)
+  let menuKbd = $state(false)
+  let submenuKbd = $state(false)
+  let submenuFlip = $state(false)
   let menuRootEl: HTMLElement | undefined = $state()
   let menuTriggerEl: HTMLButtonElement | undefined = $state()
   let mainMenuEl: HTMLElement | undefined = $state()
@@ -122,22 +133,174 @@
   // entière se REPLIE en un seul bouton « onglet actif · n » qui ouvre un menu flottant
   // listant tous les onglets — des onglets écrasés à la seule croix ne se distinguent
   // plus (vécu en fenêtre étroite avec sidebar + copilote ouverts).
-  const TAB_MIN = 96
+  // Même valeur que `.tab { min-width }` : sinon la bascule vers le menu diverge du rendu.
+  const TAB_MIN = 120
   const TAB_GAP = 3
   const NEW_TAB_W = 32
+  // Plafond d'un onglet (Kube : 90 à 240 px), = `.tab { max-width }`.
+  const TAB_MAX = 240
+  // Caractères que montre un nom dans `px` de large : le reste de l'onglet (marges, croix,
+  // pastille) prend ~50 px, un caractère ~7 px en 13 px. La coupe se fait au MILIEU ;
+  // l'ellipsis CSS reste le dernier recours si l'estimation déborde.
+  const nameChars = (px: number) => Math.max(6, Math.floor((px - 50) / 7))
   let tabsBox = $state<HTMLElement | null>(null)
+
+  // Glisser un onglet comme dans Chrome. Tenu, il se soulève et suit la souris ; tiré hors de
+  // la barre, un aperçu de fenêtre naît de lui et suit le curseur le temps que la vraie fenêtre
+  // (`tearOffTab`) se peigne dessous, puis s'efface. Le seul onglet d'une fenêtre secondaire
+  // entraîne la fenêtre même. Au-dessus de la barre d'une autre fenêtre Doku, la fenêtre
+  // s'efface et l'onglet s'y annonce ; lâché là, il la rejoint. La capture, posée sur la barre
+  // une fois le geste lancé (avant, elle volerait le clic), suit la souris hors de la fenêtre.
+  const TEAR_OFF_PX = 32
+  // Point par lequel on tient une fenêtre arrachée : son premier onglet (px CSS depuis le coin).
+  const TORN_GRAB: [number, number] = [120, 20]
+  type TabDrag = {
+    id: number
+    name: string
+    lines: string[]
+    pointer: number
+    startX: number
+    startY: number
+    x: number
+    y: number
+    moved: boolean
+    out: boolean
+    window: string | null
+    grab: [number, number]
+    tearing: boolean
+    target: string | null
+    shown: boolean
+    frame: number
+  }
+  let tabDrag = $state<TabDrag | null>(null)
+  let tabDragEnded = false
+  let windowLabel = 'main'
+  void currentWindowLabel().then((label) => (windowLabel = label))
+  // Onglet d'une autre fenêtre en approche au-dessus de cette barre.
+  let incomingTab = $state<string | null>(null)
+  void onTabHover((name) => (incomingTab = name))
+
+  // Premières lignes lisibles du document, pour l'aperçu de fenêtre (rien pour un PDF ou un Word).
+  function previewLines(tab: DocTab): string[] {
+    return tab.content
+      .split('\n')
+      .map((line) => line.replace(/^[#>*\-\s]+|<[^>]*>/g, '').trim())
+      .filter(Boolean)
+      .slice(0, 4)
+  }
+
+  function startTabDrag(e: PointerEvent, tab: DocTab) {
+    if (e.button !== 0 || !isTauri || !tabsBox || !canMoveTabToNewWindow(tab) || (e.target as Element).closest('.close')) return
+    window.addEventListener('pointermove', moveTabDrag)
+    window.addEventListener('pointerup', endTabDrag)
+    window.addEventListener('pointercancel', endTabDrag)
+    tabDrag = {
+      id: tab.id, name: tabLabel(tab), lines: previewLines(tab), pointer: e.pointerId,
+      startX: e.clientX, startY: e.clientY, x: e.clientX, y: e.clientY, moved: false, out: false,
+      window: null, grab: [e.clientX, e.clientY], tearing: false, target: null, shown: false, frame: 0,
+    }
+  }
+
+  function moveTabDrag(e: PointerEvent) {
+    const drag = tabDrag
+    if (!drag || e.pointerId !== drag.pointer) return
+    drag.x = e.clientX
+    drag.y = e.clientY
+    if (!drag.moved) {
+      if (Math.hypot(e.clientX - drag.startX, e.clientY - drag.startY) <= 6) return
+      drag.moved = true
+      tabsBox?.setPointerCapture(drag.pointer)
+    }
+    if (drag.tearing) return
+    if (!drag.window) {
+      if (windowLabel !== 'main' && app.tabs.length === 1) {
+        drag.window = windowLabel
+      } else {
+        const strip = tabsBox!.getBoundingClientRect()
+        drag.out = e.clientY < strip.top - TEAR_OFF_PX || e.clientY > strip.bottom + TEAR_OFF_PX
+          || e.clientX < 0 || e.clientX > window.innerWidth
+        if (!drag.out) return
+        drag.tearing = true
+        drag.grab = TORN_GRAB
+        void tearOffTab(drag.id, TORN_GRAB).then((label) => {
+          // Relâché avant que la fenêtre existe : on conclut le lâcher pour elle.
+          if (tabDrag !== drag) {
+            if (label) void dropTabWindow(label)
+            return
+          }
+          if (!label) {
+            tabDrag = null
+            return
+          }
+          drag.window = label
+          drag.tearing = false
+          followCursor(drag)
+        })
+        return
+      }
+    }
+    followCursor(drag)
+  }
+
+  function followCursor(drag: TabDrag) {
+    if (drag.frame) return
+    drag.frame = requestAnimationFrame(async () => {
+      drag.frame = 0
+      if (!drag.window) return
+      const state = await dragTabWindow(drag.window, drag.grab).catch(() => null)
+      if (tabDrag !== drag || !state) return
+      drag.shown = state.shown
+      if (state.target === drag.target) return
+      if (drag.target) void signalTabHover(drag.target, null)
+      if (state.target) void signalTabHover(state.target, drag.name)
+      drag.target = state.target
+    })
+  }
+
+  // Tenu dans la barre, l'onglet suit la souris ; l'écart vertical est freiné, comme un
+  // onglet qui résiste avant de se décrocher.
+  function tabDragTransform(tab: DocTab): string | undefined {
+    const drag = tabDrag
+    if (!drag?.moved || drag.id !== tab.id || drag.out) return undefined
+    return `translate(${drag.x - drag.startX}px, ${(drag.y - drag.startY) * 0.35}px) scale(1.04)`
+  }
+
+  async function endTabDrag(e: PointerEvent) {
+    const drag = tabDrag
+    if (!drag || e.pointerId !== drag.pointer) return
+    tabDrag = null
+    window.removeEventListener('pointermove', moveTabDrag)
+    window.removeEventListener('pointerup', endTabDrag)
+    window.removeEventListener('pointercancel', endTabDrag)
+    if (drag.frame) cancelAnimationFrame(drag.frame)
+    if (!drag.moved) return
+    // Le clic qui suit le relâchement ne doit pas réactiver l'onglet qu'on vient d'envoyer ailleurs.
+    tabDragEnded = true
+    setTimeout(() => (tabDragEnded = false))
+    if (drag.target) void signalTabHover(drag.target, null)
+    if (!drag.window) return
+    await dragTabWindow(drag.window, drag.grab).catch(() => null)
+    await dropTabWindow(drag.window)
+  }
+
   let tabsBoxWidth = $state(Infinity)
   const tabsCollapsed = $derived(
     app.tabs.length > 0 &&
       tabsBoxWidth < app.tabs.length * (TAB_MIN + TAB_GAP) + NEW_TAB_W + 8,
   )
+  const tabRowWidth = $derived(tabsBoxWidth - NEW_TAB_W - 8)
+  const tabNameChars = $derived(nameChars(Math.min(TAB_MAX, tabRowWidth / Math.max(1, app.tabs.length) - TAB_GAP)))
 
   let tabsMenuOpen = $state(false)
   let tabsMenuRootEl: HTMLElement | undefined = $state()
   let tabsMenuTriggerEl: HTMLButtonElement | undefined = $state()
   let tabsMenuEl: HTMLElement | undefined = $state()
+  // Menu ouvert au clavier (`detail === 0` = clic synthétisé par Entrée/Espace) : pas
+  // d'animation d'entrée, un geste répété cent fois par jour doit être instantané.
+  let tabsMenuKbd = $state(false)
 
-  function toggleTabsMenu() {
+  function toggleTabsMenu(event: MouseEvent) {
+    tabsMenuKbd = event.detail === 0
     tabsMenuOpen = !tabsMenuOpen
   }
   function closeTabsMenu(restoreFocus = false) {
@@ -171,6 +334,7 @@
   async function openTabsMenuFromKeyboard(event: KeyboardEvent) {
     if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return
     event.preventDefault()
+    tabsMenuKbd = true
     tabsMenuOpen = true
     await tick()
     tabsMenuItems()[0]?.focus()
@@ -184,9 +348,35 @@
     if (restoreFocus) void tick().then(() => menuTriggerEl?.focus())
   }
 
-  function toggleMenu() {
+  function toggleMenu(event: MouseEvent) {
+    menuKbd = event.detail === 0
     menuOpen = !menuOpen
     submenu = null
+  }
+
+  // Survol d'une entrée à sous-menu. Ne touche à rien si ce sous-menu est déjà ouvert :
+  // retirer `.kbd` d'un menu affiché relancerait son animation d'entrée.
+  function hoverSubmenu(name: 'export' | 'width') {
+    if (submenu === name || (name === 'export' && !canExport)) return
+    submenuKbd = false
+    submenuFlip = flipFor(name === 'export' ? exportTriggerEl : widthTriggerEl)
+    submenu = name
+  }
+  function clickSubmenu(event: MouseEvent, name: 'export' | 'width') {
+    if (name === 'export' && !canExport) return
+    if (submenu === name) {
+      submenu = null
+      return
+    }
+    submenuKbd = event.detail === 0
+    submenuFlip = flipFor(event.currentTarget as HTMLElement)
+    submenu = name
+  }
+  // Le sous-menu s'ouvre à gauche du menu ; trop près du bord gauche, il passe à droite.
+  // Mesure à l'ouverture (pas d'anchor positioning : WebKitGTK ne le connaît pas).
+  const FLYOUT_W = 236
+  function flipFor(trigger: HTMLElement | undefined) {
+    return !!trigger && trigger.getBoundingClientRect().left < FLYOUT_W + 8
   }
 
   function runMenuAction(action: () => void | Promise<void>) {
@@ -372,6 +562,8 @@
 
   async function openSubmenu(name: 'export' | 'width', focusFirst = false) {
     if (name === 'export' && !canExport) return
+    submenuKbd = focusFirst
+    submenuFlip = flipFor(name === 'export' ? exportTriggerEl : widthTriggerEl)
     submenu = name
     if (!focusFirst) return
     await tick()
@@ -382,6 +574,7 @@
   async function openMenuFromKeyboard(event: KeyboardEvent) {
     if (!['ArrowDown', 'ArrowUp', 'Enter', ' '].includes(event.key)) return
     event.preventDefault()
+    menuKbd = true
     menuOpen = true
     submenu = null
     await tick()
@@ -463,25 +656,36 @@
     <button
       class="rail-btn"
       class:lit={app.sidebarOpen || railHover}
-      title={app.sidebarOpen ? 'Replier la barre latérale' : 'Déplier la barre latérale'}
+      use:tooltip={app.sidebarOpen ? 'Replier la barre latérale' : 'Déplier la barre latérale'}
       aria-label={app.sidebarOpen ? 'Replier la barre latérale' : 'Déplier la barre latérale'}
       aria-pressed={app.sidebarOpen}
-      onmouseenter={() => (railHover = true)}
-      onmouseleave={() => (railHover = false)}
+      onpointerenter={(e) => { if (e.pointerType === 'mouse') railHover = true }}
+      onpointerleave={() => (railHover = false)}
       onclick={() => (app.sidebarOpen = !app.sidebarOpen)}
     >
-      <span class="layer" style:opacity={showLogo ? 1 : 0}>
+      <span class="layer" class:shown={showLogo}>
         <DokuMark size={22} />
       </span>
-      <span class="layer" style:opacity={showLogo ? 0 : 1}>
-        <svg width="20" height="20" viewBox="-0.5 -0.5 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round">
+      <span class="layer" class:shown={!showLogo}>
+        <svg width="18" height="18" viewBox="-0.5 -0.5 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round">
           <path d="M5.625 2.1875v10.625M1.875 5.875c0 -1.4 0 -2.1 0.2725 -2.635a2.5 2.5 0 0 1 1.0925 -1.0925C3.775 1.875 4.475 1.875 5.875 1.875h3.25c1.4 0 2.1 0 2.635 0.2725a2.5 2.5 0 0 1 1.0925 1.0925C13.125 3.775 13.125 4.475 13.125 5.875v3.25c0 1.4 0 2.1 -0.2725 2.635a2.5 2.5 0 0 1 -1.0925 1.0925C11.225 13.125 10.525 13.125 9.125 13.125H5.875c-1.4 0 -2.1 0 -2.635 -0.2725a2.5 2.5 0 0 1 -1.0925 -1.0925C1.875 11.225 1.875 10.525 1.875 9.125z" />
         </svg>
       </span>
     </button>
   </div>
 
-  <div class="tabs" class:split={workspace.split} class:stacked={workspaceLayout.stacked} data-tauri-drag-region bind:this={tabsBox} style={`--workspace-ratio:${workspace.ratio}%`}>
+  <!-- Onglets = boutons (pas de tablist : ni flèches, ni tabpanel, et le « + » y vit aussi) ;
+       l'actif porte aria-current. Groupe nommé seulement quand la rangée porte de vrais onglets. -->
+  <div
+    class="tabs"
+    class:split={workspace.split}
+    class:stacked={workspaceLayout.stacked}
+    role={!workspace.split && !tabsCollapsed ? 'group' : undefined}
+    aria-label={!workspace.split && !tabsCollapsed ? 'Onglets ouverts' : undefined}
+    data-tauri-drag-region
+    bind:this={tabsBox}
+    style={`--workspace-ratio:${workspace.ratio}%`}
+  >
     {#if workspace.split}
       <div class="split-slot primary" data-tauri-drag-region>
         <PaneTabSelector paneId="primary" onOpen={() => onOpen('primary')} onTabMenu={openTabMenu} />
@@ -498,20 +702,20 @@
           class="tabs-overflow-trigger"
           class:open={tabsMenuOpen}
           bind:this={tabsMenuTriggerEl}
-          title={(active?.path ?? active?.name ?? '') + (active && isDirty(active) ? ' — non enregistré' : '')}
+          use:tooltip={(active?.path ?? active?.name ?? '') + (active && isDirty(active) ? ' — non enregistré' : '')}
           aria-haspopup="menu"
           aria-expanded={tabsMenuOpen}
-          aria-label={`Onglets ouverts (${app.tabs.length}) — actif : ${active?.name ?? 'aucun'}`}
+          aria-label={`Onglets ouverts (${app.tabs.length}) — actif : ${active?.name ?? 'aucun'}${active && isDirty(active) ? ', non enregistré' : ''}`}
           onclick={toggleTabsMenu}
           onkeydown={openTabsMenuFromKeyboard}
         >
-          {#if active && isDirty(active)}<span class="dot">●</span>{/if}
-          <span class="name">{active ? tabLabel(active) : ''}</span>
+          {#if active && isDirty(active)}<span class="dot" aria-hidden="true"></span>{/if}
+          <span class="name">{active ? middleTruncate(tabLabel(active), nameChars(tabRowWidth - 70)) : ''}</span>
           {#if app.tabs.length > 1}<span class="tabs-overflow-count">+{app.tabs.length - 1}</span>{/if}
-          <span class="msr tabs-overflow-chev">expand_more</span>
+          <svg class="icon tabs-overflow-chev" aria-hidden="true"><use href="#i-chevron-down" /></svg>
         </button>
         {#if tabsMenuOpen}
-          <div class="app-menu tabs-menu" role="menu" tabindex="-1" aria-label="Onglets ouverts" bind:this={tabsMenuEl} onkeydown={handleTabsMenuKeydown}>
+          <div class="app-menu tabs-menu" class:kbd={tabsMenuKbd} role="menu" tabindex="-1" aria-label="Onglets ouverts" bind:this={tabsMenuEl} onkeydown={handleTabsMenuKeydown}>
             {#each app.tabs as tab (tab.id)}
               {@const parent = tabDiscriminator(tab, app.tabs)}
               <div class="tabs-menu-row" role="none">
@@ -524,16 +728,17 @@
                   oncontextmenu={(e) => openTabMenu(e, tab.id)}
                 >
                   <span class="tabs-menu-dot" class:dirty={isDirty(tab)} class:current={tab.id === app.activeId}></span>
-                  <span class="menu-label">{tabLabel(tab)}</span>
+                  <span class="menu-label">{middleTruncate(tabLabel(tab))}</span>
+                  {#if isDirty(tab)}<span class="sr-only">non enregistré</span>{/if}
                   {#if parent}<span class="tabs-menu-parent">{parent}</span>{/if}
                 </button>
                 <button
                   class="tabs-menu-close"
-                  title="Fermer l'onglet"
+                  use:tooltip={{ label: "Fermer l'onglet", kbd: tab.id === app.activeId ? 'Ctrl+W' : undefined }}
                   aria-label={'Fermer ' + tab.name}
                   onclick={() => requestCloseTab(tab.id)}
                 >
-                  <span class="msr" style="font-size:15px">close</span>
+                  <svg class="icon" aria-hidden="true"><use href="#i-x" /></svg>
                 </button>
               </div>
             {/each}
@@ -543,41 +748,83 @@
     {:else}
       {#each app.tabs as tab (tab.id)}
         {@const parent = tabDiscriminator(tab, app.tabs)}
+        {@const label = tabLabel(tab)}
+        {@const shown = middleTruncate(label, tabNameChars)}
         <button
           class="tab"
           class:active={tab.id === app.activeId}
-          role="tab"
-          aria-selected={tab.id === app.activeId}
-          title={(tab.path ?? tab.name) + (isDirty(tab) ? ' — non enregistré' : '')}
-          onclick={() => selectTab(tab.id)}
+          class:dragging={tabDrag?.moved && tabDrag.id === tab.id}
+          class:torn={tabDrag?.out && tabDrag.id === tab.id}
+          style:transform={tabDragTransform(tab)}
+          aria-current={tab.id === app.activeId ? 'page' : undefined}
+          use:tooltip={(tab.path ?? tab.name) + (isDirty(tab) ? ' — non enregistré' : '')}
+          onpointerdown={(e) => startTabDrag(e, tab)}
+          onclick={() => { if (!tabDragEnded) selectTab(tab.id) }}
           onauxclick={(e) => { if (e.button === 1) requestCloseTab(tab.id) }}
           oncontextmenu={(e) => openTabMenu(e, tab.id)}
         >
-          {#if isDirty(tab)}<span class="dot">●</span>{/if}
-          <span class="name">{tabLabel(tab)}</span>
+          {#if isDirty(tab)}<span class="dot" aria-hidden="true"></span>{/if}
+          {#if shown === label}
+            <span class="name">{label}</span>
+          {:else}
+            <!-- Nom coupé au milieu à l'écran ; entier pour les technologies d'assistance. -->
+            <span class="name" aria-hidden="true">{shown}</span><span class="sr-only">{label}</span>
+          {/if}
+          {#if isDirty(tab)}<span class="sr-only">non enregistré</span>{/if}
           {#if parent}<span class="parent">{parent}</span>{/if}
+          <!-- Croix masquée aux technologies d'assistance : un bouton dans un onglet n'est pas
+               valide, et Ctrl+W ferme l'onglet au clavier. Souris et doigt gardent le clic. -->
           <span
             class="close"
-            title="Fermer l'onglet"
+            use:tooltip={{ label: "Fermer l'onglet", kbd: tab.id === app.activeId ? 'Ctrl+W' : undefined }}
             role="button"
             tabindex="-1"
-            onclick={(e) => { e.stopPropagation(); requestCloseTab(tab.id) }}
+            aria-hidden="true"
+            onclick={(e) => {
+              e.stopPropagation()
+              // Au doigt, la croix invisible d'un onglet inactif reste touchable : toucher la
+              // droite de l'onglet le fermerait. Ce toucher-là l'active, comme ailleurs sur l'onglet.
+              if (e instanceof PointerEvent && e.pointerType === 'touch' && tab.id !== app.activeId) selectTab(tab.id)
+              else requestCloseTab(tab.id)
+            }}
             onkeydown={(e) => { if (e.key === 'Enter') { e.stopPropagation(); requestCloseTab(tab.id) } }}
           >
-            <span class="msr" style="font-size:16px">close</span>
+            <svg class="icon" aria-hidden="true"><use href="#i-x" /></svg>
           </span>
         </button>
       {/each}
+      {#if incomingTab}
+        <div class="tab active incoming" aria-hidden="true"><span class="name">{incomingTab}</span></div>
+      {/if}
     {/if}
     {#if !workspace.split}
-      <button class="new-tab" title="Nouvel onglet" aria-label="Nouvel onglet" onclick={newTab}>
-        <span class="msr" style="font-size:20px">add</span>
+      <button class="new-tab" use:tooltip={'Nouvel onglet'} aria-label="Nouvel onglet" onclick={newTab}>
+        <svg class="icon" aria-hidden="true"><use href="#i-plus" /></svg>
       </button>
     {/if}
   </div>
 
+  {#if tabDrag?.out && !tabDrag.shown && !tabDrag.target}
+    <!-- Aperçu de la fenêtre arrachée, tenu par son onglet au même point que la vraie fenêtre. -->
+    <div class="tear-preview" style={`left:${tabDrag.x}px;top:${tabDrag.y}px`} aria-hidden="true" out:fade={{ duration: reducedMotion() ? 0 : 150, easing: quintOut }}>
+      <div class="tear-preview-bar"><span class="tear-preview-tab">{tabDrag.name}</span></div>
+      <div class="tear-preview-page">
+        {#each tabDrag.lines as line, i (i)}
+          <span class:title={i === 0}>{line}</span>
+        {/each}
+        <!-- Document court (ou PDF, Word) : des lignes neutres gardent l'allure d'une page. -->
+        {#each { length: Math.max(0, 5 - tabDrag.lines.length) }, i (i)}
+          <span class="skeleton" class:short={i % 2 === 1}></span>
+        {/each}
+      </div>
+    </div>
+  {/if}
+
   {#if renaming}
-    <div class="tab-rename-pop" style={`left: ${Math.min(renaming.x, window.innerWidth - 240)}px; top: ${Math.min(renaming.y, window.innerHeight - 60)}px`}>
+    <!-- Bornée au bord, la surface s'écarte du clic : l'origine du zoom d'entrée reste sur lui. -->
+    {@const left = Math.min(renaming.x, window.innerWidth - 240)}
+    {@const top = Math.min(renaming.y, window.innerHeight - 60)}
+    <div class="tab-rename-pop" style={`left: ${left}px; top: ${top}px; transform-origin: ${renaming.x - left}px ${renaming.y - top}px`}>
       <input
         class="tab-rename"
         type="text"
@@ -593,40 +840,42 @@
   {#if tabMenu}
     {@const tab = app.tabs.find((t) => t.id === tabMenu?.id)}
     {#if tab}
+      {@const left = Math.min(tabMenu.x, window.innerWidth - 250)}
+      {@const top = Math.min(tabMenu.y, window.innerHeight - 300)}
       <div
         class="app-menu tab-menu"
         role="menu"
         tabindex="-1"
         aria-label={`Actions sur ${tabLabel(tab)}`}
-        style={`left: ${Math.min(tabMenu.x, window.innerWidth - 250)}px; top: ${Math.min(tabMenu.y, window.innerHeight - 260)}px`}
+        style={`left: ${left}px; top: ${top}px; transform-origin: ${tabMenu.x - left}px ${tabMenu.y - top}px`}
         bind:this={tabMenuEl}
         onkeydown={handleTabMenuKeydown}
       >
         <button class="app-menu-item" role="menuitem" onclick={() => tabMenuAction(startRename)}>
-          <span class="msr">drive_file_rename_outline</span><span class="menu-label">Renommer l'onglet</span>
+          <svg class="icon" aria-hidden="true"><use href="#i-pencil-line" /></svg><span class="menu-label">Renommer l'onglet</span>
         </button>
         <button class="app-menu-item" role="menuitem" disabled={isBinaryKind(tab.kind)} onclick={() => tabMenuAction((a) => duplicateTab(a.id))}>
-          <span class="msr">content_copy</span><span class="menu-label">Dupliquer l'onglet</span>
+          <svg class="icon" aria-hidden="true"><use href="#i-copy" /></svg><span class="menu-label">Dupliquer l'onglet</span>
         </button>
         {#if workspace.split}
           <button class="app-menu-item" role="menuitem" onclick={() => tabMenuAction((a) => showInOtherPane(a.id))}>
-            <span class="msr">swap_horiz</span><span class="menu-label">Afficher dans l'autre volet</span>
+            <svg class="icon" aria-hidden="true"><use href="#i-arrow-left-right" /></svg><span class="menu-label">Afficher dans l'autre volet</span>
           </button>
         {/if}
         {#if isTauri}
           <button class="app-menu-item" role="menuitem" disabled={!canMoveTabToNewWindow(tab)} onclick={() => tabMenuAction((a) => moveTabToNewWindow(a.id))}>
-            <span class="msr">open_in_new</span><span class="menu-label">Détacher l'onglet</span>
+            <svg class="icon" aria-hidden="true"><use href="#i-external-link" /></svg><span class="menu-label">Détacher l'onglet</span>
           </button>
         {/if}
         <div class="app-menu-sep" role="separator"></div>
         <button class="app-menu-item" role="menuitem" disabled={app.tabs.length < 2} onclick={() => tabMenuAction((a) => closeOtherTabs(a.id))}>
-          <span class="msr">tab_close</span><span class="menu-label">Fermer les autres onglets</span>
+          <svg class="icon" aria-hidden="true"><use href="#i-square-x" /></svg><span class="menu-label">Fermer les autres onglets</span>
         </button>
         <button class="app-menu-item" role="menuitem" disabled={app.tabs.at(-1)?.id === tab.id} onclick={() => tabMenuAction((a) => closeTabsToRight(a.id))}>
-          <span class="msr">keyboard_tab</span><span class="menu-label">Fermer les onglets à droite</span>
+          <svg class="icon" aria-hidden="true"><use href="#i-arrow-right-to-line" /></svg><span class="menu-label">Fermer les onglets à droite</span>
         </button>
         <button class="app-menu-item" role="menuitem" onclick={() => tabMenuAction((a) => requestCloseTab(a.id))}>
-          <span class="msr">close</span><span class="menu-label">Fermer l'onglet</span>
+          <svg class="icon" aria-hidden="true"><use href="#i-x" /></svg><span class="menu-label">Fermer l'onglet</span>
         </button>
       </div>
     {/if}
@@ -637,18 +886,18 @@
       class="document-menu-trigger"
       class:open={menuOpen}
       bind:this={menuTriggerEl}
-      title="Options du document"
+      use:tooltip={'Options du document'}
       aria-label="Options du document"
       aria-haspopup="menu"
       aria-expanded={menuOpen}
       onclick={toggleMenu}
       onkeydown={openMenuFromKeyboard}
     >
-      <span class="msr" aria-hidden="true">more_horiz</span>
+      <svg class="icon" aria-hidden="true"><use href="#i-ellipsis" /></svg>
     </button>
 
     {#if menuOpen}
-      <div class="app-menu document-menu" role="menu" tabindex="-1" aria-label="Options du document" bind:this={mainMenuEl} onkeydown={handleMainMenuKeydown}>
+      <div class="app-menu document-menu" class:kbd={menuKbd} role="menu" tabindex="-1" aria-label="Options du document" bind:this={mainMenuEl} onkeydown={handleMainMenuKeydown}>
         <button
           class="app-menu-item"
           role="menuitem"
@@ -657,12 +906,12 @@
           onmouseenter={() => (submenu = null)}
           onclick={() => runMenuAction(saveActive)}
         >
-          <span class="msr">save</span>
+          <svg class="icon" aria-hidden="true"><use href="#i-save" /></svg>
           <span class="menu-label">{activeIsDocx && docxActions.busy === 'save' ? 'Enregistrement…' : 'Enregistrer'}</span>
           <kbd>Ctrl+S</kbd>
         </button>
 
-        <div class="submenu-root" role="none" onmouseenter={() => { if (canExport) submenu = 'export' }}>
+        <div class="submenu-root" role="none" onmouseenter={() => hoverSubmenu('export')}>
           <button
             class="app-menu-item"
             class:open={submenu === 'export'}
@@ -672,21 +921,21 @@
             aria-haspopup="menu"
             aria-expanded={submenu === 'export'}
             disabled={!canExport}
-            onclick={() => { if (canExport) submenu = submenu === 'export' ? null : 'export' }}
+            onclick={(e) => clickSubmenu(e, 'export')}
           >
-            <span class="msr">ios_share</span><span class="menu-label">Exporter</span><span class="msr menu-chevron">chevron_left</span>
+            <svg class="icon" aria-hidden="true"><use href="#i-share" /></svg><span class="menu-label">Exporter</span><svg class="icon menu-chevron" aria-hidden="true"><use href="#i-chevron-left" /></svg>
           </button>
           {#if submenu === 'export' && canExport}
-            <div class="app-menu flyout-menu" role="menu" tabindex="-1" aria-label="Exporter" bind:this={exportMenuEl} onkeydown={(event) => handleSubmenuKeydown(event, 'export')}>
+            <div class="app-menu flyout-menu" class:kbd={submenuKbd} class:flip={submenuFlip} role="menu" tabindex="-1" aria-label="Exporter" bind:this={exportMenuEl} onkeydown={(event) => handleSubmenuKeydown(event, 'export')}>
               {#if activeIsPdf}
                 <button class="app-menu-item" role="menuitem" disabled={burningPdf || !pdfPath} onclick={() => void exportAnnotatedActive()}>
-                  <span class="msr">stylus_note</span><span class="menu-label">{burningPdf ? 'Gravure en cours…' : 'PDF avec les annotations'}</span><span class="menu-format">.pdf</span>
+                  <svg class="icon" aria-hidden="true"><use href="#i-pen-line" /></svg><span class="menu-label">{burningPdf ? 'Gravure en cours…' : 'PDF avec les annotations'}</span><span class="menu-format">.pdf</span>
                 </button>
                 <button class="app-menu-item" role="menuitem" disabled={!pdfPath} onclick={editTextActive}>
-                  <span class="msr">edit_document</span><span class="menu-label">Modifier le texte…</span>
+                  <svg class="icon" aria-hidden="true"><use href="#i-file-pen-line" /></svg><span class="menu-label">Modifier le texte…</span>
                 </button>
                 <button class="app-menu-item" role="menuitem" disabled={!pdfPath} onclick={organizePagesActive}>
-                  <span class="msr">auto_stories</span><span class="menu-label">Organiser les pages…</span>
+                  <svg class="icon" aria-hidden="true"><use href="#i-book-open" /></svg><span class="menu-label">Organiser les pages…</span>
                 </button>
               {:else if activeIsDocx}
                 <!-- Un document Word s'exporte en PDF par le même menu que les autres
@@ -697,7 +946,7 @@
                   disabled={docxActions.busy !== '' || !docxActions.exportPdf}
                   onclick={() => void exportDocxToPdf()}
                 >
-                  <span class="msr">picture_as_pdf</span>
+                  <svg class="icon" aria-hidden="true"><use href="#i-file-text" /></svg>
                   <span class="menu-label">{docxActions.busy === 'pdf' ? 'Export en cours…' : 'Document PDF'}</span>
                   <span class="menu-format">.pdf</span>
                 </button>
@@ -707,17 +956,17 @@
                     const tab = activeTab()
                     if (tab) { closeMenus(); exportPortableMarkdown(tab) }
                   }}>
-                    <span class="msr">download</span><span class="menu-label">Markdown portable</span><span class="menu-format">.md</span>
+                    <svg class="icon" aria-hidden="true"><use href="#i-download" /></svg><span class="menu-label">Markdown portable</span><span class="menu-format">.md</span>
                   </button>
                 {/if}
                 <button class="app-menu-item" role="menuitem" onclick={() => exportActive('docx')}>
-                  <span class="msr">description</span><span class="menu-label">Document Word</span><span class="menu-format">.docx</span>
+                  <svg class="icon" aria-hidden="true"><use href="#i-file-text" /></svg><span class="menu-label">Document Word</span><span class="menu-format">.docx</span>
                 </button>
                 <button class="app-menu-item" role="menuitem" onclick={() => exportActive('html')}>
-                  <span class="msr">html</span><span class="menu-label">Page web autonome</span><span class="menu-format">.html</span>
+                  <svg class="icon" aria-hidden="true"><use href="#i-file-code" /></svg><span class="menu-label">Page web autonome</span><span class="menu-format">.html</span>
                 </button>
                 <button class="app-menu-item" role="menuitem" onclick={() => exportActive('pdf')}>
-                  <span class="msr">picture_as_pdf</span><span class="menu-label">Document PDF</span><span class="menu-format">.pdf</span>
+                  <svg class="icon" aria-hidden="true"><use href="#i-file-text" /></svg><span class="menu-label">Document PDF</span><span class="menu-format">.pdf</span>
                 </button>
               {/if}
             </div>
@@ -746,7 +995,7 @@
           <span class="menu-check">{app.focus ? '✓' : ''}</span><span class="menu-label">Mode focus</span><kbd>F9</kbd>
         </button>
 
-        <div class="submenu-root" role="none" onmouseenter={() => (submenu = 'width')}>
+        <div class="submenu-root" role="none" onmouseenter={() => hoverSubmenu('width')}>
           <button
             class="app-menu-item"
             class:open={submenu === 'width'}
@@ -755,20 +1004,20 @@
             role="menuitem"
             aria-haspopup="menu"
             aria-expanded={submenu === 'width'}
-            onclick={() => (submenu = submenu === 'width' ? null : 'width')}
+            onclick={(e) => clickSubmenu(e, 'width')}
           >
-            <span class="msr">view_column</span><span class="menu-label">Largeur du document</span><span class="msr menu-chevron">chevron_left</span>
+            <svg class="icon" aria-hidden="true"><use href="#i-columns-2" /></svg><span class="menu-label">Largeur du document</span><svg class="icon menu-chevron" aria-hidden="true"><use href="#i-chevron-left" /></svg>
           </button>
           {#if submenu === 'width'}
-            <div class="app-menu flyout-menu width-menu" role="menu" tabindex="-1" aria-label="Largeur du document" bind:this={widthMenuEl} onkeydown={(event) => handleSubmenuKeydown(event, 'width')}>
+            <div class="app-menu flyout-menu width-menu" class:kbd={submenuKbd} class:flip={submenuFlip} role="menu" tabindex="-1" aria-label="Largeur du document" bind:this={widthMenuEl} onkeydown={(event) => handleSubmenuKeydown(event, 'width')}>
               <button class="app-menu-item" role="menuitemradio" aria-checked={app.columnWidth === 'narrow'} onclick={() => pickColumnWidth('narrow')}>
-                <span class="menu-check">{app.columnWidth === 'narrow' ? '✓' : ''}</span><span class="msr">width_normal</span><span class="menu-label">Étroit</span>
+                <span class="menu-check">{app.columnWidth === 'narrow' ? '✓' : ''}</span><svg class="icon" aria-hidden="true"><use href="#i-fold-horizontal" /></svg><span class="menu-label">Étroit</span>
               </button>
               <button class="app-menu-item" role="menuitemradio" aria-checked={app.columnWidth === 'wide'} onclick={() => pickColumnWidth('wide')}>
-                <span class="menu-check">{app.columnWidth === 'wide' ? '✓' : ''}</span><span class="msr">width_wide</span><span class="menu-label">Confortable</span>
+                <span class="menu-check">{app.columnWidth === 'wide' ? '✓' : ''}</span><svg class="icon" aria-hidden="true"><use href="#i-unfold-horizontal" /></svg><span class="menu-label">Confortable</span>
               </button>
               <button class="app-menu-item" role="menuitemradio" aria-checked={app.columnWidth === 'full'} onclick={() => pickColumnWidth('full')}>
-                <span class="menu-check">{app.columnWidth === 'full' ? '✓' : ''}</span><span class="msr">width_full</span><span class="menu-label">Pleine largeur</span>
+                <span class="menu-check">{app.columnWidth === 'full' ? '✓' : ''}</span><svg class="icon" aria-hidden="true"><use href="#i-move-horizontal" /></svg><span class="menu-label">Pleine largeur</span>
               </button>
             </div>
           {/if}
@@ -777,7 +1026,7 @@
         {#if isTauri}
           <div class="app-menu-sep"></div>
           <button class="app-menu-item" role="menuitem" onmouseenter={() => (submenu = null)} onclick={() => runMenuAction(newWindow)}>
-            <span class="msr">open_in_new</span><span class="menu-label">Nouvelle fenêtre</span><kbd>Ctrl+Maj+N</kbd>
+            <svg class="icon" aria-hidden="true"><use href="#i-external-link" /></svg><span class="menu-label">Nouvelle fenêtre</span><kbd>Ctrl+Maj+N</kbd>
           </button>
         {/if}
       </div>
@@ -787,27 +1036,28 @@
   <div class="win-controls">
     <button
       class="ctrl"
-      title={workspace.split ? 'Réunir les volets' : 'Scinder la vue'}
+      use:tooltip={workspace.split ? 'Réunir les volets' : 'Scinder la vue'}
       aria-label={workspace.split ? 'Réunir les volets' : 'Scinder la vue'}
       aria-pressed={workspace.split}
       onclick={toggleWorkspaceSplit}
     >
-      <span class="msr" style="font-size:18px">view_column</span>
+      <svg class="icon" aria-hidden="true"><use href="#i-columns-2" /></svg>
     </button>
-    <button class="ctrl pin" class:on={app.pinned} title="Toujours au-dessus (Ctrl+Maj+T)" aria-label="Toujours au-dessus" aria-pressed={app.pinned} onclick={togglePin}>
-      <span class="msr" style="font-size:19px">keep</span>
+    <button class="ctrl" use:tooltip={{ label: 'Toujours au-dessus', kbd: 'Ctrl+Maj+T' }} aria-label="Toujours au-dessus" aria-pressed={app.pinned} onclick={togglePin}>
+      <svg class="icon" aria-hidden="true"><use href="#i-pin" /></svg>
     </button>
     {#if !app.copilotOpen}
       <!-- Panneau copilote ouvert → ces contrôles migrent dans son en-tête (maquette w2). -->
       <div class="sep"></div>
-      <button class="ctrl wide" title="Réduire" aria-label="Réduire" onclick={minimizeWindow}>
-        <span class="msr" style="font-size:18px">remove</span>
+      <button class="ctrl wide" use:tooltip={'Réduire'} aria-label="Réduire" onclick={minimizeWindow}>
+        <svg class="icon" aria-hidden="true"><use href="#i-minus" /></svg>
       </button>
-      <button class="ctrl wide" title="Agrandir" aria-label="Agrandir" onclick={toggleMaximizeWindow}>
-        <span class="msr" style="font-size:15px">crop_square</span>
+      <button class="ctrl wide" use:tooltip={'Agrandir'} aria-label="Agrandir" onclick={toggleMaximizeWindow}>
+        <!-- Le carré Lucide paraît plus massif que les autres glyphes de légende. -->
+        <svg class="icon" style="font-size:14px" aria-hidden="true"><use href="#i-square" /></svg>
       </button>
-      <button class="ctrl wide close-win" title="Fermer" aria-label="Fermer" onclick={closeWindow}>
-        <span class="msr" style="font-size:18px">close</span>
+      <button class="ctrl wide close-win" use:tooltip={'Fermer'} aria-label="Fermer" onclick={closeWindow}>
+        <svg class="icon" aria-hidden="true"><use href="#i-x" /></svg>
       </button>
     {/if}
   </div>
@@ -815,10 +1065,10 @@
 
 <style>
   .titlebar {
-    --titlebar-control-height: 32px;
+    --titlebar-control-height: var(--control-md);
     --titlebar-right-safe: 292px;
     position: relative;
-    z-index: 20;
+    z-index: var(--z-chrome);
     display: flex;
     align-items: stretch;
     padding-left: 4px;
@@ -828,6 +1078,7 @@
     -webkit-backdrop-filter: blur(24px) saturate(145%);
     backdrop-filter: blur(24px) saturate(145%);
     box-shadow: inset 0 1px 0 var(--chrome-material-filet);
+    font-size: var(--text-sm);
     user-select: none;
   }
   .titlebar.copilot-open { --titlebar-right-safe: 156px; }
@@ -842,22 +1093,28 @@
     width: 40px;
     height: var(--titlebar-control-height);
     border: 0;
-    border-radius: 6px;
+    border-radius: var(--radius-lg);
     background: transparent;
     color: var(--ink-3);
     cursor: pointer;
-    transition: color 140ms ease, background 140ms ease;
+    transition: color var(--duration-basic) ease, background-color var(--duration-basic) ease, transform var(--duration-basic) var(--ease-enter-snappy);
   }
-  .rail-btn.lit { background: var(--surface-hover); color: var(--ink); }
+  .rail-btn:active { transform: scale(0.97); }
+  .rail-btn.lit { background: var(--fill-hover); color: var(--ink); }
+  .rail-btn:focus-visible { outline-offset: -2px; }
+  /* Échange logo ↔ icône en place : simple fondu bref. Il joue au survol et aux raccourcis
+     Ctrl+Maj+E/P/H/F (gestes fréquents) : ni zoom ni flou, qui en feraient un spectacle. */
   .rail-btn .layer {
     position: absolute;
     inset: 0;
     display: flex;
     align-items: center;
     justify-content: center;
-    transition: opacity 140ms ease;
+    opacity: 0;
+    transition: opacity var(--duration-basic) ease;
     pointer-events: none;
   }
+  .rail-btn .layer.shown { opacity: 1; }
 
   .document-menu-root {
     position: relative;
@@ -872,60 +1129,81 @@
     align-items: center;
     justify-content: center;
     border: 0;
-    border-radius: 8px;
+    border-radius: var(--radius-lg);
     background: transparent;
     color: var(--ink-3);
     cursor: pointer;
-    transition: background 140ms ease, color 140ms ease;
+    transition:
+      background-color var(--duration-basic) ease,
+      color var(--duration-basic) ease,
+      transform var(--duration-basic) var(--ease-enter-snappy);
   }
-  .document-menu-trigger > .msr { font-size: 20px; }
+  .document-menu-trigger > .icon { font-size: 16px; }
   .document-menu-trigger:hover,
-  .document-menu-trigger.open { background: var(--surface-hover); color: var(--ink); }
-  .document-menu-trigger:focus-visible { outline: 2px solid var(--line-3); outline-offset: -3px; }
+  .document-menu-trigger.open { background: var(--fill-hover); color: var(--ink); }
+  .document-menu-trigger:active { transform: scale(0.97); }
+  .document-menu-trigger:focus-visible { outline-offset: -2px; }
 
+  /* Menus flottants (menu document, liste repliée des onglets, menu contextuel d'onglet) :
+     surface élevée, ouverture depuis le déclencheur à l'échelle .95 + fondu. Ouverts au
+     clavier (.kbd) : aucune animation. */
   .app-menu {
     position: absolute;
     top: 38px;
-    z-index: 40;
+    z-index: var(--z-popover);
     width: 244px;
-    padding: 6px;
-    border-radius: 13px;
-    background: var(--cream-tint);
-    box-shadow:
-      0 0 0 1px var(--elevation-ring),
-      0 12px 30px rgba(var(--shadow-rgb), 0.18);
-    animation: app-menu-in 150ms cubic-bezier(0.22, 1, 0.36, 1);
+    padding: 4px;
+    border-radius: var(--radius-xl);
+    background: var(--composer-bg);
+    box-shadow: var(--shadow-xl);
+    animation: doku-pop-in var(--duration-basic) var(--ease-enter-snappy);
   }
+  .app-menu.kbd { animation: none; }
   .document-menu { right: 0; transform-origin: top right; }
-  .tab-menu { position: fixed; top: auto; z-index: 60; transform-origin: top left; }
+  /* transform-origin posé en ligne : le point cliqué, même quand le menu est borné au bord.
+     Bornage vertical (innerHeight − 300) : 7 rangées de 40 px au doigt + séparateur + padding. */
+  .tab-menu { position: fixed; top: auto; z-index: var(--z-context); }
   .tab-rename-pop {
     position: fixed;
-    z-index: 60;
-    padding: 5px;
-    border-radius: 9px;
-    background: var(--cream-tint);
-    box-shadow: 0 0 0 1px var(--elevation-ring), 0 12px 30px rgba(var(--shadow-rgb), 0.18);
+    z-index: var(--z-context);
+    padding: 4px;
+    border-radius: var(--radius-xl);
+    background: var(--composer-bg);
+    box-shadow: var(--shadow-xl);
+    animation: doku-pop-in var(--duration-basic) var(--ease-enter-snappy);
   }
   .tab-rename {
     min-width: 0;
     width: 220px;
-    height: 26px;
-    padding: 0 6px;
-    border: 1px solid var(--line-3);
-    border-radius: 6px;
+    height: var(--control-sm);
+    padding: 0 8px;
+    border: 0;
+    border-radius: var(--radius-md);
     background: var(--cream-content);
     color: var(--ink);
     font: inherit;
-    outline: none;
+    font-size: var(--text-sm);
+    outline: 2px solid var(--focus-ring);
+    outline-offset: -1px;
   }
   .submenu-root { position: relative; }
+  /* Le sous-menu s'ouvre à 4 px du bord du menu parent ; `top` compense la gouttière
+     pour que sa première ligne s'aligne sur la ligne déclencheuse. */
   .flyout-menu {
-    top: -6px;
-    right: calc(100% + 7px);
+    top: -4px;
+    right: calc(100% + 8px);
     width: 236px;
     transform-origin: top right;
   }
   .width-menu { width: 220px; }
+  /* Sous 600 px le sous-menu recouvre déjà le menu (règle suivante) : pas de retournement. */
+  @media not all and (max-width: 600px) {
+    .flyout-menu.flip {
+      right: auto;
+      left: calc(100% + 8px);
+      transform-origin: top left;
+    }
+  }
   @media (max-width: 600px) {
     .document-menu {
       right: auto;
@@ -938,56 +1216,64 @@
       transform-origin: top left;
     }
   }
+  /* Fond de survol = couche ::before, le libellé ne bouge pas. Instantanée : les flèches du
+     clavier la déplacent en rafale, un fondu y laisserait deux surbrillances à la fois. */
   .app-menu-item {
+    position: relative;
+    isolation: isolate;
     width: 100%;
-    height: 40px;
+    height: var(--control-md);
     display: flex;
     align-items: center;
-    gap: 9px;
-    padding: 0 9px;
+    gap: 8px;
+    padding: 0 8px;
     border: 0;
-    border-radius: 7px;
+    border-radius: var(--radius-md);
     background: transparent;
-    color: var(--ink-2);
+    color: var(--ink);
     font-family: var(--font-sans);
-    font-size: 12.5px;
+    font-size: var(--text-sm);
+    font-weight: var(--weight-control);
     text-align: left;
     cursor: pointer;
-    transition: background 130ms ease, color 130ms ease, scale 100ms ease;
   }
-  .app-menu-item > .msr { width: 18px; flex: 0 0 auto; font-size: 17px; color: var(--ink-4); }
-  .app-menu-item:hover,
-  .app-menu-item.open { background: var(--surface-hover); color: var(--ink); }
-  .app-menu-item:hover > .msr { color: var(--ink-2); }
-  .app-menu-item:focus-visible { outline: 2px solid var(--line-3); outline-offset: -2px; }
-  .app-menu-item:active:not(:disabled) { scale: 0.96; }
-  .app-menu-item:disabled { opacity: 0.38; cursor: default; }
+  /* Rangées hautes seulement quand le dernier geste était au doigt (data-input posé par main.ts) :
+     sur Surface, `any-pointer: coarse` reste vrai à la souris. */
+  :global(:root[data-input='touch']) .app-menu-item { min-height: 40px; }
+  .app-menu-item::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    border-radius: inherit;
+    background: var(--accent-soft);
+    opacity: 0;
+  }
+  .app-menu-item:not(:disabled):is(:hover, :focus-visible, .open)::before { opacity: 1; }
+  .app-menu-item:focus-visible { outline-offset: -2px; }
+  .app-menu-item:disabled { opacity: var(--opacity-disabled); cursor: default; }
+  .app-menu-item > .icon { font-size: 15px; color: var(--ink-3); }
+  .app-menu-item > .menu-chevron { font-size: 14px; color: var(--ink-4); }
+  .app-menu-item:not(:disabled):is(:hover, :focus-visible, .open) > .icon { color: var(--ink); }
   .menu-label { flex: 1; min-width: 0; white-space: nowrap; }
   .app-menu-item kbd,
   .menu-format {
     margin-left: auto;
-    color: var(--ink-5);
-    font-family: var(--font-sans);
-    font-size: 10px;
-    font-weight: 400;
+    padding-left: 8px;
+    color: var(--ink-4);
+    font: var(--weight-regular) var(--text-xs) var(--font-sans);
+    white-space: nowrap;
   }
-  .menu-chevron { width: 15px !important; font-size: 16px !important; }
+  /* Même largeur que les icônes (15 px) : les libellés cochables restent alignés. */
   .menu-check {
-    width: 16px;
+    width: 15px;
     flex: 0 0 auto;
-    color: var(--ink-2);
-    font-size: 12px;
-    font-weight: 600;
+    color: var(--ink);
+    font-size: var(--text-sm);
+    font-weight: var(--weight-strong);
     text-align: center;
   }
-  .app-menu-sep { height: 1px; margin: 5px 7px; background: var(--line-1); }
-  @keyframes app-menu-in {
-    from { opacity: 0; transform: translateY(-3px) scale(0.985); }
-    to { opacity: 1; transform: translateY(0) scale(1); }
-  }
-  @media (prefers-reduced-motion: reduce) {
-    .app-menu { animation: none; }
-  }
+  .app-menu-sep { height: 1px; margin: 4px 8px; background: var(--line-1); }
 
   .tabs {
     flex: 1;
@@ -1025,7 +1311,6 @@
     inset: auto;
     flex: 1;
     display: flex;
-    grid-template-columns: none;
     padding: 0 4px;
   }
   .tabs.split.stacked .split-slot.primary {
@@ -1040,35 +1325,35 @@
     position: relative;
     display: inline-flex;
     align-items: center;
-    gap: 7px;
+    gap: 6px;
     height: var(--titlebar-control-height);
     min-width: 0;
     max-width: 100%;
-    padding: 0 8px 0 13px;
+    padding: 0 8px 0 12px;
     border: 1px solid transparent;
     border-bottom-width: 0;
-    border-radius: 10px 10px 0 0;
+    border-radius: var(--radius-lg) var(--radius-lg) 0 0;
     background: var(--cream-content);
     box-shadow: 0 4px 0 var(--cream-content);
     color: var(--ink);
-    font-size: 12.5px;
-    font-weight: 500;
+    font-size: var(--text-sm);
+    font-weight: var(--weight-control);
     cursor: pointer;
   }
-  .tabs-overflow-trigger:focus-visible { outline: 1px solid var(--line-3); outline-offset: -2px; }
+  .tabs-overflow-trigger:focus-visible { outline-offset: -2px; }
   /* « +n » nu (n = autres onglets) : info secondaire, pas de pilule qui crie. */
   .tabs-overflow-count {
     flex: 0 0 auto;
-    font-family: var(--font-mono);
-    font-size: 10.5px;
-    font-weight: 500;
+    font-size: var(--text-2xs);
+    font-weight: var(--weight-strong);
+    font-variant-numeric: tabular-nums;
     color: var(--ink-4);
   }
   .tabs-overflow-chev {
     flex: 0 0 auto;
-    font-size: 16px;
+    font-size: 14px;
     color: var(--ink-4);
-    transition: transform 140ms ease;
+    transition: transform var(--duration-moderate) var(--ease-enter-snappy);
   }
   .tabs-overflow-trigger.open .tabs-overflow-chev { transform: rotate(180deg); }
   .tabs-menu {
@@ -1082,11 +1367,11 @@
   /* Nom long → « … », jamais de scrollbar horizontale (même règle que .name des onglets). */
   .tabs-menu .menu-label { overflow: hidden; text-overflow: ellipsis; }
   .tabs-menu-row { display: flex; align-items: center; gap: 2px; }
-  .tabs-menu-row .app-menu-item { flex: 1; min-width: 0; height: 36px; }
-  .tabs-menu-row .app-menu-item[aria-checked='true'] { background: var(--accent-soft); color: var(--ink); }
-  /* Colonne fixe : rond plein = non enregistré, anneau = onglet courant, vide sinon —
-     l'alignement des noms reste stable. */
-  .tabs-menu-dot { width: 8px; height: 8px; flex: 0 0 auto; border-radius: 50%; }
+  .tabs-menu-row .app-menu-item { flex: 1; min-width: 0; }
+  .tabs-menu-row .app-menu-item[aria-checked='true'] { background: var(--accent-soft); }
+  /* Colonne fixe : pastille pleine = non enregistré (même 6 px que sur l'onglet), anneau =
+     onglet courant, vide sinon — l'alignement des noms reste stable. */
+  .tabs-menu-dot { width: 6px; height: 6px; flex: 0 0 auto; border-radius: 50%; }
   .tabs-menu-dot.current { border: 1.5px solid var(--line-3); }
   .tabs-menu-dot.dirty { border: 0; background: var(--ink); }
   .tabs-menu-parent {
@@ -1096,67 +1381,165 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    font-size: 10.5px;
+    font-size: var(--text-xs);
+    font-weight: var(--weight-regular);
     color: var(--ink-4);
   }
   .tabs-menu-parent::before { content: '·'; margin-right: 4px; opacity: 0.55; }
   .tabs-menu-close {
-    width: 26px;
-    height: 26px;
+    position: relative;
+    width: var(--control-2xs);
+    height: var(--control-2xs);
     flex: 0 0 auto;
     display: inline-flex;
     align-items: center;
     justify-content: center;
     border: 0;
-    border-radius: 6px;
+    border-radius: var(--radius-md);
     background: transparent;
     color: var(--ink-4);
     cursor: pointer;
+    transition: background-color var(--duration-basic) ease, color var(--duration-basic) ease;
   }
-  .tabs-menu-close:hover { background: var(--surface-hover); color: var(--err); }
-  .tabs-menu-close:focus-visible { outline: 1px solid var(--line-3); outline-offset: -2px; }
+  .tabs-menu-close > .icon { font-size: 14px; }
+  /* Fermer un onglet n'est pas destructif : survol neutre, pas la couleur d'erreur. */
+  .tabs-menu-close:hover { background: var(--fill-hover); color: var(--ink); }
+  .tabs-menu-close:focus-visible { outline-offset: -2px; }
+  /* Zone invisible portée à la hauteur de la rangée (32 px à la souris, 40 px au doigt), sans
+     mordre sur l'entrée voisine (1 px du trou de 2 px) ; à droite, jusqu'au bord du menu. */
+  @media (any-pointer: coarse) {
+    .tabs-menu-close::after { content: ''; position: absolute; inset: -4px -4px -4px -1px; }
+    :global(:root[data-input='touch']) .tabs-menu-close::after { inset: -8px -4px -8px -1px; }
+  }
 
   .tab {
     position: relative;
     display: inline-flex;
     align-items: center;
-    gap: 7px;
-    padding: 0 8px 0 13px;
+    gap: 6px;
+    padding: 0 6px 0 12px;
     height: var(--titlebar-control-height);
     /* Un onglet ne s'écrase plus au point de ne laisser que la croix : en deçà,
        le strip défile. */
-    min-width: 96px;
+    min-width: 120px; /* = TAB_MIN du script */
+    max-width: 240px; /* = TAB_MAX du script */
     flex: 0 1 auto;
     border: 1px solid transparent;
     border-bottom-width: 0;
-    border-radius: 10px 10px 0 0;
+    border-radius: var(--radius-lg) var(--radius-lg) 0 0;
     background: transparent;
-    color: var(--ink-4);
-    font-size: 12.5px;
+    color: var(--ink-3);
+    font-size: var(--text-sm);
+    /* Même graisse actif ou non : la largeur des onglets ne bouge pas quand on en change. */
+    font-weight: var(--weight-control);
     cursor: pointer;
-    transition: background 140ms ease, color 140ms ease;
+    /* Pas de fondu : Ctrl+Tab change d'onglet en rafale. Le survol des inactifs garde le
+       sien par ::before. */
+    transition: none;
+  }
+  .tab:focus-visible { outline-offset: -2px; }
+  .tab.dragging {
+    z-index: 5;
+    cursor: grabbing;
+    background: var(--cream-content);
+    color: var(--ink);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-xl);
+    transition: box-shadow var(--duration-basic) ease, opacity var(--duration-basic) ease;
+  }
+  .tab.torn { opacity: 0; }
+  /* Mini fenêtre qui suit le curseur ; son onglet (à 60 px du bord) est sous le pointeur. */
+  .tear-preview {
+    position: fixed;
+    z-index: var(--z-drag);
+    width: 300px;
+    height: 190px;
+    margin: -14px 0 0 -60px;
+    border-radius: var(--radius-xl);
+    overflow: hidden;
+    background: var(--cream-content);
+    box-shadow: var(--shadow-2xl);
+    pointer-events: none;
+    transform-origin: 60px 14px;
+    animation: tear-preview-in var(--duration-moderate) var(--ease-enter);
+  }
+  @keyframes tear-preview-in {
+    from { opacity: 0; transform: scale(0.35); }
+  }
+  .tear-preview-bar {
+    height: 28px;
+    padding: 5px 0 0 12px;
+    background: var(--chrome-material-base);
+  }
+  .tear-preview-tab {
+    display: inline-block;
+    max-width: 150px;
+    height: 23px;
+    padding: 4px 12px 0;
+    border-radius: var(--radius-md) var(--radius-md) 0 0;
+    background: var(--cream-content);
+    color: var(--ink);
+    font-size: 11px;
+    font-weight: 510;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .tear-preview-page {
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+    padding: 16px 26px;
+    color: var(--ink-3);
+    font-size: 10px;
+    line-height: 1.35;
+  }
+  .tear-preview-page span {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .tear-preview-page .title {
+    color: var(--ink);
+    font-family: var(--font-serif);
+    font-size: 15px;
+    font-weight: 600;
+  }
+  .tear-preview-page .skeleton {
+    flex: none;
+    height: 7px;
+    border-radius: var(--radius-xs);
+    background: var(--accent-soft);
+  }
+  .tear-preview-page .skeleton.short { width: 60%; }
+  /* Onglet d'une autre fenêtre tenu au-dessus de cette barre : place qu'il prendra si on le lâche. */
+  .tab.incoming {
+    pointer-events: none;
+    animation: tab-incoming var(--duration-basic) var(--ease-enter);
+  }
+  @keyframes tab-incoming {
+    from { opacity: 0; transform: translateY(6px); }
   }
   .tab:not(.active)::before {
     content: '';
     position: absolute;
     inset: 0;
-    border-radius: 9px;
-    background: var(--surface-hover);
+    border-radius: var(--radius-md);
+    background: var(--fill-hover);
     opacity: 0;
     pointer-events: none;
-    transition: opacity 140ms ease;
+    transition: opacity var(--duration-basic) ease;
   }
   .tab:not(.active):hover { color: var(--ink-2); }
   .tab:not(.active):hover::before { opacity: 1; }
-  .tab:not(.active) > :global(*) { position: relative; z-index: 1; }
+  .tab:not(.active) > :global(:not(.sr-only)) { position: relative; z-index: 1; }
   .tab.active {
     background: var(--cream-content);
     box-shadow: 0 4px 0 var(--cream-content);
     color: var(--ink);
-    font-weight: 500;
     z-index: 2;
   }
-  .tab.active:hover { background: var(--cream-content); }
+  /* Congés inversés au pied de l'onglet actif : rayon = --radius-lg (10 px) + 0,5 px d'anticrénelage. */
   .tab.active::before,
   .tab.active::after {
     content: '';
@@ -1175,8 +1558,21 @@
     background: radial-gradient(circle at top right, transparent 10.5px, var(--cream-content) 10.5px);
   }
 
-  .dot { font-size: 9px; color: var(--ink); line-height: 1; margin-right: 1px; }
-  .name { min-width: 0; max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* « Non enregistré » : pastille CSS (pas le glyphe ●, dont la taille suit la police) ;
+     le libellé lisible vit dans un .sr-only ou dans l'aria-label du bouton. */
+  .dot { flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--ink); }
+  .sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    padding: 0;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+    border: 0;
+  }
+  .name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .parent {
     flex-shrink: 3;
     min-width: 0;
@@ -1184,28 +1580,41 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    font-size: 10.5px;
+    font-size: var(--text-xs);
+    font-weight: var(--weight-regular);
     color: var(--ink-4);
   }
   .parent::before { content: '·'; margin-right: 4px; opacity: 0.55; }
+  /* Croix révélée au survol, au focus et sur l'onglet actif ; sa place reste réservée. */
   .close {
+    position: relative;
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 24px;
-    height: 24px;
-    margin-right: -4px;
-    border-radius: 6px;
-    color: var(--ink-4);
-    opacity: 0.45;
-    transition: opacity 120ms ease, background 120ms ease, color 120ms ease;
+    flex: none;
+    width: 20px;
+    height: 20px;
+    /* Concentrique : onglet 10 − retrait 6 = 4. */
+    border-radius: var(--radius-xs);
+    color: var(--ink-3);
+    opacity: 0;
+    transition:
+      opacity var(--duration-basic) ease,
+      background-color var(--duration-basic) ease,
+      color var(--duration-basic) ease;
   }
-  .tab.active .close { opacity: 0.9; }
-  .close:hover { background: var(--surface-hover); color: var(--ink); }
+  .close > .icon { font-size: 14px; }
+  .tab:is(:hover, :focus-visible, .active) .close { opacity: 1; }
+  .close:hover { background: var(--accent-soft); color: var(--ink); }
+  /* 20 px au doigt : zone portée à la hauteur de l'onglet, rendu inchangé. Sur un onglet
+     inactif, ce toucher active l'onglet au lieu de le fermer (voir le onclick). */
+  @media (any-pointer: coarse) {
+    .close::after { content: ''; position: absolute; inset: -6px; }
+  }
 
   .new-tab {
     position: relative;
-    width: 32px;
+    width: var(--control-md);
     flex: 0 0 auto;
     height: var(--titlebar-control-height);
     display: inline-flex;
@@ -1213,24 +1622,26 @@
     justify-content: center;
     background: transparent;
     border: 0;
-    border-radius: 8px;
-    color: var(--ink-4);
+    border-radius: var(--radius-lg);
+    color: var(--ink-3);
     cursor: pointer;
-    transition: color 140ms ease;
+    transition: color var(--duration-basic) ease, transform var(--duration-basic) var(--ease-enter-snappy);
   }
   .new-tab::before {
     content: '';
     position: absolute;
     inset: 0;
-    border-radius: 9px;
-    background: var(--surface-hover);
+    border-radius: inherit;
+    background: var(--fill-hover);
     opacity: 0;
     pointer-events: none;
-    transition: opacity 140ms ease;
+    transition: opacity var(--duration-basic) ease;
   }
   .new-tab:hover { color: var(--ink); }
+  .new-tab:active { transform: scale(0.97); }
   .new-tab:hover::before { opacity: 1; }
-  .new-tab .msr { position: relative; z-index: 1; }
+  .new-tab:focus-visible { outline-offset: -2px; }
+  .new-tab .icon { position: relative; z-index: 1; font-size: 16px; }
 
   .win-controls { display: flex; align-items: center; gap: 2px; padding-right: 2px; flex-shrink: 0; }
   .ctrl {
@@ -1241,17 +1652,21 @@
     justify-content: center;
     background: transparent;
     border: 0;
-    border-radius: 6px;
+    border-radius: var(--radius-lg);
     color: var(--ink-3);
     cursor: pointer;
-    transition: color 140ms ease, background 140ms ease, transform 100ms ease;
+    transition: color var(--duration-basic) ease, background-color var(--duration-basic) ease, transform var(--duration-basic) var(--ease-enter-snappy);
   }
-  .ctrl:hover { background: var(--surface-hover); color: var(--ink); }
-  .ctrl:active { background: var(--accent-soft); transform: translateY(1px); }
-  .ctrl:focus-visible { outline: 1px solid var(--line-3); outline-offset: -2px; background: var(--surface-hover); }
-  .ctrl.wide { width: 40px; border-radius: 7px; }
-  .ctrl.pin.on { background: var(--accent-soft); color: var(--ink); }
+  .ctrl > .icon { font-size: 16px; }
+  .ctrl:hover { background: var(--fill-hover); color: var(--ink); }
+  .ctrl:active,
+  .ctrl[aria-pressed='true'] { background: var(--accent-soft); color: var(--ink); }
+  .ctrl:focus-visible { outline-offset: -2px; }
+  /* Pression sur les actions de Doku ; la légende Windows (.wide) garde le comportement système. */
+  .ctrl:not(.wide):active { transform: scale(0.97); }
+  /* Légende Windows (réduire, agrandir, fermer) : rayon de rangée, plus proche du système. */
+  .ctrl.wide { width: 40px; border-radius: var(--radius-md); }
   .close-win:hover { background: var(--window-close); color: #fff; }
   .close-win:active { background: var(--window-close-active); color: #fff; }
-  .sep { width: 1px; height: 16px; background: var(--line-2); margin: 0 6px; }
+  .sep { width: 1px; height: 16px; background: var(--line-1); margin: 0 6px; }
 </style>

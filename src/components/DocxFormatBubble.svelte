@@ -19,6 +19,7 @@
   //     `history-empty`…) : un outil inerte peut donc DIRE pourquoi, au lieu d'être
   //     grisé sans explication (règle « branché ou retiré, jamais muet »).
   import { onMount } from 'svelte'
+  import { tooltip } from '../lib/tooltip'
 
   interface EtatCommande {
     enabled?: boolean
@@ -54,6 +55,7 @@
   let x = $state(0)
   let y = $state(0)
   let dessous = $state(false)
+  let origineX = $state(0)
   let bulleEl: HTMLElement | undefined = $state()
   let largeurBulle = $state(0)
   let hauteurBulle = $state(0)
@@ -72,24 +74,24 @@
   // Les libellés sont en FRANÇAIS : la barre d'origine était en anglais au milieu d'une
   // application entièrement française.
   const CARACTERE = [
-    { id: 'bold', label: 'Gras', icone: 'format_bold' },
-    { id: 'italic', label: 'Italique', icone: 'format_italic' },
-    { id: 'underline', label: 'Souligné', icone: 'format_underlined' },
-    { id: 'strikethrough', label: 'Barré', icone: 'format_strikethrough' },
+    { id: 'bold', label: 'Gras', icone: 'bold' },
+    { id: 'italic', label: 'Italique', icone: 'italic' },
+    { id: 'underline', label: 'Souligné', icone: 'underline' },
+    { id: 'strikethrough', label: 'Barré', icone: 'strikethrough' },
   ]
   const LISTES = [
-    { id: 'bullet-list', label: 'Liste à puces', icone: 'format_list_bulleted' },
-    { id: 'numbered-list', label: 'Liste numérotée', icone: 'format_list_numbered' },
+    { id: 'bullet-list', label: 'Liste à puces', icone: 'list' },
+    { id: 'numbered-list', label: 'Liste numérotée', icone: 'list-ordered' },
   ]
   const ALIGNEMENTS = [
-    { valeur: 'left', label: 'Aligner à gauche', icone: 'format_align_left' },
-    { valeur: 'center', label: 'Centrer', icone: 'format_align_center' },
-    { valeur: 'right', label: 'Aligner à droite', icone: 'format_align_right' },
-    { valeur: 'justify', label: 'Justifier', icone: 'format_align_justify' },
+    { valeur: 'left', label: 'Aligner à gauche', icone: 'text-align-start' },
+    { valeur: 'center', label: 'Centrer', icone: 'text-align-center' },
+    { valeur: 'right', label: 'Aligner à droite', icone: 'text-align-end' },
+    { valeur: 'justify', label: 'Justifier', icone: 'text-align-justify' },
   ]
   const RETRAITS = [
-    { id: 'indent-decrease', label: 'Diminuer le retrait', icone: 'format_indent_decrease' },
-    { id: 'indent-increase', label: 'Augmenter le retrait', icone: 'format_indent_increase' },
+    { id: 'indent-decrease', label: 'Diminuer le retrait', icone: 'list-indent-decrease' },
+    { id: 'indent-increase', label: 'Augmenter le retrait', icone: 'list-indent-increase' },
   ]
   // Couleurs de DOCUMENT : elles atterrissent dans le fichier, pas dans le mobilier de
   // Doku. Elles sont donc écrites en dur et ne suivent pas le thème — un texte mis en
@@ -113,10 +115,10 @@
   ]
 
   const SUIVIES = [...CARACTERE, ...LISTES, ...RETRAITS, { id: 'link', label: 'Lien', icone: 'link' },
-    { id: 'text-color', label: 'Couleur du texte', icone: 'format_color_text' },
-    { id: 'highlight-color', label: 'Surlignage', icone: 'ink_highlighter' },
-    { id: 'text-align', label: 'Alignement', icone: 'format_align_left' },
-    { id: 'clear-formatting', label: 'Effacer la mise en forme', icone: 'format_clear' },
+    { id: 'text-color', label: 'Couleur du texte', icone: 'baseline' },
+    { id: 'highlight-color', label: 'Surlignage', icone: 'highlighter' },
+    { id: 'text-align', label: 'Alignement', icone: 'text-align-start' },
+    { id: 'clear-formatting', label: 'Effacer la mise en forme', icone: 'remove-formatting' },
     { id: 'table-insert', label: 'Tableau', icone: 'table' }]
 
   // Traduction des raisons d'indisponibilité : un outil inerte doit dire pourquoi.
@@ -203,6 +205,8 @@
     dessous = haut - hauteurBulle - marge < 0
     y = dessous ? haut + ancre.height + marge : haut - hauteurBulle - marge
     x = Math.min(Math.max(centre - largeurBulle / 2, 8), Math.max(8, cadre.width - largeurBulle - 8))
+    // Même quand le bord a repoussé la bulle, elle grandit depuis la sélection.
+    origineX = Math.min(Math.max(centre - x, 0), largeurBulle)
     visible = true
   }
 
@@ -275,12 +279,12 @@
 {#if visible}
   <div
     class="bulle"
-    class:dessous
     bind:this={bulleEl}
     bind:clientWidth={largeurBulle}
     bind:clientHeight={hauteurBulle}
     style:left="{x}px"
     style:top="{y}px"
+    style:transform-origin="{origineX}px {dessous ? '0' : '100%'}"
     role="toolbar"
     aria-label="Mise en forme"
   >
@@ -292,7 +296,7 @@
         onclick={() => { menuStyles = !menuStyles; palette = false }}
       >
         <span class="nom">{styleCourantLisible}</span>
-        <span class="msr fleche">expand_more</span>
+        <svg class="icon fleche" aria-hidden="true"><use href="#i-chevron-down" /></svg>
       </button>
 
       <span class="sep"></span>
@@ -302,12 +306,12 @@
         <button
           class="outil"
           class:actif={etat.active}
-          title={raisonLisible(etat) || outil.label}
+          use:tooltip={raisonLisible(etat) || outil.label}
           aria-label={outil.label}
           aria-pressed={!!etat.active}
           onclick={() => void lancer(outil.id)}
         >
-          <span class="msr">{outil.icone}</span>
+          <svg class="icon" aria-hidden="true"><use href="#i-{outil.icone}" /></svg>
         </button>
       {/each}
 
@@ -318,22 +322,22 @@
         <button
           class="outil"
           class:actif={etat.active}
-          title={raisonLisible(etat) || outil.label}
+          use:tooltip={raisonLisible(etat) || outil.label}
           aria-label={outil.label}
           aria-pressed={!!etat.active}
           onclick={() => void lancer(outil.id)}
         >
-          <span class="msr">{outil.icone}</span>
+          <svg class="icon" aria-hidden="true"><use href="#i-{outil.icone}" /></svg>
         </button>
       {/each}
 
       <button
         class="outil"
-        title={raisonLisible(etatDe('link')) || 'Lien'}
+        use:tooltip={raisonLisible(etatDe('link')) || 'Lien'}
         aria-label="Lien"
         onclick={() => void lancer('link')}
       >
-        <span class="msr">link</span>
+        <svg class="icon" aria-hidden="true"><use href="#i-link" /></svg>
       </button>
 
       <span class="sep"></span>
@@ -343,11 +347,11 @@
         class:actif={palette}
         aria-haspopup="menu"
         aria-expanded={palette}
-        title="Plus d’outils"
+        use:tooltip={'Plus d’outils'}
         aria-label="Plus d’outils"
         onclick={() => { palette = !palette; menuStyles = false }}
       >
-        <span class="msr">more_horiz</span>
+        <svg class="icon" aria-hidden="true"><use href="#i-ellipsis" /></svg>
       </button>
     </div>
 
@@ -376,7 +380,7 @@
                 role="menuitem"
                 class="pastille"
                 class:choisie={etatDe('text-color').value === c.valeur}
-                title={c.label}
+                use:tooltip={c.label}
                 aria-label="Couleur du texte : {c.label}"
                 onclick={() => void lancer('text-color', c.valeur)}
               >
@@ -393,12 +397,12 @@
                 role="menuitem"
                 class="pastille"
                 class:choisie={etatDe('highlight-color').value === c.valeur}
-                title={c.label}
+                use:tooltip={c.label}
                 aria-label="Surlignage : {c.label}"
                 onclick={() => void lancer('highlight-color', c.valeur)}
               >
                 {#if c.valeur === 'none'}
-                  <span class="teinte aucune"><span class="msr">format_color_reset</span></span>
+                  <span class="teinte aucune"><svg class="icon" aria-hidden="true"><use href="#i-circle-slash" /></svg></span>
                 {:else}
                   <span class="teinte" style:background={c.valeur}></span>
                 {/if}
@@ -414,16 +418,16 @@
                 role="menuitem"
                 class="outil"
                 class:actif={etatDe('text-align').value === a.valeur}
-                title={a.label}
+                use:tooltip={a.label}
                 aria-label={a.label}
                 onclick={() => void lancer('text-align', a.valeur)}
               >
-                <span class="msr">{a.icone}</span>
+                <svg class="icon" aria-hidden="true"><use href="#i-{a.icone}" /></svg>
               </button>
             {/each}
             {#each RETRAITS as r (r.id)}
-              <button role="menuitem" class="outil" title={raisonLisible(etatDe(r.id)) || r.label} aria-label={r.label} onclick={() => void lancer(r.id)}>
-                <span class="msr">{r.icone}</span>
+              <button role="menuitem" class="outil" use:tooltip={raisonLisible(etatDe(r.id)) || r.label} aria-label={r.label} onclick={() => void lancer(r.id)}>
+                <svg class="icon" aria-hidden="true"><use href="#i-{r.icone}" /></svg>
               </button>
             {/each}
           </div>
@@ -431,17 +435,17 @@
         <div class="groupe">
           <span class="titre-groupe">Insérer</span>
           <div class="ligne">
-            <button role="menuitem" class="outil" title="Tableau" aria-label="Tableau" onclick={() => void lancer('table-insert')}>
-              <span class="msr">table</span>
+            <button role="menuitem" class="outil" use:tooltip={'Tableau'} aria-label="Tableau" onclick={() => void lancer('table-insert')}>
+              <svg class="icon" aria-hidden="true"><use href="#i-table" /></svg>
             </button>
-            <button role="menuitem" class="outil" title="Image" aria-label="Image" onclick={() => void lancer('image')}>
-              <span class="msr">image</span>
+            <button role="menuitem" class="outil" use:tooltip={'Image'} aria-label="Image" onclick={() => void lancer('image')}>
+              <svg class="icon" aria-hidden="true"><use href="#i-image" /></svg>
             </button>
           </div>
         </div>
         <div class="groupe">
-          <button role="menuitem" class="large" title={raisonLisible(etatDe('clear-formatting')) || 'Effacer la mise en forme'} onclick={() => void lancer('clear-formatting')}>
-            <span class="msr">format_clear</span><span>Effacer la mise en forme</span>
+          <button role="menuitem" class="large" use:tooltip={raisonLisible(etatDe('clear-formatting'))} onclick={() => void lancer('clear-formatting')}>
+            <svg class="icon" aria-hidden="true"><use href="#i-remove-formatting" /></svg><span>Effacer la mise en forme</span>
           </button>
         </div>
       </div>
@@ -450,89 +454,86 @@
 {/if}
 
 <style>
-  /* Vocabulaire des menus flottants du système : papier teinté, rayon 13–14px, 6px de
-     padding, ombre ambiante — jamais un contour dur. */
+  /* Barre flottante à la Kube : surface élevée opaque, gouttière 4px, boutons de barre
+     d'outils 28px au rayon concentrique (12 − 4 = 8), ombre de rôle « menu ». Elle grandit
+     depuis la sélection (origine posée en ligne par placer()) : en bas quand elle la coiffe,
+     en haut quand elle passe dessous. */
   .bulle {
     position: absolute;
     z-index: 40;
     display: flex;
     flex-direction: column;
     gap: 4px;
-    padding: 5px;
-    border-radius: 13px;
-    background: var(--cream-tint);
-    box-shadow:
-      0 0 0 1px var(--elevation-ring),
-      0 12px 30px rgba(var(--shadow-rgb), 0.18);
-    animation: bulle-in 130ms cubic-bezier(0.22, 1, 0.36, 1);
-  }
-  @keyframes bulle-in {
-    from { opacity: 0; transform: translateY(4px) scale(0.97); }
-    to { opacity: 1; transform: translateY(0) scale(1); }
-  }
-  .bulle.dessous { animation-name: bulle-in-dessous; }
-  @keyframes bulle-in-dessous {
-    from { opacity: 0; transform: translateY(-4px) scale(0.97); }
-    to { opacity: 1; transform: translateY(0) scale(1); }
+    padding: 4px;
+    border-radius: var(--radius-xl);
+    background: var(--composer-bg);
+    box-shadow: var(--shadow-xl);
+    color: var(--ink);
+    font-size: 13px;
+    animation: doku-pop-in var(--duration-basic) var(--ease-enter-snappy);
   }
 
   .rangee { display: flex; align-items: center; gap: 2px; }
-  .sep { width: 1px; height: 18px; margin: 0 3px; background: var(--line-2); }
+  .sep { flex: none; width: 1px; height: 16px; margin: 0 4px; background: var(--line-1); }
 
   .outil, .style {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    gap: 5px;
-    height: 30px;
+    gap: 4px;
+    height: var(--control-sm);
+    padding: 0;
     border: 0;
-    border-radius: 8px;
+    border-radius: var(--radius-md);
     background: transparent;
     color: var(--ink-3);
     font: inherit;
-    font-size: 12.5px;
-    font-weight: 500;
+    font-weight: 510;
     cursor: pointer;
-    transition: background-color 120ms ease, color 120ms ease;
+    transition: background-color var(--duration-basic) ease, color var(--duration-basic) ease;
   }
-  .outil { width: 30px; }
-  .style { padding: 0 6px 0 9px; min-width: 84px; justify-content: space-between; }
+  .outil { width: var(--control-sm); }
+  .style { padding: 0 6px 0 8px; min-width: 84px; justify-content: space-between; }
   .style .nom { white-space: nowrap; }
-  .style .fleche { font-size: 16px; color: var(--ink-5); }
-  .outil:hover, .style:hover { background: var(--surface-hover); color: var(--ink); }
-  /* L'état ACTIF est une encre pleine sur fond tonal — pas une couleur d'accent : le
-     système réserve la couleur aux statuts sémantiques. */
-  .outil.actif { background: var(--cream-base); color: var(--ink); box-shadow: 0 1px 4px rgba(var(--shadow-rgb), 0.12); }
-  .outil .msr { font-size: 18px; }
-  .outil:focus-visible, .style:focus-visible { outline: 2px solid var(--line-3); outline-offset: 1px; }
+  .style .fleche { font-size: 14px; color: var(--ink-4); }
+  .outil:hover, .style:hover { background: rgba(var(--ink-rgb), 0.06); color: var(--ink); }
+  /* L'état ACTIF (et le volet ouvert) est le remplissage de sélection, encre pleine — pas
+     une couleur d'accent : le système réserve la couleur aux statuts sémantiques. */
+  .outil.actif, .style[aria-expanded='true'] { background: var(--accent-soft); color: var(--ink); }
+  .outil .icon { font-size: 16px; }
+  .outil:focus-visible, .style:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -1px; }
 
+  /* Volets : pas une seconde surface posée sur la bulle (élévation imbriquée), un simple
+     filet qui sépare la barre de son contenu déplié. */
   .volet {
     display: flex;
     flex-direction: column;
     gap: 6px;
-    padding: 6px;
-    border-radius: 10px;
-    background: var(--cream-base);
-    box-shadow: 0 0 0 1px var(--elevation-ring-soft);
+    padding-top: 4px;
+    border-top: 1px solid var(--line-1);
   }
-  .volet button {
+  .styles { gap: 0; }
+  /* Rangées de menu : 30px, rayon de rangée, sélection = --accent-soft. */
+  .styles button, .large {
     display: flex;
     align-items: center;
-    gap: 9px;
-    min-height: 32px;
-    padding: 0 9px;
+    gap: 8px;
+    width: 100%;
+    min-height: 30px;
+    padding: 0 8px;
     border: 0;
-    border-radius: 8px;
+    border-radius: var(--radius-md);
     background: transparent;
-    color: var(--ink-3);
+    color: var(--ink-2);
     font: inherit;
-    font-size: 12.5px;
-    font-weight: 500;
     text-align: left;
     cursor: pointer;
+    transition: background-color var(--duration-basic) ease, color var(--duration-basic) ease;
   }
-  .volet button:hover { background: var(--surface-hover); color: var(--ink); }
-  .styles button.coche { background: var(--cream-tint); color: var(--ink); }
+  .styles button:hover, .large:hover { background: var(--accent-soft); color: var(--ink); }
+  .styles button.coche { background: var(--accent-soft); color: var(--ink); }
+  .styles button:focus-visible, .large:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
+  .large .icon { font-size: 15px; color: var(--ink-4); }
   /* L'aperçu montre le style plutôt que de le nommer deux fois. Colonne à largeur FIXE
      et hauteur de ligne neutralisée : c'est ce qui garantit que la ligne ne bouge pas
      d'un style à l'autre et que rien ne déborde sur le libellé. */
@@ -548,31 +549,32 @@
 
   /* Pastilles de couleur : la teinte EST l'étiquette, on ne la nomme pas deux fois. */
   .pastille {
-    width: 26px; height: 26px; padding: 0;
+    width: var(--control-sm); height: var(--control-sm); padding: 0;
     display: inline-flex; align-items: center; justify-content: center;
-    border: 0; border-radius: 8px; background: transparent; cursor: pointer;
+    border: 0; border-radius: var(--radius-md); background: transparent; cursor: pointer;
+    transition: background-color var(--duration-basic) ease;
   }
-  .pastille:hover { background: var(--surface-hover); }
+  .pastille:hover { background: rgba(var(--ink-rgb), 0.06); }
+  /* Filet de thème, pas une encre de papier : sur la bulle sombre, la pastille noire
+     disparaissait derrière un liseré sombre. */
   .pastille .teinte {
-    width: 16px; height: 16px; border-radius: 5px;
-    box-shadow: inset 0 0 0 1px rgba(28, 26, 22, 0.22);
+    width: 16px; height: 16px; border-radius: var(--radius-xs);
+    box-shadow: inset 0 0 0 1px var(--line-2);
   }
   .pastille .teinte.aucune {
     display: inline-flex; align-items: center; justify-content: center;
-    background: var(--cream-content); color: var(--ink-5);
+    background: var(--cream-content); color: var(--ink-4);
   }
-  .pastille .teinte.aucune .msr { font-size: 13px; }
-  .pastille.choisie { background: var(--cream-tint); box-shadow: 0 0 0 1px var(--line-2); }
-  .pastille:focus-visible { outline: 2px solid var(--line-3); outline-offset: 1px; }
+  .pastille .teinte.aucune .icon { font-size: 12px; }
+  .pastille.choisie { background: var(--accent-soft); box-shadow: inset 0 0 0 1px var(--line-2); }
+  .pastille:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -1px; }
 
-  .groupe { display: flex; flex-direction: column; gap: 3px; }
-  .titre-groupe { padding: 0 4px; font-size: 10.5px; font-weight: 600; color: var(--ink-5); }
+  /* Au doigt : boutons 36×40 réels. Ils ne sont séparés que de 2px, une zone élargie par
+     pseudo-élément recouvrirait le voisin. */
+  :global(:root[data-input='touch']) :is(.outil, .pastille) { width: 36px; height: 40px; }
+  :global(:root[data-input='touch']) .style { height: 40px; }
+
+  .groupe { display: flex; flex-direction: column; gap: 2px; }
+  .titre-groupe { padding: 2px 8px 0; font-size: 12px; font-weight: 510; color: var(--ink-3); }
   .ligne { display: flex; align-items: center; gap: 2px; }
-  .ligne .outil { width: 30px; padding: 0; }
-  .volet .large { width: 100%; }
-
-  @media (prefers-reduced-motion: reduce) {
-    .bulle { animation: none; }
-    .outil, .style { transition: none; }
-  }
 </style>

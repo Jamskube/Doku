@@ -68,6 +68,7 @@
     let cancelled = false
     void (async () => {
       status = 'loading'
+      message = ''
       const bytes = await readBytes(path)
       if (cancelled) return
       if (!bytes) {
@@ -260,24 +261,24 @@
 <dialog class="pages" bind:this={dlg} onclose={closePdfPages} aria-label="Organiser les pages">
   <div class="window">
     <header>
-      <span class="msr" aria-hidden="true">auto_stories</span>
+      <span class="title-icon" aria-hidden="true"><svg class="icon" aria-hidden="true"><use href="#i-layers" /></svg></span>
       <div class="title">
         <strong>Organiser les pages</strong>
         <small>{fileName}</small>
       </div>
       <span class="spacer"></span>
-      <button class="icon-button" aria-label="Fermer" onclick={closePdfPages}><span class="msr">close</span></button>
+      <button class="icon-button" aria-label="Fermer" onclick={closePdfPages}><svg class="icon" aria-hidden="true"><use href="#i-x" /></svg></button>
     </header>
 
     <div class="tools">
       <button onclick={() => plan = turnAllPdfPagePlan(plan, -1)} disabled={status !== 'ready'}>
-        <span class="msr">rotate_left</span><span>Tout pivoter</span>
+        <svg class="icon" aria-hidden="true"><use href="#i-rotate-ccw" /></svg><span>Tout pivoter</span>
       </button>
       <button onclick={() => void insertDocument()} disabled={status !== 'ready' || saving}>
-        <span class="msr">library_add</span><span>Insérer un PDF…</span>
+        <svg class="icon" aria-hidden="true"><use href="#i-copy-plus" /></svg><span>Insérer un PDF…</span>
       </button>
       <button onclick={() => { plan = identityPdfPagePlan(sourceCount); message = '' }} disabled={untouched || saving}>
-        <span class="msr">restart_alt</span><span>Réinitialiser</span>
+        <svg class="icon" aria-hidden="true"><use href="#i-undo-2" /></svg><span>Réinitialiser</span>
       </button>
       <span class="spacer"></span>
       <!-- Le compte rendu est permanent : l'utilisateur voit ce qu'il s'apprête à
@@ -291,13 +292,23 @@
       </span>
     </div>
 
-    {#if message}<p class="message" role="status">{message}</p>{/if}
+    <!-- En erreur de chargement, le message vit dans la grille : une seule fois. -->
+    {#if message && status === 'ready'}<p class="message" role="status">{message}</p>{/if}
 
-    <div class="grid" class:busy={status !== 'ready'}>
+    <div class="grid" class:busy={status === 'error'} aria-busy={status === 'loading'}>
       {#if status === 'loading'}
-        <p class="hint">Ouverture du document…</p>
+        <!-- Cartes fantômes à la mise en page des vraies, invisibles pendant 400 ms : une
+             ouverture rapide ne clignote pas. -->
+        <div class="loading" role="status" aria-label="Ouverture du document">
+          {#each [0, 1, 2, 3, 4, 5] as n (n)}
+            <div class="ghost-card" aria-hidden="true">
+              <div class="thumb"><span class="placeholder doku-skel"></span></div>
+              <span class="ghost-tools"></span>
+            </div>
+          {/each}
+        </div>
       {:else if status === 'error'}
-        <p class="hint">{message}</p>
+        <p class="hint error" role="status">{message}</p>
       {:else}
         {#each plan as entry, index (`${entry.from}:${entry.source}:${index}`)}
           <div
@@ -317,14 +328,14 @@
               {:else}
                 <span class="placeholder"></span>
               {/if}
-              {#if entry.from !== 0}<span class="badge" title={sources[entry.from]?.name}>inséré</span>{/if}
+              {#if entry.from !== 0}<span class="badge" title={sources[entry.from]?.name}>Inséré</span>{/if}
             </div>
             <div class="card-tools">
-              <button aria-label="Pivoter à gauche" title="Pivoter à gauche" onclick={() => plan = turnPdfPagePlan(plan, index, -1)}><span class="msr">rotate_left</span></button>
-              <button aria-label="Pivoter à droite" title="Pivoter à droite" onclick={() => plan = turnPdfPagePlan(plan, index, 1)}><span class="msr">rotate_right</span></button>
-              <button aria-label="Reculer" title="Reculer" disabled={index === 0} onclick={() => plan = movePdfPagePlan(plan, index, index - 1)}><span class="msr">chevron_left</span></button>
-              <button aria-label="Avancer" title="Avancer" disabled={index === plan.length - 1} onclick={() => plan = movePdfPagePlan(plan, index, index + 1)}><span class="msr">chevron_right</span></button>
-              <button class="danger" aria-label="Supprimer" title="Supprimer" disabled={plan.length <= 1} onclick={() => plan = dropPdfPagePlan(plan, index)}><span class="msr">delete</span></button>
+              <button aria-label="Pivoter à gauche" title="Pivoter à gauche" onclick={() => plan = turnPdfPagePlan(plan, index, -1)}><svg class="icon" aria-hidden="true"><use href="#i-rotate-ccw" /></svg></button>
+              <button aria-label="Pivoter à droite" title="Pivoter à droite" onclick={() => plan = turnPdfPagePlan(plan, index, 1)}><svg class="icon" aria-hidden="true"><use href="#i-rotate-cw" /></svg></button>
+              <button aria-label="Reculer" title="Reculer" disabled={index === 0} onclick={() => plan = movePdfPagePlan(plan, index, index - 1)}><svg class="icon" aria-hidden="true"><use href="#i-chevron-left" /></svg></button>
+              <button aria-label="Avancer" title="Avancer" disabled={index === plan.length - 1} onclick={() => plan = movePdfPagePlan(plan, index, index + 1)}><svg class="icon" aria-hidden="true"><use href="#i-chevron-right" /></svg></button>
+              <button class="danger" aria-label="Supprimer" title="Supprimer" disabled={plan.length <= 1} onclick={() => plan = dropPdfPagePlan(plan, index)}><svg class="icon" aria-hidden="true"><use href="#i-trash" /></svg></button>
             </div>
             <span class="number">{index + 1}</span>
           </div>
@@ -337,7 +348,7 @@
            nom proposé porte un suffixe. -->
       <small>Le document d’origine n’est jamais modifié.</small>
       <span class="spacer"></span>
-      <button class="ghost" onclick={closePdfPages}>Annuler</button>
+      <button class="secondary" onclick={closePdfPages}>Annuler</button>
       <button class="primary" disabled={untouched || saving} onclick={() => void saveCopy()}>
         {saving ? 'Écriture…' : 'Enregistrer une copie…'}
       </button>
@@ -357,86 +368,104 @@
     color: var(--ink);
     overflow: visible;
   }
+  /* Voile discret, partagé par toutes les modales de Doku. */
   .pages::backdrop {
-    background: rgb(0 0 0 / 0.38);
-    -webkit-backdrop-filter: blur(3px);
-    backdrop-filter: blur(3px);
+    background: var(--scrim);
+    animation: doku-fade-in var(--duration-dialog) var(--ease-enter-snappy);
   }
   .window {
     height: min(660px, calc(100vh - 48px));
     display: flex;
     flex-direction: column;
-    background: var(--cream-base);
-    border-radius: 18px;
-    box-shadow:
-      0 0 0 1px var(--elevation-ring),
-      0 28px 76px rgba(var(--shadow-rgb), 0.34),
-      0 6px 20px rgba(var(--shadow-rgb), 0.16);
+    background: var(--surface);
+    border-radius: var(--radius-2xl);
+    box-shadow: var(--shadow-dialog);
     overflow: hidden;
+    animation: doku-dialog-in var(--duration-dialog) var(--ease-enter-snappy);
   }
   header {
+    min-height: 60px;
     flex: 0 0 auto;
     display: flex;
     align-items: center;
-    gap: 11px;
-    padding: 12px 14px 12px 18px;
+    gap: 12px;
+    padding: 12px 12px 12px 16px;
     border-bottom: 1px solid var(--line-1);
   }
-  .title { display: flex; flex-direction: column; line-height: 1.25; }
-  .title small { opacity: 0.62; }
+  .title-icon {
+    width: 36px; height: 36px; display: inline-flex; align-items: center; justify-content: center;
+    border-radius: var(--radius-xl); background: var(--accent-soft); color: var(--ink); font-size: 18px;
+  }
+  .title { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+  .title strong { font-size: var(--text-lg); line-height: var(--leading-tight); font-weight: var(--weight-strong); letter-spacing: var(--tracking-tight); }
+  .title small { overflow: hidden; font-size: var(--text-xs); color: var(--ink-3); text-overflow: ellipsis; white-space: nowrap; }
   .spacer { flex: 1 1 auto; }
 
   .tools {
     flex: 0 0 auto;
     display: flex;
     align-items: center;
-    gap: 8px;
-    padding: 10px 14px;
+    gap: 4px;
+    padding: 8px 12px;
     border-bottom: 1px solid var(--line-1);
   }
+  /* Boutons fantômes, sans contour permanent : le fond n'apparaît qu'au survol. */
   .tools button, footer button {
     display: inline-flex;
     align-items: center;
     gap: 6px;
-    height: 32px;
+    height: var(--control-md);
     padding: 0 12px;
-    /* Pilule SANS contour permanent, révélée au survol : même grammaire que « Modifier
-       le texte » et que le reste de Doku. Le contour de 1px faisait de cette modale la
-       seule surface cerclée de l'application. */
     border: 0;
-    border-radius: 999px;
+    border-radius: var(--radius-lg);
     background: transparent;
     color: var(--ink-3);
     cursor: pointer;
     font: inherit;
-    font-size: 12.5px;
-    font-weight: 500;
-    transition: background-color 140ms ease, color 140ms ease, transform 100ms ease;
+    font-size: var(--text-sm);
+    font-weight: var(--weight-control);
+    transition: background-color var(--duration-basic) ease, color var(--duration-basic) ease, transform var(--duration-basic) var(--ease-enter-snappy);
   }
-  .tools button:hover:not(:disabled), footer button:hover:not(:disabled) { background: var(--surface-hover); color: var(--ink); }
-  .tools button:active:not(:disabled), footer button:active:not(:disabled) { transform: scale(0.97); }
-  .tools button:disabled, footer button:disabled, .card-tools button:disabled { opacity: 0.4; cursor: default; }
-  /* Focus CLAVIER : sans lui, on ne sait pas où l'on est en tabulant — la modale se
-     pilote entièrement au clavier (pivoter, supprimer, réordonner). */
-  .tools button:focus-visible,
-  footer button:focus-visible,
-  .card-tools button:focus-visible,
-  .icon-button:focus-visible { outline: 2px solid var(--line-3); outline-offset: 2px; }
-  .summary { font-size: 11.5px; color: var(--ink-4); }
-  .message { margin: 0; padding: 8px 16px; font-size: 12.5px; color: var(--err-text); }
+  /* Alignement optique : côté icône = côté texte − 2 px. */
+  .tools button { height: var(--control-sm); padding: 0 10px 0 8px; border-radius: var(--radius-md); }
+  .tools .icon { font-size: 16px; }
+  .tools button:hover:not(:disabled), footer button:hover:not(:disabled) { background: var(--fill-hover); color: var(--ink); }
+  .tools button:disabled, footer button:disabled, .card-tools button:disabled { opacity: var(--opacity-disabled); cursor: default; }
+  .summary { font-size: var(--text-xs); color: var(--ink-3); font-variant-numeric: tabular-nums; }
+  .message { margin: 0; padding: 8px 16px; font-size: var(--text-xs); color: var(--err-text); }
 
   .grid {
     flex: 1 1 auto;
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(158px, 1fr));
-    gap: 14px;
+    gap: 16px;
     padding: 16px;
     overflow-y: auto;
     scrollbar-gutter: stable;
     align-content: start;
   }
   .grid.busy { display: block; }
-  .hint { opacity: 0.7; padding: 24px; text-align: center; }
+  .loading {
+    grid-column: 1 / -1;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(158px, 1fr));
+    gap: 16px;
+    animation: doku-fade-in var(--duration-moderate) ease 400ms backwards;
+  }
+  .ghost-card {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 8px;
+    border: 1px solid var(--line-1);
+    border-radius: var(--radius-xl);
+    background: var(--cream-content);
+  }
+  .ghost-tools { height: var(--control-sm); }
+  /* Bande du balayage en gris de papier : la vignette reste blanche en thème sombre. */
+  .placeholder.doku-skel::after { background: linear-gradient(90deg, transparent 0%, rgba(var(--shadow-rgb), 0.06) 50%, transparent 100%); }
+  .hint { padding: 24px; font-size: var(--text-sm); color: var(--ink-3); text-align: center; text-wrap: pretty; }
+  .hint.error { color: var(--err-text); }
 
   .card {
     position: relative;
@@ -445,8 +474,9 @@
     gap: 6px;
     padding: 8px;
     border: 1px solid var(--line-1);
-    border-radius: 12px;
-    background: rgba(var(--ink-rgb), 0.02);
+    border-radius: var(--radius-xl);
+    background: var(--cream-content);
+    transition: border-color var(--duration-basic) ease, box-shadow var(--duration-basic) ease, opacity var(--duration-basic) ease;
     cursor: grab;
     /* Sans ça, déplacer à la souris sélectionne le numéro et le badge au passage. */
     user-select: none;
@@ -460,46 +490,57 @@
   .card.dragging { opacity: 0.45; }
   /* Cible de dépôt : en encre, jamais en reflet lavande — « The Quiet Accent Rule »
      réserve le lavande à la profondeur du chrome, jamais à une sélection ou un état. */
-  .card.over { border-color: var(--line-3); box-shadow: 0 0 0 2px rgba(var(--ink-rgb), 0.22); }
+  .card.over { border-color: var(--line-3); box-shadow: 0 0 0 2px var(--line-2); }
+  /* Rayon intérieur = rayon de la carte moins son padding : les coins restent concentriques. */
   .thumb {
     position: relative;
     display: grid;
     place-items: center;
     height: 190px;
     background: #fff;
-    border-radius: 8px;
+    border-radius: var(--radius-xs);
     overflow: hidden;
   }
-  .thumb img { max-width: 100%; max-height: 100%; display: block; transition: transform 140ms ease; }
-  .placeholder { width: 60%; height: 70%; border-radius: 4px; background: rgba(var(--ink-rgb), 0.07); }
-  .badge {
+  /* Filet d'image : le bord d'une page blanche reste lisible sur le fond blanc de .thumb. */
+  .thumb img { max-width: 100%; max-height: 100%; display: block; outline: 1px solid var(--image-outline); outline-offset: -1px; transition: transform var(--duration-moderate) var(--ease-move); }
+  /* Sur le papier toujours blanc, l'encre d'interface (claire en thème sombre) disparaîtrait :
+     repères et pastilles prennent les teintes fixes des épingles posées sur une page. */
+  .placeholder { width: 60%; height: 70%; border-radius: var(--radius-xs); background: rgba(var(--shadow-rgb), 0.07); }
+  .badge, .number {
     position: absolute;
     top: 6px;
-    left: 6px;
-    padding: 1px 7px;
-    border-radius: 999px;
-    background: rgba(var(--ink-rgb), 0.72);
-    color: var(--cream-base);
-    font-size: 10px;
+    height: 18px;
+    display: inline-flex;
+    align-items: center;
+    padding: 0 6px;
+    border-radius: var(--radius-xs);
+    background: var(--pdf-annotation-pin-bg);
+    color: var(--pdf-annotation-pin-ink);
+    font-size: var(--text-2xs);
+    font-weight: var(--weight-strong);
+    letter-spacing: var(--tracking-badge);
   }
-  .card-tools { display: flex; justify-content: center; gap: 1px; }
+  .badge { left: 6px; }
+  .card-tools { display: flex; justify-content: center; }
   .card-tools button {
     display: grid;
     place-items: center;
-    width: 27px;
-    height: 27px;
+    width: var(--control-sm);
+    height: var(--control-sm);
     border: 0;
-    border-radius: 7px;
+    border-radius: var(--radius-md);
     background: transparent;
-    color: inherit;
+    color: var(--ink-3);
     cursor: pointer;
+    transition: background-color var(--duration-basic) ease, color var(--duration-basic) ease, transform var(--duration-basic) var(--ease-enter-snappy);
   }
-  .card-tools button:hover:not(:disabled) { background: var(--surface-hover); color: var(--ink); }
+  .card-tools button:hover:not(:disabled) { background: var(--fill-hover); color: var(--ink); }
   /* Supprimer une page est une action destructive : c'est le rouge d'action du système,
      pas un rouge d'erreur ni une couleur inventée. */
   .card-tools .danger:hover:not(:disabled) { color: var(--danger-action-text); }
-  .card-tools .msr { font-size: 17px; }
-  .number { position: absolute; right: 10px; top: 10px; font-size: 11px; opacity: 0.55; }
+  .card-tools .icon { font-size: 16px; }
+  /* Numéro posé sur la vignette, dans le coin opposé au badge « Inséré ». */
+  .number { right: 14px; top: 14px; font-variant-numeric: tabular-nums; }
 
   footer {
     flex: 0 0 auto;
@@ -509,28 +550,25 @@
     padding: 12px 16px;
     border-top: 1px solid var(--line-1);
   }
-  footer small { opacity: 0.6; }
+  footer small { font-size: var(--text-xs); color: var(--ink-3); }
   footer .primary { background: var(--ink); color: var(--cream-content); }
   footer .primary:hover:not(:disabled) { background: var(--ink-2); color: var(--cream-content); }
+  footer .secondary { background: var(--accent-soft); color: var(--ink); }
+  footer .secondary:hover:not(:disabled) { background: var(--fill-pressed); color: var(--ink); }
 
   .icon-button {
     display: grid;
     place-items: center;
-    width: 32px;
-    height: 32px;
+    width: var(--control-md);
+    height: var(--control-md);
     border: 0;
-    border-radius: 9px;
+    border-radius: var(--radius-lg);
     background: transparent;
-    color: inherit;
+    color: var(--ink-4);
+    font-size: 16px;
     cursor: pointer;
+    transition: background-color var(--duration-basic) ease, color var(--duration-basic) ease, transform var(--duration-basic) var(--ease-enter-snappy);
   }
-  .icon-button:hover { background: var(--surface-hover); color: var(--ink); }
-  .icon-button:active { transform: scale(0.96); }
-
-  @media (prefers-reduced-motion: reduce) {
-    /* La modale animait ses vignettes et ses boutons sans alternative : le mouvement
-       réduit est une préférence système, pas une option. */
-    .tools button, footer button, .icon-button, .thumb img { transition: none !important; }
-    .tools button:active, footer button:active, .icon-button:active { transform: none; }
-  }
+  .icon-button:hover { background: var(--fill-hover); color: var(--ink); }
+  .tools button:not(:disabled):active, footer button:not(:disabled):active, .card-tools button:not(:disabled):active, .icon-button:active { transform: scale(0.97); }
 </style>

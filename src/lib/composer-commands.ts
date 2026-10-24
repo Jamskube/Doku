@@ -16,10 +16,10 @@ export interface OutputModeInfo {
 export const OUTPUT_ORDER = ['answer', 'diagram', 'html', 'pdf'] as const
 
 export const OUTPUT_MODES: Record<ChatOutputMode, OutputModeInfo> = {
-  answer: { icon: 'chat_bubble', label: 'Réponse', short: 'Réponse', hint: 'Continuer la conversation' },
-  diagram: { icon: 'account_tree', label: 'Diagramme', short: 'Diagramme', hint: 'Structurer les idées visuellement' },
-  html: { icon: 'html', label: 'Page HTML', short: 'HTML', hint: 'Créer une page interactive et autonome' },
-  pdf: { icon: 'picture_as_pdf', label: 'Document PDF', short: 'PDF', hint: 'Composer un document prêt à imprimer' },
+  answer: { icon: 'message-circle', label: 'Réponse', short: 'Réponse', hint: 'Continuer la conversation' },
+  diagram: { icon: 'network', label: 'Diagramme', short: 'Diagramme', hint: 'Structurer les idées visuellement' },
+  html: { icon: 'file-code', label: 'Page HTML', short: 'HTML', hint: 'Créer une page interactive et autonome' },
+  pdf: { icon: 'file-text', label: 'Document PDF', short: 'PDF', hint: 'Composer un document prêt à imprimer' },
 }
 
 /** Les livrables que le modèle local ne sait pas produire (ADR-0031 : le local lit, le cloud crée). */
@@ -51,20 +51,20 @@ export interface SlashCommand {
 }
 
 export const SLASH_COMMANDS: readonly SlashCommand[] = [
-  { token: 'pdf', aliases: ['document', 'doc'], icon: 'picture_as_pdf', hint: 'Composer un document prêt à imprimer', action: { kind: 'mode', mode: 'pdf' } },
-  { token: 'html', aliases: ['page'], icon: 'html', hint: 'Créer une page interactive et autonome', action: { kind: 'mode', mode: 'html' } },
-  { token: 'diagramme', aliases: ['diagram', 'schema', 'schéma', 'graph', 'graphique'], icon: 'account_tree', hint: 'Structurer les idées visuellement', action: { kind: 'mode', mode: 'diagram' } },
-  { token: 'reponse', aliases: ['réponse', 'texte', 'chat'], icon: 'chat_bubble', hint: 'Revenir à une réponse dans la conversation', action: { kind: 'mode', mode: 'answer' } },
+  { token: 'pdf', aliases: ['document', 'doc'], icon: 'file-text', hint: 'Composer un document prêt à imprimer', action: { kind: 'mode', mode: 'pdf' } },
+  { token: 'html', aliases: ['page'], icon: 'file-code', hint: 'Créer une page interactive et autonome', action: { kind: 'mode', mode: 'html' } },
+  { token: 'diagramme', aliases: ['diagram', 'schema', 'schéma', 'graph', 'graphique'], icon: 'network', hint: 'Structurer les idées visuellement', action: { kind: 'mode', mode: 'diagram' } },
+  { token: 'reponse', aliases: ['réponse', 'texte', 'chat'], icon: 'message-circle', hint: 'Revenir à une réponse dans la conversation', action: { kind: 'mode', mode: 'answer' } },
 
   { token: 'web', aliases: ['recherche', 'internet'], icon: 'search', hint: 'Activer ou couper la recherche Web', action: { kind: 'web' } },
-  { token: 'selection', aliases: ['sélection'], icon: 'notes', hint: 'Ajouter le texte sélectionné au contexte', action: { kind: 'context', target: 'selection' }, standalone: true },
-  { token: 'fichiers', aliases: ['fichier', 'files'], icon: 'description', hint: 'Ajouter des fichiers au contexte', action: { kind: 'context', target: 'files' }, standalone: true },
+  { token: 'selection', aliases: ['sélection'], icon: 'text-align-justify-start', hint: 'Ajouter le texte sélectionné au contexte', action: { kind: 'context', target: 'selection' }, standalone: true },
+  { token: 'fichiers', aliases: ['fichier', 'files'], icon: 'file-text', hint: 'Ajouter des fichiers au contexte', action: { kind: 'context', target: 'files' }, standalone: true },
   { token: 'dossier', aliases: ['notes', 'folder'], icon: 'folder', hint: 'Utiliser l’index sémantique d’un dossier', action: { kind: 'context', target: 'folder' }, standalone: true },
-  { token: 'presse-papiers', aliases: ['presse', 'clipboard', 'coller'], icon: 'content_paste', hint: 'Ajouter le presse-papiers au contexte', action: { kind: 'context', target: 'clipboard' }, standalone: true },
+  { token: 'presse-papiers', aliases: ['presse', 'clipboard', 'coller'], icon: 'clipboard-paste', hint: 'Ajouter le presse-papiers au contexte', action: { kind: 'context', target: 'clipboard' }, standalone: true },
 
-  { token: 'bref', aliases: ['court'], icon: 'short_text', hint: 'Réponses droit à l’essentiel', action: { kind: 'verbosity', value: 'brief' } },
-  { token: 'equilibre', aliases: ['équilibré', 'normal'], icon: 'subject', hint: 'Réponses de longueur naturelle', action: { kind: 'verbosity', value: 'balanced' } },
-  { token: 'detaille', aliases: ['détaillé', 'long'], icon: 'notes', hint: 'Réponses développées et structurées', action: { kind: 'verbosity', value: 'detailed' } },
+  { token: 'bref', aliases: ['court'], icon: 'text-align-start', hint: 'Réponses droit à l’essentiel', action: { kind: 'verbosity', value: 'brief' } },
+  { token: 'equilibre', aliases: ['équilibré', 'normal'], icon: 'text-align-justify', hint: 'Réponses de longueur naturelle', action: { kind: 'verbosity', value: 'balanced' } },
+  { token: 'detaille', aliases: ['détaillé', 'long'], icon: 'text-align-justify-start', hint: 'Réponses développées et structurées', action: { kind: 'verbosity', value: 'detailed' } },
 ]
 
 export interface SlashMatch {
@@ -111,6 +111,15 @@ export interface SlashSuggestion {
 // Une ligne par commande dont le nom canonique OU un alias commence par la saisie, et
 // c'est le nom QUI CORRESPOND qui s'affiche : taper « /p » doit montrer `pdf` et `page`,
 // pas `pdf` et `html`, sinon on ne sait pas quoi finir de taper.
+// Navigation clavier du tray (Kube ComposerDrawer) : flèches qui bouclent. Home/End restent
+// à la saisie (curseur en début/fin de ligne). `null` = touche hors navigation, ou liste vide.
+export function nextTrayIndex(current: number, key: string, count: number): number | null {
+  if (count === 0) return null
+  if (key === 'ArrowDown') return (current + 1) % count
+  if (key === 'ArrowUp') return (current - 1 + count) % count
+  return null
+}
+
 export function suggestSlashCommands(query: string): SlashSuggestion[] {
   const out: SlashSuggestion[] = []
   for (const command of SLASH_COMMANDS) {

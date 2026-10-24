@@ -49,4 +49,19 @@ describe('omitEmbeddedImageData', () => {
     expect(omitEmbeddedImageData(markdown)).toBe('# Note\n[Image intégrée : Schéma]\n![Photo](photo.png)')
     expect(markdownTextLength(markdown)).toBeLessThan(markdown.length)
   })
+
+  it('rend la source telle quelle sans image intégrée, et reconnaît la casse mixte', () => {
+    const plain = '# Note\n![Photo](photo.png)\n<img src="a.png">\ndata: pas une image'
+    expect(omitEmbeddedImageData(plain)).toBe(plain)
+    expect(omitEmbeddedImageData('![a](DATA:Image/png;base64,AAAA)')).toBe('[Image intégrée : a]')
+    expect(omitEmbeddedImageData('<IMG SRC="Data:image/png;base64,AAAA">')).toBe('[Image intégrée]')
+  })
+
+  // DocumentView saute le calcul tant que la source est sous 9/10 du seuil de la vue
+  // scindée : cette borne doit tenir au pire cas (image minimale, alt d'un caractère).
+  it('ne dépasse jamais 10/9 de la source', () => {
+    for (const markdown of ['![a](data:image/x)', '![a](data:image/x)'.repeat(50), '![](data:image/x)', '<img src="data:image/x">']) {
+      expect(markdownTextLength(markdown) * 9).toBeLessThanOrEqual(markdown.length * 10)
+    }
+  })
 })

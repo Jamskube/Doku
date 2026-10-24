@@ -1,32 +1,39 @@
-// Garde-fou du subset d'icônes (scripts/subset-icons.mjs) : toute icône référencée
-// dans les sources doit figurer dans le manifeste généré avec la police. Une icône
-// ajoutée sans régénérer le subset rendrait un carré vide dans l'app.
-// En cas d'échec : `node scripts/subset-icons.mjs` puis committer les fichiers générés.
+// Garde-fou du sprite d'icônes (scripts/subset-icons.mjs) : toute icône référencée
+// dans les sources doit figurer dans src/assets/icons.svg, sinon elle rend un vide.
+// En cas d'échec : `npm run subset:icons` puis committer le sprite.
 import { describe, expect, it } from 'vitest'
-import { readFileSync } from 'node:fs'
+import { readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { collectIconNames } from '../../scripts/icon-names.mjs'
+import { collectIconNames, lucideIds } from '../../scripts/icon-names.mjs'
 
 const ROOT = fileURLToPath(new URL('../..', import.meta.url))
+const known = lucideIds(join(ROOT, 'node_modules', 'lucide-static', 'sprite.svg'))
 
-describe('subset Material Symbols', () => {
+describe('sprite Lucide', () => {
   it('couvre toutes les icônes utilisées par les sources', () => {
-    const manifest = new Set<string>(
-      JSON.parse(readFileSync(join(ROOT, 'src', 'assets', 'material-symbols-manifest.json'), 'utf8')),
-    )
-    // Même filtre de faux positifs que le script : l'extraction attrape aussi des
-    // littéraux qui ne sont pas des icônes ('asc', 'minimax'…) — seuls les noms
-    // présents dans la table officielle des codepoints comptent. Revers assumé : une
-    // icône au nom FAUTIF est filtrée aussi (le tofu se voit à la vérif visuelle).
-    const codepoints = new Set(
-      readFileSync(join(ROOT, 'scripts', 'material-symbols-rounded.codepoints'), 'utf8')
-        .split('\n')
-        .map((line) => line.split(' ')[0])
-        .filter(Boolean),
-    )
-    const used = collectIconNames(join(ROOT, 'src')).filter((n) => codepoints.has(n))
-    const missing = used.filter((n) => !manifest.has(n))
-    expect(missing, 'icônes hors subset — relancer node scripts/subset-icons.mjs').toEqual([])
+    const sprite = readFileSync(join(ROOT, 'src', 'assets', 'icons.svg'), 'utf8')
+    const shipped = new Set([...sprite.matchAll(/<symbol id="i-([^"]+)"/g)].map((m) => m[1]))
+    const used = collectIconNames(join(ROOT, 'src'), known)
+    expect(used.filter((n) => !shipped.has(n)), 'icônes hors sprite — relancer npm run subset:icons').toEqual([])
+  })
+
+  // collectIconNames filtre par les noms connus : une faute de frappe dans un href
+  // statique y disparaîtrait sans bruit. Ce témoin-ci ne filtre pas.
+  it('ne référence en dur que des icônes Lucide existantes', () => {
+    const unknown: string[] = []
+    const walk = (dir: string) => {
+      for (const e of readdirSync(dir, { withFileTypes: true })) {
+        const p = join(dir, e.name)
+        if (e.isDirectory()) walk(p)
+        else if (/\.(svelte|ts)$/.test(e.name) && !e.name.endsWith('.test.ts')) {
+          for (const m of readFileSync(p, 'utf8').matchAll(/#i-([a-z0-9-]+)/g)) {
+            if (!known.has(m[1])) unknown.push(`${e.name}: ${m[1]}`)
+          }
+        }
+      }
+    }
+    walk(join(ROOT, 'src'))
+    expect(unknown).toEqual([])
   })
 })

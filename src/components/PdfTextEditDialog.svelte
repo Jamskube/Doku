@@ -255,20 +255,20 @@
 <dialog class="pdftext" bind:this={dlg} onclose={closePdfTextEdit} oncancel={surEchap} aria-label="Modifier le texte du PDF">
   <div class="window">
     <header>
-      <span class="title-icon" aria-hidden="true"><span class="msr">edit_document</span></span>
+      <span class="title-icon" aria-hidden="true"><svg class="icon" aria-hidden="true"><use href="#i-file-pen-line" /></svg></span>
       <div class="title">
         <h2>Modifier le texte</h2>
         <p>{fileName}</p>
       </div>
       <span class="spacer"></span>
-      <button class="close" aria-label="Fermer" onclick={() => void fermer()}><span class="msr">close</span></button>
+      <button class="close" aria-label="Fermer" onclick={() => void fermer()}><svg class="icon" aria-hidden="true"><use href="#i-x" /></svg></button>
     </header>
 
     <div class="tools">
-      <button class="icon-button" disabled={pageIndex <= 1} onclick={() => pageIndex--} aria-label="Page précédente"><span class="msr">chevron_left</span></button>
+      <button class="icon-button" disabled={pageIndex <= 1} onclick={() => pageIndex--} aria-label="Page précédente"><svg class="icon" aria-hidden="true"><use href="#i-chevron-left" /></svg></button>
       <span class="pageno">{pageIndex} / {pageCount || '…'}</span>
-      {#if rendering}<span class="rendering" role="status">rendu…</span>{/if}
-      <button class="icon-button" disabled={pageIndex >= pageCount} onclick={() => pageIndex++} aria-label="Page suivante"><span class="msr">chevron_right</span></button>
+      {#if rendering}<span class="rendering" role="status">Rendu…</span>{/if}
+      <button class="icon-button" disabled={pageIndex >= pageCount} onclick={() => pageIndex++} aria-label="Page suivante"><svg class="icon" aria-hidden="true"><use href="#i-chevron-right" /></svg></button>
       <span class="spacer"></span>
       <span class="summary">
         {#if pending.length}
@@ -279,13 +279,14 @@
       </span>
     </div>
 
-    {#if message}<p class="message" role="status">{message}</p>{/if}
+    <!-- En erreur de chargement, le message vit dans la scène : une seule fois. -->
+    {#if message && status === 'ready'}<p class="message" role="status">{message}</p>{/if}
 
     <div class="stage">
       {#if status === 'loading'}
         <p class="hint">Analyse du document…</p>
       {:else if status === 'error'}
-        <p class="hint error">{message}</p>
+        <p class="hint error" role="status">{message}</p>
       {/if}
       <div class="sheet">
         <canvas bind:this={canvasEl}></canvas>
@@ -315,7 +316,7 @@
     <footer>
       <small>Le document d’origine n’est jamais modifié.</small>
       <span class="spacer"></span>
-      <button onclick={() => void fermer()}>Annuler</button>
+      <button class="secondary" onclick={() => void fermer()}>Annuler</button>
       <button class="primary" disabled={!pending.length || saving} onclick={() => void save()}>
         {saving ? 'Écriture…' : 'Enregistrer une copie…'}
       </button>
@@ -335,61 +336,49 @@
     color: var(--ink);
     overflow: visible;
   }
-  /* Même voile que SettingsDialog : deux dialogues de la même app ne se posent pas sur
-     deux fonds différents. */
+  /* Voile discret, partagé par toutes les modales de Doku. */
   .pdftext::backdrop {
-    background: rgb(0 0 0 / 0.38);
-    -webkit-backdrop-filter: blur(3px);
-    backdrop-filter: blur(3px);
+    background: var(--scrim);
+    animation: doku-fade-in var(--duration-dialog) var(--ease-enter-snappy);
   }
   .window {
     height: min(880px, calc(100vh - 40px));
     display: flex;
     flex-direction: column;
-    background: var(--cream-base);
-    border-radius: 18px;
-    /* Vocabulaire « Fenêtre modale » du système d'élévation, les trois couches. */
-    box-shadow:
-      0 0 0 1px var(--elevation-ring),
-      0 28px 76px rgba(var(--shadow-rgb), 0.34),
-      0 6px 20px rgba(var(--shadow-rgb), 0.16);
+    background: var(--surface);
+    border-radius: var(--radius-2xl);
+    box-shadow: var(--shadow-dialog);
     overflow: hidden;
-    animation: pdftext-in 190ms cubic-bezier(0.22, 1, 0.36, 1);
-  }
-  @keyframes pdftext-in {
-    from { opacity: 0; transform: translateY(6px) scale(0.985); }
-    to { opacity: 1; transform: translateY(0) scale(1); }
+    animation: doku-dialog-in var(--duration-dialog) var(--ease-enter-snappy);
   }
 
   /* En-tête et barre d'outils forment UN seul bloc de chrome : le changement de ton
      vers la scène suffit à les en séparer. Un filet en plus serait une redite. */
-  header { flex: 0 0 auto; display: flex; align-items: center; gap: 11px; padding: 12px 14px 12px 18px; }
+  header { min-height: 60px; flex: 0 0 auto; display: flex; align-items: center; gap: 12px; padding: 12px 12px 12px 16px; }
   .title-icon {
     width: 36px; height: 36px; display: inline-flex; align-items: center; justify-content: center;
-    border-radius: 10px; background: var(--accent-soft); color: var(--ink-2);
+    border-radius: var(--radius-xl); background: var(--accent-soft); color: var(--ink); font-size: 18px;
   }
-  .title-icon .msr { font-size: 20px; }
   .title { min-width: 0; }
-  .title h2 { margin: 0; font-size: 15px; line-height: 1.3; font-weight: 650; }
-  .title p { margin: 2px 0 0; font-size: 11.5px; line-height: 1.3; color: var(--ink-4); }
+  .title h2 { margin: 0; font-size: var(--text-lg); line-height: var(--leading-tight); font-weight: var(--weight-strong); letter-spacing: var(--tracking-tight); }
+  .title p { margin: 2px 0 0; overflow: hidden; font-size: var(--text-xs); line-height: 1.3; color: var(--ink-3); text-overflow: ellipsis; white-space: nowrap; }
   .spacer { flex: 1 1 auto; }
   .close {
-    width: 34px; height: 34px; display: inline-flex; align-items: center; justify-content: center;
-    border: 0; border-radius: 999px; background: transparent; color: var(--ink-4); cursor: pointer;
-    transition: background-color 140ms ease, color 140ms ease, transform 100ms ease;
+    width: var(--control-md); height: var(--control-md); display: inline-flex; align-items: center; justify-content: center;
+    border: 0; border-radius: var(--radius-lg); background: transparent; color: var(--ink-4); font-size: 16px; cursor: pointer;
+    transition: background-color var(--duration-basic) ease, color var(--duration-basic) ease, transform var(--duration-basic) var(--ease-enter-snappy);
   }
-  .close:hover { background: var(--surface-hover); color: var(--ink); }
-  .close:active { transform: scale(0.96); }
+  .close:hover { background: var(--fill-hover); color: var(--ink); }
 
-  /* Gouttière de 18px partagée avec l'en-tête et le pied : la pastille de titre, le
-     premier chevron et la mention du pied s'alignent sur une seule verticale. */
-  .tools { flex: 0 0 auto; display: flex; align-items: center; gap: 6px; padding: 0 18px 10px; }
-  .pageno { font-variant-numeric: tabular-nums; font-size: 12.5px; font-weight: 500; color: var(--ink-4); }
-  .rendering { font-size: 11.5px; color: var(--ink-5); }
-  .summary { font-size: 11.5px; color: var(--ink-4); }
+  /* Gouttière partagée avec l'en-tête et le pied : la pastille de titre, le premier
+     chevron et la mention du pied s'alignent sur une seule verticale. */
+  .tools { flex: 0 0 auto; display: flex; align-items: center; gap: 4px; padding: 0 16px 10px; }
+  .pageno { font-variant-numeric: tabular-nums; font-size: 13px; font-weight: 510; color: var(--ink-3); }
+  .rendering { font-size: 12px; color: var(--ink-3); }
+  .summary { font-size: var(--text-xs); color: var(--ink-3); font-variant-numeric: tabular-nums; }
   /* Le rouge d'erreur du système EXISTE en variante textuelle par thème (`--err-text`) :
      le fond `--err` calibré pour une pastille n'a pas le contraste d'un petit texte. */
-  .message { margin: 0; padding: 0 16px 10px; font-size: 12.5px; color: var(--err-text); }
+  .message { margin: 0; padding: 0 16px 10px; font-size: var(--text-xs); color: var(--err-text); }
 
   /* C'est le TON, pas un contour, qui détache la feuille du mobilier (« The Document
      Contrast Rule »). Papier teinté plutôt que voile doux : la scène doit être plus
@@ -400,13 +389,13 @@
     display: grid; place-items: start center; padding: 20px;
     background: var(--cream-tint);
   }
-  .hint { padding: 24px; font-size: 12.5px; color: var(--ink-4); }
+  .hint { padding: 24px; font-size: var(--text-xs); color: var(--ink-4); }
   .hint.error { color: var(--err-text); }
 
   .sheet {
     position: relative; line-height: 0;
-    /* Vocabulaire « Surface flottante » : la feuille flotte réellement au-dessus de la scène. */
-    box-shadow: 0 0 0 1px var(--elevation-ring), 0 12px 30px rgba(var(--shadow-rgb), 0.18);
+    /* Ombre de « surface flottante » : la feuille flotte réellement au-dessus de la scène. */
+    box-shadow: var(--shadow-card);
     /* La feuille est BLANCHE dans les deux thèmes : son encre ne peut donc pas suivre
        `--ink`, qui vire au blanc en sombre. Ces trois valeurs sont l'encre brune du
        système, figées ici parce qu'elles vivent sur du papier, pas sur du mobilier. */
@@ -438,7 +427,7 @@
     width: auto;
     field-sizing: content;
     max-width: 96%;
-    transition: background-color 120ms ease, border-color 120ms ease;
+    transition: background-color var(--duration-basic) ease, border-color var(--duration-basic) ease;
   }
   /* Au survol : un CADRE, jamais de fond. Un fond semi-transparent délavait le texte du
      document sans révéler celui du champ — on ne lisait plus ni l'un ni l'autre. */
@@ -487,29 +476,24 @@
      tireté dit « pas modifiable », l'infobulle dit pourquoi. */
   .line.locked:hover { border-color: var(--sheet-line); border-style: dashed; background: transparent; }
 
-  footer { flex: 0 0 auto; display: flex; align-items: center; gap: 8px; padding: 12px 18px; }
-  footer small { font-size: 11.5px; color: var(--ink-5); }
+  footer { flex: 0 0 auto; display: flex; align-items: center; gap: 8px; padding: 12px 16px; }
+  footer small { font-size: var(--text-xs); color: var(--ink-3); }
 
-  /* Un SEUL vocabulaire de bouton dans la modale : pilule sans contour permanent, qui
-     ne se révèle qu'au survol. Le contour permanent d'avant faisait ressembler la
-     fenêtre à un dialogue générique posé dans Doku. */
+  /* Fantôme pour la barre d'outils (fond au survol seulement) ; au pied, la grammaire
+     commune des modales : secondaire en --accent-soft, primaire en encre. */
   .icon-button, footer button {
     display: inline-flex; align-items: center; justify-content: center;
     border: 0; background: transparent; color: var(--ink-3);
-    font: inherit; font-size: 12.5px; font-weight: 500; cursor: pointer;
-    transition: background-color 140ms ease, color 140ms ease, transform 100ms ease;
+    font: inherit; font-size: var(--text-sm); font-weight: var(--weight-control); cursor: pointer;
+    transition: background-color var(--duration-basic) ease, color var(--duration-basic) ease, transform var(--duration-basic) var(--ease-enter-snappy);
   }
-  .icon-button { width: 30px; height: 30px; border-radius: 9px; color: var(--ink-4); }
-  footer button { height: 34px; padding: 0 16px; border-radius: 999px; }
-  .icon-button:hover:not(:disabled), footer button:hover:not(:disabled) { background: var(--surface-hover); color: var(--ink); }
-  .icon-button:active:not(:disabled), footer button:active:not(:disabled) { transform: scale(0.97); }
-  .icon-button:disabled, footer button:disabled { opacity: 0.4; cursor: default; }
+  .icon-button { width: var(--control-sm); height: var(--control-sm); border-radius: var(--radius-md); color: var(--ink-4); font-size: 16px; }
+  footer button { height: var(--control-md); padding: 0 12px; border-radius: var(--radius-lg); }
+  .icon-button:hover:not(:disabled), footer button:hover:not(:disabled) { background: var(--fill-hover); color: var(--ink); }
+  .icon-button:disabled, footer button:disabled { opacity: var(--opacity-disabled); cursor: default; }
+  .close:active, .icon-button:not(:disabled):active, footer button:not(:disabled):active { transform: scale(0.97); }
   footer .primary { background: var(--ink); color: var(--cream-content); }
   footer .primary:hover:not(:disabled) { background: var(--ink-2); color: var(--cream-content); }
-
-  @media (prefers-reduced-motion: reduce) {
-    .window { animation: none; }
-    .line, .close, .icon-button, footer button { transition: none !important; }
-    .close:active, .icon-button:active, footer button:active { transform: none; }
-  }
+  footer .secondary { background: var(--accent-soft); color: var(--ink); }
+  footer .secondary:hover:not(:disabled) { background: var(--fill-pressed); color: var(--ink); }
 </style>

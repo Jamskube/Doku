@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest'
-import { NOTICE_DELAY, startDismissTimer, type DismissClock } from './auto-dismiss'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { NOTICE_DELAY, autoDismiss, startDismissTimer, type DismissClock } from './auto-dismiss'
 
 // Horloge pilotée à la main : un test de minuterie qui dort vraiment est un test lent
 // ET instable. Ici le temps n'avance que quand on le décide.
@@ -125,16 +125,100 @@ describe('startDismissTimer', () => {
   })
 })
 
+describe('startDismissTimer — délai nul = persistante', () => {
+  it('ne s’efface jamais seule, même après pause/reprise', () => {
+    const h = horloge()
+    let efface = 0
+    const t = startDismissTimer(0, () => efface++, h.clock)
+    h.avancer(60_000)
+    t.pause(); t.resume()
+    h.avancer(60_000)
+    expect(efface).toBe(0)
+    expect(t.remaining()).toBe(Infinity)
+  })
+})
+
 describe('NOTICE_DELAY', () => {
-  it('laisse plus de temps à une erreur qu’à un succès', () => {
-    expect(NOTICE_DELAY.error).toBeGreaterThan(NOTICE_DELAY.warning)
+  it('une erreur attend d’être fermée ; un avertissement dure plus qu’un succès', () => {
+    expect(NOTICE_DELAY.error).toBe(0)
     expect(NOTICE_DELAY.warning).toBeGreaterThan(NOTICE_DELAY.success)
   })
 
   it('laisse le temps de lire une phrase, sans camper à l’écran', () => {
-    for (const d of Object.values(NOTICE_DELAY)) {
+    for (const d of [NOTICE_DELAY.success, NOTICE_DELAY.warning]) {
       expect(d).toBeGreaterThanOrEqual(4000)
       expect(d).toBeLessThanOrEqual(15_000)
     }
+  })
+})
+
+describe('autoDismiss — data-paused, seul signal suivi par le CSS', () => {
+  // Fenêtre et document factices : l'environnement de test est node, sans DOM.
+  let win: EventTarget
+  let doc: EventTarget & { visibilityState: string; hasFocus: () => boolean }
+  let fenetreActive = true
+  beforeEach(() => {
+    fenetreActive = true
+    win = new EventTarget()
+    doc = Object.assign(new EventTarget(), { visibilityState: 'visible', hasFocus: () => fenetreActive })
+    vi.stubGlobal('window', win)
+    vi.stubGlobal('document', doc)
+  })
+  afterEach(() => vi.unstubAllGlobals())
+  const noeud = () => Object.assign(new EventTarget(), { dataset: {} as DOMStringMap, contains: () => false }) as unknown as HTMLElement
+
+  it('se suspend quand la fenêtre perd le focus ou est masquée, reprend au retour', () => {
+    const node = noeud()
+    const action = autoDismiss(node, { delay: 5_000, onDismiss: () => {} })
+    expect('paused' in node.dataset).toBe(false)
+    fenetreActive = false
+    win.dispatchEvent(new Event('blur'))
+    expect('paused' in node.dataset).toBe(true)
+    fenetreActive = true
+    doc.visibilityState = 'hidden'
+    win.dispatchEvent(new Event('focus'))
+    expect('paused' in node.dataset).toBe(true) // focus rendu mais fenêtre toujours masquée
+    doc.visibilityState = 'visible'
+    doc.dispatchEvent(new Event('visibilitychange'))
+    expect('paused' in node.dataset).toBe(false)
+    // Le survol tient la pause même quand la fenêtre revient.
+    node.dispatchEvent(new Event('pointerenter'))
+    fenetreActive = false
+    win.dispatchEvent(new Event('blur'))
+    fenetreActive = true
+    win.dispatchEvent(new Event('focus'))
+    expect('paused' in node.dataset).toBe(true)
+    action.destroy()
+  })
+
+  it('une notification née fenêtre inactive part suspendue', () => {
+    fenetreActive = false
+    const node = noeud()
+    const action = autoDismiss(node, { delay: 5_000, onDismiss: () => {} })
+    expect('paused' in node.dataset).toBe(true)
+    action.destroy()
+  })
+
+  it('n’écoute plus la fenêtre après destroy', () => {
+    const node = noeud()
+    const action = autoDismiss(node, { delay: 5_000, onDismiss: () => {} })
+    action.destroy()
+    fenetreActive = false
+    win.dispatchEvent(new Event('blur'))
+    expect('paused' in node.dataset).toBe(false)
+  })
+
+  it('reste suspendu tant que le survol OU le focus tient', () => {
+    const node = noeud()
+    const action = autoDismiss(node, { delay: 5_000, onDismiss: () => {} })
+    const fire = (type: string) => node.dispatchEvent(new Event(type))
+    expect('paused' in node.dataset).toBe(false)
+    fire('pointerenter')
+    fire('focusin')
+    fire('pointerleave')
+    expect('paused' in node.dataset).toBe(true)
+    fire('focusout')
+    expect('paused' in node.dataset).toBe(false)
+    action.destroy()
   })
 })

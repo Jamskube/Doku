@@ -12,7 +12,7 @@ import { makeSearchDoc, searchDocs, type SearchDoc, type SearchResult } from './
 import { snapshotKey, type SnapshotInfo } from './snapshot'
 import { canonicalPathKey, runSaveAs, type TextSaveSnapshot } from './save-as'
 import { buildSession, buildWorkspacePathSnapshot, parseSession, parseWorkspacePathSnapshot, restoreWorkspace, type WorkspacePathSnapshot } from './session'
-import { buildSearchIndex, confirmReplacePath, confirmTabMoved, isMainWindow, isTauri, setBackgroundMode, listSnapshots, onTabMoved, pathExistsAt, openNewWindow, purgeAllSnapshots, readSnapshot, readTextFileAt, recordSnapshot, renamePathAt, saveTextDialog, scanFiles, setAlwaysOnTop, syncSystemBackdrop, takeHandoff, writeTextFileAtomic } from './tauri'
+import { buildSearchIndex, closeWindow, confirmReplacePath, confirmTabMoved, giveTab, isMainWindow, onMergeInto, isTauri, setBackgroundMode, listSnapshots, onTabMoved, pathExistsAt, openNewWindow, purgeAllSnapshots, readSnapshot, readTextFileAt, recordSnapshot, renamePathAt, saveTextDialog, scanFiles, onTabDropped, setAlwaysOnTop, syncSystemBackdrop, takeHandoff, takeMerge, tearOffTabWindow, writeTextFileAtomic } from './tauri'
 import { findBacklinks, normalizeTarget, wikilinkCandidates, wikilinkFileName, type Backlink } from './wikilink'
 import { clampCopilotWidth, COPILOT_DEFAULT_WIDTH } from './copilot-width'
 import type { CopilotVerbosity } from './copilot-service'
@@ -118,6 +118,9 @@ export const app = $state({
   pinned: false,
   // Masquée par défaut (app « légère » — FR-6) ; l'état est persisté (settings).
   sidebarOpen: false,
+  // Repliée d'office par l'ouverture du copilote sur fenêtre étroite (App.svelte) : runtime,
+  // non persisté — saveSettings enregistre la préférence comme si elle était restée ouverte.
+  sidebarAutoCollapsed: false,
   sidebarView: 'files' as SidebarView,
   columnWidth: 'narrow' as ColumnWidth,
   // Zoom du texte des documents (doc-zoom.ts) : 1 = 100 %.
@@ -203,7 +206,9 @@ export const app = $state({
   searching: false,
   // Occurrence à révéler dans l'éditeur après ouverture (clic sur un résultat, 9.4).
   // Consommée par DocumentView une fois l'onglet monté, puis remise à null.
-  pendingReveal: null as { path: string; line: number; col: number; length: number; select?: boolean } | null,
+  // `text` = passage cité : un onglet HTML en aperçu le révèle dans son iframe (l'éditeur y est
+  // masqué). `tabId` départage les onglets sans chemin (document généré non enregistré).
+  pendingReveal: null as { path: string | null; tabId?: number; line: number; col: number; length: number; select?: boolean; text?: string } | null,
   // Page à révéler dans le viewer PDF (citation ancrée sur un PDF). `text` = passage cité :
   // PdfView surligne ses rectangles dans la page (repli : halo de page si introuvable).
   // Consommée par PdfView une fois la page créée.
@@ -440,7 +445,7 @@ export function saveSettings() {
       SETTINGS_KEY,
       JSON.stringify({
         theme: app.theme,
-        sidebarOpen: app.sidebarOpen,
+        sidebarOpen: app.sidebarOpen || app.sidebarAutoCollapsed,
         sidebarView: app.sidebarView,
         columnWidth: app.columnWidth,
         docZoom: app.docZoom,
@@ -618,8 +623,10 @@ export function initApp(): Promise<void> {
     // vide (ou avec l'onglet qu'on y déplace) et `sessionReady` y reste faux, sinon deux
     // fenêtres s'écraseraient la même clé.
     // Ses notes sans chemin passent donc par l'invite d'enregistrement à la fermeture.
+    void onTabDropped(acceptMovedTab)
     appReadyPromise = isMainWindow().then((main) => {
-      if (!main) return receiveMovedTab()
+      // Écoute posée APRÈS la reprise de l'onglet : une fusion arrivée plus tôt attend dans l'hôte.
+      if (!main) return receiveMovedTab().then(() => onMergeInto(mergeIfDropped)).then(mergeIfDropped)
       void purgeAllSnapshots(Date.now()) // purge de démarrage de l'historique (ADR-0003)
       return restoreSession()
     })
@@ -680,30 +687,62 @@ export function canMoveTabToNewWindow(tab: DocTab): boolean {
 }
 
 export function moveTabToNewWindow(id: number) {
+  void handTabOff(id, openNewWindow)
+}
+
+// Onglet arraché de sa barre en le glissant : sa nouvelle fenêtre suit le curseur (label rendu).
+export function tearOffTab(id: number, grab: [number, number]): Promise<string | null> {
+  return handTabOff(id, (handoff) => tearOffTabWindow(handoff, grab))
+}
+
+// Cette fenêtre a été glissée sur la barre d'une autre : ses onglets y passent, puis elle se ferme.
+async function mergeIfDropped() {
+  const target = await takeMerge()
+  if (target) for (const tab of [...app.tabs]) void handTabOff(tab.id, (handoff) => giveTab(target, handoff))
+}
+
+function handTabOff<T>(id: number, deliver: (handoff: string) => Promise<T>): Promise<T | null> {
   const tab = app.tabs.find((t) => t.id === id)
-  if (!tab || !canMoveTabToNewWindow(tab)) return
+  if (!tab || !canMoveTabToNewWindow(tab)) return Promise.resolve(null)
   // Les modifications d'un .docx vivent dans l'éditeur Word affiché, pas dans l'onglet :
   // les déplacer sans enregistrer les perdrait.
   if (tab.kind === 'docx' && docxActions.tabId === id && docxActions.dirty) {
     app.banner = { tone: 'warning', title: 'Document Word modifié', message: `Enregistrez « ${tab.label ?? tab.name} » avant de le détacher dans une nouvelle fenêtre.` }
-    return
+    return Promise.resolve(null)
   }
   const { name, label, path, kind, content, savedContent, eol } = tab
   const token = crypto.randomUUID()
   const handoff: TabHandoff = { token, name, label, path, kind, content, savedContent, eol }
-  onTabMoved(token, () => {
+  return onTabMoved(token, async () => {
     // Frappe arrivée pendant le transfert : l'onglet reste aussi ici plutôt que de la perdre.
     if (app.tabs.find((t) => t.id === id)?.content === content) closeTab(id)
+    // Comme Chrome : une fenêtre de plus vidée de son dernier onglet se ferme. La principale reste.
+    if (app.tabs.length === 0 && !(await isMainWindow())) await closeWindow()
   })
-    .then(() => openNewWindow(JSON.stringify(handoff)))
-    .catch(newWindowFailed)
+    .then(() => deliver(JSON.stringify(handoff)))
+    .catch((error) => {
+      newWindowFailed(error)
+      return null
+    })
 }
 
 async function receiveMovedTab() {
   const raw = await takeHandoff()
-  if (!raw) return
+  if (raw) await acceptMovedTab(raw)
+}
+
+async function acceptMovedTab(raw: string) {
   const moved = JSON.parse(raw) as TabHandoff
+  // Fichier déjà ouvert ici : `openTab` rendrait cet onglet et le contenu déplacé serait perdu
+  // à la fermeture de l'original. Sans accusé de réception, l'original reste dans sa fenêtre.
+  const existing = moved.path ? app.tabs.find((t) => t.path && canonicalPathKey(t.path) === canonicalPathKey(moved.path!)) : undefined
+  if (existing && existing.content !== moved.content) {
+    selectTab(existing.id)
+    app.banner = { tone: 'warning', title: 'Déjà ouvert dans cette fenêtre', message: `« ${existing.label ?? existing.name} » y a un autre contenu : l'onglet glissé reste dans sa fenêtre.` }
+    return
+  }
   const tab = openTab(moved.name, moved.path, moved.content, moved.kind)
+  if (tab === existing) return void confirmTabMoved(moved.token)
   tab.label = moved.label
   tab.savedContent = moved.savedContent
   tab.eol = moved.eol

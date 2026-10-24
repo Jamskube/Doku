@@ -13,7 +13,6 @@
   let { onOpen }: { onOpen: (paneId?: PaneId) => void } = $props()
   let root: HTMLElement | undefined = $state()
   let vertical = $state(false)
-  let dragging = $state(false)
 
   function newNote(paneId: PaneId) {
     createWorkspaceNote(paneId)
@@ -39,17 +38,17 @@
   class="workspace"
   class:split={workspace.split}
   class:vertical
-  class:dragging
   bind:this={root}
-  style={`--workspace-ratio:${workspace.ratio}%`}
 >
-  <div class="workspace-pane primary">
+  <!-- flex-basis posé sur chaque volet, pas en variable sur .workspace : pendant le glisser,
+       une variable héritée réécrite à chaque frame recalculerait le style des deux éditeurs. -->
+  <div class="workspace-pane primary" style:flex-basis={workspace.split ? `${workspace.ratio}%` : '100%'}>
     <DocumentPane paneId="primary" onOpen={() => onOpen('primary')} onNewNote={newNote} />
   </div>
 
   {#if workspace.split}
-    <SplitDivider orientation={vertical ? 'vertical' : 'horizontal'} ratio={workspace.ratio} onChange={resizeWorkspace} onDragging={(value) => (dragging = value)} />
-    <div class="workspace-pane secondary">
+    <SplitDivider orientation={vertical ? 'vertical' : 'horizontal'} ratio={workspace.ratio} onChange={resizeWorkspace} />
+    <div class="workspace-pane secondary" style:flex-basis={`${100 - workspace.ratio}%`}>
       <DocumentPane paneId="secondary" showLocalSelector={vertical} onOpen={() => onOpen('secondary')} onNewNote={newNote} />
     </div>
   {/if}
@@ -69,17 +68,9 @@
     min-width: 0;
     min-height: 0;
     display: flex;
-    transition: flex-basis 220ms cubic-bezier(0.22, 1, 0.36, 1);
   }
-  .workspace.dragging .workspace-pane { transition: none; }
   .workspace-pane > :global(*) { flex: 1; min-width: 0; min-height: 0; }
-  .workspace-pane.primary { flex: 0 1 var(--workspace-ratio); }
-  .workspace-pane.secondary { flex: 1 1 calc(100% - var(--workspace-ratio)); }
-  .workspace:not(.split) .workspace-pane.primary { flex-basis: 100%; }
+  .workspace-pane.primary { flex-grow: 0; flex-shrink: 1; }
+  .workspace-pane.secondary { flex-grow: 1; flex-shrink: 1; }
   .workspace.split.vertical { flex-direction: column; }
-  .workspace.split.vertical .workspace-pane.primary { flex-basis: var(--workspace-ratio); }
-  .workspace.split.vertical .workspace-pane.secondary { flex-basis: calc(100% - var(--workspace-ratio)); }
-  @media (prefers-reduced-motion: reduce) {
-    .workspace-pane { transition-duration: 0.01ms; }
-  }
 </style>

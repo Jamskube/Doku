@@ -113,4 +113,15 @@ describe('sanitizeChatHtml (réponse LLM — garantie 0 réseau, principe 8.3)',
     expect(out.toLowerCase()).not.toContain('<html')
     expect(out.toLowerCase()).not.toContain('<head')
   })
+
+  it('borne align à left|center|right et retire toute valeur d’attribut porteuse de < > [', () => {
+    expect(sanitizeChatHtml('<table><tr><td align="center">a</td><td align="justify">b</td></tr></table>'))
+      .toContain('<td align="center">a</td><td>b</td>')
+    expect(sanitizeChatHtml('<a href="#x[1]">l</a>')).toBe('<a>l</a>')
+  })
+
+  it('le filtre d’attributs du chat ne fuit pas sur sanitizeHtml (aperçu)', () => {
+    sanitizeChatHtml('<p>x</p>')
+    expect(sanitizeHtml('<a href="#x[1]">l</a>')).toContain('href="#x[1]"')
+  })
 })

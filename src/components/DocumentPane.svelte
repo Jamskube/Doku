@@ -39,9 +39,11 @@
     <DocumentView {onOpen} {paneId} {tabId} />
   {:else}
     <div class="pane-empty">
-      <span class="msr" aria-hidden="true">description</span>
-      <strong>Volet disponible</strong>
-      <p>Affichez un document ouvert ou commencez une note Markdown.</p>
+      <svg class="icon" aria-hidden="true"><use href="#i-file-text" /></svg>
+      <div class="pane-empty-text">
+        <strong>Volet disponible</strong>
+        <p>Affichez un document ouvert ou commencez une note Markdown.</p>
+      </div>
       <div class="pane-empty-actions">
         <button onclick={onOpen}>Ouvrir un document</button>
         <button class="primary" onclick={() => onNewNote(paneId)}>Nouvelle note</button>
@@ -66,25 +68,40 @@
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    gap: 7px;
-    padding: 24px;
-    color: var(--ink-4);
+    gap: 12px;
+    padding: 24px 16px;
     text-align: center;
   }
-  .pane-empty > .msr { font-size: 25px; opacity: 0.55; }
-  .pane-empty strong { color: var(--ink-2); font-size: 12.5px; font-weight: 600; }
-  .pane-empty p { max-width: 310px; font-size: 12.5px; line-height: 1.45; }
-  .pane-empty-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 7px; margin-top: 8px; }
-  .pane-empty-actions button {
-    min-height: 32px;
-    padding: 0 13px;
-    border: 1px solid var(--line-1);
-    border-radius: 999px;
-    background: transparent;
-    color: var(--ink-2);
-    font-size: 12.5px;
-    cursor: pointer;
+  .pane-empty > .icon { color: var(--ink-4); font-size: 24px; stroke-width: 1.5; }
+  .pane-empty-text { display: grid; gap: 6px; }
+  .pane-empty strong {
+    color: var(--ink);
+    font-size: var(--text-lg);
+    font-weight: var(--weight-strong);
+    letter-spacing: var(--tracking-tight);
+    text-wrap: balance;
   }
-  .pane-empty-actions button:hover { background: var(--surface-hover); }
-  .pane-empty-actions button.primary { border-color: transparent; background: var(--ink); color: var(--cream-content); }
+  .pane-empty p {
+    max-width: 310px;
+    color: var(--ink-3);
+    font-size: var(--text-xs);
+    line-height: var(--leading-normal);
+    text-wrap: pretty;
+  }
+  .pane-empty-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin-top: 4px; }
+  /* Bouton secondaire = remplissage d'encre léger ; primaire = encre, un seul par vue. */
+  .pane-empty-actions button {
+    height: var(--control-md);
+    padding: 0 12px;
+    border: 0;
+    border-radius: var(--radius-lg);
+    background: var(--accent-soft);
+    color: var(--ink);
+    font: var(--weight-control) var(--text-sm) var(--font-sans);
+    cursor: pointer;
+    transition: background-color var(--duration-basic) ease;
+  }
+  .pane-empty-actions button:hover { background: var(--fill-pressed); }
+  .pane-empty-actions button.primary { background: var(--ink); color: var(--cream-content); }
+  .pane-empty-actions button.primary:hover { background: var(--ink-2); }
 </style>

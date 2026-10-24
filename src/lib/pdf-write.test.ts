@@ -31,6 +31,7 @@ import {
   movePdfPagePlan,
   turnPdfPagePlan,
 } from './pdf-pages'
+import { pdfFileComments } from './pdf-annotations'
 
 function page(rotation: number, extra: Partial<PdfBurnPage> = {}): PdfBurnPage {
   return { x: 0, y: 0, width: 600, height: 800, rotation, ...extra }
@@ -226,6 +227,31 @@ describe('burnPdfAnnotations', () => {
     expect(annots).toBeInstanceOf(PDFArray)
     expect((annots as unknown as { size: () => number }).size()).toBe(1)
   })
+
+  it('rend un commentaire que le lecteur de Doku relit (pdf.js)', async () => {
+    const source = await blankPdf([{ width: 600, height: 800 }])
+    const passage = { left: 0.12, top: 0.4, width: 0.5, height: 0.03 }
+    const surlignage = createPdfTextHighlightDrawing(1, [passage], { comment: 'Vérifier la clause « résiliation »' })
+    const result = await burnPdfAnnotations(source, [surlignage])
+    const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs')
+    const task = pdfjs.getDocument({ data: result.bytes.slice() })
+    const doc = await task.promise
+    try {
+      const page = await doc.getPage(1)
+      const viewport = page.getViewport({ scale: 1 })
+      const comments = pdfFileComments(
+        await page.getAnnotations(),
+        1,
+        (x, y) => viewport.convertToViewportPoint(x, y),
+        viewport,
+      )
+      expect(comments.map((c) => c.comment)).toEqual(['Vérifier la clause « résiliation »'])
+      // Épinglé à hauteur du passage annoté, pas en haut de page.
+      expect(Math.abs(comments[0].top - passage.top)).toBeLessThan(0.03)
+    } finally {
+      await task.destroy()
+    }
+  }, 30_000)
 
   it('écarte un tracé orphelin au lieu de le poser au hasard', async () => {
     const source = await blankPdf([{ width: 600, height: 800 }])

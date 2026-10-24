@@ -10,6 +10,8 @@
   import { app, docxActions } from '../lib/stores.svelte'
   import { baseName } from '../lib/paths'
   import { readFileBytes, savePdfDialog, writeFileAtomic } from '../lib/tauri'
+  import { fade } from 'svelte/transition'
+  import { cubicOut } from 'svelte/easing'
   import DocxFormatBubble from './DocxFormatBubble.svelte'
 
   // Ports injectables, comme les modales PDF : c'est ce qui permet au banc de contrôle
@@ -243,16 +245,23 @@
          et elle apparaît d'abord vide puis se remplit. La règle du registre produit —
          « skeleton states for loading, not spinners in the middle of content » — et le
          principe « le document parle » disent la même chose ici. -->
-    <div class="docx-attente" role="status" aria-label="Ouverture du document">
+    <!-- Les transitions Svelte passent par WAAPI et échappent à la règle globale de
+         mouvement réduit : la durée s'y lit à la main. -->
+    <div
+      class="docx-attente"
+      role="status"
+      aria-label="Ouverture du document"
+      out:fade={{ duration: matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 150, easing: cubicOut }}
+    >
       <div class="feuille-vide">
         <div class="trame">
-          <span class="ligne titre"></span>
-          <span class="ligne l1"></span>
-          <span class="ligne l2"></span>
-          <span class="ligne l3"></span>
-          <span class="ligne titre court"></span>
-          <span class="ligne l1"></span>
-          <span class="ligne l4"></span>
+          <span class="ligne doku-skel titre"></span>
+          <span class="ligne doku-skel l1"></span>
+          <span class="ligne doku-skel l2"></span>
+          <span class="ligne doku-skel l3"></span>
+          <span class="ligne doku-skel titre court"></span>
+          <span class="ligne doku-skel l1"></span>
+          <span class="ligne doku-skel l4"></span>
         </div>
       </div>
       <p class="mention">Ouverture de {fileName}…</p>
@@ -260,7 +269,7 @@
   {:else if status === 'error'}
     <div class="docx-attente" role="alert">
       <div class="feuille-vide vide">
-        <span class="msr" aria-hidden="true">description</span>
+        <svg class="icon" aria-hidden="true"><use href="#i-file-text" /></svg>
         <p>{message}</p>
       </div>
     </div>
@@ -315,15 +324,16 @@
        ton sémantique est porté par le texte, jamais par le papier. */
     color: var(--err-text);
   }
-  .feuille-vide.vide .msr { font-size: 30px; color: rgba(28, 26, 22, 0.28); }
-  .feuille-vide.vide p { margin: 0; max-width: 40ch; text-align: center; font-size: 12.5px; line-height: 1.5; }
+  /* Grande icône d'état vide : trait affiné, comme le kit pour les icônes de 32px. */
+  .feuille-vide.vide .icon { font-size: 32px; stroke-width: 1.5; color: rgba(28, 26, 22, 0.28); }
+  .feuille-vide.vide p { margin: 0; max-width: 40ch; text-align: center; font-size: 13px; line-height: 1.5; text-wrap: balance; }
 
   .trame { padding: 84px 92px; display: flex; flex-direction: column; gap: 11px; }
   /* Les barres imitent la mise en page d'un document Word : un titre, puis des lignes
      de longueurs inégales. Une trame régulière ressemblerait à un tableau. */
   .ligne {
     height: 9px;
-    border-radius: 3px;
+    border-radius: var(--radius-xs);
     /* Gris de PAPIER, indépendant du thème : la feuille est blanche dans les deux, une
        trame en `--ink` deviendrait blanche sur blanc en thème sombre. */
     background: rgba(28, 26, 22, 0.09);
@@ -335,31 +345,17 @@
   .ligne.l3 { width: 72%; }
   .ligne.l4 { width: 88%; }
 
-  /* Un balayage lent traverse la trame — il dit « ça travaille » sans rien faire
-     tourner. Le mouvement est porté par un dégradé, pas par une propriété de layout. */
-  .trame .ligne {
-    background-image: linear-gradient(
-      100deg,
-      transparent 20%,
-      rgba(28, 26, 22, 0.07) 42%,
-      transparent 64%
-    );
-    background-size: 260% 100%;
-    background-repeat: no-repeat;
-    animation: trame-balayage 1900ms ease-in-out infinite;
-  }
-  @keyframes trame-balayage {
-    from { background-position: 130% 0; }
-    to { background-position: -30% 0; }
+  /* Un balayage traverse la trame — il dit « ça travaille » sans rien faire tourner.
+     Porté par `.doku-skel` (bande en transform, composité) : l'ancien
+     `background-position` repeignait chaque ligne au fil principal, celui-là même que
+     l'import du document occupe. Seule la couleur de la bande est reprise ici, en gris de
+     papier pour la même raison que le fond. */
+  .trame .ligne::after {
+    background: linear-gradient(90deg, transparent 0%, rgba(28, 26, 22, 0.07) 50%, transparent 100%);
   }
 
-  .mention { margin: 0; font-size: 11.5px; color: var(--ink-5); }
+  .mention { margin: 0; font-size: 12px; color: var(--ink-3); }
 
-  @media (prefers-reduced-motion: reduce) {
-    /* La trame reste VISIBLE, seule son animation s'arrête : l'état d'attente ne doit
-       pas dépendre du mouvement pour exister. */
-    .trame .ligne { animation: none; background-image: none; }
-  }
 
   .docx-host {
     flex: 1 1 auto;
@@ -394,7 +390,7 @@
       0 0 0 1px transparent,
       0 0 0 3px transparent,
       0 0 0 0 transparent;
-    transition: box-shadow 160ms ease;
+    transition: box-shadow var(--duration-basic) ease;
   }
   .docx-host.saisie :global(.v2-super-editor__stage) {
     box-shadow:

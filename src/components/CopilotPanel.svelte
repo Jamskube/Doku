@@ -1,5 +1,7 @@
 <script lang="ts">
   import { tick, untrack } from 'svelte'
+  import { fly } from 'svelte/transition'
+  import { cubicOut } from 'svelte/easing'
   import { activeEditorSelection, activeTab, app, isCloudProvider, openPath, visibleTabs, type CopilotProvider, type DocKind, type DocTab } from '../lib/stores.svelte'
   import { closeWindow, fileSizeAt, isTauri, minimizeWindow, openContextFilesDialog, openFolderDialog, readFileBytes, readTextFileAt, toggleMaximizeWindow } from '../lib/tauri'
   import { formatBytes } from '../lib/ollama'
@@ -7,9 +9,9 @@
   import { conversations } from '../lib/copilot-conversations.svelte'
   import { MINIMAX_DEFAULT_MODEL, minimaxThinkingSwitchable } from '../lib/compat'
   import { markdownTextLength } from '../lib/images'
-  import { cloudOnlyMode, matchSlashCommand, OUTPUT_MODES, OUTPUT_ORDER, slashQuery, suggestSlashCommands, type SlashCommand, type SlashSuggestion } from '../lib/composer-commands'
+  import { cloudOnlyMode, matchSlashCommand, nextTrayIndex, OUTPUT_MODES, OUTPUT_ORDER, slashQuery, suggestSlashCommands, type SlashCommand, type SlashSuggestion } from '../lib/composer-commands'
   import { vaultLabel, vaultShortLabel } from '../lib/platform'
-  import { clampCopilotWidth, COPILOT_DEFAULT_WIDTH, COPILOT_MAX_WIDTH, COPILOT_MIN_WIDTH } from '../lib/copilot-width'
+  import { clampCopilotWidth, copilotMaxWidthCss, copilotWidthCss, COPILOT_DEFAULT_WIDTH, COPILOT_MAX_WIDTH, COPILOT_MIN_WIDTH } from '../lib/copilot-width'
   import { DEFAULT_EMBED_MODEL, FALLBACK_EMBED_MODEL, noteTitle } from '../lib/rag'
   import { cancelRagIndexing, deleteRagIndex, ragState, refreshRagIndex } from '../lib/rag-index.svelte'
   import { baseName, parentPath } from '../lib/explorer'
@@ -22,6 +24,10 @@
   import { NOTICE_DELAY, autoDismiss } from '../lib/auto-dismiss'
   import type { CloudMemoryProvider, MemoryRecord, MemoryType } from '../lib/copilot-memory'
   import { addWebCitationMarkers, annotateWebCitations } from '../lib/web-citations'
+  import { codeLanguages, decorateChatBlocks } from '../lib/chat-blocks'
+  import { createStickToBottom } from '../lib/stick-to-bottom'
+  import { placeHoverCard } from '../lib/hover-card'
+  import { tooltip } from '../lib/tooltip'
   import CopilotEvidence from './CopilotEvidence.svelte'
   import CopilotDiagram from './CopilotDiagram.svelte'
   import CopilotDocument from './CopilotDocument.svelte'
@@ -34,11 +40,16 @@
   function renderAnswer(m: ChatMsg): string {
     const marked = addWebCitationMarkers(m.content, m.webCitations ?? [])
     const rendered = annotateCitations(renderChatMarkdown(marked), m.sources?.length ?? 0)
-    return annotateWebCitations(rendered, m.webCitations?.length ?? 0)
+    return decorateChatBlocks(annotateWebCitations(rendered, m.webCitations?.length ?? 0), codeLanguages(marked))
   }
 
   // Clic délégué sur les puces [n] injectées via {@html} (pas de handlers Svelte dedans).
   function onAnswerClick(e: MouseEvent, m: ChatMsg) {
+    const codeCopy = (e.target as HTMLElement).closest?.<HTMLButtonElement>('.cop-code-copy')
+    if (codeCopy) {
+      void copyCodeBlock(codeCopy)
+      return
+    }
     const webChip = (e.target as HTMLElement).closest?.('.cop-web-cite')
     if (webChip) {
       const n = Number.parseInt(webChip.getAttribute('data-web-cite') ?? '', 10)
@@ -90,6 +101,15 @@
   let resizeFrame = 0
   let pendingWidth = COPILOT_DEFAULT_WIDTH
   const panelWidth = $derived(resizeWidth ?? app.copilotWidth)
+  // `--copilot-width` est hérité par toute la conversation : le réécrire à chaque image
+  // recalculait le style de chaque descendant. Pendant le glisser, seule la `flex-basis`
+  // du panneau bouge ; la variable n'est posée qu'au relâchement.
+  const committedWidthCss = $derived(copilotWidthCss(app.copilotWidth))
+  const dragWidthCss = $derived(resizeWidth === null ? null : copilotWidthCss(resizeWidth))
+  const maxWidthCss = $derived(copilotMaxWidthCss(app.sidebarOpen))
+  // Redimensionnement aux flèches : aucune animation (geste clavier, répété en rafale).
+  let keySnap = $state(false)
+  let keySnapToken = 0
 
   /** Place partagée par la zone document et le panneau — sidebar exclue. */
   function availableWidth(): number {
@@ -144,18 +164,30 @@
     commitWidth(pendingWidth)
   }
 
+  function commitWidthInstantly(width: number) {
+    keySnap = true
+    commitWidth(width)
+    // Deux images : la première calcule le style AVEC la nouvelle largeur et sans
+    // transition ; retirer la classe plus tôt laisserait le rideau rejouer. Le jeton
+    // empêche une touche précédente de la retirer sous une touche répétée.
+    const token = ++keySnapToken
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      if (token === keySnapToken) keySnap = false
+    }))
+  }
+
   function resizeKey(event: KeyboardEvent) {
     // Le panneau est à droite : vers la GAUCHE l'élargit. La flèche suit le bord qu'on
     // déplace, pas la valeur — c'est ce que fait le séparateur des volets.
     const step = event.key === 'ArrowLeft' ? 24 : event.key === 'ArrowRight' ? -24 : 0
     if (step !== 0) {
       event.preventDefault()
-      commitWidth(panelWidth + step)
+      commitWidthInstantly(panelWidth + step)
       return
     }
     if (event.key === 'Home' || event.key === 'End') {
       event.preventDefault()
-      commitWidth(event.key === 'Home' ? COPILOT_MIN_WIDTH : COPILOT_MAX_WIDTH)
+      commitWidthInstantly(event.key === 'Home' ? COPILOT_MIN_WIDTH : COPILOT_MAX_WIDTH)
     }
   }
 
@@ -163,37 +195,55 @@
     if (resizeFrame) cancelAnimationFrame(resizeFrame)
   })
 
-  let citePreview = $state<{ n: number; name: string | null; text: string; x: number; y: number; below: boolean } | null>(null)
+  // Cartes de survol (aperçu de citation, info-bulle Réfléchir) : règles Kube hover card,
+  // comme CopilotEvidence — 200 ms au pointeur, tout de suite au focus clavier, jamais au
+  // doigt. Rendues en couche supérieure (`popover`) : `contain: paint` du panneau les
+  // rognerait. La largeur ne vit qu'en CSS : on mesure la carte montée pour la placer.
+  function placeCard(el: HTMLElement, anchor: HTMLElement) {
+    if (typeof el.showPopover === 'function' && !el.matches(':popover-open')) el.showPopover()
+    const place = placeHoverCard(
+      anchor.getBoundingClientRect(),
+      { width: el.offsetWidth, height: el.offsetHeight },
+      { width: window.innerWidth, height: window.innerHeight },
+    )
+    el.style.left = `${place.left}px`
+    el.style.top = `${place.top}px`
+    el.style.transformOrigin = `${place.originX}px ${place.side === 'bottom' ? 'top' : 'bottom'}`
+    anchor.setAttribute('aria-describedby', el.id)
+    return () => anchor.removeAttribute('aria-describedby')
+  }
+
+  let citePreview = $state.raw<{ n: number; name: string | null; text: string; anchor: HTMLElement } | null>(null)
   let citePreviewTimer: ReturnType<typeof setTimeout> | undefined
 
-  function showCitePreview(chip: HTMLElement, m: ChatMsg) {
-    const n = Number.parseInt(chip.getAttribute('data-cite') ?? '', 10)
-    const passage = m.sources?.find((s) => s.n === n)
-    if (!passage || !panelEl || !chip.isConnected) return
-    const r = chip.getBoundingClientRect()
-    const a = panelEl.getBoundingClientRect()
-    // contain: layout paint sur .cop-panel = bloc conteneur ET boîte de clip : la carte
-    // se positionne en absolu RELATIF au panneau, x serré pour rester dedans.
-    const half = 150
-    const x = Math.min(Math.max(r.left + r.width / 2 - a.left, half + 8), a.width - half - 8)
-    const below = r.top - a.top < 240
-    citePreview = {
-      n,
-      name: passage.name,
-      text: passage.text,
-      x,
-      y: below ? r.bottom - a.top + 7 : r.top - a.top - 7,
-      below,
-    }
+  function citeChip(e: Event): HTMLElement | null {
+    return (e.target as HTMLElement).closest?.<HTMLElement>('.cop-cite') ?? null
   }
-  function onAnswerCiteOver(e: Event, m: ChatMsg) {
-    const chip = (e.target as HTMLElement).closest?.('.cop-cite') as HTMLElement | null
-    if (!chip) return
+  function showCitePreview(chip: HTMLElement, m: ChatMsg, delay: number) {
     clearTimeout(citePreviewTimer)
-    citePreviewTimer = setTimeout(() => showCitePreview(chip, m), 160)
+    citePreviewTimer = setTimeout(() => {
+      const n = Number.parseInt(chip.getAttribute('data-cite') ?? '', 10)
+      const passage = m.sources?.find((s) => s.n === n)
+      if (passage && chip.isConnected) citePreview = { n, name: passage.name, text: passage.text, anchor: chip }
+    }, delay)
   }
-  function onAnswerCiteOut(e: Event) {
-    if (!(e.target as HTMLElement).closest?.('.cop-cite')) return
+  // Carte déjà ouverte : passer d'une puce à la voisine ne réarme pas le délai.
+  function onAnswerCitePointer(e: PointerEvent, m: ChatMsg) {
+    const chip = citeChip(e)
+    if (chip && e.pointerType !== 'touch') showCitePreview(chip, m, citePreview ? 0 : 200)
+  }
+  function onAnswerCiteFocus(e: FocusEvent, m: ChatMsg) {
+    const chip = citeChip(e)
+    if (chip?.matches(':focus-visible')) showCitePreview(chip, m, 0)
+  }
+  function onAnswerCiteOut(e: Event, delay = 0) {
+    if (!citeChip(e)) return
+    clearTimeout(citePreviewTimer)
+    citePreviewTimer = setTimeout(dismissCitePreview, delay)
+  }
+  function onAnswerKey(e: KeyboardEvent) {
+    if (e.key !== 'Escape' || !citePreview) return
+    e.stopPropagation()
     dismissCitePreview()
   }
   function dismissCitePreview() {
@@ -201,8 +251,7 @@
     if (citePreview) citePreview = null
   }
 
-  // Bouton « Réfléchir » et son info-bulle : même carte flottante que l'aperçu de citation,
-  // positionnée dans le repère du panneau (la rangée d'options rogne ce qui en dépasse).
+  // Bouton « Réfléchir » et son info-bulle (même carte de survol que l'aperçu de citation).
   const thinkModel = $derived(app.copilotProvider === 'openai' ? OPENAI_MODEL : app.minimaxModel || MINIMAX_DEFAULT_MODEL)
   const thinkAlways = $derived(app.copilotProvider === 'minimax' && !minimaxThinkingSwitchable(thinkModel))
   const thinkTipText = $derived(
@@ -212,22 +261,28 @@
         ? { title: 'Réflexion activée', text: `${thinkModel} raisonne avant chaque réponse : plus fouillée, mais plus lente et plus coûteuse.`, hint: 'Cliquer pour revenir aux réponses rapides' }
         : { title: 'Réfléchir', text: 'Laisse le modèle raisonner avant de répondre, pour les questions difficiles. Réponses plus lentes et plus coûteuses.', hint: 'Désactivé · réponses rapides' },
   )
-  let thinkTip = $state<{ x: number; y: number } | null>(null)
+  let thinkTip = $state.raw<HTMLElement | null>(null)
   let thinkTipTimer: ReturnType<typeof setTimeout> | undefined
-  function showThinkTip(button: HTMLElement) {
+  function showThinkTip(button: HTMLElement, delay: number) {
     clearTimeout(thinkTipTimer)
     thinkTipTimer = setTimeout(() => {
-      if (!panelEl || !button.isConnected) return
-      const r = button.getBoundingClientRect()
-      const a = panelEl.getBoundingClientRect()
-      const half = 130
-      thinkTip = { x: Math.min(Math.max(r.left + r.width / 2 - a.left, half + 8), a.width - half - 8), y: r.top - a.top - 8 }
-    }, 250)
+      if (button.isConnected) thinkTip = button
+    }, delay)
   }
   function hideThinkTip() {
     clearTimeout(thinkTipTimer)
     thinkTip = null
   }
+
+  // Nom complet en info-bulle ; le menu n'en montre que la partie distinctive (après le
+  // dernier « / » : « hf.co/LiquidAI/LFM2-2.6B-GGUF:Q4_0 » se tronquait sur « hf.co/Liq… »).
+  const identityModel = $derived(
+    app.copilotProvider === 'openai'
+      ? OPENAI_MODEL
+      : app.copilotProvider === 'minimax'
+        ? app.minimaxModel || MINIMAX_DEFAULT_MODEL
+        : app.activeModel || 'Aucun modèle actif',
+  )
 
   // Modèle conseillé (carte d'onboarding) + suggestions. Toujours des tags -q4_0 explicites
   // (repacking ARM). Dans l'onboarding, le conseillé est déjà en carte → chips sans lui.
@@ -265,8 +320,8 @@
   const libraryTotal = $derived(copilot.models.reduce((sum, m) => sum + m.size, 0))
 
   // --- Sélecteur unifié « Modèle actif » : un dropdown groupé par fournisseur remplace
-  // les onglets. Matériau flottant volontairement LOCAL : sémantique listbox (choix d'une
-  // valeur) ≠ menus TitleBar/Sidebar (commandes) — l'extraction d'un matériau partagé
+  // les onglets. Matériau flottant volontairement LOCAL : menu de choix (menuitemradio,
+  // Kube PickerMenu) ≠ menus TitleBar/Sidebar (commandes) — l'extraction d'un matériau partagé
   // reste une dette notée, pas aggravée à l'aveugle ici.
   let pickerOpen = $state(false)
   let pickerRootEl = $state<HTMLElement | null>(null)
@@ -480,8 +535,27 @@
   let activityDrawerOpen = $state(false)
   let activityButtonEl = $state<HTMLButtonElement | null>(null)
   let activityDrawerEl = $state<HTMLElement | null>(null)
-  let composerFace = $state<'question' | 'context'>('question')
-  let atBottom = true // ne pas voler le scroll si l'utilisateur est remonté relire
+  // Tiroir du composeur (Kube ComposerDrawer) : la rangée « Contexte » dépasse de derrière
+  // la saisie ; la déplier révèle les sources en hauteur, la saisie restant ancrée en bas.
+  let contextOpen = $state(false)
+  let contextToggleEl = $state<HTMLButtonElement | null>(null)
+  // Geste clavier (`detail === 0`, frappe) : tiroir et tray changent d'état sans animer.
+  let drawerKbd = $state(false)
+
+  // Fin de réponse annoncée UNE fois au lecteur d'écran (le flux, lui, ne l'est pas : une
+  // région live sur le texte qui s'écrit répéterait chaque token). Vidée au départ suivant
+  // pour qu'un même libellé soit réannoncé.
+  let answerAnnouncement = $state('')
+  let wasGenerating = false
+  $effect(() => {
+    const generating = copilot.generating
+    if (generating) answerAnnouncement = ''
+    else if (wasGenerating) {
+      const last = untrack(() => copilot.messages.at(-1))
+      if (last?.role === 'assistant' && !last.failed && !last.config) answerAnnouncement = 'Réponse de Doku-San prête'
+    }
+    wasGenerating = generating
+  })
 
   const numberFormatter = new Intl.NumberFormat('fr-FR')
 
@@ -545,7 +619,7 @@
   const contextSummary = $derived(
     copilot.scope === 'folder'
       ? `${ragDir ? '1 dossier' : 'Aucun dossier'}${copilot.contextItems.length ? ` + ${copilot.contextItems.length}` : ''}`
-      : `${contextCount} source${contextCount === 1 ? '' : 's'}`,
+      : `${contextCount} source${contextCount > 1 ? 's' : ''}`,
   )
   const cloudDestination = $derived(
     app.copilotProvider === 'openai' ? 'OpenAI' : app.copilotProvider === 'minimax' ? 'MiniMax' : null,
@@ -685,20 +759,25 @@
     return parts.join(' · ')
   }
 
-  function showComposerFace(face: 'question' | 'context', focus = false) {
-    composerFace = face
-    if (!focus) return
-    requestAnimationFrame(() => {
-      if (face === 'question') promptEl?.focus()
-      else document.getElementById('cop-context-tab')?.focus()
-    })
+  function toggleContext(keyboard: boolean) {
+    drawerKbd = keyboard
+    contextOpen = !contextOpen
+  }
+
+  function onContextKey(e: KeyboardEvent) {
+    if (e.key !== 'Escape') return
+    e.preventDefault()
+    e.stopPropagation()
+    drawerKbd = true
+    contextOpen = false
+    contextToggleEl?.focus()
   }
 
   async function startNewChat() {
     if (!(await clearChat())) return
     draft = ''
     activityDrawerOpen = false
-    composerFace = 'question'
+    contextOpen = false
     addMenuOpen = false
     requestAnimationFrame(() => promptEl?.focus())
   }
@@ -742,19 +821,6 @@
     if (returnFocus) requestAnimationFrame(() => activityButtonEl?.focus())
   }
 
-  function onComposerTabKey(e: KeyboardEvent, face: 'question' | 'context') {
-    const switchKey = e.key === 'ArrowUp' || e.key === 'ArrowDown' || e.key === 'ArrowLeft' || e.key === 'ArrowRight'
-    if (switchKey) {
-      e.preventDefault()
-      const next = face === 'question' ? 'context' : 'question'
-      composerFace = next
-      requestAnimationFrame(() => document.getElementById(next === 'question' ? 'cop-question-tab' : 'cop-context-tab')?.focus())
-    } else if (e.key === 'Escape' && face === 'context') {
-      e.preventDefault()
-      showComposerFace('question', true)
-    }
-  }
-
   function onAdvancedSummaryKey(e: KeyboardEvent) {
     if (e.key !== 'Enter' && e.key !== ' ') return
     e.preventDefault()
@@ -776,8 +842,13 @@
     if (restoreFocus) identityButtonEl?.focus()
   }
 
-  function toggleIdentityMenu() {
+  // Ouverture au clavier (Entrée/Espace → `click` de detail 0) : pas d'entrée animée.
+  // Posé à l'ouverture seulement : retirer `.kbd` d'un menu affiché relancerait son keyframe.
+  let identityMenuKbd = $state(false)
+
+  function toggleIdentityMenu(keyboard = false) {
     identityMenuOpen = !identityMenuOpen
+    if (identityMenuOpen) identityMenuKbd = keyboard
     if (!identityMenuOpen || !identityButtonEl || !panelEl) return
     const trigger = identityButtonEl.getBoundingClientRect()
     const panel = panelEl.getBoundingClientRect()
@@ -829,7 +900,7 @@
   async function editDiagram(artifact: DiagramArtifact) {
     reviseDiagram(artifact)
     draft = 'Modifie ce diagramme : '
-    composerFace = 'question'
+    contextOpen = false
     await tick()
     promptEl?.focus()
     promptEl?.setSelectionRange(draft.length, draft.length)
@@ -838,20 +909,28 @@
   async function editGeneratedDocument(artifact: GeneratedDocumentArtifact, target?: DocumentBlockTarget) {
     reviseGeneratedDocument(artifact, target)
     draft = target ? 'Modifie cette partie : ' : 'Modifie ce document : '
-    composerFace = 'question'
+    contextOpen = false
     await tick()
     promptEl?.focus()
     promptEl?.setSelectionRange(draft.length, draft.length)
   }
 
-  function chooseOutputMode(mode: ChatOutputMode) {
+  // Pastille de livrable : pas d'entrée animée quand le choix vient du clavier. Ne change
+  // que pastille masquée — retirer `.kbd` d'une pastille affichée relancerait son keyframe.
+  let modePillKbd = $state(false)
+  function setOutputModeFrom(mode: ChatOutputMode, keyboard: boolean) {
+    if (copilot.outputMode === 'answer') modePillKbd = keyboard
     setChatOutputMode(mode)
+  }
+
+  function chooseOutputMode(mode: ChatOutputMode, keyboard: boolean) {
+    setOutputModeFrom(mode, keyboard)
     closeAddMenu(true)
   }
 
   // Commandes « / » du composeur : la reconnaissance est pure (`composer-commands.ts`),
   // la décision reste ici — un livrable cloud demandé en local se dit au lieu de basculer.
-  function runSlashCommand(command: SlashCommand, withSuffix = false): boolean {
+  function runSlashCommand(command: SlashCommand, withSuffix = false, keyboard = true): boolean {
     const action = command.action
     if (action.kind === 'mode') {
       if (cloudOnlyMode(action.mode) && !isCloudProvider(app.copilotProvider)) {
@@ -864,7 +943,7 @@
         }
         return false
       }
-      setChatOutputMode(action.mode)
+      setOutputModeFrom(action.mode, keyboard)
       return true
     }
     if (action.kind === 'verbosity') {
@@ -909,38 +988,48 @@
     return true
   }
 
-  // Autocomplétion : dès la barre oblique, les commandes qui correspondent s'affichent
-  // sous le composeur. Sans elle, il faut connaître le mot par cœur avant de le taper.
+  // Autocomplétion (Kube ComposerDrawer, tray) : dès la barre oblique, les commandes
+  // sortent de derrière le composeur, à la place du tiroir Contexte. Le focus reste dans
+  // la saisie ; la sélection passe par `aria-activedescendant`.
   let slashDismissed = $state(false)
   let slashIndex = $state(0)
-  let composerFrontEl = $state<HTMLElement | null>(null)
-  // Même repère que les autres pops : `.cop-card` est en `overflow: hidden`, une carte
-  // posée dans le composeur serait coupée en haut. On mesure donc dans le panneau.
-  let slashPos = $state<{ left: number; bottom: number; width: number } | null>(null)
+  let promptFocused = $state(false)
+  let trayListEl = $state<HTMLElement | null>(null)
   const slashPartial = $derived(slashDismissed ? null : slashQuery(draft))
   const slashSuggestions = $derived(slashPartial === null ? [] : suggestSlashCommands(slashPartial))
-
-  // Recalculée à chaque frappe : le champ grandit avec le texte, donc le haut du
-  // composeur bouge sous la carte.
-  $effect(() => {
-    void draft
-    if (!slashSuggestions.length || !composerFrontEl || !panelEl) {
-      slashPos = null
-      return
-    }
-    // Ancrée au haut de la CARTE DE SAISIE, pas du composeur entier : la liste passe
-    // ainsi devant le bandeau « Contexte » au lieu de le repousser vers le haut.
-    const front = composerFrontEl.getBoundingClientRect()
-    const panel = panelEl.getBoundingClientRect()
-    slashPos = {
-      left: Math.round(front.left - panel.left),
-      width: Math.round(front.width),
-      bottom: Math.round(panel.bottom - front.top) + 8,
-    }
+  const trayOpen = $derived(slashPartial !== null && promptFocused)
+  const contextShown = $derived(contextOpen && !trayOpen)
+  // Le tray garde son dernier contenu pendant qu'il se replie : vidé d'un coup, il
+  // afficherait « aucune commande » le temps de la fermeture.
+  let trayFrozen: { query: string; list: SlashSuggestion[] } = { query: '', list: [] }
+  const trayView = $derived.by(() => {
+    if (trayOpen) trayFrozen = { query: slashPartial ?? '', list: slashSuggestions }
+    return trayFrozen
   })
 
-  function applySlash(suggestion: SlashSuggestion) {
-    if (!runSlashCommand(suggestion.command)) return
+  // Garde l'option active visible après un déplacement CLAVIER seulement : à l'ouverture,
+  // la liste se révèle en hauteur et sa hauteur visible trompe le calcul. Calcul local
+  // plutôt que `scrollIntoView`, qui ferait aussi défiler `.cop-card` (overflow: hidden).
+  async function revealTrayOption() {
+    await tick()
+    const option = trayListEl?.querySelector<HTMLElement>(`#cop-slash-opt-${slashIndex}`)
+    if (!trayListEl || !option) return
+    // Rectangles plutôt qu'`offsetTop` : la liste n'est pas le `offsetParent` des options.
+    const top = option.getBoundingClientRect().top - trayListEl.getBoundingClientRect().top + trayListEl.scrollTop
+    const bottom = top + option.offsetHeight
+    if (top < trayListEl.scrollTop) trayListEl.scrollTop = top
+    else if (bottom > trayListEl.scrollTop + trayListEl.clientHeight) trayListEl.scrollTop = bottom - trayListEl.clientHeight
+  }
+
+  // Le filtre change la liste et ramène la sélection en tête : on remonte avec elle.
+  $effect(() => {
+    void trayView.query
+    if (trayListEl) trayListEl.scrollTop = 0
+  })
+
+  function applySlash(suggestion: SlashSuggestion, keyboard = true) {
+    drawerKbd = keyboard
+    if (!runSlashCommand(suggestion.command, false, keyboard)) return
     draft = ''
     slashDismissed = false
     slashIndex = 0
@@ -950,6 +1039,7 @@
   // La frappe rouvre toujours la liste (une commande abandonnée puis reprise doit
   // suggérer à nouveau) et repart du premier choix, la saisie ayant changé.
   function onPromptInput() {
+    drawerKbd = true
     slashDismissed = false
     slashIndex = 0
     consumeSlashCommand(false)
@@ -964,7 +1054,7 @@
   let browserFilesEl = $state<HTMLInputElement | null>(null)
   let browserFolderEl = $state<HTMLInputElement | null>(null)
   let contextLoading = $state(false)
-  let addMenuPos = $state<{ left: number; bottom: number } | null>(null)
+  let addMenuPos = $state<{ left: number; bottom: number; originX: number } | null>(null)
   const ADD_MENU_W = 288
   // Le menu du « + » porte trois sections dépliables — Créer, Contexte, Style — sur le
   // motif du menu de compte de OnePortal : une seule ouverte à la fois, chacune montrant
@@ -980,22 +1070,39 @@
   const selectionAvailable = $derived(!!activeEditorSelection().text.trim() && activeTab()?.kind !== 'pdf')
   // Ce que le modèle reçoit : le texte SANS les octets d'images intégrées. Le badge doit
   // compter la même chose, sinon il annonce une lecture partielle d'un document envoyé entier.
-  const textLengthOf = (t: { kind: DocKind; content: string }) => (t.kind === 'md' ? markdownTextLength(t.content) : t.content.length)
+  // Mémo par onglet : markdownTextLength parcourt tout le document (deux regex) et quatre dérivés
+  // le relisent à chaque frappe ; on ne recalcule que si le contenu a changé.
+  const textLengthMemo = new WeakMap<object, { content: string; n: number }>()
+  const textLengthOf = (t: { kind: DocKind; content: string }) => {
+    if (t.kind !== 'md') return t.content.length
+    const hit = textLengthMemo.get(t)
+    if (hit && hit.content === t.content) return hit.n
+    const n = markdownTextLength(t.content)
+    textLengthMemo.set(t, { content: t.content, n })
+    return n
+  }
 
   function closeAddMenu(restoreFocus = false) {
     addMenuOpen = false
     if (restoreFocus) addButtonEl?.focus()
   }
 
-  function toggleAddMenu() {
+  // Même règle que le menu de l'identité : `.kbd` posé à l'ouverture seulement.
+  let addMenuKbd = $state(false)
+
+  function toggleAddMenu(keyboard = false) {
     addMenuOpen = !addMenuOpen
-    if (addMenuOpen) menuSection = null
+    if (addMenuOpen) {
+      menuSection = null
+      addMenuKbd = keyboard
+    }
     copilot.contextError = ''
     if (!addMenuOpen || !addButtonEl || !panelEl) return
     const r = addButtonEl.getBoundingClientRect()
     const a = panelEl.getBoundingClientRect()
     const left = Math.min(Math.max(Math.round(r.left - a.left), 8), Math.round(a.width - ADD_MENU_W - 8))
-    addMenuPos = { left, bottom: Math.round(a.bottom - r.top) + 8 }
+    // L'échelle d'apparition part du « + », même quand le bord du panneau décale le menu.
+    addMenuPos = { left, bottom: Math.round(a.bottom - r.top) + 8, originX: Math.round(r.left + r.width / 2 - a.left - left) }
     void tick().then(() => addMenuEl?.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus())
   }
 
@@ -1163,21 +1270,27 @@
   }
 
   function onPromptKey(e: KeyboardEvent) {
-    // La liste de commandes capte d'abord les flèches, Entrée et Tab : tant qu'elle est
-    // ouverte, Entrée complète la commande au lieu d'envoyer une demande incomplète.
-    if (slashSuggestions.length) {
+    // Pendant une composition IME, Entrée valide le mot en cours : jamais un envoi.
+    if (e.isComposing || e.keyCode === 229) return
+    // Le tray capte d'abord flèches, Entrée, Tab et Échap (Home/End restent à la saisie) :
+    // tant qu'il est ouvert, Entrée complète la commande au lieu d'envoyer une demande incomplète.
+    if (trayOpen) {
       const count = slashSuggestions.length
-      if (e.key === 'ArrowDown') {
+      if (e.key === 'Escape') {
         e.preventDefault()
-        slashIndex = (slashIndex + 1) % count
+        e.stopPropagation()
+        drawerKbd = true
+        slashDismissed = true
         return
       }
-      if (e.key === 'ArrowUp') {
+      const next = nextTrayIndex(slashIndex, e.key, count)
+      if (next !== null) {
         e.preventDefault()
-        slashIndex = (slashIndex - 1 + count) % count
+        slashIndex = next
+        void revealTrayOption()
         return
       }
-      if (e.key === 'Tab' || (e.key === 'Enter' && !e.shiftKey)) {
+      if (count && (e.key === 'Tab' || (e.key === 'Enter' && !e.shiftKey && !e.altKey))) {
         e.preventDefault()
         // « / » seul puis Entrée : rien n'a été choisi, on n'arme pas la première ligne
         // à l'aveugle — la liste reste, c'est elle la réponse.
@@ -1185,27 +1298,28 @@
         applySlash(slashSuggestions[Math.min(slashIndex, count - 1)])
         return
       }
-      if (e.key === 'Escape') {
-        e.preventDefault()
-        e.stopPropagation()
-        slashDismissed = true
-        return
-      }
     }
-    if (e.key === 'Enter' && !e.shiftKey) {
+    if (e.key !== 'Enter') return
+    // Maj+Entrée : saut de ligne natif. Alt+Entrée n'en a aucun dans un textarea : on
+    // l'insère (execCommand garde l'annulation et déclenche `input`, donc bind:value).
+    if (e.altKey) {
       e.preventDefault()
-      // « /pdf » seul dans le champ : la commande arme le livrable, elle n'envoie rien.
-      if (consumeSlashCommand(true)) return
-      send()
+      document.execCommand('insertText', false, '\n')
+      return
     }
+    if (e.shiftKey) return
+    e.preventDefault()
+    // « /pdf » seul dans le champ : la commande arme le livrable, elle n'envoie rien.
+    if (consumeSlashCommand(true)) return
+    send()
   }
 
   // Style des réponses (verbosité) : jauge à trois crans, rangée dans la section « Style
   // des réponses » du menu du « + ».
   const VERBOSITY_CHOICES = [
-    { value: 'brief', label: 'Bref', hint: "Droit à l'essentiel", icon: 'short_text' },
-    { value: 'balanced', label: 'Équilibré', hint: 'Longueur naturelle', icon: 'subject' },
-    { value: 'detailed', label: 'Détaillé', hint: 'Développé et structuré', icon: 'notes' },
+    { value: 'brief', label: 'Bref', hint: "Droit à l'essentiel", icon: 'text-align-start' },
+    { value: 'balanced', label: 'Équilibré', hint: 'Longueur naturelle', icon: 'text-align-justify' },
+    { value: 'detailed', label: 'Détaillé', hint: 'Développé et structuré', icon: 'text-align-justify-start' },
   ] as const
   // Fermeture au clic extérieur : partagée avec le dropdown Modèle (un seul svelte:window).
   function onGlobalPointerDown(e: PointerEvent) {
@@ -1224,11 +1338,37 @@
     void summarizeDoc({ name: t?.name ?? null, text: t?.content ?? '', kind: t?.kind ?? 'md', path: t?.path ?? null }, mode)
   }
 
-  async function copyMessage(text: string) {
+  // Les transitions Svelte passent par WAAPI et échappent à la règle globale de mouvement
+  // réduit : la sortie du toast lit la préférence elle-même.
+  const toastExit = () => ({
+    y: -8,
+    opacity: 0,
+    duration: matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 150,
+    easing: cubicOut,
+  })
+
+  // Copie d'une réponse : coche brève au succès, bannière à l'échec — jamais muet (Epic 19).
+  let copiedIdx = $state(-1)
+  let copiedTimer: ReturnType<typeof setTimeout> | undefined
+  // Région polie dédiée : vidée à la fin de la coche, une seconde copie est réannoncée.
+  let copyAnnouncement = $state('')
+  async function copyMessage(i: number, text: string) {
     try {
       await navigator.clipboard.writeText(text)
+      copiedIdx = i
+      copyAnnouncement = 'Réponse copiée'
+      clearTimeout(copiedTimer)
+      copiedTimer = setTimeout(() => {
+        copiedIdx = -1
+        copyAnnouncement = ''
+      }, 1300)
     } catch (e) {
       console.error('[copilot] copy', e)
+      app.banner = {
+        tone: 'error',
+        title: 'Copie impossible',
+        message: 'Le presse-papiers a refusé le texte. Sélectionnez la réponse et copiez-la avec Ctrl+C.',
+      }
     }
   }
 
@@ -1253,28 +1393,92 @@
     }
   }
 
+  // Bloc de code d'une réponse ({@html}, donc hors de l'état Svelte) : l'état « copié »
+  // vit sur le bouton lui-même, 2 s comme Kube CodeBlock.
+  async function copyCodeBlock(button: HTMLButtonElement) {
+    if (button.dataset.copied !== undefined) return
+    const code = button.closest('.cop-code')?.querySelector('pre')?.textContent ?? ''
+    try {
+      await navigator.clipboard.writeText(code)
+    } catch (e) {
+      console.error('[copilot] copy code', e)
+      app.banner = {
+        tone: 'error',
+        title: 'Copie impossible',
+        message: 'Le presse-papiers a refusé le code. Sélectionnez-le et copiez-le avec Ctrl+C.',
+      }
+      return
+    }
+    // Nom du bouton constant : seule la région live annonce la copie (sinon, deux fois).
+    button.dataset.copied = ''
+    copyAnnouncement = 'Code copié'
+    setTimeout(() => {
+      delete button.dataset.copied
+      if (copyAnnouncement === 'Code copié') copyAnnouncement = ''
+    }, 2000)
+  }
+
   function onScroll() {
-    if (scroller) atBottom = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 40
+    stick?.onScroll()
     // Un aperçu de citation OUVERT devient mensonger au scroll (position figée) → fermé.
     // Le timer d'ouverture en attente survit : il lira la position FRAÎCHE de la puce au
     // moment d'afficher (sinon l'inertie d'un trackpad avale l'aperçu à chaque fois).
     if (citePreview) citePreview = null
   }
 
-  // Suit le bas pendant le streaming, mais seulement si l'utilisateur y était déjà.
-  // Coalescé en rAF : lire scrollHeight force un layout synchrone — à 30-60 tokens/s,
-  // un reflow par token concurrençait le rendu du texte. Un recalage par frame suffit.
-  let scrollFollowScheduled = false
+  // Suivi du bas (Kube Thread). L'épingle passe par un ResizeObserver sur la conversation,
+  // pas par un effet sur le texte : au plus un recalage par frame, aucun travail par jeton.
+  let following = $state(true)
+  let stick: ReturnType<typeof createStickToBottom> | null = null
+  function followConversation(conv: HTMLElement) {
+    const box = conv.parentElement as HTMLElement
+    stick = createStickToBottom(box, (v) => (following = v))
+    stick.scrollToBottom(false)
+    const observer = new ResizeObserver(() => stick?.pin())
+    observer.observe(conv)
+    observer.observe(box)
+    return () => {
+      observer.disconnect()
+      stick = null
+      following = true
+    }
+  }
+
+  // Le bouton devient inerte une fois en bas : au clavier, le focus passe à la saisie
+  // plutôt que de tomber sur <body>.
+  function jumpToLatest(byKeyboard: boolean) {
+    stick?.scrollToBottom(!byKeyboard && !matchMedia('(prefers-reduced-motion: reduce)').matches)
+    if (byKeyboard) promptEl?.focus()
+  }
+
+  // Une conversation ouverte (tableau REMPLACÉ) s'affiche d'un coup, en bas ; un tour
+  // ajouté (push) entre en fondu. `enterFrom` = longueur au dernier remplacement.
+  let enterList: ChatMsg[] | null = null
+  let enterFromLength = 0
+  const enterFrom = $derived.by(() => {
+    const list = copilot.messages
+    if (list !== enterList) {
+      enterList = list
+      enterFromLength = untrack(() => list.length)
+    }
+    return enterFromLength
+  })
+
+  // Envoyer une question ramène toujours au bas, même remonté relire ; ouvrir une
+  // conversation aussi.
+  let seenList: ChatMsg[] | null = null
+  let seenLength = 0
   $effect(() => {
-    const n = copilot.messages.length
-    const tail = copilot.messages[n - 1]?.content
-    void n
-    void tail
-    if (!atBottom || scrollFollowScheduled) return
-    scrollFollowScheduled = true
-    requestAnimationFrame(() => {
-      scrollFollowScheduled = false
-      if (atBottom && scroller) scroller.scrollTop = scroller.scrollHeight
+    const list = copilot.messages
+    const n = list.length
+    // Lu ici aussi : sous l'accueil, la liste n'est pas rendue et `enterFrom` ne serait
+    // évalué qu'au premier push — le premier échange d'une conversation n'entrerait pas.
+    void enterFrom
+    untrack(() => {
+      const sent = list === seenList && list.slice(seenLength).some((m) => m.role === 'user')
+      if (list !== seenList || sent) stick?.scrollToBottom(false)
+      seenList = list
+      seenLength = n
     })
   })
 </script>
@@ -1285,7 +1489,7 @@
   <section>
     <div class="cop-label">Ajouter</div>
     <div class="cop-add">
-      <span class="msr" style="font-size:18px;color:var(--ink-4)">search</span>
+      <svg class="icon" style="font-size:16px;color:var(--ink-4)" aria-hidden="true"><use href="#i-search" /></svg>
       <input
         class="cop-add-input"
         type="text"
@@ -1300,42 +1504,12 @@
       <div class="cop-chips">
         {#each chips as s (s)}
           <button class="cop-chip" onclick={() => startPull(s)}>
-            <span class="msr" style="font-size:14px;color:var(--ink-4)">add</span>{s}
+            <svg class="icon" style="font-size:14px;color:var(--ink-4)" aria-hidden="true"><use href="#i-plus" /></svg>{s}
           </button>
         {/each}
       </div>
     {/if}
   </section>
-{/snippet}
-
-{#snippet slashMenu()}
-  {#if slashSuggestions.length && slashPos}
-    <div
-      class="cop-slash"
-      style="left:{slashPos.left}px; bottom:{slashPos.bottom}px; width:{slashPos.width}px"
-      role="listbox"
-      aria-label="Commandes de livrable"
-    >
-      {#each slashSuggestions as suggestion, index (suggestion.token)}
-        {@const action = suggestion.command.action}
-        {@const blocked = action.kind === 'mode' && cloudOnlyMode(action.mode) && !isCloudProvider(app.copilotProvider)}
-        <button
-          class="cop-slash-row"
-          class:sel={index === slashIndex}
-          role="option"
-          aria-selected={index === slashIndex}
-          onmouseenter={() => (slashIndex = index)}
-          onclick={() => applySlash(suggestion)}
-        >
-          <span class="msr cop-slash-ic">{suggestion.command.icon}</span>
-          <span class="cop-slash-name"
-            ><b>/{suggestion.token.slice(0, slashPartial?.length ?? 0)}</b>{suggestion.token.slice(slashPartial?.length ?? 0)}</span
-          >
-          <span class="cop-slash-hint">{blocked ? 'Modèle cloud requis' : suggestion.command.hint}</span>
-        </button>
-      {/each}
-    </div>
-  {/if}
 {/snippet}
 
 {#snippet addContextMenu()}
@@ -1345,7 +1519,8 @@
     {@const current = OUTPUT_MODES[copilot.outputMode]}
     <div
       class="cop-add-context-menu"
-      style="left:{addMenuPos.left}px; bottom:{addMenuPos.bottom}px"
+      class:kbd={addMenuKbd}
+      style="left:{addMenuPos.left}px; bottom:{addMenuPos.bottom}px; width:{ADD_MENU_W}px; transform-origin:{addMenuPos.originX}px 100%"
       role="menu"
       tabindex="-1"
       aria-label="Créer, contexte et style"
@@ -1358,12 +1533,12 @@
         aria-expanded={menuSection === 'create'}
         onclick={() => toggleMenuSection('create')}
       >
-        <span class="cop-sec-ic"><span class="msr">{copilot.outputMode === 'answer' ? 'auto_awesome' : current.icon}</span></span>
+        <span class="cop-sec-ic"><svg class="icon" aria-hidden="true"><use href="#i-{copilot.outputMode === 'answer' ? 'sparkles' : current.icon}" /></svg></span>
         <span class="cop-sec-copy">
           <strong>Créer</strong>
           <small>{copilot.outputMode === 'answer' ? 'Réponse dans la conversation' : current.label}</small>
         </span>
-        <span class="msr cop-sec-chev">expand_more</span>
+        <svg class="icon cop-sec-chev" aria-hidden="true"><use href="#i-chevron-down" /></svg>
       </button>
       {#if menuSection === 'create'}
         <div class="cop-sec-body">
@@ -1376,11 +1551,11 @@
               role="menuitemradio"
               aria-checked={copilot.outputMode === id}
               disabled={blocked}
-              onclick={() => chooseOutputMode(id)}
+              onclick={(e) => chooseOutputMode(id, e.detail === 0)}
             >
-              <span class="msr">{option.icon}</span>
+              <svg class="icon" aria-hidden="true"><use href="#i-{option.icon}" /></svg>
               <span><strong>{option.label}</strong><small>{blocked ? 'Modèle cloud requis' : option.hint}</small></span>
-              {#if copilot.outputMode === id}<span class="cop-add-context-check msr">check</span>{/if}
+              {#if copilot.outputMode === id}<svg class="icon cop-add-context-check" aria-hidden="true"><use href="#i-check" /></svg>{/if}
             </button>
           {/each}
         </div>
@@ -1392,12 +1567,12 @@
         aria-expanded={menuSection === 'context'}
         onclick={() => toggleMenuSection('context')}
       >
-        <span class="cop-sec-ic"><span class="msr">layers</span></span>
+        <span class="cop-sec-ic"><svg class="icon" aria-hidden="true"><use href="#i-layers" /></svg></span>
         <span class="cop-sec-copy">
           <strong>Contexte</strong>
           <small>{#if cloudDestination}{contextSummary} · envoyé à {cloudDestination}{:else}{contextSummary} · reste sur cet appareil{/if}</small>
         </span>
-        <span class="msr cop-sec-chev">expand_more</span>
+        <svg class="icon cop-sec-chev" aria-hidden="true"><use href="#i-chevron-down" /></svg>
       </button>
       {#if menuSection === 'context'}
         <div class="cop-sec-body">
@@ -1408,20 +1583,20 @@
             aria-checked={copilot.webSearchEnabled}
             onclick={() => { setWebSearchEnabled(!copilot.webSearchEnabled); closeAddMenu(true) }}
           >
-            <span class="msr">search</span><span><strong>Recherche Web</strong><small>Informations actuelles avec sources</small></span>
-            <span class="cop-add-context-check msr">{copilot.webSearchEnabled ? 'check' : 'add'}</span>
+            <svg class="icon" aria-hidden="true"><use href="#i-search" /></svg><span><strong>Recherche Web</strong><small>Informations actuelles avec sources</small></span>
+            <svg class="icon cop-add-context-check" aria-hidden="true"><use href="#i-{copilot.webSearchEnabled ? 'check' : 'plus'}" /></svg>
           </button>
           <button class="cop-add-context-action" role="menuitem" disabled={!selectionAvailable || contextLoading} onclick={addSelection}>
-            <span class="msr">notes</span><span><strong>Sélection actuelle</strong><small>Capturer le texte sélectionné</small></span>
+            <svg class="icon" aria-hidden="true"><use href="#i-text-align-justify-start" /></svg><span><strong>Sélection actuelle</strong><small>Capturer le texte sélectionné</small></span>
           </button>
           <button class="cop-add-context-action" role="menuitem" disabled={contextLoading} onclick={() => void addFiles()}>
-            <span class="msr">description</span><span><strong>Fichiers…</strong><small>Markdown, texte, HTML ou PDF</small></span>
+            <svg class="icon" aria-hidden="true"><use href="#i-file-text" /></svg><span><strong>Fichiers…</strong><small>Markdown, texte, HTML ou PDF</small></span>
           </button>
           <button class="cop-add-context-action" role="menuitem" disabled={contextLoading} onclick={() => void addFolder()}>
-            <span class="msr">folder</span><span><strong>Dossier de notes…</strong><small>Utiliser son index sémantique</small></span>
+            <svg class="icon" aria-hidden="true"><use href="#i-folder" /></svg><span><strong>Dossier de notes…</strong><small>Utiliser son index sémantique</small></span>
           </button>
           <button class="cop-add-context-action" role="menuitem" disabled={contextLoading} onclick={() => void addClipboard()}>
-            <span class="msr">content_paste</span><span><strong>Texte du presse-papiers</strong><small>Créer un instantané temporaire</small></span>
+            <svg class="icon" aria-hidden="true"><use href="#i-clipboard-paste" /></svg><span><strong>Texte du presse-papiers</strong><small>Créer un instantané temporaire</small></span>
           </button>
         </div>
       {/if}
@@ -1432,12 +1607,12 @@
         aria-expanded={menuSection === 'verb'}
         onclick={() => toggleMenuSection('verb')}
       >
-        <span class="cop-sec-ic"><span class="msr">{vCur.icon}</span></span>
+        <span class="cop-sec-ic"><svg class="icon" aria-hidden="true"><use href="#i-{vCur.icon}" /></svg></span>
         <span class="cop-sec-copy">
           <strong>Style des réponses</strong>
           <small>{vCur.label} — {vCur.hint}</small>
         </span>
-        <span class="msr cop-sec-chev">expand_more</span>
+        <svg class="icon cop-sec-chev" aria-hidden="true"><use href="#i-chevron-down" /></svg>
       </button>
       {#if menuSection === 'verb'}
         <div class="cop-sec-body">
@@ -1475,7 +1650,8 @@
   {#if identityMenuOpen && identityMenuPos}
     <div
       class="cop-identity-menu"
-      style="left:{identityMenuPos.left}px; top:{identityMenuPos.top}px"
+      class:kbd={identityMenuKbd}
+      style="left:{identityMenuPos.left}px; top:{identityMenuPos.top}px; width:{IDENTITY_MENU_W}px"
       role="menu"
       aria-label="Menu Doku-San"
       tabindex="-1"
@@ -1487,9 +1663,9 @@
         class:active={app.copilotView === 'models'}
         onclick={() => openCopilotView('models')}
       >
-        <span class="cop-identity-menu-icon"><span class="msr">layers</span></span>
-        <span><strong>Modèles</strong><small>{app.copilotProvider === 'openai' ? OPENAI_MODEL : app.copilotProvider === 'minimax' ? (app.minimaxModel || MINIMAX_DEFAULT_MODEL) : (app.activeModel || 'Aucun modèle actif')}</small></span>
-        <span class="msr">chevron_right</span>
+        <span class="cop-identity-menu-icon"><svg class="icon" aria-hidden="true"><use href="#i-layers" /></svg></span>
+        <span><strong>Modèles</strong><small title={identityModel}>{identityModel.slice(identityModel.lastIndexOf('/') + 1)}</small></span>
+        <svg class="icon" aria-hidden="true"><use href="#i-{app.copilotView === 'models' ? 'check' : 'chevron-right'}" /></svg>
       </button>
       {#if isCloudProvider(app.copilotProvider)}
         <button
@@ -1497,9 +1673,9 @@
           class:active={app.copilotView === 'memory'}
           onclick={() => openCopilotView('memory')}
         >
-          <span class="cop-identity-menu-icon"><span class="msr">database</span></span>
+          <span class="cop-identity-menu-icon"><svg class="icon" aria-hidden="true"><use href="#i-database" /></svg></span>
           <span><strong>Mémoire</strong><small>{app.cloudMemoryEnabled ? 'Automatique' : 'Désactivée'}</small></span>
-          <span class="msr">chevron_right</span>
+          <svg class="icon" aria-hidden="true"><use href="#i-{app.copilotView === 'memory' ? 'check' : 'chevron-right'}" /></svg>
         </button>
       {/if}
     </div>
@@ -1508,18 +1684,14 @@
 
 {#snippet citePreviewCard()}
   {#if citePreview}
-    <div
-      class="cop-cite-preview"
-      class:below={citePreview.below}
-      style="left:{citePreview.x}px; top:{citePreview.y}px"
-      role="tooltip"
-    >
-      <div class="cop-cite-preview-head">
+    {@const anchor = citePreview.anchor}
+    <div id="cop-cite-preview" class="cop-hover-card" role="tooltip" popover="manual" {@attach (el) => placeCard(el, anchor)}>
+      <div class="cop-hover-card-head">
         <span class="cop-source-num">{citePreview.n}</span>
-        <span class="cop-cite-preview-name">{citePreview.name ?? 'Passage cité'}</span>
+        <span class="cop-hover-card-name">{citePreview.name ?? 'Passage cité'}</span>
       </div>
-      <p class="cop-cite-preview-text">{citePreview.text}</p>
-      <div class="cop-cite-preview-hint">Cliquer sur la puce ouvre le passage dans le document</div>
+      <p class="cop-hover-card-text">{citePreview.text}</p>
+      <div class="cop-hover-card-hint">Cliquer sur la puce ouvre le passage dans le document</div>
     </div>
   {/if}
 {/snippet}
@@ -1533,7 +1705,10 @@
   class:open={app.copilotOpen}
   class:expanded={app.copilotExpanded}
   class:resizing
-  style:--copilot-width="min({panelWidth}px, calc(100vw - 40px))"
+  class:snap={keySnap}
+  style:--copilot-width={committedWidthCss}
+  style:--copilot-max={maxWidthCss}
+  style:flex-basis={dragWidthCss}
   aria-hidden={!app.copilotOpen}
   inert={!app.copilotOpen}
   bind:this={panelEl}
@@ -1571,55 +1746,49 @@
       aria-haspopup="menu"
       aria-expanded={identityMenuOpen}
       aria-label="Ouvrir le menu Doku-San"
-      onclick={toggleIdentityMenu}
+      onclick={(e) => toggleIdentityMenu(e.detail === 0)}
       onkeydown={(event) => { if (event.key === 'Escape') closeIdentityMenu(true) }}
     >
       <span class="cop-mark">
-        <span class="msr" style="font-size:15px">spa</span>
+        <svg class="icon" aria-hidden="true"><use href="#i-leaf" /></svg>
       </span>
       <span class="cop-title">Doku-San</span>
       <span class="cop-local" class:cloud={isCloudProvider(app.copilotProvider)}>
         {isCloudProvider(app.copilotProvider) ? 'cloud' : 'local'}
       </span>
-      <span class="cop-identity-chevron msr" aria-hidden="true">expand_more</span>
+      <svg class="icon cop-identity-chevron" aria-hidden="true"><use href="#i-chevron-down" /></svg>
     </button>
     <div class="cop-head-spacer" data-tauri-drag-region></div>
     <button
       class="cop-ic"
       class:active={app.copilotExpanded}
-      title={app.copilotExpanded ? 'Réduire le chat' : 'Agrandir le chat'}
+      use:tooltip={app.copilotExpanded ? { label: 'Réduire le chat', kbd: 'Échap' } : 'Agrandir le chat'}
       aria-label={app.copilotExpanded ? 'Réduire le chat' : 'Agrandir le chat'}
       aria-pressed={app.copilotExpanded}
       onclick={() => (app.copilotExpanded = !app.copilotExpanded)}
     >
-      <span class="msr" style="font-size:17px">{app.copilotExpanded ? 'close_fullscreen' : 'open_in_full'}</span>
+      <svg class="icon" aria-hidden="true"><use href="#i-{app.copilotExpanded ? 'minimize-2' : 'maximize-2'}" /></svg>
     </button>
     {#if app.copilotView === 'models' || app.copilotView === 'memory'}
-      <button class="cop-ic" title="Retour au chat" aria-label="Retour au chat" onclick={() => (app.copilotView = 'chat')}>
-        <span class="msr" style="font-size:19px">arrow_back</span>
+      <button class="cop-ic" use:tooltip={'Retour au chat'} aria-label="Retour au chat" onclick={() => (app.copilotView = 'chat')}>
+        <svg class="icon" aria-hidden="true"><use href="#i-arrow-left" /></svg>
       </button>
     {:else}
       {#if copilot.messages.length > 0}
-        <button class="cop-ic" title="Nouvelle conversation" aria-label="Nouvelle conversation" onclick={startNewChat}>
-          <!-- Icône de trait (famille Lucide « square-pen ») : inline plutôt que dans le
-               subset Material Symbols — le geste « nouvelle conversation » mérite le dessin
-               au trait, plus léger que le glyphe plein. currentColor = suit l'état du bouton. -->
-          <svg class="cop-ic-line" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <path d="M12 3H7a4 4 0 0 0-4 4v10a4 4 0 0 0 4 4h10a4 4 0 0 0 4-4v-5" />
-            <path d="M18.375 2.625a1 1 0 0 1 3 3l-9.013 9.014a2 2 0 0 1-.853.505l-2.873.84a.5.5 0 0 1-.62-.62l.84-2.873a2 2 0 0 1 .506-.852z" />
-          </svg>
+        <button class="cop-ic" use:tooltip={'Nouvelle conversation'} aria-label="Nouvelle conversation" onclick={() => startNewChat()}>
+          <svg class="icon" aria-hidden="true"><use href="#i-square-pen" /></svg>
         </button>
       {/if}
     {/if}
-    <div class="cop-sep"></div>
-    <button class="cop-win" title="Réduire" aria-label="Réduire" onclick={minimizeWindow}>
-      <span class="msr" style="font-size:18px">remove</span>
+    <div class="cop-sep" aria-hidden="true"></div>
+    <button class="cop-win" use:tooltip={'Réduire'} aria-label="Réduire" onclick={minimizeWindow}>
+      <svg class="icon" aria-hidden="true"><use href="#i-minus" /></svg>
     </button>
-    <button class="cop-win" title="Agrandir" aria-label="Agrandir" onclick={toggleMaximizeWindow}>
-      <span class="msr" style="font-size:15px">crop_square</span>
+    <button class="cop-win" use:tooltip={'Agrandir'} aria-label="Agrandir" onclick={toggleMaximizeWindow}>
+      <svg class="icon cop-win-square" aria-hidden="true"><use href="#i-square" /></svg>
     </button>
-    <button class="cop-win close" title="Fermer" aria-label="Fermer" onclick={closeWindow}>
-      <span class="msr" style="font-size:18px">close</span>
+    <button class="cop-win close" use:tooltip={'Fermer'} aria-label="Fermer" onclick={closeWindow}>
+      <svg class="icon" aria-hidden="true"><use href="#i-x" /></svg>
     </button>
   </header>
 
@@ -1630,12 +1799,12 @@
         bind:this={activityButtonEl}
         class="cop-activity-fab"
         class:active={activityDrawerOpen}
-        title="Sources et activité"
+        use:tooltip={'Sources et activité'}
         aria-label="Afficher les sources et l’activité"
         aria-expanded={activityDrawerOpen}
         onclick={() => void toggleActivityDrawer()}
       >
-        <span class="msr">format_list_bulleted</span>
+        <svg class="icon" aria-hidden="true"><use href="#i-list" /></svg>
       </button>
     {/if}
     <div class="cop-scroll" bind:this={scroller} onscroll={onScroll}>
@@ -1643,32 +1812,46 @@
         <!-- L'auto-effacement referme aussi la fenêtre d'annulation : c'est voulu et
              c'est la convention (l'« Annuler » d'un envoi de mail vit le temps du
              bandeau). Le survol suspend le compte à rebours, donc viser le bouton ne
-             fait jamais disparaître la cible. -->
+             fait jamais disparaître la cible.
+             L'enveloppe porte la sortie, la carte l'entrée (une seule fois) ; le {#key} ne
+             remonte que le filet de vie, qui repart avec le compte à rebours (autoDismiss
+             relance son minuteur au changement de `key`). -->
+        <div class="cop-toast-slot" out:fly={toastExit()}>
         <div
           class="cop-memory-toast"
           role="status"
           use:autoDismiss={{ delay: NOTICE_DELAY.success, key: cloudMemory.lastBatch, onDismiss: () => (cloudMemory.lastBatch = null) }}
         >
-          <span class="msr" aria-hidden="true">database</span>
+          <svg class="icon" aria-hidden="true"><use href="#i-database" /></svg>
           <span><strong>Mémoire mise à jour</strong><small>{memoryBatchLabel()}</small></span>
           {#if shownMemoryWorkspace ?? cloudMemory.workspace}
             <button onclick={() => void undoCloudMemory((shownMemoryWorkspace ?? cloudMemory.workspace)!)}>Annuler</button>
           {/if}
-          <button class="icon" title="Masquer" aria-label="Masquer la notification" onclick={() => (cloudMemory.lastBatch = null)}><span class="msr">close</span></button>
-          <span class="toast-life" aria-hidden="true" style:animation-duration="{NOTICE_DELAY.success}ms"></span>
+          <button class="icon" use:tooltip={'Masquer'} aria-label="Masquer la notification" onclick={() => (cloudMemory.lastBatch = null)}><svg class="icon" aria-hidden="true"><use href="#i-x" /></svg></button>
+          {#key cloudMemory.lastBatch}
+            <span class="toast-life" aria-hidden="true" style:animation-duration="{NOTICE_DELAY.success}ms"></span>
+          {/key}
+        </div>
         </div>
       {/if}
       {#if app.copilotView === 'chat' && cloudMemory.error}
+        <div class="cop-toast-slot" out:fly={toastExit()}>
         <div
           class="cop-memory-toast error"
           role="alert"
           use:autoDismiss={{ delay: NOTICE_DELAY.error, key: cloudMemory.error, onDismiss: () => (cloudMemory.error = '') }}
         >
-          <span class="msr" aria-hidden="true">warning</span>
+          <svg class="icon" aria-hidden="true"><use href="#i-triangle-alert" /></svg>
           <span><strong>Mémoire indisponible</strong><small>{cloudMemory.error}</small></span>
           <button onclick={openMemoryView}>Vérifier</button>
-          <button class="icon" title="Masquer" aria-label="Masquer l’erreur mémoire" onclick={() => (cloudMemory.error = '')}><span class="msr">close</span></button>
-          <span class="toast-life" aria-hidden="true" style:animation-duration="{NOTICE_DELAY.error}ms"></span>
+          <button class="icon" use:tooltip={'Masquer'} aria-label="Masquer l’erreur mémoire" onclick={() => (cloudMemory.error = '')}><svg class="icon" aria-hidden="true"><use href="#i-x" /></svg></button>
+          <!-- Délai 0 = erreur persistante : pas de filet de vie (figé à mi-course sinon). -->
+          {#if NOTICE_DELAY.error > 0}
+            {#key cloudMemory.error}
+              <span class="toast-life" aria-hidden="true" style:animation-duration="{NOTICE_DELAY.error}ms"></span>
+            {/key}
+          {/if}
+        </div>
         </div>
       {/if}
       {#if app.copilotView === 'models'}
@@ -1679,13 +1862,13 @@
               class="cop-picker-trigger"
               id="cop-picker-trigger"
               bind:this={pickerTriggerEl}
-              aria-haspopup="listbox"
+              aria-haspopup="menu"
               aria-expanded={pickerOpen}
               aria-labelledby="cop-picker-label cop-picker-trigger"
               onclick={togglePicker}
               onkeydown={onTriggerKeydown}
             >
-              <span class="msr">{app.copilotProvider === 'ollama' ? 'memory' : 'cloud'}</span>
+              <svg class="icon" aria-hidden="true"><use href="#i-{app.copilotProvider === 'ollama' ? 'cpu' : 'cloud'}" /></svg>
               <span class="cop-picker-name">
                 {#if app.copilotProvider === 'openai'}
                   <strong class="sans">{OPENAI_MODEL}</strong>
@@ -1703,7 +1886,7 @@
                   </small>
                 {/if}
               </span>
-              <span class="msr cop-picker-chev" class:open={pickerOpen}>expand_more</span>
+              <svg class="icon cop-picker-chev" class:open={pickerOpen} aria-hidden="true"><use href="#i-chevron-down" /></svg>
             </button>
             {#if pickerOpen}
               <div
@@ -1722,10 +1905,10 @@
                 aria-expanded={pickerSection === 'ollama'}
                 onclick={() => toggleSection('ollama')}
               >
-                <span class="msr">memory</span>
+                <svg class="icon" aria-hidden="true"><use href="#i-cpu" /></svg>
                 <span class="cop-picker-sec-name">Sur cet appareil</span>
                 <span class="cop-picker-sec-state">privé</span>
-                <span class="msr cop-picker-sec-chev">chevron_right</span>
+                <svg class="icon cop-picker-sec-chev" aria-hidden="true"><use href="#i-chevron-right" /></svg>
               </button>
               <div
                 class="cop-picker-fold"
@@ -1751,21 +1934,21 @@
                          SANS changer le modèle actif — l'ancien onglet « Sur cet appareil »
                          offrait ce chemin, le dropdown doit le garder. -->
                     <button class="cop-picker-opt" role="menuitem" onclick={pickManageLocal}>
-                      <span class="msr">tune</span>
+                      <svg class="icon" aria-hidden="true"><use href="#i-sliders-horizontal" /></svg>
                       <span class="grow">Gérer modèles et index…</span>
                     </button>
                   {:else if !copilot.modelsLoaded}
                     <!-- Liste jamais lue (moteur pas démarré / indisponible) : ne JAMAIS
                          affirmer « aucun modèle installé » sans avoir regardé. -->
                     <button class="cop-picker-opt" role="menuitem" onclick={pickManageLocal}>
-                      <span class="msr">warning</span>
+                      <svg class="icon" aria-hidden="true"><use href="#i-triangle-alert" /></svg>
                       <span class="grow">Moteur IA indisponible — voir ci-dessous</span>
                     </button>
                   {:else}
                     <!-- Entrée-action (pas un choix de valeur) : bascule sur la section
                          locale où vivent onboarding et téléchargement. -->
                     <button class="cop-picker-opt" role="menuitem" onclick={pickManageLocal}>
-                      <span class="msr">download</span>
+                      <svg class="icon" aria-hidden="true"><use href="#i-download" /></svg>
                       <span class="grow">Aucun modèle installé — gérer ci-dessous</span>
                     </button>
                   {/if}
@@ -1780,12 +1963,12 @@
                 aria-expanded={pickerSection === 'openai'}
                 onclick={() => toggleSection('openai')}
               >
-                <span class="msr">cloud</span>
+                <svg class="icon" aria-hidden="true"><use href="#i-cloud" /></svg>
                 <span class="cop-picker-sec-name">OpenAI</span>
                 <span class="cop-picker-sec-state" class:ok={openAiState.kind === 'ok'} class:warn={openAiState.kind === 'warn'}>
                   {openAiState.label}
                 </span>
-                <span class="msr cop-picker-sec-chev">chevron_right</span>
+                <svg class="icon cop-picker-sec-chev" aria-hidden="true"><use href="#i-chevron-right" /></svg>
               </button>
               <div
                 class="cop-picker-fold"
@@ -1816,12 +1999,12 @@
                 aria-expanded={pickerSection === 'minimax'}
                 onclick={() => toggleSection('minimax')}
               >
-                <span class="msr">cloud</span>
+                <svg class="icon" aria-hidden="true"><use href="#i-cloud" /></svg>
                 <span class="cop-picker-sec-name">MiniMax</span>
                 <span class="cop-picker-sec-state" class:ok={minimaxState.kind === 'ok'} class:warn={minimaxState.kind === 'warn'}>
                   {minimaxState.label}
                 </span>
-                <span class="msr cop-picker-sec-chev">chevron_right</span>
+                <svg class="icon cop-picker-sec-chev" aria-hidden="true"><use href="#i-chevron-right" /></svg>
               </button>
               <div
                 class="cop-picker-fold"
@@ -1850,7 +2033,7 @@
           <div class="cop-openai-view">
             <div class="cop-cloud-hero">
               <div class="cop-cloud-head">
-                <span class="cop-cloud-icon"><span class="msr">cloud</span></span>
+                <span class="cop-cloud-icon"><svg class="icon" aria-hidden="true"><use href="#i-cloud" /></svg></span>
                 <span class="cop-cloud-name">
                   <strong>{OPENAI_MODEL}</strong>
                   <small>GPT‑5.6 Luna · raisonnement faible</small>
@@ -1876,7 +2059,7 @@
 
             {#if copilot.openAiAuthenticated}
               <div class:warn={copilot.openAiPreferredAvailable === false} class="cop-cloud-note ok" role="status">
-                <span class="msr">{copilot.openAiPreferredAvailable === false ? 'warning' : 'verified_user'}</span>
+                <svg class="icon" aria-hidden="true"><use href="#i-{copilot.openAiPreferredAvailable === false ? 'triangle-alert' : 'shield-check'}" /></svg>
                 <span>
                   <strong>{copilot.openAiPreferredAvailable === false ? 'GPT‑5.6 Luna n’est pas disponible' : 'Compte OpenAI connecté'}</strong>
                   <small>
@@ -1890,20 +2073,20 @@
                 <p class="cop-auth-error" role="status">{copilot.openAiStatusError}</p>
               {/if}
               <button class="cop-btn-quiet" onclick={() => void disconnectOpenAiAccount()}>
-                <span class="msr">logout</span>Déconnecter le compte
+                <svg class="icon" aria-hidden="true"><use href="#i-log-out" /></svg>Déconnecter le compte
               </button>
             {:else if copilot.openAiAuthPhase === 'waiting' && copilot.openAiAuth}
               <section class="cop-cloud-setup cop-auth-wait" aria-live="polite">
-                <span class="cop-auth-mark"><span class="msr">open_in_browser</span></span>
+                <span class="cop-auth-mark"><svg class="icon" aria-hidden="true"><use href="#i-app-window" /></svg></span>
                 <h3>Validez dans votre navigateur</h3>
                 <p>Connectez-vous à OpenAI, puis saisissez ce code sur la page officielle.</p>
-                <button class="cop-auth-code" title="Copier le code" onclick={() => void copyOpenAiCode()}>
+                <button class="cop-auth-code" use:tooltip={'Copier le code'} onclick={() => void copyOpenAiCode()}>
                   <span>{copilot.openAiAuth.userCode}</span>
-                  <span class="msr">{authCodeCopied ? 'check' : 'content_copy'}</span>
+                  <span class="cop-swap" class:on={authCodeCopied} aria-hidden="true"><svg class="icon"><use href="#i-copy" /></svg><svg class="icon"><use href="#i-check" /></svg></span>
                 </button>
                 <div class="cop-auth-actions">
                   <button class="cop-btn-fill" onclick={() => void openOpenAiAuthPage(copilot.openAiAuth!.verificationUrl)}>
-                    <span class="msr">open_in_new</span>Ouvrir OpenAI
+                    <svg class="icon" aria-hidden="true"><use href="#i-external-link" /></svg>Ouvrir OpenAI
                   </button>
                   <button class="cop-btn-quiet" onclick={() => void cancelOpenAiConnection()}>Annuler</button>
                 </div>
@@ -1915,19 +2098,19 @@
                 <h3>Connecter votre compte OpenAI</h3>
                 <p>Utilisez votre abonnement ChatGPT/Codex comme moteur de Doku-San. La connexion se fait sur la page officielle OpenAI.</p>
                 <ol>
-                  <li><span class="msr">key_off</span><p><strong>Aucune clé API</strong><small>Doku ne vous demandera jamais d’en créer une.</small></p></li>
-                  <li><span class="msr">verified_user</span><p><strong>Validation par OpenAI</strong><small>Votre mot de passe ne transite jamais par Doku.</small></p></li>
-                  <li><span class="msr">lock</span><p><strong>Session protégée</strong><small>Les jetons restent dans {vaultLabel()}.</small></p></li>
+                  <li><svg class="icon" aria-hidden="true"><use href="#i-lock-open" /></svg><p><strong>Aucune clé API</strong><small>Doku ne vous demandera jamais d’en créer une.</small></p></li>
+                  <li><svg class="icon" aria-hidden="true"><use href="#i-shield-check" /></svg><p><strong>Validation par OpenAI</strong><small>Votre mot de passe ne transite jamais par Doku.</small></p></li>
+                  <li><svg class="icon" aria-hidden="true"><use href="#i-lock" /></svg><p><strong>Session protégée</strong><small>Les jetons restent dans {vaultLabel()}.</small></p></li>
                 </ol>
                 <button class="cop-btn-fill" onclick={() => void beginOpenAiAuth()} disabled={copilot.openAiAuthPhase === 'starting'}>
-                  <span class="msr">login</span>{copilot.openAiAuthPhase === 'starting' ? 'Connexion…' : 'Se connecter avec OpenAI'}
+                  <svg class="icon" aria-hidden="true"><use href="#i-log-in" /></svg>{copilot.openAiAuthPhase === 'starting' ? 'Connexion…' : 'Se connecter avec OpenAI'}
                 </button>
                 {#if copilot.openAiAuthError}<p class="cop-auth-error" role="status">{copilot.openAiAuthError}</p>{/if}
               </section>
             {/if}
 
             <div class="cop-cloud-privacy">
-              <span class="msr">info</span>
+              <svg class="icon" aria-hidden="true"><use href="#i-info" /></svg>
               <p><strong>Envoi volontaire vers le cloud.</strong> Quand OpenAI est actif, la question et le contexte affiché sont transmis au service Codex. Le mode Ollama reste entièrement local.</p>
             </div>
           </div>
@@ -1935,7 +2118,7 @@
           <div class="cop-openai-view">
             <div class="cop-cloud-hero">
               <div class="cop-cloud-head">
-                <span class="cop-cloud-icon"><span class="msr">cloud</span></span>
+                <span class="cop-cloud-icon"><svg class="icon" aria-hidden="true"><use href="#i-cloud" /></svg></span>
                 <span class="cop-cloud-name">
                   <strong>{app.minimaxModel || MINIMAX_DEFAULT_MODEL}</strong>
                   <small>MiniMax · compatible OpenAI</small>
@@ -1959,7 +2142,7 @@
 
             {#if copilot.minimaxStatus?.connected && !copilot.minimaxStatus.keyRejected}
               <div class="cop-cloud-note ok" role="status">
-                <span class="msr">verified_user</span>
+                <svg class="icon" aria-hidden="true"><use href="#i-shield-check" /></svg>
                 <span>
                   <strong>Clé MiniMax connectée</strong>
                   <small>La clé est protégée par {vaultLabel()} — elle n'apparaît jamais dans les réglages ni dans les fichiers de Doku.</small>
@@ -1969,7 +2152,7 @@
                 <p class="cop-auth-error" role="status">{copilot.minimaxStatus.error}</p>
               {/if}
               <button class="cop-btn-quiet" onclick={() => void disconnectMinimaxKey()}>
-                <span class="msr">logout</span>Déconnecter la clé
+                <svg class="icon" aria-hidden="true"><use href="#i-log-out" /></svg>Déconnecter la clé
               </button>
             {:else}
               <section class="cop-cloud-setup">
@@ -1980,8 +2163,8 @@
                     : 'Créez une clé API sur platform.minimax.io, puis collez-la ici. Elle est vérifiée avant d’être enregistrée.'}
                 </p>
                 <ol>
-                  <li><span class="msr">verified_user</span><p><strong>Vérifiée avant stockage</strong><small>Clé invalide ou réseau en panne : rien n’est enregistré.</small></p></li>
-                  <li><span class="msr">lock</span><p><strong>Protégée par {vaultShortLabel()}</strong><small>La clé vit dans {vaultLabel()}, jamais dans les fichiers de Doku.</small></p></li>
+                  <li><svg class="icon" aria-hidden="true"><use href="#i-shield-check" /></svg><p><strong>Vérifiée avant stockage</strong><small>Clé invalide ou réseau en panne : rien n’est enregistré.</small></p></li>
+                  <li><svg class="icon" aria-hidden="true"><use href="#i-lock" /></svg><p><strong>Protégée par {vaultShortLabel()}</strong><small>La clé vit dans {vaultLabel()}, jamais dans les fichiers de Doku.</small></p></li>
                 </ol>
                 <form
                   class="cop-mm-connect"
@@ -1998,7 +2181,7 @@
                     disabled={copilot.minimaxConnecting}
                   />
                   <button class="cop-btn-fill" type="submit" disabled={copilot.minimaxConnecting || !minimaxKeyInput.trim()}>
-                    <span class="msr">login</span>{copilot.minimaxConnecting ? 'Vérification…' : 'Connecter'}
+                    <svg class="icon" aria-hidden="true"><use href="#i-log-in" /></svg>{copilot.minimaxConnecting ? 'Vérification…' : 'Connecter'}
                   </button>
                 </form>
                 {#if copilot.minimaxConnectError}<p class="cop-auth-error" role="status">{copilot.minimaxConnectError}</p>{/if}
@@ -2006,7 +2189,7 @@
             {/if}
 
             <div class="cop-cloud-privacy">
-              <span class="msr">info</span>
+              <svg class="icon" aria-hidden="true"><use href="#i-info" /></svg>
               <p><strong>Envoi volontaire vers le cloud.</strong> Quand MiniMax est actif, la question et le contexte affiché sont transmis à api.minimax.io. Le mode Ollama reste entièrement local.</p>
             </div>
           </div>
@@ -2014,8 +2197,8 @@
         {#if copilot.error}
           <div class="cop-msg err row">
             <span class="grow-wrap">{copilot.error}</span>
-            <button class="cop-dismiss" title="Masquer" aria-label="Masquer l'erreur" onclick={() => (copilot.error = '')}>
-              <span class="msr" style="font-size:15px">close</span>
+            <button class="cop-dismiss" use:tooltip={'Masquer'} aria-label="Masquer l'erreur" onclick={() => (copilot.error = '')}>
+              <svg class="icon" aria-hidden="true"><use href="#i-x" /></svg>
             </button>
           </div>
         {/if}
@@ -2025,7 +2208,7 @@
         {:else if copilot.models.length === 0 && !copilot.pulling}
           <!-- Onboarding : aucun modèle installé -->
           <div class="cop-onboard">
-            <div class="cop-onboard-tile"><span class="msr" style="font-size:28px">spa</span></div>
+            <div class="cop-onboard-tile"><svg class="icon" style="font-size:24px" aria-hidden="true"><use href="#i-leaf" /></svg></div>
             <div>
               <div class="cop-onboard-title">Activez votre copilote</div>
               <p class="cop-onboard-sub">
@@ -2039,7 +2222,7 @@
               </div>
               <div class="cop-reco-sub">935 Mo · ultra-léger, discret, optimisé ARM</div>
               <button class="cop-btn-fill" onclick={() => startPull(RECO_MODEL)}>
-                <span class="msr" style="font-size:17px">download</span>Télécharger ce modèle
+                <svg class="icon" aria-hidden="true"><use href="#i-download" /></svg>Télécharger ce modèle
               </button>
             </div>
           </div>
@@ -2047,12 +2230,12 @@
                progressive disclosure, pas de voie unique cachée. -->
           <details class="cop-advanced cop-onboard-more">
             <summary onkeydown={onAdvancedSummaryKey}>
-              <span class="cop-advanced-icon"><span class="msr">tune</span></span>
+              <span class="cop-advanced-icon"><svg class="icon" aria-hidden="true"><use href="#i-sliders-horizontal" /></svg></span>
               <span class="cop-advanced-copy">
                 <strong>Voir d’autres modèles</strong>
                 <small>Autres tailles ou modèle personnalisé</small>
               </span>
-              <span class="msr cop-advanced-chev">expand_more</span>
+              <svg class="icon cop-advanced-chev" aria-hidden="true"><use href="#i-chevron-down" /></svg>
             </summary>
             <div class="cop-sections cop-advanced-body">
               {@render addSection(ALT_SUGGESTIONS)}
@@ -2066,13 +2249,13 @@
               <div class="cop-label">Téléchargement</div>
               <div class="cop-dl">
                 <div class="cop-dl-head">
-                  <span class="msr orbit" style="font-size:18px">progress_activity</span>
+                  <svg class="icon orbit" style="font-size:16px" aria-hidden="true"><use href="#i-loader-circle" /></svg>
                   <span class="cop-mono grow" title={copilot.pulling.name}>{copilot.pulling.name}</span>
                   <span class="cop-size">
                     {copilot.pulling.total > 0 ? `${formatBytes(copilot.pulling.done)} / ${formatBytes(copilot.pulling.total)}` : '…'}
                   </span>
-                  <button class="cop-del" title="Annuler" aria-label="Annuler le téléchargement" onclick={cancelPull}>
-                    <span class="msr" style="font-size:16px">close</span>
+                  <button class="cop-del" use:tooltip={'Annuler'} aria-label="Annuler le téléchargement" onclick={cancelPull}>
+                    <svg class="icon" aria-hidden="true"><use href="#i-x" /></svg>
                   </button>
                 </div>
                 <div class="cop-track"><div class="doku-skel" style="width:{copilot.pulling.pct}%;height:100%;border-radius:3px"></div></div>
@@ -2082,12 +2265,12 @@
 
           <details class="cop-advanced">
             <summary onkeydown={onAdvancedSummaryKey}>
-              <span class="cop-advanced-icon"><span class="msr">tune</span></span>
+              <span class="cop-advanced-icon"><svg class="icon" aria-hidden="true"><use href="#i-sliders-horizontal" /></svg></span>
               <span class="cop-advanced-copy">
                 <strong>Gérer les modèles locaux</strong>
                 <small>{copilot.models.length} installé{copilot.models.length > 1 ? 's' : ''} · {formatBytes(libraryTotal)} · index du dossier</small>
               </span>
-              <span class="msr cop-advanced-chev">expand_more</span>
+              <svg class="icon cop-advanced-chev" aria-hidden="true"><use href="#i-chevron-down" /></svg>
             </summary>
             <div class="cop-sections cop-advanced-body">
             <!-- Le modèle actif vit désormais dans le dropdown « MODÈLE ACTIF » en tête de
@@ -2121,21 +2304,22 @@
                            prédicat que le dropdown), icône database au lieu de la pastille. -->
                       <button
                         class="cop-row-pick"
-                        title={embed ? "Modèle d'embedding — réservé à l'index du dossier" : 'Choisir comme modèle actif'}
+                        use:tooltip={embed ? '' : 'Choisir comme modèle actif'}
+                        title={embed ? "Modèle d'embedding — réservé à l'index du dossier" : undefined}
                         aria-pressed={isActive}
                         disabled={embed}
                         onclick={() => setActiveModel(m.name)}
                       >
                         {#if embed}
-                          <span class="msr" style="font-size:15px;color:var(--ink-4)">database</span>
+                          <svg class="icon" style="font-size:14px;color:var(--ink-4)" aria-hidden="true"><use href="#i-database" /></svg>
                         {:else}
                           <span class="cop-dot" class:on={isActive}></span>
                         {/if}
                         <span class="cop-mono grow">{m.name}</span>
                         <span class="cop-size">{formatBytes(m.size)}</span>
                       </button>
-                      <button class="cop-del" title="Supprimer" aria-label={'Supprimer ' + m.name} onclick={() => (confirmDelete = m.name)}>
-                        <span class="msr" style="font-size:17px">delete</span>
+                      <button class="cop-del" use:tooltip={'Supprimer'} aria-label={'Supprimer ' + m.name} onclick={() => (confirmDelete = m.name)}>
+                        <svg class="icon" aria-hidden="true"><use href="#i-trash" /></svg>
                       </button>
                     </div>
                   {/if}
@@ -2154,13 +2338,13 @@
               </div>
               <div class="cop-rag">
                 <div class="cop-rag-row">
-                  <span class="msr" style="font-size:18px;color:var(--ink-4)">database</span>
+                  <svg class="icon" style="font-size:16px;color:var(--ink-4)" aria-hidden="true"><use href="#i-database" /></svg>
                   <span class="cop-mono grow" title="Modèle d'embedding — réglage distinct du modèle de chat">{embedModelName}</span>
                   {#if !embedInstalled}
                     <button class="cop-btn-sm" onclick={() => startPull(embedModelName)} disabled={!!copilot.pulling}>Télécharger</button>
                   {:else if ragIndexing}
-                    <button class="cop-del" title="Annuler l'indexation" aria-label="Annuler l'indexation" onclick={cancelRagIndexing}>
-                      <span class="msr" style="font-size:16px">close</span>
+                    <button class="cop-del" use:tooltip={"Annuler l'indexation"} aria-label="Annuler l'indexation" onclick={cancelRagIndexing}>
+                      <svg class="icon" aria-hidden="true"><use href="#i-x" /></svg>
                     </button>
                   {:else}
                     <!-- Désactivé aussi quand un AUTRE dossier s'indexe (une seule indexation à la fois). -->
@@ -2216,7 +2400,7 @@
       {:else if app.copilotView === 'memory'}
         <section class="cop-memory-view" aria-labelledby="cop-memory-title">
           <div class="cop-memory-heading">
-            <span class="cop-memory-mark" aria-hidden="true"><span class="msr">database</span></span>
+            <span class="cop-memory-mark" aria-hidden="true"><svg class="icon" aria-hidden="true"><use href="#i-database" /></svg></span>
             <span>
               <h2 id="cop-memory-title" tabindex="-1">Mémoire du travail</h2>
               <p>{memoryTarget ? (memoryTarget.kind === 'document' ? `Cette note · ${memoryTarget.label}` : `Dossier partagé · ${memoryTarget.label}`) : 'Aucune portée durable'}</p>
@@ -2256,27 +2440,27 @@
                 disabled={!memoryDocument}
                 aria-pressed={!effectiveMemoryFolder}
                 onclick={useDocumentMemory}
-              ><span class="msr">description</span>Cette note</button>
+              ><svg class="icon" aria-hidden="true"><use href="#i-file-text" /></svg>Cette note</button>
               <button
                 class:active={!!effectiveMemoryFolder}
                 disabled={!memoryFolderCandidate}
                 aria-pressed={!!effectiveMemoryFolder}
                 title={memoryFolderCandidate ? `Partager la mémoire avec le dossier ${memoryFolderCandidate.label}` : 'Aucun dossier disponible'}
                 onclick={useFolderMemory}
-              ><span class="msr">folder</span>{memoryFolderCandidate ? memoryFolderCandidate.label : 'Dossier'}</button>
+              ><svg class="icon" aria-hidden="true"><use href="#i-folder" /></svg>{memoryFolderCandidate ? memoryFolderCandidate.label : 'Dossier'}</button>
             </div>
           </div>
 
           {#if !isCloudProvider(app.copilotProvider)}
             <div class="cop-memory-empty">
-              <span class="msr">cloud_off</span>
+              <svg class="icon" aria-hidden="true"><use href="#i-cloud-off" /></svg>
               <strong>La mémoire est réservée aux modèles cloud</strong>
               <p>Choisissez OpenAI ou MiniMax pour la rappeler et la faire évoluer automatiquement.</p>
               <button class="cop-btn-quiet" onclick={() => (app.copilotView = 'models')}>Choisir un fournisseur</button>
             </div>
           {:else if !memoryTarget}
             <div class="cop-memory-empty">
-              <span class="msr">description</span>
+              <svg class="icon" aria-hidden="true"><use href="#i-file-text" /></svg>
               <strong>Aucun travail à mémoriser</strong>
               <p>Enregistrez cette note pour lui donner sa propre mémoire, ou choisissez explicitement un dossier à partager.</p>
             </div>
@@ -2285,19 +2469,19 @@
           {:else}
             {#if cloudMemory.error}
               <div class="cop-memory-error" role="alert">
-                <span class="msr">warning</span><span>{cloudMemory.error}</span>
-                <button title="Masquer" aria-label="Masquer l'erreur" onclick={() => (cloudMemory.error = '')}><span class="msr">close</span></button>
+                <svg class="icon" aria-hidden="true"><use href="#i-triangle-alert" /></svg><span>{cloudMemory.error}</span>
+                <button use:tooltip={'Masquer'} aria-label="Masquer l'erreur" onclick={() => (cloudMemory.error = '')}><svg class="icon" aria-hidden="true"><use href="#i-x" /></svg></button>
               </div>
             {/if}
             <div class="cop-memory-list-head">
               <span>{cloudMemory.records.length} souvenir{cloudMemory.records.length === 1 ? '' : 's'}</span>
               {#if cloudMemory.undoAvailable && shownMemoryWorkspace}
-                <button onclick={() => void undoCloudMemory(shownMemoryWorkspace!)}><span class="msr">history</span>Annuler la dernière modification</button>
+                <button onclick={() => void undoCloudMemory(shownMemoryWorkspace!)}><svg class="icon" aria-hidden="true"><use href="#i-undo-2" /></svg>Annuler la dernière modification</button>
               {/if}
             </div>
             {#if cloudMemory.records.length === 0}
               <div class="cop-memory-empty quiet">
-                <span class="msr">auto_stories</span>
+                <svg class="icon" aria-hidden="true"><use href="#i-book-open" /></svg>
                 <strong>La mémoire est prête</strong>
                 <p>Continuez votre travail normalement. Après un échange utile, Doku-San enregistrera ici ce qui mérite de survivre à la conversation.</p>
               </div>
@@ -2334,8 +2518,8 @@
                       <div class="cop-memory-item-head">
                         <span class="cop-memory-type">{memoryTypeLabel(record.type)}</span>
                         <span class="cop-memory-date">{new Date(record.updatedAt).toLocaleDateString('fr-FR')}</span>
-                        <button data-memory-id={record.id} data-memory-action="edit" title="Modifier" aria-label={`Modifier ${record.name}`} onclick={() => void editMemory(record)}><span class="msr">edit_note</span></button>
-                        <button data-memory-id={record.id} data-memory-action="delete" title="Oublier" aria-label={`Oublier ${record.name}`} onclick={() => void askMemoryDelete(record.id)}><span class="msr">delete</span></button>
+                        <button data-memory-id={record.id} data-memory-action="edit" use:tooltip={'Modifier'} aria-label={`Modifier ${record.name}`} onclick={() => void editMemory(record)}><svg class="icon" aria-hidden="true"><use href="#i-pencil" /></svg></button>
+                        <button data-memory-id={record.id} data-memory-action="delete" use:tooltip={'Oublier'} aria-label={`Oublier ${record.name}`} onclick={() => void askMemoryDelete(record.id)}><svg class="icon" aria-hidden="true"><use href="#i-trash" /></svg></button>
                       </div>
                       <h3>{record.name}</h3>
                       <p class="cop-memory-description">{record.description}</p>
@@ -2345,36 +2529,41 @@
                 {/each}
               </div>
             {/if}
-            <p class="cop-memory-privacy"><span class="msr">lock</span> {memoryTarget?.kind === 'folder' ? 'Mémoire partagée avec ce dossier' : 'Mémoire propre à cette note'}, stockée localement dans AppData. Seuls les souvenirs retenus rejoignent ensuite la question cloud.</p>
+            <p class="cop-memory-privacy"><svg class="icon" aria-hidden="true"><use href="#i-lock" /></svg> {memoryTarget?.kind === 'folder' ? 'Mémoire partagée avec ce dossier' : 'Mémoire propre à cette note'}, stockée localement dans AppData. Seuls les souvenirs retenus rejoignent ensuite la question cloud.</p>
           {/if}
         </section>
       {:else if copilot.messages.length === 0}
-        <!-- Conversation vide : un vrai point de départ, pas une liste de commandes.
-             Les cartes conservent les trois livrables documentaires existants. -->
+        <!-- Conversation vide (Kube EmptyState + SuggestionCard en rangées) : un point de
+             départ, pas une liste de commandes. Les trois livrables documentaires restent ;
+             aucune entrée échelonnée (on ne chorégraphie pas l'arrivée d'une vue). -->
         <div class="cop-chat-empty">
-          <div class="cop-empty-mark" aria-hidden="true"><span class="msr">spa</span></div>
+          <div class="cop-empty-art" aria-hidden="true"><svg class="icon" aria-hidden="true"><use href="#i-leaf" /></svg></div>
           <h2 class="cop-empty-title">Comment puis-je aider&nbsp;?</h2>
+          <p class="cop-empty-desc">Posez une question ci-dessous, ou partez d’une suggestion.</p>
           <div class="cop-actions">
             <button class="cop-action" onclick={() => quickAction('summary')}>
-              <span class="msr cop-action-icon" aria-hidden="true">summarize</span>
-              <strong>Résume le document</strong>
+              <svg class="icon cop-action-icon" aria-hidden="true"><use href="#i-scroll-text" /></svg>
+              <span>Résume le document</span>
+              <svg class="icon cop-action-arrow" aria-hidden="true"><use href="#i-arrow-right" /></svg>
             </button>
             <button class="cop-action" onclick={() => quickAction('todos')}>
-              <span class="msr cop-action-icon" aria-hidden="true">checklist</span>
-              <strong>Repère les actions à suivre</strong>
+              <svg class="icon cop-action-icon" aria-hidden="true"><use href="#i-list-checks" /></svg>
+              <span>Repère les actions à suivre</span>
+              <svg class="icon cop-action-arrow" aria-hidden="true"><use href="#i-arrow-right" /></svg>
             </button>
             <button class="cop-action" onclick={() => quickAction('keypoints')}>
-              <span class="msr cop-action-icon" aria-hidden="true">key</span>
-              <strong>Extrais les points clés</strong>
+              <svg class="icon cop-action-icon" aria-hidden="true"><use href="#i-key-round" /></svg>
+              <span>Extrais les points clés</span>
+              <svg class="icon cop-action-arrow" aria-hidden="true"><use href="#i-arrow-right" /></svg>
             </button>
           </div>
         </div>
       {:else}
         <!-- Conversation -->
-        <div class="cop-conv">
+        <div class="cop-conv" {@attach followConversation}>
           {#if copilot.historyOmitted > 0}
             <p class="cop-history-window" role="status">
-              <span class="msr" aria-hidden="true">history</span>
+              <svg class="icon" aria-hidden="true"><use href="#i-rotate-ccw-clock" /></svg>
               {copilot.historyOmitted} ancien{copilot.historyOmitted > 1 ? 's' : ''} message{copilot.historyOmitted > 1 ? 's' : ''} reste{copilot.historyOmitted > 1 ? 'nt' : ''} dans la discussion mais ne rejoint{copilot.historyOmitted > 1 ? 'nent' : ''} pas ce tour.
             </p>
           {/if}
@@ -2384,10 +2573,8 @@
             {:else if m.config}
               <!-- État de CONFIG (aucun modèle actif) : carte neutre, pas une erreur — rien n'a
                    échoué. Le bouton fait le travail (pas de « icône calques » à traduire). -->
-              <div class="cop-err-card" role="status">
-                <span class="msr" style="font-size:20px;color:var(--ink-3);flex:0 0 auto">
-                  {m.config === 'openai' || m.config === 'minimax' ? 'cloud_off' : m.config === 'embed' ? 'database' : 'layers'}
-                </span>
+              <div class="cop-err-card" class:enter={i >= enterFrom} role="status">
+                <svg class="icon cop-err-icon" aria-hidden="true"><use href="#i-{m.config === 'openai' || m.config === 'minimax' ? 'cloud-off' : m.config === 'embed' ? 'database' : 'layers'}" /></svg>
                 <div>
                   <div class="cop-err-title">
                     {m.config === 'openai'
@@ -2411,8 +2598,8 @@
                 </div>
               </div>
             {:else if m.failed}
-              <div class="cop-err-card" role="alert">
-                <span class="msr" style="font-size:20px;color:var(--err);flex:0 0 auto">error</span>
+              <div class="cop-err-card" class:enter={i >= enterFrom} role="alert">
+                <svg class="icon cop-err-icon failed" aria-hidden="true"><use href="#i-circle-alert" /></svg>
                 <div>
                   <div class="cop-err-title">La génération a échoué</div>
                   <p class="cop-err-msg">{m.content}</p>
@@ -2425,47 +2612,27 @@
                 </div>
               </div>
             {:else}
-              <!-- Attente = AVANT le 1er token : les points chorégraphiés remplacent l'en-tête
-                   (le nom revient au-dessus du texte dès qu'il s'écrit). -->
+              <!-- Attente = AVANT le 1er token : l'indicateur remplace l'en-tête (le nom
+                   revient au-dessus du texte dès qu'il s'écrit). -->
               {@const waiting = m.streaming && m.content === ''}
-              <div class="cop-asst">
+              {@const canSave = isTauri && !m.notice && !!m.content && !m.diagram && !m.generatedDocument}
+              {@const canCopy = !m.diagram && !m.generatedDocument}
+              <div class="cop-asst" class:enter={i >= enterFrom}>
                 {#if waiting}
                   <!-- role=status : la ligne (statut réel ou « réfléchit ») est annoncée au
-                       lecteur d'écran. Le shimmer est purement décoratif. -->
+                       lecteur d'écran. Points et shimmer sont décoratifs. -->
                   <div class="cop-status" role="status">
-                    <span class="cop-think" aria-hidden="true"><i></i><i></i><i></i></span>
+                    <span class="cop-typing" aria-hidden="true"><i></i><i></i><i></i></span>
                     <span class="cop-shimmer">{m.status ?? 'Doku-San réfléchit'}</span>
                   </div>
                 {:else}
                 <div class="cop-asst-head">
-                  <span class="msr" style="font-size:16px;color:var(--ink-4)">spa</span>
+                  <svg class="icon" aria-hidden="true"><use href="#i-leaf" /></svg>
                   <span class="cop-asst-name">Doku-San</span>
-                  <div class="grow"></div>
-                  {#if !m.streaming}
-                    {#if isTauri && !m.notice && m.content && !m.diagram && !m.generatedDocument}
-                      <!-- Sauver en note (21.x) : la réponse devient un fichier .md du dossier
-                           courant — indexable, citable. Feedback succès (check) ET échec
-                           (bannière) : jamais de bouton muet (règle Epic 19). -->
-                      <button
-                        class="cop-copy"
-                        title="Sauver en note"
-                        aria-label="Sauver la réponse en note"
-                        disabled={copilot.savingNote}
-                        onclick={() => void saveNote(i)}
-                      >
-                        <span class="msr" style="font-size:15px">{noteSavedIdx === i ? 'check' : 'save'}</span>
-                      </button>
-                    {/if}
-                    {#if !m.diagram && !m.generatedDocument}
-                      <button class="cop-copy" title="Copier" aria-label="Copier la réponse" onclick={() => copyMessage(m.content)}>
-                        <span class="msr" style="font-size:15px">content_copy</span>
-                      </button>
-                    {/if}
-                  {/if}
                 </div>
                 {#if m.streaming}
                   <!-- Streaming : texte brut (aucun parse par token) — rendu Markdown à la fin.
-                       ::after = curseur doux qui pulse au fil de l'écriture. -->
+                       ::after = caret qui pulse au bout du texte qui s'écrit. -->
                   <div class="cop-md-plain streaming">{m.content}</div>
                 {:else if m.diagram}
                   <CopilotDiagram
@@ -2480,14 +2647,15 @@
                        svelte-ignore : clic et survol sont délégués aux <button> injectés
                        (focusables — focusin/focusout portent l'équivalent clavier du survol),
                        le wrapper n'est pas lui-même interactif. -->
-                  <!-- svelte-ignore a11y_no_static_element_interactions, a11y_click_events_have_key_events, a11y_mouse_events_have_key_events -->
+                  <!-- svelte-ignore a11y_no_static_element_interactions, a11y_click_events_have_key_events -->
                   <div
                     class="cop-md"
                     onclick={(e) => onAnswerClick(e, m)}
-                    onmouseover={(e) => onAnswerCiteOver(e, m)}
-                    onmouseout={onAnswerCiteOut}
-                    onfocusin={(e) => onAnswerCiteOver(e, m)}
-                    onfocusout={onAnswerCiteOut}
+                    onpointerover={(e) => onAnswerCitePointer(e, m)}
+                    onpointerout={(e) => onAnswerCiteOut(e, 100)}
+                    onfocusin={(e) => onAnswerCiteFocus(e, m)}
+                    onfocusout={(e) => onAnswerCiteOut(e)}
+                    onkeydown={onAnswerKey}
                   >{@html renderAnswer(m)}</div>
                 {/if}
                 {/if}
@@ -2497,206 +2665,106 @@
                   onOpenWeb={(url) => void openWebSource(url)}
                   onOpenMemory={openMemoryView}
                 />
+                {#if !m.streaming && (canSave || canCopy)}
+                  <!-- Rangée d'actions (Kube Message) : révélée au survol du tour ou au focus,
+                       toujours visible au doigt. -->
+                  <div class="cop-msg-actions">
+                    {#if canSave}
+                      <!-- Sauver en note (21.x) : la réponse devient un fichier .md du dossier
+                           courant — indexable, citable. Feedback succès (check) ET échec
+                           (bannière) : jamais de bouton muet (règle Epic 19). -->
+                      <button
+                        class="cop-copy"
+                        class:done={noteSavedIdx === i}
+                        use:tooltip={'Sauver en note'}
+                        aria-label="Sauver la réponse en note"
+                        disabled={copilot.savingNote}
+                        onclick={() => void saveNote(i)}
+                      >
+                        <span class="cop-swap" class:on={noteSavedIdx === i} aria-hidden="true"><svg class="icon"><use href="#i-save" /></svg><svg class="icon"><use href="#i-check" /></svg></span>
+                      </button>
+                    {/if}
+                    {#if canCopy}
+                      <button class="cop-copy" class:done={copiedIdx === i} use:tooltip={copiedIdx === i ? 'Copié' : 'Copier'} aria-label="Copier la réponse" onclick={() => copyMessage(i, m.content)}>
+                        <span class="cop-swap" class:on={copiedIdx === i} aria-hidden="true"><svg class="icon"><use href="#i-copy" /></svg><svg class="icon"><use href="#i-check" /></svg></span>
+                      </button>
+                    {/if}
+                  </div>
+                {/if}
               </div>
             {/if}
           {/each}
         </div>
+        <!-- Sticky dans le défileur : posé juste au-dessus du dock de saisie quelle que soit
+             sa hauteur, sans mesure. Hauteur nulle : ne pousse aucun contenu. Le bouton devient
+             inert une fois en bas : un clic ne lui donne pas le focus (il tomberait sur <body>),
+             le clavier rend le focus à la saisie. -->
+        <div class="cop-jump-dock">
+          <button
+            class="cop-jump"
+            class:shown={!following}
+            inert={following}
+            use:tooltip={'Aller au dernier message'}
+            aria-label="Aller au dernier message"
+            onmousedown={(e) => e.preventDefault()}
+            onclick={(e) => jumpToLatest(e.detail === 0)}
+          >
+            <svg class="icon" aria-hidden="true"><use href="#i-arrow-down" /></svg>
+          </button>
+        </div>
       {/if}
     </div>
+    <p class="cop-sr-only" role="status">{answerAnnouncement}</p>
+    <p class="cop-sr-only" role="status">{copyAnnouncement}</p>
 
     <!-- Zone de saisie « imbriquée » (chat réel, 14.1) -->
     {#if app.copilotView === 'chat'}
       <div class="cop-input-wrap">
-        <div class="cop-composer-shell" role="tablist" aria-label="Question et contexte" aria-orientation="vertical">
-          {#if composerFace === 'question'}
-            <button
-              id="cop-context-tab"
-              class="cop-composer-back"
-              type="button"
-              role="tab"
-              aria-selected="false"
-              aria-controls="cop-context-panel"
-              tabindex="-1"
-              onclick={() => showComposerFace('context')}
-              onkeydown={(e) => onComposerTabKey(e, 'context')}
-            >
-              <span class="cop-composer-back-icon"><span class="msr">layers</span></span>
-              <span class="cop-composer-back-label">Contexte</span>
-              <span class="cop-composer-note">{contextSummary}</span>
-              <span class="msr cop-composer-switch">swap_vert</span>
-            </button>
-          {:else}
-            <button
-              id="cop-question-tab"
-              class="cop-composer-back"
-              type="button"
-              role="tab"
-              aria-selected="false"
-              aria-controls="cop-question-panel"
-              tabindex="-1"
-              onclick={() => showComposerFace('question', true)}
-              onkeydown={(e) => onComposerTabKey(e, 'question')}
-            >
-              <span class="cop-composer-back-icon"><span class="msr">chat_bubble</span></span>
-              <span class="cop-composer-back-label">Question</span>
-              {#if draft.trim()}<span class="cop-composer-note">Brouillon conservé</span>{/if}
-              <span class="msr cop-composer-switch">swap_vert</span>
-            </button>
-          {/if}
-
-          {#key composerFace}
-            <section class="cop-composer-front" bind:this={composerFrontEl}>
-              {#if composerFace === 'question'}
+        <!-- Pile Kube (ComposerDrawer) : le tiroir Contexte OU le tray des commandes, jamais
+             les deux, puis la saisie qui les recouvre. Ils se révèlent en hauteur : la saisie
+             reste ancrée en bas pendant que le tiroir pousse vers le haut. -->
+        <div class="cop-composer-stack" class:kbd={drawerKbd}>
+          <div class="cop-drawer" class:open={!trayOpen}>
+            <div class="cop-drawer-item" class:open={!trayOpen} inert={trayOpen} aria-hidden={trayOpen || undefined}>
+              <div class="cop-drawer-content">
                 <button
-                  id="cop-question-tab"
-                  class="cop-composer-active-label"
-                  type="button"
-                  role="tab"
-                  aria-selected="true"
-                  aria-controls="cop-question-panel"
-                  tabindex="0"
-                  onclick={() => promptEl?.focus()}
-                  onkeydown={(e) => onComposerTabKey(e, 'question')}
-                >
-                  Question
-                </button>
-              {:else}
-                <button
-                  id="cop-context-tab"
-                  class="cop-composer-front-tab"
-                  type="button"
-                  role="tab"
-                  aria-selected="true"
+                  class="cop-drawer-row cop-context-toggle"
+                  bind:this={contextToggleEl}
+                  aria-expanded={contextShown}
                   aria-controls="cop-context-panel"
-                  tabindex="0"
-                  onclick={() => showComposerFace('context')}
-                  onkeydown={(e) => onComposerTabKey(e, 'context')}
+                  onclick={(e) => toggleContext(e.detail === 0)}
                 >
-                  <span class="msr">layers</span>
-                  <span>Contexte</span>
-                  <span class="cop-composer-note">{contextSummary}</span>
+                  <svg class="icon cop-drawer-icon" aria-hidden="true"><use href="#i-layers" /></svg>
+                  <span class="cop-drawer-text"><strong>Contexte</strong> <small>{contextSummary}{cloudDestination ? ` · envoyé à ${cloudDestination}` : ''}</small></span>
+                  <span class="cop-drawer-action" aria-hidden="true"><svg class="icon cop-context-chevron" aria-hidden="true"><use href="#i-chevron-up" /></svg></span>
                 </button>
-              {/if}
-
-              <div class="cop-composer-panels">
-                <div
-                  id="cop-question-panel"
-                  class="cop-composer-panel cop-question-drawer"
-                  class:active={composerFace === 'question'}
-                  role="tabpanel"
-                  aria-labelledby="cop-question-tab"
-                  aria-hidden={composerFace !== 'question'}
-                  inert={composerFace !== 'question'}
-                >
+              </div>
+            </div>
+            <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+            <div
+              id="cop-context-panel"
+              class="cop-drawer-item"
+              class:open={contextShown}
+              role="region"
+              aria-label="Sources du contexte"
+              inert={!contextShown}
+              aria-hidden={!contextShown || undefined}
+              onkeydown={onContextKey}
+            >
+              <div class="cop-drawer-content">
+                <div class="cop-context-list">
+                  <!-- Portée des questions (15.3) : document courant OU dossier entier
+                       (réponses citant les notes). Une ligne par source, texte ellipsé ;
+                       le libellé complet reste dans le nom accessible et l'info-bulle. -->
                   <button
-                    class="cop-input-attach"
-                    class:open={addMenuOpen}
-                    bind:this={addButtonEl}
-                    disabled={contextLoading}
-                    title="Créer un livrable, ajouter du contexte, régler le style"
-                    aria-label="Créer, contexte et style"
-                    aria-haspopup="menu"
-                    aria-expanded={addMenuOpen}
-                    onclick={toggleAddMenu}
-                  ><span class="msr" style="font-size:20px">add</span></button>
-                  <textarea
-                    class="cop-input-ta"
-                    bind:this={promptEl}
-                    bind:value={draft}
-                    rows="1"
-                    placeholder={copilot.outputMode === 'diagram'
-                      ? 'Décrivez le diagramme à créer…'
-                      : copilot.outputMode === 'html'
-                        ? 'Décrivez la page HTML à créer…'
-                        : copilot.outputMode === 'pdf'
-                          ? 'Décrivez le document PDF à créer…'
-                          : copilot.scope === 'folder' ? 'Demandez à vos notes…' : 'Demandez à Doku-San…'}
-                    aria-label={copilot.scope === 'folder' ? 'Poser une question sur le dossier de notes' : 'Poser une question sur ce document'}
-                    onkeydown={onPromptKey}
-                    oninput={onPromptInput}
-                  ></textarea>
-                  <div class="cop-compose-options">
-                    <!-- Réflexion des modèles cloud : un bouton à bascule, visible en permanence
-                         parce qu'il change le coût et la durée de chaque réponse. -->
-                    {#if isCloudProvider(app.copilotProvider)}
-                      <!-- aria-disabled et non disabled : un bouton désactivé ne reçoit aucun
-                           survol, et l'info-bulle doit justement expliquer pourquoi. -->
-                      <button
-                        class="cop-think-toggle"
-                        class:on={app.copilotThinking || thinkAlways}
-                        aria-pressed={app.copilotThinking || thinkAlways}
-                        aria-disabled={thinkAlways}
-                        aria-describedby={thinkTip ? 'cop-think-tip' : undefined}
-                        onclick={() => { if (!thinkAlways) app.copilotThinking = !app.copilotThinking }}
-                        onmouseenter={(event) => showThinkTip(event.currentTarget)}
-                        onmouseleave={hideThinkTip}
-                        onfocus={(event) => showThinkTip(event.currentTarget)}
-                        onblur={hideThinkTip}
-                      ><span class="msr">psychology</span>Réfléchir</button>
-                    {/if}
-                    <!-- Un livrable armé se voit ici, et nulle part ailleurs : le menu du
-                         « + » porte le choix, cette pastille porte l'état. -->
-                    {#if copilot.outputMode !== 'answer'}
-                      {@const current = OUTPUT_MODES[copilot.outputMode]}
-                      <span class="cop-mode-pill">
-                        <span class="msr">{current.icon}</span>{current.short}
-                        <button
-                          title="Revenir à une réponse"
-                          aria-label={`Retirer le livrable ${current.label}`}
-                          onclick={() => setChatOutputMode('answer')}
-                        ><span class="msr">close</span></button>
-                      </span>
-                    {/if}
-                    {#if copilot.generatedDocumentSeed?.target}
-                      {@const target = copilot.generatedDocumentSeed.target}
-                      <span class="cop-mode-pill cop-target-pill" title={`Partie désignée : ${target.excerpt}`}>
-                        <span class="msr">ads_click</span><span class="cop-target-text">{target.excerpt}</span>
-                        <button
-                          title="Viser tout le document"
-                          aria-label="Retirer la partie désignée"
-                          onclick={clearGeneratedDocumentTarget}
-                        ><span class="msr">close</span></button>
-                      </span>
-                    {/if}
-                  </div>
-                  {#if copilot.generating}
-                    <button class="cop-input-send" title="Arrêter" aria-label="Arrêter la génération" onclick={stopChat}>
-                      <span class="msr" style="font-size:17px;font-variation-settings:'FILL' 1">stop</span>
-                    </button>
-                  {:else}
-                    <button class="cop-input-send" title="Envoyer" aria-label="Envoyer" disabled={!draft.trim()} onclick={send}>
-                      <span class="msr" style="font-size:19px">arrow_upward</span>
-                    </button>
-                  {/if}
-                </div>
-                <!-- Une commande « / » de contexte qui échoue (presse-papiers vide, fichier
-                     illisible) écrit ici : le message doit se lire sans changer de volet. -->
-                {#if copilot.contextError && composerFace === 'question'}
-                  <p class="cop-context-error cop-context-error-inline" role="alert">{copilot.contextError}</p>
-                {/if}
-
-                <div
-                  id="cop-context-panel"
-                  class="cop-composer-panel cop-context-drawer"
-                  class:active={composerFace === 'context'}
-                  role="tabpanel"
-                  aria-labelledby="cop-context-tab"
-                  aria-hidden={composerFace !== 'context'}
-                  inert={composerFace !== 'context'}
-                >
-                  <!-- Portée des questions (15.3) — le câblage des puces « + Contexte » :
-                       document courant OU dossier entier (réponses citant les notes). -->
-                  <button
-                    class="cop-scope"
+                    class="cop-context-row"
                     class:sel={copilot.scope === 'doc'}
                     aria-pressed={copilot.scope === 'doc'}
+                    title={`${contextDetails.name} · ${contextDetails.meta}`}
                     onclick={() => (copilot.scope = 'doc')}
                   >
-                    <span class="cop-context-icon" aria-hidden="true"><span class="msr">description</span></span>
-                    <span class="cop-context-copy">
-                      <strong>{contextDetails.name}</strong>
-                      <small>{contextDetails.meta}</small>
-                    </span>
+                    <svg class="icon cop-drawer-icon" aria-hidden="true"><use href="#i-file-text" /></svg>
+                    <span class="cop-drawer-text"><strong>{contextDetails.name}</strong> <small>{contextDetails.meta}</small></span>
                     <span
                       class="cop-context-state"
                       class:warn={docTruncated && !docIndexAvailable}
@@ -2707,85 +2775,73 @@
                           : 'Document trop long : seul son début est transmis au copilote.'
                         : contextDetails.state}
                     >
-                      {#if docTruncated && !docIndexAvailable}<span class="msr">warning</span>{/if}
+                      {#if docTruncated && !docIndexAvailable}<svg class="icon" aria-hidden="true"><use href="#i-triangle-alert" /></svg>{/if}
                       {contextDetails.state}
                     </span>
                   </button>
                   {#each automaticContextTabs as tab (tab.id)}
-                    <div class="cop-context-extra automatic" role="note" aria-label={`${tab.name}, ajouté automatiquement au contexte`}>
-                      <span class="msr" aria-hidden="true">description</span>
-                      <span class="cop-context-extra-copy">
-                        <strong>{tab.name}</strong>
-                        <small>{automaticContextMeta(tab)}</small>
-                      </span>
+                    <div class="cop-context-row" role="note" aria-label={`${tab.name}, ajouté automatiquement au contexte`} title={`${tab.name} · ${automaticContextMeta(tab)}`}>
+                      <svg class="icon cop-drawer-icon" aria-hidden="true"><use href="#i-file-text" /></svg>
+                      <span class="cop-drawer-text"><strong>{tab.name}</strong> <small>{automaticContextMeta(tab)}</small></span>
                       <span class="cop-context-state">Automatique</span>
                     </div>
                   {/each}
                   <button
-                    class="cop-scope"
+                    class="cop-context-row"
                     class:sel={copilot.scope === 'folder'}
                     aria-pressed={copilot.scope === 'folder'}
+                    title={folderMeta}
                     onclick={() => (copilot.scope = 'folder')}
                   >
-                    <span class="cop-context-icon" aria-hidden="true"><span class="msr">folder</span></span>
-                    <span class="cop-context-copy">
-                      <strong>Dossier{ragDir ? ` « ${baseName(ragDir)} »` : ''}</strong>
-                      <small>{folderMeta}</small>
-                    </span>
+                    <svg class="icon cop-drawer-icon" aria-hidden="true"><use href="#i-folder" /></svg>
+                    <span class="cop-drawer-text"><strong>Dossier{ragDir ? ` « ${baseName(ragDir)} »` : ''}</strong> <small>{folderMeta}</small></span>
                     <span class="cop-context-state">{copilot.scope === 'folder' ? 'Actif' : 'Choisir'}</span>
                   </button>
                   {#if copilot.contextFolder}
-                    <div class="cop-context-extra folder">
-                      <span class="msr" aria-hidden="true">folder</span>
-                      <span class="cop-context-extra-copy">
-                        <strong>{copilot.contextFolder.label}</strong>
-                        <small>Dossier choisi pour les questions et l’index</small>
-                      </span>
-                      <button title="Retirer ce dossier" aria-label={`Retirer le dossier ${copilot.contextFolder.label}`} onclick={() => setCopilotContextFolder(null)}>
-                        <span class="msr">close</span>
+                    <div class="cop-context-row">
+                      <svg class="icon cop-drawer-icon" aria-hidden="true"><use href="#i-folder" /></svg>
+                      <span class="cop-drawer-text"><strong>{copilot.contextFolder.label}</strong> <small>Dossier choisi pour les questions et l’index</small></span>
+                      <button class="cop-drawer-btn" use:tooltip={'Retirer ce dossier'} aria-label={`Retirer le dossier ${copilot.contextFolder.label}`} onclick={() => setCopilotContextFolder(null)}>
+                        <svg class="icon" aria-hidden="true"><use href="#i-x" /></svg>
                       </button>
                     </div>
                   {/if}
                   {#each copilot.contextItems as item (item.id)}
-                    <div class="cop-context-extra">
-                      <span class="msr" aria-hidden="true">{item.kind === 'clipboard' ? 'content_paste' : item.kind === 'selection' ? 'notes' : 'description'}</span>
-                      <span class="cop-context-extra-copy">
-                        <strong>{item.label}</strong>
-                        <small>{numberFormatter.format(item.charCount)} caractères{item.truncatedAtLoad ? ' · partiel à l’ajout' : ''}</small>
-                      </span>
-                      <button title="Retirer cette source" aria-label={`Retirer ${item.label}`} onclick={() => removeCopilotContext(item.id)}>
-                        <span class="msr">close</span>
+                    <div class="cop-context-row" title={item.label}>
+                      <svg class="icon cop-drawer-icon" aria-hidden="true"><use href="#i-{item.kind === 'clipboard' ? 'clipboard-paste' : item.kind === 'selection' ? 'text-align-justify-start' : 'file-text'}" /></svg>
+                      <span class="cop-drawer-text"><strong>{item.label}</strong> <small>{numberFormatter.format(item.charCount)} caractères{item.truncatedAtLoad ? ' · partiel à l’ajout' : ''}</small></span>
+                      <!-- title="" : sans lui, le survol du bouton afficherait aussi le title natif de la rangée. -->
+                      <button class="cop-drawer-btn" title="" use:tooltip={'Retirer cette source'} aria-label={`Retirer ${item.label}`} onclick={() => removeCopilotContext(item.id)}>
+                        <svg class="icon" aria-hidden="true"><use href="#i-x" /></svg>
                       </button>
                     </div>
                   {/each}
                   {#if copilot.webSearchEnabled}
-                    <div class="cop-context-extra web">
-                      <span class="msr" aria-hidden="true">search</span>
-                      <span class="cop-context-extra-copy">
-                        <strong>Recherche Web</strong>
-                        <!-- Le document alimente la requête quand la question ne se suffit
-                             pas : le dire ici, et le rendre vérifiable dans l'activité du
-                             tour, qui affiche la requête exacte partie au moteur. -->
-                        <small>Interroge un moteur de recherche · la question et, si elle est vague, quelques termes clés du document</small>
-                      </span>
-                      <button title="Désactiver la recherche Web" aria-label="Désactiver la recherche Web" onclick={() => setWebSearchEnabled(false)}>
-                        <span class="msr">close</span>
+                    <div class="cop-context-row">
+                      <svg class="icon cop-drawer-icon" aria-hidden="true"><use href="#i-search" /></svg>
+                      <span class="cop-drawer-text"><strong>Recherche Web</strong></span>
+                      <button class="cop-drawer-btn" use:tooltip={'Désactiver la recherche Web'} aria-label="Désactiver la recherche Web" onclick={() => setWebSearchEnabled(false)}>
+                        <svg class="icon" aria-hidden="true"><use href="#i-x" /></svg>
                       </button>
                     </div>
+                    <!-- Le document alimente la requête quand la question ne se suffit pas : le
+                         dire ici, en entier (pas d'ellipse sur ce qui quitte l'appareil), et le
+                         rendre vérifiable dans l'activité du tour, qui affiche la requête exacte. -->
+                    <p class="cop-context-note">Interroge un moteur de recherche · la question et, si elle est vague, quelques termes clés du document</p>
                   {/if}
                   {#if cloudDestination}
-                    <button class="cop-context-memory" onclick={openMemoryView}>
-                      <span class="msr" aria-hidden="true">database</span>
-                      <span><strong>Mémoire du travail</strong><small>{app.cloudMemoryEnabled ? (effectiveMemoryFolder ? `Automatique · dossier ${effectiveMemoryFolder.label}` : 'Automatique · cette note seulement') : 'Désactivée'}</small></span>
-                      <span class="msr">chevron_right</span>
+                    <button class="cop-context-row" onclick={openMemoryView}>
+                      <svg class="icon cop-drawer-icon" aria-hidden="true"><use href="#i-database" /></svg>
+                      <span class="cop-drawer-text"><strong>Mémoire du travail</strong> <small>{app.cloudMemoryEnabled ? (effectiveMemoryFolder ? `Automatique · dossier ${effectiveMemoryFolder.label}` : 'Automatique · cette note seulement') : 'Désactivée'}</small></span>
+                      <span class="cop-drawer-action" aria-hidden="true"><svg class="icon" aria-hidden="true"><use href="#i-chevron-right" /></svg></span>
                     </button>
                   {/if}
                   {#if cloudDestination && hasSupplementalContext}
-                    <p class="cop-context-destination"><span class="msr">cloud</span> Sera envoyé à {cloudDestination} avec votre question.</p>
+                    <p class="cop-context-note cop-context-destination"><svg class="icon" aria-hidden="true"><use href="#i-cloud" /></svg> Sera envoyé à {cloudDestination} avec votre question.</p>
                   {/if}
-                  {#if copilot.contextError}<p class="cop-context-error" role="alert">{copilot.contextError}</p>{/if}
+                  {#if copilot.contextError}<p class="cop-context-note cop-context-error" role="alert">{copilot.contextError}</p>{/if}
                   {#if copilot.messages.length && hasSupplementalContext}
-                    <p class="cop-context-history">
+                    <p class="cop-context-note">
                       {automaticContextTabs.length
                         ? 'Les documents visibles sont recapturés à chaque envoi. Les sources ajoutées restent modifiables séparément.'
                         : 'Retirer une source agit sur les prochains envois. Nouvelle conversation purge aussi l’historique.'}
@@ -2793,8 +2849,150 @@
                   {/if}
                 </div>
               </div>
-            </section>
-          {/key}
+            </div>
+          </div>
+
+          <div class="cop-drawer cop-tray" class:open={trayOpen}>
+            <div class="cop-drawer-item" class:open={trayOpen} inert={!trayOpen} aria-hidden={!trayOpen || undefined}>
+              <div class="cop-drawer-content">
+                {#if trayView.list.length}
+                  <div id="cop-slash-list" class="cop-tray-list" role="listbox" aria-label="Commandes" bind:this={trayListEl}>
+                    {#each trayView.list as suggestion, index (suggestion.token)}
+                      {@const action = suggestion.command.action}
+                      {@const blocked = action.kind === 'mode' && cloudOnlyMode(action.mode) && !isCloudProvider(app.copilotProvider)}
+                      <!-- Le focus reste dans la saisie : l'option n'est pas focalisable et son
+                           mousedown est empêché (seul geste qui focalise hors Chromium) ; le
+                           clavier passe par la saisie et aria-activedescendant. -->
+                      <!-- svelte-ignore a11y_click_events_have_key_events, a11y_interactive_supports_focus -->
+                      <div
+                        id="cop-slash-opt-{index}"
+                        class="cop-tray-option"
+                        role="option"
+                        aria-selected={index === slashIndex}
+                        onpointerdown={(e) => e.preventDefault()}
+                        onmousedown={(e) => e.preventDefault()}
+                        onpointermove={() => { if (slashIndex !== index) slashIndex = index }}
+                        onclick={() => applySlash(suggestion, false)}
+                      >
+                        <svg class="icon" aria-hidden="true"><use href="#i-{suggestion.command.icon}" /></svg>
+                        <!-- Le préfixe déjà tapé en gras, la fin en clair : on voit ce qu'il reste à écrire. -->
+                        <span class="cop-tray-name"><b>/{suggestion.token.slice(0, trayView.query.length)}</b>{suggestion.token.slice(trayView.query.length)}</span>
+                        <span class="cop-tray-hint">{blocked ? 'Modèle cloud requis' : suggestion.command.hint}</span>
+                      </div>
+                    {/each}
+                  </div>
+                {:else}
+                  <p class="cop-tray-empty">Aucune commande ne correspond</p>
+                {/if}
+              </div>
+            </div>
+          </div>
+
+          <section class="cop-composer-front">
+            <div class="cop-composer-grid">
+              <button
+                class="cop-input-attach"
+                class:open={addMenuOpen}
+                bind:this={addButtonEl}
+                disabled={contextLoading}
+                use:tooltip={'Créer un livrable, ajouter du contexte, régler le style'}
+                aria-label="Créer, contexte et style"
+                aria-haspopup="menu"
+                aria-expanded={addMenuOpen}
+                onclick={(e) => toggleAddMenu(e.detail === 0)}
+              ><svg class="icon" aria-hidden="true"><use href="#i-plus" /></svg></button>
+              <textarea
+                class="cop-input-ta"
+                bind:this={promptEl}
+                bind:value={draft}
+                rows="1"
+                placeholder={copilot.outputMode === 'diagram'
+                  ? 'Décrivez le diagramme à créer…'
+                  : copilot.outputMode === 'html'
+                    ? 'Décrivez la page HTML à créer…'
+                    : copilot.outputMode === 'pdf'
+                      ? 'Décrivez le document PDF à créer…'
+                      : copilot.scope === 'folder' ? 'Demandez à vos notes…' : 'Demandez à Doku-San…'}
+                aria-label={copilot.scope === 'folder' ? 'Poser une question sur le dossier de notes' : 'Poser une question sur ce document'}
+                aria-autocomplete="list"
+                aria-controls={trayOpen && trayView.list.length ? 'cop-slash-list' : undefined}
+                aria-activedescendant={trayOpen && slashSuggestions.length ? `cop-slash-opt-${slashIndex}` : undefined}
+                onkeydown={onPromptKey}
+                oninput={onPromptInput}
+                onfocus={() => (promptFocused = true)}
+                onblur={() => (promptFocused = false)}
+              ></textarea>
+              <div class="cop-compose-options">
+                <!-- Réflexion des modèles cloud : un bouton à bascule, visible en permanence
+                     parce qu'il change le coût et la durée de chaque réponse. -->
+                {#if isCloudProvider(app.copilotProvider)}
+                  <!-- aria-disabled et non disabled : un bouton désactivé ne reçoit aucun
+                       survol, et l'info-bulle doit justement expliquer pourquoi. Le nom
+                       accessible survit au libellé masqué en pied étroit. -->
+                  <button
+                    class="cop-think-toggle"
+                    class:on={app.copilotThinking || thinkAlways}
+                    aria-label="Réfléchir"
+                    aria-pressed={app.copilotThinking || thinkAlways}
+                    aria-disabled={thinkAlways}
+                    onclick={() => { if (!thinkAlways) app.copilotThinking = !app.copilotThinking }}
+                    onpointerenter={(event) => { if (event.pointerType !== 'touch') showThinkTip(event.currentTarget, 200) }}
+                    onpointerleave={hideThinkTip}
+                    onfocus={(event) => { if (event.currentTarget.matches(':focus-visible')) showThinkTip(event.currentTarget, 0) }}
+                    onblur={hideThinkTip}
+                  ><svg class="icon" aria-hidden="true"><use href="#i-brain" /></svg><span class="cop-think-label">Réfléchir</span></button>
+                {/if}
+                <!-- Un livrable armé se voit ici, et nulle part ailleurs : le menu du
+                     « + » porte le choix, cette pastille porte l'état. -->
+                {#if copilot.outputMode !== 'answer'}
+                  {@const current = OUTPUT_MODES[copilot.outputMode]}
+                  <span class="cop-mode-pill" class:kbd={modePillKbd} title={current.label}>
+                    <svg class="icon" aria-hidden="true"><use href="#i-{current.icon}" /></svg><span class="cop-mode-label">{current.short}</span>
+                    <!-- title="" : bloque le title natif de la pastille, la bulle suffit. -->
+                    <button
+                      title=""
+                      use:tooltip={'Revenir à une réponse'}
+                      aria-label={`Retirer le livrable ${current.label}`}
+                      onclick={() => setChatOutputMode('answer')}
+                    ><svg class="icon" aria-hidden="true"><use href="#i-x" /></svg></button>
+                  </span>
+                {/if}
+                {#if copilot.generatedDocumentSeed?.target}
+                  {@const target = copilot.generatedDocumentSeed.target}
+                  <span class="cop-mode-pill cop-target-pill" title={`Partie désignée : ${target.excerpt}`}>
+                    <svg class="icon" aria-hidden="true"><use href="#i-mouse-pointer-click" /></svg><span class="cop-target-text">{target.excerpt}</span>
+                    <button
+                      title=""
+                      use:tooltip={'Viser tout le document'}
+                      aria-label="Retirer la partie désignée"
+                      onclick={clearGeneratedDocumentTarget}
+                    ><svg class="icon" aria-hidden="true"><use href="#i-x" /></svg></button>
+                  </span>
+                {/if}
+              </div>
+              <!-- Un seul disque : Envoyer devient Arrêter pendant la génération (Kube send). -->
+              <button
+                class="cop-input-send"
+                use:tooltip={copilot.generating ? 'Arrêter la génération' : { label: 'Envoyer', kbd: 'Entrée' }}
+                aria-label={copilot.generating ? 'Arrêter la génération' : 'Envoyer'}
+                aria-busy={copilot.generating}
+                disabled={!copilot.generating && !draft.trim()}
+                onclick={() => { if (copilot.generating) stopChat(); else send() }}
+              >
+                {#if copilot.generating}
+                  <svg class="icon cop-stop-glyph" aria-hidden="true"><use href="#i-square" /></svg>
+                {:else}
+                  <svg class="icon cop-send-arrow" aria-hidden="true"><use href="#i-arrow-up" /></svg>
+                {/if}
+              </button>
+            </div>
+            <!-- Une commande « / » de contexte qui échoue (presse-papiers vide, fichier
+                 illisible) écrit ici quand le tiroir est replié : le message doit se lire
+                 sans rien déplier. -->
+            {#if copilot.contextError && !contextShown}
+              <p class="cop-context-error cop-context-error-inline" role="alert">{copilot.contextError}</p>
+            {/if}
+          </section>
         </div>
         <div class="cop-disclaimer">
           <!-- La recherche Web est un SECOND canal de sortie, indépendant du fournisseur :
@@ -2812,8 +3010,10 @@
       </div>
     {/if}
     {#if app.copilotView === 'chat' && activityDrawerOpen}
+      <!-- Voile de clic extérieur : hors de l'ordre de tabulation (Échap ferme déjà). -->
       <button
         class="cop-activity-backdrop"
+        tabindex="-1"
         aria-label="Fermer les sources et l’activité"
         onclick={() => closeActivityDrawer()}
       ></button>
@@ -2821,13 +3021,12 @@
         bind:this={activityDrawerEl}
         class="cop-activity-drawer"
         role="dialog"
-        aria-modal="true"
         aria-label="Sources et activité de la conversation"
         tabindex="-1"
         onkeydown={(event) => { if (event.key === 'Escape') closeActivityDrawer() }}
       >
         <header>
-          <span class="msr" aria-hidden="true">progress_activity</span>
+          <svg class="icon" aria-hidden="true"><use href="#i-list" /></svg>
           <div><strong>Sources et activité</strong><small>{evidenceTurns.length} réponse{evidenceTurns.length > 1 ? 's' : ''}</small></div>
         </header>
         <div class="cop-activity-turns">
@@ -2867,16 +3066,16 @@
        le repère du panneau (contain: layout) au-dessus de tout le contenu. -->
   {@render citePreviewCard()}
   {#if thinkTip}
-    <div id="cop-think-tip" class="cop-cite-preview cop-think-tip" style="left:{thinkTip.x}px; top:{thinkTip.y}px" role="tooltip">
-      <div class="cop-cite-preview-head">
-        <span class="msr">psychology</span>
-        <span class="cop-cite-preview-name">{thinkTipText.title}</span>
+    {@const anchor = thinkTip}
+    <div id="cop-think-tip" class="cop-hover-card cop-think-tip" role="tooltip" popover="manual" {@attach (el) => placeCard(el, anchor)}>
+      <div class="cop-hover-card-head">
+        <svg class="icon" aria-hidden="true"><use href="#i-brain" /></svg>
+        <span class="cop-hover-card-name">{thinkTipText.title}</span>
       </div>
-      <p class="cop-cite-preview-text">{thinkTipText.text}</p>
-      <div class="cop-cite-preview-hint">{thinkTipText.hint}</div>
+      <p class="cop-hover-card-text">{thinkTipText.text}</p>
+      <div class="cop-hover-card-hint">{thinkTipText.hint}</div>
     </div>
   {/if}
-  {@render slashMenu()}
   {@render addContextMenu()}
   {@render identityMenu()}
 </aside>
@@ -2886,11 +3085,15 @@
     /* Repli seulement : la largeur réelle vient d'un style inline (préférence persistée,
        réglée au séparateur). Sans cette ligne, un `--copilot-width` absent rendrait
        `flex-basis` invalide et le panneau se replierait à zéro. */
-    --copilot-width: min(400px, calc(100vw - 40px));
+    --copilot-width: 400px;
+    --copilot-max: max(240px, calc(100vw - 320px));
     /* Une seule propriété de taille animée (flex-basis) : width/max-width décrivaient la
        même boîte et triplaient le travail d'interpolation + diff de style par frame. */
     flex: 0 0 0;
     min-width: 0;
+    /* Borne liée à la fenêtre, hors de `transition` : un `vw` dans la flex-basis animée
+       relançait le rideau à chaque image d'un redimensionnement de fenêtre. */
+    max-width: var(--copilot-max);
     height: 100%;
     display: flex;
     flex-direction: column;
@@ -2904,7 +3107,6 @@
     visibility: hidden;
     pointer-events: none;
     contain: layout paint;
-    container-type: inline-size;
     /* 340 ms, et non les 240 ms d'origine : la courbe sortante place ~80 % de la course
        dans les 40 % premiers, si bien qu'à durée égale l'ouverture PARAÎT bien plus
        rapide qu'avec l'ancienne courbe entrante — le panneau semblait surgir. On garde
@@ -2913,26 +3115,30 @@
        Le délai de `visibility` SUIT la durée du rideau : plus court, le panneau
        disparaîtrait avant la fin de sa fermeture. */
     transition:
-      flex-grow 300ms cubic-bezier(0.22, 1, 0.36, 1),
-      flex-basis 340ms cubic-bezier(0.22, 1, 0.36, 1),
-      visibility 0s linear 340ms;
+      flex-grow var(--duration-relaxed) var(--ease-curtain),
+      flex-basis var(--duration-curtain) var(--ease-curtain),
+      visibility 0s linear var(--duration-curtain);
   }
   .cop-panel.open {
     flex-basis: var(--copilot-width);
     visibility: visible;
     pointer-events: auto;
     transition:
-      flex-grow 300ms cubic-bezier(0.22, 1, 0.36, 1),
-      flex-basis 340ms cubic-bezier(0.22, 1, 0.36, 1),
+      flex-grow var(--duration-relaxed) var(--ease-curtain),
+      flex-basis var(--duration-curtain) var(--ease-curtain),
       visibility 0s;
   }
   .cop-panel.open.expanded {
     flex-grow: 1;
+    max-width: none;
   }
   /* Pendant le glisser, aucune transition : le rideau de 340 ms transformerait chaque
-     image en interpolation en retard sur le pointeur (le panneau traînerait derrière). */
+     image en interpolation en retard sur le pointeur (le panneau traînerait derrière).
+     Même chose aux flèches (.snap) : un geste clavier ne s'anime pas. */
   .cop-panel.resizing,
-  .cop-panel.open.resizing {
+  .cop-panel.open.resizing,
+  .cop-panel.snap,
+  .cop-panel.open.snap {
     transition: none;
   }
 
@@ -2944,7 +3150,7 @@
     top: 0;
     bottom: 0;
     left: 0;
-    z-index: 20;
+    z-index: var(--z-chrome);
     width: 8px;
     cursor: col-resize;
     touch-action: none;
@@ -2958,22 +3164,29 @@
     left: 0;
     width: 2px;
     background: transparent;
-    transition: background 140ms ease;
+    transition: background-color var(--duration-basic) ease;
   }
   .cop-resize:hover::after,
   .cop-resize:focus-visible::after { background: var(--line-3); }
   .cop-resize:focus-visible { outline: none; }
   .cop-panel.resizing .cop-resize::after { background: var(--line-3); }
   .cop-panel.expanded .cop-resize { display: none; }
-  @media (prefers-reduced-motion: reduce) {
-    .cop-resize::after { transition: none; }
-  }
   .cop-panel > .cop-head,
   .cop-panel > .cop-card {
     width: 100%;
-    min-width: var(--copilot-width);
+    /* Suit la largeur EFFECTIVE (bornée par max-width) : sinon la carte déborderait du
+       panneau sur fenêtre étroite et serait rognée par son overflow. */
+    min-width: min(var(--copilot-width), var(--copilot-max));
     align-self: flex-end;
   }
+  /* Conteneur des unités `cqi` (vue mémoire) porté par la carte et non par le
+     panneau animé : pendant le rideau, la carte garde sa largeur minimale, donc rien ne se
+     recalcule image par image. Le composeur a ses conteneurs nommés (`cop-input`, `cop-composer`). */
+  .cop-panel > .cop-card { container-type: inline-size; }
+  /* Au glisser, `--copilot-width` reste figée (voir dragWidthCss) : le contenu suit la
+     flex-basis du panneau au lieu de garder l'ancienne largeur minimale. */
+  .cop-panel.resizing > .cop-head,
+  .cop-panel.resizing > .cop-card { min-width: 0; }
 
   /* En-tête */
   .cop-head {
@@ -2981,8 +3194,8 @@
     flex-shrink: 0;
     display: flex;
     align-items: center;
-    gap: 5px;
-    padding: 0 2px 0 10px;
+    gap: 4px;
+    padding: 0 2px 0 6px;
     background: transparent;
     -webkit-backdrop-filter: blur(24px) saturate(145%);
     backdrop-filter: blur(24px) saturate(145%);
@@ -2990,81 +3203,97 @@
     user-select: none;
   }
   .cop-identity {
-    min-width: 0; height: 32px; display: flex; align-items: center; gap: 7px; padding: 0 7px 0 0;
-    border: 0; border-radius: 9px; background: transparent; color: inherit; cursor: pointer;
-    text-align: left; transition: background 120ms ease, color 120ms ease;
+    min-width: 0; height: var(--control-md); display: flex; align-items: center; gap: 8px; padding: 0 8px 0 4px;
+    border: 0; border-radius: var(--radius-lg); background: transparent; color: inherit; cursor: pointer; overflow: hidden;
+    text-align: left; transition: background-color var(--duration-basic) ease, color var(--duration-basic) ease;
   }
   .cop-identity:hover, .cop-identity[aria-expanded='true'] { background: var(--surface-hover); }
-  .cop-identity:focus-visible { outline: 1px solid var(--line-3); outline-offset: -2px; }
+  .cop-identity:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
   .cop-mark {
     flex: 0 0 auto;
-    width: 24px; height: 24px; display: inline-flex; align-items: center; justify-content: center;
-    border-radius: 8px; background: var(--cream-content); color: var(--ink-3);
+    width: var(--control-2xs); height: var(--control-2xs); display: inline-flex; align-items: center; justify-content: center;
+    border-radius: var(--radius-md); background: var(--cream-content); color: var(--ink-3);
+    font-size: 14px;
   }
   /* C'est le TITRE qui cède quand l'en-tête manque de place. Sans `min-width: 0`, sa
      taille minimale automatique vaut son texte entier : l'identité refusait de se
      comprimer et poussait la pastille d'état PAR-DESSUS le premier bouton — visible dès
      que le panneau descend sous ~330 px, ce que le séparateur rend désormais atteignable. */
-  .cop-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; font-size: 12.5px; font-weight: 600; color: var(--ink-2); white-space: nowrap; }
+  .cop-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; font-size: var(--text-sm); font-weight: var(--weight-strong); letter-spacing: var(--tracking-snug); color: var(--ink-2); white-space: nowrap; }
   .cop-local {
     flex: 0 0 auto;
     height: 18px; display: inline-flex; align-items: center; padding: 0 6px;
-    border-radius: 999px; background: var(--accent-soft); color: var(--ink-4);
-    font-size: 9.5px; font-weight: 500; letter-spacing: 0.02em;
+    border-radius: var(--radius-xs); background: var(--accent-soft); color: var(--ink-3);
+    font-size: var(--text-2xs); font-weight: var(--weight-strong); letter-spacing: var(--tracking-badge);
   }
-  .cop-local.cloud { background: rgba(82, 119, 178, 0.14); color: var(--ink-3); }
-  .cop-identity-chevron { flex: 0 0 auto; color: var(--ink-4); font-size: 15px; transition: transform 140ms ease; }
+  .cop-local.cloud { background: var(--accent-soft); color: var(--ink-3); }
+  .cop-identity-chevron { flex: 0 0 auto; color: var(--ink-4); font-size: 14px; transition: transform var(--duration-basic) var(--ease-enter-snappy); }
   .cop-identity[aria-expanded='true'] .cop-identity-chevron { transform: rotate(180deg); }
   .cop-head-spacer { flex: 1; align-self: stretch; }
-  .cop-sep { width: 1px; height: 16px; background: var(--line-2); margin: 0 4px; }
+  .cop-sep { width: 1px; height: 16px; background: var(--line-1); margin: 0 4px; }
   .cop-ic,
   .cop-win {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    height: 32px;
+    height: var(--control-md);
     border: 0;
     background: transparent;
     color: var(--ink-3);
+    font-size: 16px;
     cursor: pointer;
-    transition: color 140ms ease, background 140ms ease, transform 100ms ease;
+    transition: color var(--duration-basic) ease, background-color var(--duration-basic) ease, transform var(--duration-basic) var(--ease-enter-snappy);
   }
-  .cop-ic { width: 28px; height: 28px; border-radius: 7px; color: var(--ink-4); }
-  /* Icône de trait inline : 18px pour peser comme les glyphes Material voisins (19px pleins). */
-  .cop-ic-line { width: 18px; height: 18px; display: block; }
-  .cop-win { width: 38px; border-radius: 7px; }
+  .cop-ic { width: var(--control-sm); height: var(--control-sm); border-radius: var(--radius-md); color: var(--ink-3); }
+  .cop-win { width: 38px; border-radius: var(--radius-md); }
+  /* Panneau étroit (plancher 240 px) : c'est l'identité qui cède (elle se rogne), jamais
+     Réduire/Agrandir/Fermer ni les actions du panneau. */
+  .cop-ic, .cop-win, .cop-sep { flex-shrink: 0; }
   .cop-win.close { width: 40px; }
+  .cop-win-square { font-size: 13px; }
   .cop-ic:hover,
-  .cop-win:hover { background: var(--surface-hover); color: var(--ink); }
+  .cop-win:hover { background: var(--fill-hover); color: var(--ink); }
   .cop-ic:active,
-  .cop-win:active { background: var(--accent-soft); transform: translateY(1px); }
+  .cop-win:active { background: var(--accent-soft); }
+  /* Légende Windows (Réduire/Agrandir/Fermer) exemptée de l'échelle, comme dans TitleBar. */
+  .cop-ic:active { transform: scale(0.97); }
   .cop-ic:focus-visible,
-  .cop-win:focus-visible { outline: 1px solid var(--line-3); outline-offset: -2px; background: var(--surface-hover); }
+  .cop-win:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; background: var(--surface-hover); }
   .cop-ic.active { background: var(--accent-soft); color: var(--ink); }
   .cop-win.close:hover { background: var(--window-close); color: #fff; }
   .cop-win.close:active { background: var(--window-close-active); color: #fff; }
 
+  /* Menus flottants (identité, « + ») : grammaire Kube Menu — surface élevée, rayon 12,
+     marge 4, items de rayon 8 ; ouverture au pointeur en échelle 0.95 depuis le
+     déclencheur. Largeurs posées en ligne depuis les constantes JS du bornage. */
   .cop-identity-menu {
-    position: absolute; z-index: 40; width: 232px; padding: 6px;
-    border-radius: 14px; background: var(--cream-tint);
-    box-shadow: 0 0 0 1px var(--elevation-ring-soft), 0 14px 34px rgba(var(--shadow-rgb), 0.18);
-    animation: cop-picker-in 140ms cubic-bezier(0.22, 1, 0.36, 1);
+    position: absolute; z-index: var(--z-popover); padding: 4px;
+    border-radius: var(--radius-xl); background: var(--composer-bg);
+    box-shadow: var(--shadow-xl);
+    transform-origin: top left;
+    animation: doku-pop-in var(--duration-basic) var(--ease-enter-snappy);
   }
+  /* Ouverts au clavier : pas d'entrée animée (voir identityMenuKbd / addMenuKbd). */
+  .cop-identity-menu.kbd,
+  .cop-add-context-menu.kbd { animation: none; }
   .cop-identity-menu > button {
-    width: 100%; min-height: 48px; display: flex; align-items: center; gap: 9px; padding: 6px 8px;
-    border: 0; border-radius: 10px; background: transparent; color: var(--ink-2); text-align: left; cursor: pointer;
+    width: 100%; min-height: var(--control-md); display: flex; align-items: center; gap: 10px; padding: 4px 8px 4px 6px;
+    border: 0; border-radius: var(--radius-md); background: transparent; color: var(--ink-2); text-align: left; cursor: pointer;
+    transition: background-color var(--duration-basic) ease, color var(--duration-basic) ease;
   }
-  .cop-identity-menu > button:hover, .cop-identity-menu > button.active { background: var(--surface-hover); color: var(--ink); }
-  .cop-identity-menu > button:focus-visible { outline: 2px solid var(--line-3); outline-offset: -2px; }
+  .cop-identity-menu > button:hover,
+  .cop-identity-menu > button:focus-visible { background: var(--accent-soft); color: var(--ink); }
+  .cop-identity-menu > button.active { background: var(--accent-soft); color: var(--ink); }
+  .cop-identity-menu > button:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
   .cop-identity-menu-icon {
-    width: 30px; height: 30px; flex: 0 0 30px; display: inline-flex; align-items: center; justify-content: center;
-    border-radius: 9px; background: var(--surface-2); color: var(--ink-3);
+    width: var(--control-sm); height: var(--control-sm); flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center;
+    border-radius: var(--radius-md); background: var(--accent-soft); color: var(--ink-3);
   }
-  .cop-identity-menu-icon .msr { font-size: 17px; }
+  .cop-identity-menu-icon .icon { font-size: 15px; }
   .cop-identity-menu > button > span:nth-child(2) { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 1px; }
-  .cop-identity-menu strong { font: 600 11.5px/1.35 var(--font-sans); }
-  .cop-identity-menu small { overflow: hidden; color: var(--ink-4); font: 400 10px/1.35 var(--font-sans); white-space: nowrap; text-overflow: ellipsis; }
-  .cop-identity-menu > button > .msr { flex: 0 0 auto; color: var(--ink-4); font-size: 15px; }
+  .cop-identity-menu strong { font: var(--weight-control) var(--text-sm)/18px var(--font-sans); }
+  .cop-identity-menu small { overflow: hidden; color: var(--ink-3); font: var(--weight-regular) var(--text-xs)/14px var(--font-sans); white-space: nowrap; text-overflow: ellipsis; }
+  .cop-identity-menu > button > .icon { flex: 0 0 auto; color: var(--ink-4); font-size: 14px; }
 
   /* Corps */
   .cop-card {
@@ -3080,15 +3309,15 @@
        s'arrondissent que lorsque l'état plein écran est réellement actif. */
     border-radius: 0;
     overflow: hidden;
-    transition: border-radius 240ms cubic-bezier(0.22, 1, 0.36, 1);
+    transition: border-radius var(--duration-relaxed) var(--ease-curtain);
   }
-  .cop-panel.expanded .cop-card { border-radius: 14px 14px 0 0; }
+  .cop-panel.expanded .cop-card { border-radius: var(--radius-2xl) var(--radius-2xl) 0 0; }
   .cop-scroll {
     flex: 1; min-height: 0; overflow-y: auto;
     padding: 0 max(18px, calc((100% - 760px) / 2));
     contain: layout paint;
   }
-  .cop-msg { margin: 14px 4px; font-size: calc(var(--cop-text) - 1px); color: var(--ink-4); }
+  .cop-msg { margin: 14px 4px; font-size: calc(var(--cop-text) - 1px); color: var(--ink-3); }
   .cop-msg.err { color: var(--err-text); }
 
   /* Sélecteur unifié « Modèle actif » : le menu flotte au-dessus de la page, mais sa
@@ -3098,134 +3327,130 @@
   }
   .cop-picker-shell {
     position: relative;
-    border-radius: 14px;
-    transition: background 140ms ease, filter 140ms ease;
+    border-radius: var(--radius-xl);
+    transition: background-color var(--duration-basic) ease, filter var(--duration-basic) ease;
   }
   .cop-picker-shell.open {
-    z-index: 30;
-    border-radius: 14px 14px 0 0;
+    z-index: var(--z-popover);
+    border-radius: var(--radius-xl) var(--radius-xl) 0 0;
     background: var(--surface-2);
-    filter: drop-shadow(0 12px 22px rgba(var(--shadow-rgb), 0.14));
+    filter: drop-shadow(0 8px 16px rgba(var(--shadow-rgb), 0.12));
   }
   .cop-picker-trigger {
     width: 100%; min-height: 48px; display: flex; align-items: center; gap: 10px; padding: 8px 12px;
-    border: 0; border-radius: 13px; background: var(--surface-2); color: var(--ink);
+    border: 0; border-radius: var(--radius-xl); background: var(--surface-2); color: var(--ink);
     font-family: var(--font-sans); text-align: left; cursor: pointer;
-    transition: background 140ms ease;
+    transition: background-color var(--duration-basic) ease;
   }
   .cop-picker-trigger:hover { background: var(--surface-hover); }
   .cop-picker-trigger:active { background: var(--accent-soft); }
-  .cop-picker-trigger:focus-visible { outline: 2px solid var(--line-3); outline-offset: 1px; }
+  .cop-picker-trigger:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
   .cop-picker-shell.open .cop-picker-trigger {
-    border-radius: 14px 14px 0 0;
+    border-radius: var(--radius-xl) var(--radius-xl) 0 0;
     background: transparent;
   }
   .cop-picker-shell.open .cop-picker-trigger:hover { background: var(--surface-hover); }
-  .cop-picker-trigger > .msr { flex: 0 0 auto; font-size: 18px; color: var(--ink-3); }
+  .cop-picker-trigger > .icon { flex: 0 0 auto; font-size: 16px; color: var(--ink-3); }
   .cop-picker-name { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
   .cop-picker-name strong {
-    overflow: hidden; font-family: var(--font-mono); font-size: 12.5px; font-weight: 500;
+    overflow: hidden; font-family: var(--font-mono); font-size: var(--text-sm); font-weight: var(--weight-control);
     white-space: nowrap; text-overflow: ellipsis;
   }
   /* La mono est réservée aux TAGS techniques locaux (qwen2.5:1.5b-q4_0) : un nom de
      modèle cloud est un nom de produit → sans. */
-  .cop-picker-name strong.sans { font-family: var(--font-sans); font-weight: 600; }
-  .cop-picker-name strong.placeholder { font-family: var(--font-sans); color: var(--ink-4); }
-  .cop-picker-name small { font-size: 10px; color: var(--ink-4); }
+  .cop-picker-name strong.sans { font-family: var(--font-sans); font-size: var(--text-sm); font-weight: var(--weight-strong); }
+  .cop-picker-name strong.placeholder { font-family: var(--font-sans); font-size: var(--text-sm); color: var(--ink-3); }
+  .cop-picker-name small { font-size: var(--text-xs); color: var(--ink-3); }
   .cop-picker-name small.warn { color: var(--warn-text); }
-  .cop-picker-chev { transition: transform 140ms ease; }
+  .cop-picker-chev { transition: transform var(--duration-basic) var(--ease-enter-snappy); }
   .cop-picker-chev.open { transform: rotate(180deg); }
   /* Déploiement attaché en overlay : top: 100% conserve une jonction à 0 px tandis que
      la position absolue empêche le menu d'allonger la page ou de pousser son contenu. */
   .cop-picker-pop {
     position: absolute; top: 100%; left: 0; right: 0;
-    max-height: 360px; overflow-x: hidden; overflow-y: auto; padding: 6px;
-    border-radius: 0 0 14px 14px; background: var(--surface-2);
+    max-height: 360px; overflow-x: hidden; overflow-y: auto; padding: 4px;
+    border-radius: 0 0 var(--radius-xl) var(--radius-xl); background: var(--surface-2);
     box-shadow: inset 0 1px 0 var(--line-1);
-    animation: cop-picker-expand 180ms cubic-bezier(0.22, 1, 0.36, 1);
+    animation: cop-picker-expand var(--duration-moderate) var(--ease-enter);
   }
   @keyframes cop-picker-expand {
     from { opacity: 0.72; clip-path: inset(0 0 100% 0); }
     to { opacity: 1; clip-path: inset(0); }
   }
-  @keyframes cop-picker-in {
-    from { opacity: 0; transform: translateY(4px) scale(0.98); }
-    to { opacity: 1; transform: translateY(0) scale(1); }
-  }
   .cop-picker-sec {
-    width: 100%; height: 40px; display: flex; align-items: center; gap: 9px; padding: 0 9px;
-    border: 0; border-radius: 9px; background: transparent; color: var(--ink-2);
-    font-family: var(--font-sans); font-size: 12.5px; text-align: left; cursor: pointer;
-    transition: background 140ms ease, color 140ms ease;
+    width: 100%; min-height: var(--control-md); display: flex; align-items: center; gap: 8px; padding: 4px 8px;
+    border: 0; border-radius: var(--radius-md); background: transparent; color: var(--ink-2);
+    font-family: var(--font-sans); font-size: var(--text-sm); text-align: left; cursor: pointer;
+    transition: background-color var(--duration-basic) ease, color var(--duration-basic) ease;
   }
-  .cop-picker-sec > .msr { width: 19px; flex: 0 0 auto; font-size: 17px; color: var(--ink-4); }
+  .cop-picker-sec > .icon { flex: 0 0 auto; font-size: 16px; color: var(--ink-4); }
   .cop-picker-sec:hover { background: var(--surface-hover); color: var(--ink); }
-  .cop-picker-sec:hover > .msr { color: var(--ink-2); }
-  .cop-picker-sec:focus-visible { outline: 2px solid var(--line-3); outline-offset: -2px; }
-  .cop-picker-sec-name { flex: 1; min-width: 0; white-space: nowrap; font-weight: 500; }
-  .cop-picker-sec-state { flex: 0 1 auto; overflow: hidden; font-size: 10.5px; color: var(--ink-4); white-space: nowrap; text-overflow: ellipsis; }
+  .cop-picker-sec:hover > .icon { color: var(--ink-2); }
+  .cop-picker-sec:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
+  .cop-picker-sec-name { flex: 1; min-width: 0; white-space: nowrap; font-weight: var(--weight-control); }
+  .cop-picker-sec-state { flex: 0 1 auto; overflow: hidden; font-size: var(--text-xs); color: var(--ink-3); white-space: nowrap; text-overflow: ellipsis; }
   .cop-picker-sec-state.ok { color: var(--ok-text); }
   .cop-picker-sec-state.warn { color: var(--warn-text); }
-  .cop-picker-sec-chev { width: 16px !important; font-size: 16px !important; transition: transform 180ms cubic-bezier(0.2, 0, 0, 1); }
+  .cop-picker-sec > .cop-picker-sec-chev { font-size: 14px; transition: transform var(--duration-basic) var(--ease-enter-snappy); }
   .cop-picker-sec.open .cop-picker-sec-chev { transform: rotate(90deg); }
   .cop-picker-fold {
     display: grid; grid-template-rows: 0fr; opacity: 0;
-    transition: grid-template-rows 190ms cubic-bezier(0.2, 0, 0, 1), opacity 130ms ease-in;
+    transition: grid-template-rows var(--duration-moderate) var(--ease-enter-snappy), opacity var(--duration-basic) ease;
   }
   .cop-picker-fold.open { grid-template-rows: 1fr; opacity: 1; }
+  .cop-picker-fold:not(.open) { transition-duration: var(--duration-basic); }
   .cop-picker-fold-inner { min-height: 0; overflow: hidden; }
   .cop-picker-sep { height: 1px; margin: 4px 6px; background: var(--line-1); }
   .cop-picker-opt {
-    width: 100%; min-height: 34px; display: flex; align-items: center; gap: 9px; padding: 5px 9px 5px 22px;
-    border: 0; border-radius: 8px; background: transparent; color: var(--ink-2);
-    font-family: var(--font-sans); font-size: 11.5px; text-align: left; cursor: pointer;
-    transition: background 140ms ease, color 140ms ease;
+    width: 100%; min-height: var(--control-md); display: flex; align-items: center; gap: 8px; padding: 4px 8px 4px 32px;
+    border: 0; border-radius: var(--radius-md); background: transparent; color: var(--ink-2);
+    font-family: var(--font-sans); font-size: var(--text-sm); font-weight: var(--weight-control); text-align: left; cursor: pointer;
+    transition: background-color var(--duration-basic) ease, color var(--duration-basic) ease;
   }
   .cop-picker-opt:hover, .cop-picker-opt:focus-visible { background: var(--surface-hover); color: var(--ink); }
-  .cop-picker-opt:focus-visible { outline: 2px solid var(--line-3); outline-offset: -2px; }
+  .cop-picker-opt:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
   .cop-picker-opt[aria-checked='true'] { background: var(--accent-soft); color: var(--ink); }
-  .cop-picker-opt > .msr { flex: 0 0 auto; font-size: 16px; color: var(--ink-3); }
-  .cop-picker-empty { padding: 5px 9px 9px 22px; font-size: 11px; color: var(--ink-4); }
-  .cop-cloud-model { font-size: 12px; font-weight: 500; color: var(--ink); }
-  @media (prefers-reduced-motion: reduce) {
-    .cop-picker-pop { animation: none; }
-    .cop-picker-shell, .cop-picker-trigger, .cop-picker-fold, .cop-picker-sec-chev, .cop-picker-chev { transition: none; }
-  }
+  .cop-picker-opt > .icon { flex: 0 0 auto; font-size: 14px; color: var(--ink-3); }
+  .cop-picker-empty { padding: 4px 8px 8px 32px; font-size: var(--text-xs); color: var(--ink-3); }
+  .cop-cloud-model { font-size: var(--text-sm); font-weight: var(--weight-control); color: var(--ink); }
 
   .cop-openai-view { padding: 0 2px 24px; display: flex; flex-direction: column; gap: 16px; }
 
   /* Mémoire durable : une surface de gestion calme, structurée par lignes plutôt que par
      cartes imbriquées. La seule élévation est la notification transitoire dans le chat. */
+  /* L'enveloppe porte le collage (sticky) et la sortie ; la carte porte l'entrée (une
+     seule fois) ; seul le filet de vie est remonté à chaque nouveau contenu. */
+  .cop-toast-slot { position: sticky; top: 8px; z-index: var(--z-toast); margin: 8px 12px 0; }
   .cop-memory-toast {
-    position: sticky; top: 8px; z-index: 6; margin: 8px 12px 0; min-height: 48px; padding: 7px 7px 7px 11px;
-    display: flex; align-items: center; gap: 9px; border-radius: 14px;
+    position: relative; min-height: 48px; padding: 8px 8px 8px 12px;
+    display: flex; align-items: center; gap: 10px; border-radius: var(--radius-2xl);
     overflow: hidden;
-    background: var(--cream-tint); color: var(--ink-2);
-    box-shadow: 0 0 0 1px var(--elevation-ring-soft), 0 12px 30px rgba(var(--shadow-rgb), 0.14);
+    background: var(--composer-bg); color: var(--ink-2);
+    box-shadow: var(--shadow-xl);
+    animation: doku-toast-in var(--duration-moderate) var(--ease-enter);
   }
-  .cop-memory-toast > .msr { font-size: 17px; color: var(--ink-3); }
+  .cop-memory-toast > .icon { font-size: 16px; color: var(--ink-3); }
   .cop-memory-toast > span:nth-child(2) { min-width: 0; flex: 1; display: flex; flex-direction: column; }
-  .cop-memory-toast strong { font-size: 11.5px; font-weight: 600; }
-  .cop-memory-toast small { font-size: 10.5px; color: var(--ink-4); }
-  .cop-memory-toast button { height: 28px; padding: 0 9px; border: 0; border-radius: 999px; background: var(--surface-2); color: var(--ink-3); font: 500 11px var(--font-sans); cursor: pointer; }
-  .cop-memory-toast button:hover { background: var(--surface-hover); color: var(--ink); }
-  .cop-memory-toast button:focus-visible { outline: 2px solid var(--line-3); outline-offset: 1px; }
-  .cop-memory-toast button.icon { width: 28px; padding: 0; display: inline-flex; align-items: center; justify-content: center; background: transparent; }
-  .cop-memory-toast button.icon .msr { font-size: 15px; }
+  .cop-memory-toast strong { font-size: var(--text-sm); font-weight: var(--weight-control); }
+  .cop-memory-toast small { font-size: var(--text-xs); color: var(--ink-3); }
+  .cop-memory-toast button { height: var(--control-sm); padding: 0 10px; border: 0; border-radius: var(--radius-md); background: var(--accent-soft); color: var(--ink-2); font: var(--weight-control) var(--text-sm) var(--font-sans); cursor: pointer; transition: background-color var(--duration-basic) ease, color var(--duration-basic) ease, transform var(--duration-basic) var(--ease-enter-snappy); }
+  .cop-memory-toast button:active { transform: scale(0.97); }
+  .cop-memory-toast button:hover { background: var(--line-1); color: var(--ink); }
+  .cop-memory-toast button:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
+  .cop-memory-toast button.icon { width: var(--control-sm); padding: 0; display: inline-flex; align-items: center; justify-content: center; background: transparent; }
+  .cop-memory-toast button.icon:hover { background: var(--fill-hover); }
+  .cop-memory-toast button.icon .icon { font-size: 14px; }
   /* Même filet de vie que le bandeau de l'app : deux notifications de la même app ne
      s'effacent pas selon deux grammaires différentes. */
   .toast-life {
     position: absolute; left: 0; right: 0; bottom: 0; height: 2px;
     background: var(--line-2); transform-origin: left center;
-    animation: toast-life linear forwards;
+    animation: doku-life linear forwards;
   }
   .cop-memory-toast.error .toast-life { background: color-mix(in srgb, var(--err) 45%, transparent); }
-  .cop-memory-toast:hover .toast-life,
-  .cop-memory-toast:focus-within .toast-life { animation-play-state: paused; }
-  @keyframes toast-life {
-    from { transform: scaleX(1); }
-    to { transform: scaleX(0); }
-  }
+  /* `data-paused` est posé par l'action autoDismiss : le filet s'arrête exactement quand
+     le compte à rebours s'arrête (survol ET focus clavier). */
+  .cop-memory-toast:global([data-paused]) .toast-life { animation-play-state: paused; }
   @media (prefers-reduced-motion: reduce) {
     .toast-life { animation: none; transform: scaleX(1); opacity: 0.5; }
   }
@@ -3234,562 +3459,723 @@
     width: min(760px, 100%); margin-inline: auto;
     padding: clamp(8px, calc(4px + 1cqi), 24px) 16px 28px; color: var(--ink-2);
   }
-  .cop-memory-heading { min-height: 56px; display: flex; align-items: center; gap: 11px; margin-bottom: 14px; }
-  .cop-memory-mark { width: 38px; height: 38px; flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; border-radius: 12px; background: var(--surface-2); color: var(--ink-3); }
-  .cop-memory-mark .msr { font-size: 19px; }
+  .cop-memory-heading { min-height: 56px; display: flex; align-items: center; gap: 12px; margin-bottom: 14px; }
+  .cop-memory-mark { width: var(--control-lg); height: var(--control-lg); flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; border-radius: var(--radius-lg); background: var(--surface-2); color: var(--ink-3); }
+  .cop-memory-mark .icon { font-size: 18px; }
   .cop-memory-heading > span:nth-child(2) { min-width: 0; flex: 1; }
-  .cop-memory-heading h2 { margin: 0; color: var(--ink); font: 650 16px/1.3 var(--font-sans); }
-  .cop-memory-heading p { margin: 2px 0 0; overflow: hidden; color: var(--ink-4); font: 400 11.5px/1.4 var(--font-sans); text-overflow: ellipsis; white-space: nowrap; }
-  .cop-memory-sync { display: inline-flex; align-items: center; gap: 6px; color: var(--ink-4); font-size: 10.5px; white-space: nowrap; }
-  .cop-memory-sync span { width: 6px; height: 6px; border-radius: 50%; background: var(--ok); animation: breathe 1.6s ease-in-out infinite; }
-  .cop-memory-control { min-height: 64px; padding: 10px 12px; display: flex; align-items: center; gap: 12px; border-radius: 14px; background: var(--surface-2); }
+  .cop-memory-heading h2 { margin: 0; color: var(--ink); font: var(--weight-strong) var(--text-lg)/1.3 var(--font-sans); letter-spacing: -0.015em; }
+  .cop-memory-heading p { margin: 2px 0 0; overflow: hidden; color: var(--ink-3); font: var(--weight-regular) var(--text-xs)/1.4 var(--font-sans); text-overflow: ellipsis; white-space: nowrap; }
+  .cop-memory-sync { display: inline-flex; align-items: center; gap: 6px; color: var(--ink-3); font-size: var(--text-xs); white-space: nowrap; }
+  .cop-memory-sync span { width: 6px; height: 6px; border-radius: 50%; background: var(--ok); animation: doku-breathe 1.6s ease-in-out infinite; }
+  .cop-memory-control { min-height: 64px; padding: 10px 12px; display: flex; align-items: center; gap: 12px; border-radius: var(--radius-xl); background: var(--surface-2); }
   .cop-memory-control > span { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 2px; }
-  .cop-memory-control strong { color: var(--ink); font-size: 12px; font-weight: 600; }
-  .cop-memory-control small { color: var(--ink-4); font-size: 10.5px; line-height: 1.4; }
-  .cop-memory-scope { padding: 12px 2px 11px; display: flex; flex-direction: column; gap: 9px; border-bottom: 1px solid var(--line); }
+  .cop-memory-control strong { color: var(--ink); font-size: var(--text-sm); font-weight: var(--weight-control); }
+  .cop-memory-control small { color: var(--ink-3); font-size: var(--text-xs); line-height: 1.4; }
+  .cop-memory-scope { padding: 12px 2px; display: flex; flex-direction: column; gap: 8px; border-bottom: 1px solid var(--line-1); }
   .cop-memory-scope-copy { display: flex; flex-direction: column; gap: 2px; }
-  .cop-memory-scope-copy strong { color: var(--ink); font-size: 11.5px; font-weight: 600; }
-  .cop-memory-scope-copy small { color: var(--ink-4); font-size: 10.5px; line-height: 1.45; }
-  .cop-memory-scope-options { display: flex; gap: 6px; min-width: 0; }
-  .cop-memory-scope-options button { min-width: 0; height: 30px; padding: 0 10px; display: inline-flex; align-items: center; gap: 6px; border: 0; border-radius: 999px; background: transparent; color: var(--ink-3); font: 550 10.5px var(--font-sans); cursor: pointer; }
-  .cop-memory-scope-options button:hover:not(:disabled) { background: var(--surface-hover); color: var(--ink); }
-  .cop-memory-scope-options button.active { background: var(--surface-3); color: var(--ink); }
-  .cop-memory-scope-options button:focus-visible { outline: 2px solid var(--line-3); outline-offset: 1px; }
-  .cop-memory-scope-options button:disabled { opacity: .42; cursor: default; }
-  .cop-memory-scope-options .msr { flex: 0 0 auto; font-size: 15px; }
-  .cop-switch { width: 38px; height: 22px; flex: 0 0 auto; padding: 2px; border: 0; border-radius: 999px; background: var(--line-3); cursor: pointer; transition: background 160ms ease; }
-  .cop-switch span { display: block; width: 18px; height: 18px; border-radius: 50%; background: var(--cream-content); box-shadow: 0 1px 4px rgba(var(--shadow-rgb), 0.16); transition: transform 180ms cubic-bezier(0.22, 1, 0.36, 1); }
+  .cop-memory-scope-copy strong { color: var(--ink); font-size: var(--text-sm); font-weight: var(--weight-control); }
+  .cop-memory-scope-copy small { color: var(--ink-3); font-size: var(--text-xs); line-height: 1.45; }
+  /* Contrôle segmenté Kube : piste --track, cran actif --track-thumb. */
+  .cop-memory-scope-options { align-self: flex-start; display: flex; gap: 2px; min-width: 0; max-width: 100%; padding: 2px; border-radius: var(--radius-md); background: var(--track); }
+  .cop-memory-scope-options button { min-width: 0; height: calc(var(--control-md) - 4px); padding: 0 12px; display: inline-flex; align-items: center; gap: 6px; border: 0; border-radius: calc(var(--radius-md) - 2px); background: transparent; color: var(--ink-3); font: var(--weight-control) var(--text-sm) var(--font-sans); cursor: pointer; transition: background-color var(--duration-basic) ease, color var(--duration-basic) ease, box-shadow var(--duration-basic) ease; }
+  .cop-memory-scope-options button:not(.active):hover:not(:disabled) { background: var(--fill-hover); color: var(--ink); }
+  .cop-memory-scope-options button.active { background: var(--track-thumb); color: var(--ink); box-shadow: var(--shadow-sm), 0 0 0 0.5px var(--elevation-ring); }
+  .cop-memory-scope-options button:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
+  .cop-memory-scope-options button:disabled { opacity: var(--opacity-disabled); cursor: default; }
+  .cop-memory-scope-options .icon { flex: 0 0 auto; font-size: 14px; }
+  /* Interrupteur Kube 32 × 20 : piste neutre, encre une fois armé, curseur clair. */
+  .cop-switch { width: 32px; height: 20px; flex: 0 0 auto; padding: 2px; border: 0; border-radius: var(--radius-full); background: var(--line-2); cursor: pointer; transition: background-color var(--duration-basic) ease; }
+  .cop-switch span { display: block; width: 16px; height: 16px; border-radius: 50%; background: var(--cream-content); box-shadow: var(--shadow-sm), 0 0 0 0.5px var(--elevation-ring); transition: transform var(--duration-basic) var(--ease-enter); }
   .cop-switch.on { background: var(--ink); }
-  .cop-switch.on span { transform: translateX(16px); }
-  .cop-switch:focus-visible { outline: 2px solid var(--line-3); outline-offset: 2px; }
-  .cop-memory-empty { min-height: 210px; padding: 34px 22px; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; }
-  .cop-memory-empty > .msr { margin-bottom: 10px; color: var(--ink-4); font-size: 25px; }
-  .cop-memory-empty strong { color: var(--ink); font-size: 13px; font-weight: 600; }
-  .cop-memory-empty p { max-width: 38ch; margin: 6px 0 13px; color: var(--ink-4); font-size: 11.5px; line-height: 1.55; }
+  .cop-switch.on span { transform: translateX(12px); }
+  .cop-switch:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+  .cop-memory-empty { min-height: 210px; padding: 32px 24px; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; }
+  .cop-memory-empty > .icon { margin-bottom: 12px; color: var(--ink-4); font-size: 24px; }
+  .cop-memory-empty strong { color: var(--ink); font-size: var(--text-md); font-weight: var(--weight-strong); text-wrap: balance; }
+  .cop-memory-empty p { max-width: 38ch; margin: 6px 0 14px; color: var(--ink-3); font-size: var(--text-xs); line-height: 1.55; text-wrap: pretty; }
   .cop-memory-empty.quiet { min-height: 180px; }
-  .cop-memory-loading { padding: 20px 0; display: flex; flex-direction: column; gap: 9px; }
-  .cop-memory-loading span { display: block; height: 66px; border-radius: 12px; }
-  .cop-memory-error { margin-top: 10px; padding: 9px 10px; display: flex; align-items: flex-start; gap: 8px; border-radius: 11px; background: color-mix(in srgb, var(--err) 10%, transparent); color: var(--err-text); font-size: 11px; line-height: 1.45; }
-  .cop-memory-error > .msr { font-size: 16px; }
+  .cop-memory-loading { padding: 20px 0; display: flex; flex-direction: column; gap: 8px; }
+  .cop-memory-loading span { display: block; height: 66px; border-radius: var(--radius-xl); }
+  .cop-memory-error { margin-top: 10px; padding: 8px 10px; display: flex; align-items: flex-start; gap: 8px; border-radius: var(--radius-lg); background: color-mix(in srgb, var(--err) 10%, transparent); color: var(--err-text); font-size: var(--text-xs); line-height: 1.45; }
+  .cop-memory-error > .icon { font-size: 16px; }
   .cop-memory-error > span:nth-child(2) { flex: 1; }
-  .cop-memory-error button { width: 26px; height: 26px; border: 0; border-radius: 7px; background: transparent; color: inherit; cursor: pointer; }
+  .cop-memory-error button { width: var(--control-2xs); height: var(--control-2xs); display: inline-flex; align-items: center; justify-content: center; border: 0; border-radius: var(--radius-md); background: transparent; color: inherit; cursor: pointer; transition: background-color var(--duration-basic) ease, transform var(--duration-basic) var(--ease-enter-snappy); }
+  .cop-memory-error button:active { transform: scale(0.97); }
   .cop-memory-error button:hover { background: rgba(var(--ink-rgb), 0.08); }
-  .cop-memory-error button .msr { font-size: 15px; }
-  .cop-memory-list-head { min-height: 44px; margin-top: 8px; display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--ink-4); font-size: 10.5px; }
-  .cop-memory-list-head button { height: 28px; display: inline-flex; align-items: center; gap: 5px; padding: 0 9px; border: 0; border-radius: 999px; background: transparent; color: var(--ink-3); font: 500 10.5px var(--font-sans); cursor: pointer; }
-  .cop-memory-list-head button:hover { background: var(--surface-hover); color: var(--ink); }
-  .cop-memory-list-head button:focus-visible { outline: 2px solid var(--line-3); outline-offset: 1px; }
-  .cop-memory-list-head button .msr { font-size: 14px; }
+  .cop-memory-error button .icon { font-size: 14px; }
+  .cop-memory-list-head { min-height: 44px; margin-top: 8px; display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--ink-3); font-size: var(--text-xs); }
+  .cop-memory-list-head button { height: var(--control-sm); display: inline-flex; align-items: center; gap: 6px; padding: 0 10px 0 8px; border: 0; border-radius: var(--radius-md); background: transparent; color: var(--ink-3); font: var(--weight-control) var(--text-sm) var(--font-sans); cursor: pointer; transition: background-color var(--duration-basic) ease, color var(--duration-basic) ease, transform var(--duration-basic) var(--ease-enter-snappy); }
+  .cop-memory-list-head button:active { transform: scale(0.97); }
+  .cop-memory-list-head button:hover { background: var(--fill-hover); color: var(--ink); }
+  .cop-memory-list-head button:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
+  .cop-memory-list-head button .icon { font-size: 14px; }
   .cop-memory-list { border-top: 1px solid var(--line-1); }
-  .cop-memory-item { padding: 13px 2px 14px; border-bottom: 1px solid var(--line-1); }
-  .cop-memory-item-head { min-height: 26px; display: flex; align-items: center; gap: 5px; }
-  .cop-memory-type { padding: 3px 7px; border-radius: 999px; background: var(--surface-2); color: var(--ink-3); font-size: 9.5px; font-weight: 550; }
-  .cop-memory-date { margin-left: auto; color: var(--ink-4); font-size: 9.5px; }
-  .cop-memory-item-head button { width: 28px; height: 28px; display: inline-flex; align-items: center; justify-content: center; border: 0; border-radius: 8px; background: transparent; color: var(--ink-4); cursor: pointer; }
-  .cop-memory-item-head button:hover { background: var(--surface-hover); color: var(--ink); }
-  .cop-memory-item-head button:focus-visible { outline: 2px solid var(--line-3); outline-offset: -2px; }
-  .cop-memory-item-head button .msr { font-size: 15px; }
-  .cop-memory-item h3 { margin: 6px 0 2px; color: var(--ink); font: 600 12.5px/1.4 var(--font-sans); }
-  .cop-memory-description { margin: 0; color: var(--ink-4); font-size: 10.5px; line-height: 1.45; }
-  .cop-memory-content { margin: 8px 0 0; color: var(--ink-2); font-size: 11.5px; line-height: 1.55; overflow-wrap: anywhere; }
+  .cop-memory-item { padding: 12px 2px 16px; border-bottom: 1px solid var(--line-1); }
+  .cop-memory-item-head { min-height: var(--control-sm); display: flex; align-items: center; gap: 4px; }
+  .cop-memory-type { height: 18px; display: inline-flex; align-items: center; padding: 0 6px; border-radius: var(--radius-xs); background: var(--surface-2); color: var(--ink-3); font-size: var(--text-2xs); font-weight: var(--weight-strong); letter-spacing: var(--tracking-badge); }
+  .cop-memory-date { margin-left: auto; color: var(--ink-3); font-size: var(--text-xs); }
+  /* Actions de ligne révélées au survol ou au focus (clavier : :focus-within). */
+  .cop-memory-item-head button { width: var(--control-sm); height: var(--control-sm); display: inline-flex; align-items: center; justify-content: center; border: 0; border-radius: var(--radius-md); background: transparent; color: var(--ink-4); cursor: pointer; transition: opacity var(--duration-basic) ease, background-color var(--duration-basic) ease, color var(--duration-basic) ease, transform var(--duration-basic) var(--ease-enter-snappy); }
+  .cop-memory-item-head button:active { transform: scale(0.97); }
+  @media (hover: hover) and (pointer: fine) {
+    .cop-memory-item-head button { opacity: 0; }
+    .cop-memory-item:hover .cop-memory-item-head button,
+    .cop-memory-item:focus-within .cop-memory-item-head button { opacity: 1; }
+  }
+  .cop-memory-item-head button:hover { background: var(--fill-hover); color: var(--ink); }
+  .cop-memory-item-head button:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
+  .cop-memory-item-head button .icon { font-size: 14px; }
+  .cop-memory-item h3 { margin: 6px 0 2px; color: var(--ink); font: var(--weight-strong) var(--text-md)/1.4 var(--font-sans); letter-spacing: -0.01em; }
+  .cop-memory-description { margin: 0; color: var(--ink-3); font-size: var(--text-xs); line-height: 1.45; }
+  .cop-memory-content { margin: 8px 0 0; color: var(--ink-2); font-size: var(--text-sm); line-height: 1.55; overflow-wrap: anywhere; }
   .cop-memory-content :global(p) { margin: 0 0 7px; }
   .cop-memory-content :global(p:last-child) { margin-bottom: 0; }
-  .cop-memory-form { display: flex; flex-direction: column; gap: 9px; }
-  .cop-memory-form label { display: flex; flex-direction: column; gap: 4px; color: var(--ink-4); font-size: 10px; }
-  .cop-memory-form input, .cop-memory-form select, .cop-memory-form textarea { width: 100%; border: 0; border-radius: 8px; background: var(--cream-content); color: var(--ink); font: 400 11.5px/1.45 var(--font-sans); box-shadow: inset 0 0 0 1px var(--line-1); }
-  .cop-memory-form input, .cop-memory-form select { height: 32px; padding: 0 9px; }
-  .cop-memory-form textarea { min-height: 92px; padding: 8px 9px; resize: vertical; }
-  .cop-memory-form input:focus, .cop-memory-form select:focus, .cop-memory-form textarea:focus { outline: 2px solid var(--line-3); outline-offset: 1px; }
+  .cop-memory-form { display: flex; flex-direction: column; gap: 10px; }
+  .cop-memory-form label { display: flex; flex-direction: column; gap: 4px; color: var(--ink-3); font-size: var(--text-xs); font-weight: var(--weight-control); }
+  .cop-memory-form input, .cop-memory-form select, .cop-memory-form textarea { width: 100%; border: 0; border-radius: var(--radius-lg); background: var(--cream-content); color: var(--ink); font: var(--weight-regular) var(--text-sm)/1.45 var(--font-sans); box-shadow: inset 0 0 0 1px var(--line-1); transition: box-shadow var(--duration-basic) ease; }
+  .cop-memory-form input:hover, .cop-memory-form select:hover, .cop-memory-form textarea:hover { box-shadow: inset 0 0 0 1px var(--line-3); }
+  .cop-memory-form input, .cop-memory-form select { height: var(--control-md); padding: 0 10px; }
+  .cop-memory-form textarea { min-height: 92px; padding: 8px 10px; resize: vertical; }
+  .cop-memory-form input:focus, .cop-memory-form select:focus, .cop-memory-form textarea:focus { outline: 2px solid var(--focus-ring); outline-offset: -1px; }
   .cop-memory-form-actions { display: flex; justify-content: flex-end; gap: 6px; }
-  .cop-memory-form-actions button, .cop-memory-confirm button { height: 30px; padding: 0 12px; border: 0; border-radius: 999px; background: var(--surface-2); color: var(--ink-3); font: 500 11px var(--font-sans); cursor: pointer; }
+  .cop-memory-form-actions button, .cop-memory-confirm button { height: var(--control-sm); padding: 0 12px; border: 0; border-radius: var(--radius-md); background: var(--surface-2); color: var(--ink-2); font: var(--weight-control) var(--text-sm) var(--font-sans); cursor: pointer; transition: background-color var(--duration-basic) ease, color var(--duration-basic) ease, transform var(--duration-basic) var(--ease-enter-snappy); }
+  .cop-memory-form-actions button:not(:disabled):active, .cop-memory-confirm button:active { transform: scale(0.97); }
+  .cop-memory-form-actions button:hover:not(:disabled), .cop-memory-confirm button:hover { background: var(--accent-soft); color: var(--ink); }
   .cop-memory-form-actions button.primary { background: var(--ink); color: var(--cream-content); }
-  .cop-memory-form-actions button:disabled { opacity: 0.4; cursor: default; }
+  .cop-memory-form-actions button.primary:hover:not(:disabled) { background: var(--ink-2); color: var(--cream-content); }
+  .cop-memory-form-actions button:disabled { opacity: var(--opacity-disabled); cursor: default; }
   .cop-memory-confirm { padding: 6px 4px; }
-  .cop-memory-confirm strong { color: var(--ink); font-size: 12px; }
-  .cop-memory-confirm p { margin: 4px 0 10px; color: var(--ink-4); font-size: 10.5px; }
+  .cop-memory-confirm strong { color: var(--ink); font-size: var(--text-sm); font-weight: var(--weight-strong); }
+  .cop-memory-confirm p { margin: 4px 0 10px; color: var(--ink-3); font-size: var(--text-xs); }
   .cop-memory-confirm > div { display: flex; justify-content: flex-end; gap: 6px; }
-  .cop-memory-confirm button.danger { background: var(--err); color: #fff; }
-  .cop-memory-privacy { margin: 14px 0 0; display: flex; align-items: flex-start; gap: 6px; color: var(--ink-4); font-size: 10px; line-height: 1.45; }
-  .cop-memory-privacy .msr { font-size: 14px; }
+  .cop-memory-confirm button.danger { background: var(--danger-action-text); color: var(--cream-content); }
+  .cop-memory-confirm button.danger:hover { background: color-mix(in srgb, var(--danger-action-text) 88%, transparent); color: var(--cream-content); }
+  .cop-memory-privacy { margin: 14px 0 0; display: flex; align-items: flex-start; gap: 6px; color: var(--ink-3); font-size: var(--text-xs); line-height: 1.45; }
+  .cop-memory-privacy .icon { flex: 0 0 auto; margin-top: 1px; font-size: 14px; }
   /* Deux tons pleins (tête surface-2, pied accent-soft par-dessus) : la carte se
      découpe du fond sans aucun contour. */
-  .cop-cloud-hero { overflow: hidden; border-radius: 18px; background: var(--surface-2); }
-  .cop-cloud-head { display: flex; align-items: center; gap: 11px; padding: 14px 14px 28px; }
+  .cop-cloud-hero { overflow: hidden; border-radius: var(--radius-2xl); background: var(--surface-2); }
+  .cop-cloud-head { display: flex; align-items: center; gap: 12px; padding: 16px 16px 28px; }
   .cop-cloud-icon {
-    width: 42px; height: 42px; flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center;
-    border-radius: 12px; background: var(--accent-soft); color: var(--ink-2);
+    width: 40px; height: 40px; flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center;
+    border-radius: var(--radius-lg); background: var(--accent-soft); color: var(--ink-2);
   }
-  .cop-cloud-icon .msr { font-size: 21px; }
-  .cop-cloud-name { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
-  .cop-cloud-name strong { overflow: hidden; font-size: 13px; font-weight: 600; color: var(--ink); white-space: nowrap; text-overflow: ellipsis; }
-  .cop-cloud-name small { font-size: 10.5px; color: var(--ink-4); }
+  .cop-cloud-icon .icon { font-size: 18px; }
+  .cop-cloud-name { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+  .cop-cloud-name strong { overflow: hidden; font-size: var(--text-md); font-weight: var(--weight-strong); letter-spacing: -0.01em; color: var(--ink); white-space: nowrap; text-overflow: ellipsis; }
+  .cop-cloud-name small { font-size: var(--text-xs); color: var(--ink-3); }
   .cop-cloud-status {
-    height: 23px; flex: 0 0 auto; display: inline-flex; align-items: center; gap: 5px; padding: 0 9px;
-    border-radius: 999px; background: var(--surface-2); color: var(--ink-4); font-size: 10.5px; font-weight: 600;
+    height: var(--control-2xs); flex: 0 0 auto; display: inline-flex; align-items: center; gap: 6px; padding: 0 10px;
+    border-radius: var(--radius-full); background: var(--surface-2); color: var(--ink-3); font-size: var(--text-xs); font-weight: var(--weight-control);
   }
-  .cop-cloud-status.ready { background: rgba(107, 164, 123, 0.16); color: var(--ok-text); }
-  .cop-cloud-status.unavailable { background: rgba(180, 130, 60, 0.12); color: var(--warn-text); }
-  .cop-cloud-status.checking { font-weight: 500; }
+  .cop-cloud-status.ready { background: color-mix(in srgb, var(--ok) 16%, transparent); color: var(--ok-text); }
+  .cop-cloud-status.unavailable { background: color-mix(in srgb, var(--warn) 16%, transparent); color: var(--warn-text); }
+  .cop-cloud-status.checking { font-weight: var(--weight-regular); }
   .cop-cloud-status .cop-dot { width: 6px; height: 6px; border: 0; background: var(--ok); }
-  .cop-cloud-foot { margin-top: -16px; display: flex; align-items: stretch; padding: 14px; border-radius: 16px 16px 0 0; background: var(--accent-soft); }
-  .cop-cloud-foot > span { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 3px; }
-  .cop-cloud-foot b { font-size: 13px; font-weight: 600; color: var(--ink); }
-  .cop-cloud-foot small { font-size: 9.5px; color: var(--ink-4); letter-spacing: 0.04em; }
+  .cop-cloud-foot { margin-top: -16px; display: flex; align-items: stretch; padding: 14px; border-radius: var(--radius-2xl) var(--radius-2xl) 0 0; background: var(--accent-soft); }
+  .cop-cloud-foot > span { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 2px; }
+  .cop-cloud-foot b { font-size: var(--text-md); font-weight: var(--weight-strong); color: var(--ink); }
+  .cop-cloud-foot small { font-size: var(--text-xs); color: var(--ink-3); }
   .cop-cloud-foot i { width: 1px; background: var(--line-2); }
 
-  .cop-cloud-note, .cop-cloud-privacy { display: flex; align-items: flex-start; gap: 10px; padding: 11px 12px; border-radius: 11px; background: var(--surface-2); }
-  .cop-cloud-note > .msr, .cop-cloud-privacy > .msr { flex: 0 0 auto; margin-top: 1px; font-size: 17px; color: var(--ink-3); }
-  .cop-cloud-note > span:last-child { display: flex; flex-direction: column; gap: 3px; }
-  .cop-cloud-note strong { font-size: 12px; color: var(--ink); }
-  .cop-cloud-note small { font-size: 10.5px; line-height: 1.45; color: var(--ink-4); }
-  .cop-cloud-note.ok > .msr { color: var(--ok-text); }
-  .cop-cloud-note.warn > .msr { color: var(--warn-text); }
+  .cop-cloud-note, .cop-cloud-privacy { display: flex; align-items: flex-start; gap: 10px; padding: 12px; border-radius: var(--radius-xl); background: var(--surface-2); }
+  .cop-cloud-note > .icon, .cop-cloud-privacy > .icon { flex: 0 0 auto; margin-top: 1px; font-size: 16px; color: var(--ink-3); }
+  .cop-cloud-note > span:last-child { display: flex; flex-direction: column; gap: 2px; }
+  .cop-cloud-note strong { font-size: var(--text-sm); font-weight: var(--weight-control); color: var(--ink); }
+  .cop-cloud-note small { font-size: var(--text-xs); line-height: 1.45; color: var(--ink-3); }
+  .cop-cloud-note.ok > .icon { color: var(--ok-text); }
+  .cop-cloud-note.warn > .icon { color: var(--warn-text); }
   .cop-cloud-setup { padding: 2px 4px 0; }
-  .cop-cloud-setup h3 { margin: 0 0 6px; font-size: 14px; font-weight: 600; color: var(--ink); }
-  .cop-cloud-setup > p { margin: 0 0 15px; font-size: 11.5px; line-height: 1.55; color: var(--ink-4); }
+  .cop-cloud-setup h3 { margin: 0 0 6px; font-size: var(--text-md); font-weight: var(--weight-strong); text-wrap: balance; letter-spacing: -0.01em; color: var(--ink); }
+  .cop-cloud-setup > p { margin: 0 0 16px; font-size: var(--text-sm); line-height: 1.55; color: var(--ink-3); text-wrap: pretty; }
   .cop-cloud-setup ol { margin: 0 0 14px; padding: 0; list-style: none; display: flex; flex-direction: column; }
-  .cop-cloud-setup li { display: flex; gap: 10px; padding: 9px 0; border-top: 1px solid var(--line-1); }
-  .cop-cloud-setup li > span { width: 22px; height: 22px; flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; border-radius: 7px; background: var(--surface-2); font-family: var(--font-mono); font-size: 10px; color: var(--ink-3); }
-  .cop-cloud-setup li > span.msr { font-family: 'Material Symbols Rounded'; font-size: 15px; }
+  .cop-cloud-setup li { display: flex; gap: 10px; padding: 10px 0; border-top: 1px solid var(--line-1); }
+  .cop-cloud-setup li > svg.icon { flex: 0 0 auto; margin-top: 1px; font-size: 16px; color: var(--ink-3); }
   .cop-cloud-setup li p { margin: 0; display: flex; flex-direction: column; gap: 2px; }
-  .cop-cloud-setup li strong { font-size: 11.5px; font-weight: 600; color: var(--ink-2); }
-  .cop-cloud-setup li small { font-size: 10.5px; line-height: 1.4; color: var(--ink-4); }
-  .cop-cloud-setup .cop-btn-fill .msr { font-size: 16px; }
-  .cop-cloud-setup .cop-btn-fill:disabled { opacity: 0.55; cursor: default; }
+  .cop-cloud-setup li strong { font-size: var(--text-sm); font-weight: var(--weight-control); color: var(--ink-2); }
+  .cop-cloud-setup li small { font-size: var(--text-xs); line-height: 1.4; color: var(--ink-3); }
+  .cop-cloud-setup .cop-btn-fill .icon { font-size: 16px; }
+  .cop-cloud-setup .cop-btn-fill:disabled { opacity: var(--opacity-disabled); cursor: default; }
   .cop-btn-quiet {
-    width: 100%; min-height: 34px; display: inline-flex; align-items: center; justify-content: center; gap: 7px;
-    border: 0; border-radius: 9px; background: var(--surface-2); color: var(--ink-3);
-    font-family: var(--font-sans); font-size: 11.5px; cursor: pointer;
-    transition: background 140ms ease, color 140ms ease, transform 100ms ease;
+    width: 100%; min-height: var(--control-md); display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+    border: 0; border-radius: var(--radius-lg); background: var(--surface-2); color: var(--ink-2);
+    font-family: var(--font-sans); font-size: var(--text-sm); font-weight: var(--weight-control); cursor: pointer;
+    transition: background-color var(--duration-basic) ease, color var(--duration-basic) ease, transform var(--duration-basic) var(--ease-enter-snappy);
   }
   .cop-btn-quiet:hover { background: var(--accent-soft); color: var(--ink); }
-  .cop-btn-quiet:active { transform: scale(0.98); }
-  .cop-btn-quiet:focus-visible, .cop-auth-code:focus-visible { outline: 2px solid var(--line-3); outline-offset: 2px; }
-  .cop-btn-quiet .msr { font-size: 15px; }
+  .cop-btn-quiet:active { transform: scale(0.97); }
+  .cop-btn-quiet:focus-visible, .cop-auth-code:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+  .cop-btn-quiet .icon { font-size: 16px; }
   .cop-auth-wait { display: flex; flex-direction: column; align-items: center; text-align: center; }
   .cop-auth-mark {
-    width: 38px; height: 38px; margin-bottom: 10px; display: inline-flex; align-items: center; justify-content: center;
-    border-radius: 11px; background: var(--surface-2); color: var(--ink-3);
+    width: var(--control-lg); height: var(--control-lg); margin-bottom: 10px; display: inline-flex; align-items: center; justify-content: center;
+    border-radius: var(--radius-lg); background: var(--surface-2); color: var(--ink-3);
   }
-  .cop-auth-mark .msr { font-size: 20px; }
+  .cop-auth-mark .icon { font-size: 18px; }
   .cop-auth-code {
     width: 100%; min-height: 52px; margin: 1px 0 12px; padding: 0 14px; display: flex; align-items: center; justify-content: center; gap: 12px;
-    border: 0; border-radius: 12px; background: var(--surface-2); color: var(--ink); cursor: pointer;
+    border: 0; border-radius: var(--radius-xl); background: var(--surface-2); color: var(--ink); cursor: pointer;
+    transition: background-color var(--duration-basic) ease, transform var(--duration-basic) var(--ease-enter-snappy);
   }
-  .cop-auth-code > span:first-child { font-family: var(--font-mono); font-size: 20px; font-weight: 600; letter-spacing: 0.12em; }
-  .cop-auth-code .msr { font-size: 16px; color: var(--ink-4); }
-  .cop-auth-actions { width: 100%; display: grid; grid-template-columns: 1fr auto; gap: 7px; }
-  .cop-auth-actions .cop-btn-quiet { width: auto; padding-inline: 13px; }
-  .cop-auth-pending { margin-top: 12px; display: inline-flex; align-items: center; gap: 7px; font-size: 10.5px; color: var(--ink-4); }
+  .cop-auth-code:hover { background: var(--accent-soft); }
+  .cop-auth-code:active { transform: scale(0.97); }
+  .cop-auth-code > span:first-child { font-family: var(--font-mono); font-size: 20px; font-weight: var(--weight-strong); letter-spacing: 0.12em; }
+  .cop-auth-code .icon { font-size: 16px; color: var(--ink-4); }
+  .cop-auth-actions { width: 100%; display: grid; grid-template-columns: 1fr auto; gap: 8px; }
+  .cop-auth-actions .cop-btn-quiet { width: auto; padding-inline: 12px; }
+  .cop-auth-pending { margin-top: 12px; display: inline-flex; align-items: center; gap: 8px; font-size: var(--text-xs); color: var(--ink-3); }
   .cop-auth-pending > span { width: 6px; height: 6px; border-radius: 50%; background: var(--ink-4); animation: doku-breathe 1.6s ease-in-out infinite; }
-  .cop-auth-error { margin: 10px 0 0; font-size: 10.5px; line-height: 1.45; color: var(--err-text); text-align: left; }
-  .cop-cloud-privacy p { margin: 0; font-size: 10.5px; line-height: 1.5; color: var(--ink-4); }
-  .cop-cloud-privacy strong { color: var(--ink-3); font-weight: 600; }
+  .cop-auth-error { margin: 10px 0 0; font-size: var(--text-xs); line-height: 1.45; color: var(--err-text); text-align: left; }
+  .cop-cloud-privacy p { margin: 0; font-size: var(--text-xs); line-height: 1.5; color: var(--ink-3); }
+  .cop-cloud-privacy strong { color: var(--ink-2); font-weight: var(--weight-strong); }
 
-  .cop-mono { font-family: var(--font-mono); font-size: 12.5px; color: var(--ink); font-weight: 500; }
+  .cop-mono { font-family: var(--font-mono); font-size: var(--text-sm); color: var(--ink); font-weight: var(--weight-control); }
   .grow { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
   /* Onboarding */
-  .cop-onboard { padding: 26px 8px; display: flex; flex-direction: column; align-items: center; text-align: center; gap: 16px; }
+  .cop-onboard { padding: 24px 8px; display: flex; flex-direction: column; align-items: center; text-align: center; gap: 16px; }
   .cop-onboard-tile {
-    width: 54px; height: 54px; border-radius: 15px;
+    width: 52px; height: 52px; border-radius: var(--radius-2xl);
     background: var(--surface-2); display: flex; align-items: center; justify-content: center; color: var(--ink-3);
   }
-  .cop-onboard-title { font-size: 15.5px; font-weight: 600; color: var(--ink); margin-bottom: 7px; }
-  .cop-onboard-sub { font-size: 12.5px; line-height: 1.6; color: var(--ink-4); }
-  .cop-onboard-sub b { color: var(--ink-3); font-weight: 600; }
-  .cop-reco { width: 100%; border-radius: 13px; padding: 13px; background: var(--surface-2); text-align: left; }
+  .cop-onboard-title { font-size: var(--text-lg); font-weight: var(--weight-strong); letter-spacing: -0.015em; color: var(--ink); margin-bottom: 6px; text-wrap: balance; }
+  .cop-onboard-sub { font-size: var(--text-sm); line-height: 1.6; color: var(--ink-3); text-wrap: pretty; }
+  .cop-onboard-sub b { color: var(--ink-2); font-weight: var(--weight-strong); }
+  .cop-reco { width: 100%; border-radius: var(--radius-xl); padding: 12px; background: var(--surface-2); text-align: left; }
   .cop-reco-head { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
-  .cop-badge { font-size: 10px; color: var(--ink-4); background: var(--accent-soft); border-radius: 5px; padding: 2px 6px; }
-  .cop-reco-sub { font-size: 11.5px; color: var(--ink-4); margin-bottom: 11px; }
+  .cop-badge { height: 18px; display: inline-flex; align-items: center; padding: 0 6px; font-size: var(--text-2xs); font-weight: var(--weight-strong); letter-spacing: var(--tracking-badge); color: var(--ink-3); background: var(--accent-soft); border-radius: var(--radius-xs); }
+  .cop-reco-sub { font-size: var(--text-xs); color: var(--ink-3); margin-bottom: 12px; }
+  /* Bouton primaire : encre sur crème, un seul par vue. */
   .cop-btn-fill {
-    width: 100%; height: 34px; display: inline-flex; align-items: center; justify-content: center; gap: 7px;
-    background: var(--ink); color: var(--cream-content); border: 0; border-radius: 9px;
-    font-family: var(--font-sans); font-size: 12.5px; font-weight: 500; cursor: pointer;
-    transition: background 140ms ease, transform 100ms ease;
+    width: 100%; height: var(--control-md); display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+    background: var(--ink); color: var(--cream-content); border: 0; border-radius: var(--radius-lg);
+    font-family: var(--font-sans); font-size: var(--text-sm); font-weight: var(--weight-control); cursor: pointer;
+    transition: background-color var(--duration-basic) ease, transform var(--duration-basic) var(--ease-enter-snappy);
   }
   .cop-btn-fill:hover { background: var(--ink-2); }
-  .cop-btn-fill:not(:disabled):active { transform: scale(0.98); }
-  .cop-btn-fill:focus-visible { outline: 2px solid var(--line-3); outline-offset: 2px; }
-  .cop-btn-fill:disabled { opacity: 0.55; cursor: default; }
+  .cop-btn-fill:not(:disabled):active { transform: scale(0.97); }
+  .cop-btn-fill:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+  .cop-btn-fill:disabled { opacity: var(--opacity-disabled); cursor: default; }
 
   /* MiniMax : champ clé */
   .cop-mm-connect { display: flex; flex-direction: column; gap: 8px; }
   .cop-mm-connect input {
-    height: 34px; padding: 0 11px; border: 0; border-radius: 9px;
-    background: var(--surface-2); color: var(--ink); font-family: var(--font-mono); font-size: 12px;
+    height: var(--control-md); padding: 0 10px; border: 0; border-radius: var(--radius-lg);
+    background: var(--cream-content); box-shadow: inset 0 0 0 1px var(--line-1);
+    color: var(--ink); font-family: var(--font-mono); font-size: var(--text-sm);
+    transition: box-shadow var(--duration-basic) ease;
   }
-  .cop-mm-connect input:focus-visible { outline: 2px solid var(--line-3); outline-offset: -1px; }
+  .cop-mm-connect input:hover { box-shadow: inset 0 0 0 1px var(--line-3); }
+  .cop-mm-connect input:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -1px; }
 
   /* Gestion locale : une seule entrée au repos, toutes les fonctions conservées derrière
      un <details> natif. Le sélecteur « Modèle actif » reste le chemin quotidien. */
   .cop-advanced { margin: 10px 2px 24px; }
   .cop-onboard-more { width: 100%; margin-top: -4px; }
   .cop-advanced > summary {
-    min-height: 48px; display: flex; align-items: center; gap: 10px; padding: 6px 10px;
-    list-style: none; border-radius: 12px; color: var(--ink-2); cursor: pointer;
-    transition: background 140ms ease, color 140ms ease;
+    min-height: 48px; display: flex; align-items: center; gap: 10px; padding: 6px 10px 6px 8px;
+    list-style: none; border-radius: var(--radius-lg); color: var(--ink-2); cursor: pointer;
+    transition: background-color var(--duration-basic) ease, color var(--duration-basic) ease;
   }
   .cop-advanced > summary::-webkit-details-marker { display: none; }
   .cop-advanced > summary:hover { background: var(--surface-hover); color: var(--ink); }
   .cop-advanced > summary:active { background: var(--accent-soft); }
-  .cop-advanced > summary:focus-visible { outline: 2px solid var(--line-3); outline-offset: 1px; }
+  .cop-advanced > summary:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
   .cop-advanced-icon {
-    width: 32px; height: 32px; flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center;
-    border-radius: 10px; background: var(--surface-2); color: var(--ink-3);
+    width: var(--control-md); height: var(--control-md); flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center;
+    border-radius: var(--radius-lg); background: var(--surface-2); color: var(--ink-3);
   }
-  .cop-advanced-icon .msr { font-size: 17px; }
+  .cop-advanced-icon .icon { font-size: 16px; }
   .cop-advanced-copy { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 2px; text-align: left; }
-  .cop-advanced-copy strong { font-size: 12.5px; font-weight: 600; color: var(--ink-2); }
-  .cop-advanced-copy small { overflow: hidden; font-size: 10.5px; color: var(--ink-4); white-space: nowrap; text-overflow: ellipsis; }
-  .cop-advanced-chev { flex: 0 0 auto; font-size: 17px; color: var(--ink-4); transition: transform 180ms cubic-bezier(0.22, 1, 0.36, 1); }
+  .cop-advanced-copy strong { font-size: var(--text-sm); font-weight: var(--weight-control); color: var(--ink-2); }
+  .cop-advanced-copy small { overflow: hidden; font-size: var(--text-xs); color: var(--ink-3); white-space: nowrap; text-overflow: ellipsis; }
+  .cop-advanced-chev { flex: 0 0 auto; font-size: 16px; color: var(--ink-4); transition: transform var(--duration-basic) var(--ease-enter-snappy); }
   .cop-advanced[open] .cop-advanced-chev { transform: rotate(180deg); }
   .cop-advanced-body { padding: 14px 0 0; }
   .cop-download-now { margin: 12px 2px; }
 
   /* Sections modèles */
   .cop-sections { padding: 8px 2px; display: flex; flex-direction: column; gap: 20px; }
-  .cop-label { font-size: 10.5px; color: var(--ink-4); font-weight: 600; letter-spacing: 0.06em; margin-bottom: 9px; }
+  .cop-sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: 0;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+  .cop-label { font-size: var(--text-xs); color: var(--ink-3); font-weight: var(--weight-control); margin-bottom: 8px; }
   .cop-label.row { display: flex; align-items: baseline; justify-content: space-between; }
-  .cop-count { font-size: 11px; color: var(--ink-4); white-space: nowrap; letter-spacing: 0; }
+  .cop-count { font-size: var(--text-xs); font-weight: var(--weight-regular); color: var(--ink-3); white-space: nowrap; font-variant-numeric: tabular-nums; }
 
   .cop-dot { width: 8px; height: 8px; flex: 0 0 auto; border-radius: 50%; border: 1.5px solid var(--line-3); }
-  .cop-dot.breathe { animation: doku-breathe 2s ease-in-out infinite; }
-  .cop-dot.on { background: var(--ok); border: 0; box-shadow: 0 0 0 3px rgba(107, 164, 123, 0.18); }
+  .cop-dot.breathe { animation: doku-breathe 1.6s ease-in-out infinite; }
+  .cop-dot.on { background: var(--ok); border: 0; box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 16%, transparent); }
 
   /* Bibliothèque */
-  .cop-lib { display: flex; flex-direction: column; gap: 5px; }
-  .cop-row { display: flex; align-items: center; border-radius: 12px; }
+  .cop-lib { display: flex; flex-direction: column; gap: 2px; }
+  .cop-row { display: flex; align-items: center; border-radius: var(--radius-lg); transition: background-color var(--duration-basic) ease; }
   .cop-row:hover { background: var(--surface-hover); }
   .cop-row.active { background: var(--accent-soft); }
   .cop-row-pick {
     flex: 1; display: flex; align-items: center; gap: 10px; min-width: 0;
-    padding: 9px 4px 9px 11px; border: 0; background: none; color: var(--ink); text-align: left; cursor: pointer;
+    padding: 8px 4px 8px 12px; border: 0; background: none; color: var(--ink); font-size: var(--text-sm); text-align: left; cursor: pointer;
   }
-  .cop-row-pick:focus-visible { outline: 2px solid var(--line-3); outline-offset: -2px; border-radius: 10px; }
+  .cop-row-pick:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; border-radius: var(--radius-lg); }
   .cop-row-pick:disabled { cursor: default; }
-  .cop-size { font-size: 11px; color: var(--ink-4); white-space: nowrap; flex-shrink: 0; }
-  .cop-del { display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 38px; border: 0; border-radius: 8px; background: none; color: var(--ink-4); cursor: pointer; transition: background 120ms ease, color 120ms ease, transform 100ms ease; }
-  .cop-del:hover { color: var(--err); }
-  .cop-del:active { background: var(--surface-hover); transform: scale(0.94); }
-  .cop-del:focus-visible { outline: 2px solid var(--line-3); outline-offset: -2px; color: var(--err-text); }
+  .cop-size { font-size: var(--text-xs); color: var(--ink-3); white-space: nowrap; flex-shrink: 0; font-variant-numeric: tabular-nums; }
+  /* Suppression révélée au survol ou au focus de la ligne, comme les actions de ligne Kube. */
+  .cop-del { display: inline-flex; align-items: center; justify-content: center; width: var(--control-sm); height: var(--control-sm); margin-right: 4px; border: 0; border-radius: var(--radius-md); background: none; color: var(--ink-4); font-size: 16px; cursor: pointer; transition: opacity var(--duration-basic) ease, background-color var(--duration-basic) ease, color var(--duration-basic) ease, transform var(--duration-basic) var(--ease-enter-snappy); }
+  @media (hover: hover) and (pointer: fine) {
+    .cop-row .cop-del { opacity: 0; }
+    .cop-row:hover .cop-del, .cop-row:focus-within .cop-del { opacity: 1; }
+  }
+  .cop-del:hover { background: var(--fill-hover); color: var(--err-text); }
+  .cop-del:active { transform: scale(0.97); }
+  .cop-del:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; color: var(--err-text); }
 
   /* Téléchargement */
-  .cop-dl { padding: 11px 12px; border-radius: 12px; background: var(--surface-2); }
-  .cop-dl-head { display: flex; align-items: center; gap: 9px; margin-bottom: 9px; }
-  .cop-track { height: 5px; background: var(--accent-soft); border-radius: 3px; overflow: hidden; }
-  .orbit { color: var(--ink-4); animation: doku-orbit 1.4s linear infinite; }
-
-  /* Ajouter */
-  .cop-add {
-    display: flex; align-items: center; gap: 7px; height: 38px; padding: 0 6px 0 12px;
-    border-radius: 11px; background: var(--surface-2);
+  .cop-dl { padding: 12px; border-radius: var(--radius-xl); background: var(--surface-2); }
+  .cop-dl-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+  .cop-track { height: 4px; background: var(--accent-soft); border-radius: var(--radius-full); overflow: hidden; }
+  .orbit { color: var(--ink-4); animation: doku-orbit 1.1s linear infinite; }
+  /* Mouvement réduit : la règle globale fige ces boucles, et une attente ne se distinguait
+     plus du repos. On garde une pulsation d'opacité seule (ni échelle ni rotation).
+     Longhands et non le raccourci : celui-ci réimposerait `animation-play-state` et
+     relancerait les boucles du panneau fermé. */
+  @media (prefers-reduced-motion: reduce) {
+    .cop-memory-sync span,
+    .cop-auth-pending > span,
+    .cop-dot.breathe,
+    .orbit {
+      animation-name: cop-wait-pulse;
+      animation-timing-function: ease-in-out;
+      animation-duration: 1.6s !important;
+      animation-iteration-count: infinite !important;
+    }
   }
+  @keyframes cop-wait-pulse {
+    0%, 100% { opacity: 0.45; }
+    50% { opacity: 1; }
+  }
+
+  /* Ajouter : champ Kube (filet, survol, anneau de focus). */
+  .cop-add {
+    display: flex; align-items: center; gap: 8px; height: var(--control-lg); padding: 0 4px 0 10px;
+    border-radius: var(--radius-lg); background: var(--cream-content); box-shadow: inset 0 0 0 1px var(--line-1);
+    transition: box-shadow var(--duration-basic) ease;
+  }
+  .cop-add:hover { box-shadow: inset 0 0 0 1px var(--line-3); }
   .cop-add-input {
     flex: 1; min-width: 0; border: 0; background: transparent; outline: none;
-    font-family: var(--font-mono); font-size: 12.5px; color: var(--ink);
+    font-family: var(--font-mono); font-size: var(--text-sm); color: var(--ink);
   }
   .cop-add-input::placeholder { color: var(--ink-4); }
-  .cop-add:focus-within { outline: 2px solid var(--line-3); outline-offset: -2px; }
+  .cop-add:focus-within { outline: 2px solid var(--focus-ring); outline-offset: -1px; }
   .cop-btn-sm {
-    height: 28px; padding: 0 13px; background: var(--ink); color: var(--cream-content); border: 0; border-radius: 8px;
-    font-family: var(--font-sans); font-size: 12px; font-weight: 500; cursor: pointer;
-    transition: background 140ms ease, transform 100ms ease;
+    height: var(--control-sm); padding: 0 12px; background: var(--ink); color: var(--cream-content); border: 0; border-radius: var(--radius-md);
+    font-family: var(--font-sans); font-size: var(--text-sm); font-weight: var(--weight-control); cursor: pointer;
+    transition: background-color var(--duration-basic) ease, transform var(--duration-basic) var(--ease-enter);
   }
-  .cop-btn-sm:disabled { opacity: 0.45; cursor: default; }
+  .cop-btn-sm:disabled { opacity: var(--opacity-disabled); cursor: default; }
+  /* Concentrique dans le champ « Ajouter » : rayon 10 − retrait 4. */
+  .cop-add .cop-btn-sm { border-radius: var(--radius-sm); }
   .cop-btn-sm:not(:disabled):hover { background: var(--ink-2); }
   .cop-btn-sm:not(:disabled):active { transform: scale(0.97); }
-  .cop-btn-sm:focus-visible { outline: 2px solid var(--line-3); outline-offset: 2px; }
-  .cop-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 9px; }
+  .cop-btn-sm:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+  .cop-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
   .cop-chip {
-    display: inline-flex; align-items: center; gap: 4px; height: 26px; padding: 0 10px;
-    border: 0; border-radius: 999px; background: var(--surface-2);
-    color: var(--ink-3); font-family: var(--font-mono); font-size: 11.5px; cursor: pointer;
+    display: inline-flex; align-items: center; gap: 4px; height: var(--control-2xs); padding: 0 10px;
+    border: 0; border-radius: var(--radius-full); background: var(--surface-2);
+    color: var(--ink-3); font-family: var(--font-mono); font-size: var(--text-xs); cursor: pointer;
+    transition: background-color var(--duration-basic) ease, color var(--duration-basic) ease, transform var(--duration-basic) var(--ease-enter-snappy);
   }
-  .cop-chip:hover { color: var(--ink); }
+  /* Alignement optique : côté icône = côté texte − 2 px. */
+  .cop-chip:has(> .icon:first-child) { padding: 0 10px 0 8px; }
+  .cop-chip:hover { background: var(--accent-soft); color: var(--ink); }
+  .cop-chip:active { transform: scale(0.97); }
   /* Dans une carte déjà surface-2 (index du dossier), les chips passent en clair. */
   .cop-rag .cop-chip { background: var(--cream-content); }
   .cop-rag .cop-chip.sel { background: var(--accent-soft); }
 
   /* Index du dossier (15.2) */
-  .cop-rag { padding: 11px 12px; border-radius: 12px; background: var(--surface-2); }
-  .cop-rag-row { display: flex; align-items: center; gap: 9px; }
-  .cop-rag-progress { display: flex; align-items: center; gap: 9px; margin-top: 9px; }
-  .cop-rag-note { font-size: 11.5px; line-height: 1.55; color: var(--ink-4); margin-top: 8px; }
+  .cop-rag { padding: 12px; border-radius: var(--radius-xl); background: var(--surface-2); }
+  .cop-rag-row { display: flex; align-items: center; gap: 8px; font-size: var(--text-sm); }
+  .cop-rag-progress { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+  .cop-rag-progress .cop-rag-note { font-variant-numeric: tabular-nums; }
+  .cop-rag-note { font-size: var(--text-xs); line-height: 1.55; color: var(--ink-3); margin-top: 8px; }
   .cop-rag-note.err { color: var(--err-text); display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
   .cop-chip.sel { background: var(--accent-soft); color: var(--ink); }
-  .cop-chip-tag { margin-left: 5px; font-family: var(--font-sans); font-size: 10px; color: var(--ink-4); letter-spacing: 0.03em; }
+  .cop-chip-tag { margin-left: 4px; font-family: var(--font-sans); font-size: var(--text-2xs); font-weight: var(--weight-strong); color: var(--ink-3); }
   .cop-rag-del {
     border: 0; background: none; padding: 0; margin-left: 4px; cursor: pointer;
-    font-family: var(--font-sans); font-size: 11.5px; color: var(--ink-4); text-decoration: underline;
+    font-family: var(--font-sans); font-size: var(--text-xs); color: var(--ink-3); text-decoration: underline;
+    transition: color var(--duration-basic) ease;
   }
-  .cop-rag-del:hover { color: var(--err); }
+  .cop-rag-del:hover { color: var(--err-text); }
 
-  /* Chat — accueil */
+  /* Chat — accueil (Kube EmptyState + SuggestionCard en rangées) : une colonne qui suit la
+     largeur du panneau, au lieu de trois cartes de 70 px côte à côte à 240 px. */
   .cop-chat-empty {
     min-height: 100%;
-    padding: clamp(44px, calc(34px + 2.5cqi), 64px) 0 clamp(82px, calc(67px + 3.75cqi), 112px);
+    padding: 32px 0 48px;
     display: flex; flex-direction: column;
     justify-content: center; align-items: center; text-align: center;
   }
-  .cop-empty-mark {
-    width: clamp(46px, calc(42px + 1cqi), 54px); height: clamp(46px, calc(42px + 1cqi), 54px);
+  .cop-empty-art {
+    width: 48px; height: 48px;
     display: flex; align-items: center; justify-content: center;
-    margin-bottom: clamp(24px, calc(20px + 1cqi), 32px);
-    border-radius: clamp(15px, calc(13.5px + 0.375cqi), 18px);
-    background: transparent; color: var(--ink-4);
-    box-shadow: inset 0 0 0 1px var(--line-2);
+    margin-bottom: 12px;
+    border-radius: var(--radius-xl); background: var(--fill-hover); color: var(--ink);
   }
-  .cop-empty-mark .msr { font-size: clamp(23px, calc(21px + 0.5cqi), 27px); }
+  .cop-empty-art .icon { font-size: 24px; }
   .cop-empty-title {
-    max-width: 30ch; margin: 0 0 clamp(38px, calc(30px + 2cqi), 54px); color: var(--ink);
-    font: 500 clamp(23px, calc(15.5px + 1.875cqi), 38px)/1.25 var(--font-sans);
-    letter-spacing: -0.022em; text-wrap: balance;
+    max-width: 30ch; margin: 0; color: var(--ink);
+    font: var(--weight-strong) var(--text-lg)/1.5 var(--font-sans);
+    letter-spacing: var(--tracking-tight); text-wrap: balance;
   }
-  .cop-actions {
-    width: 100%; max-width: 920px; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: clamp(9px, calc(5.5px + 0.875cqi), 16px);
-    text-align: left;
+  .cop-empty-desc {
+    max-width: 36ch; margin: 8px 0 24px; color: var(--ink-3);
+    font: var(--weight-regular) var(--text-sm)/1.43 var(--font-sans); text-wrap: balance;
   }
+  .cop-actions { width: 100%; max-width: 30rem; display: flex; flex-direction: column; gap: 8px; text-align: left; }
   .cop-action {
-    min-width: 0; min-height: clamp(132px, calc(106px + 6.5cqi), 184px);
-    padding: clamp(16px, calc(12px + 1cqi), 24px) clamp(14px, calc(8px + 1.5cqi), 26px);
-    display: flex; flex-direction: column; align-items: flex-start; justify-content: space-between;
-    gap: clamp(24px, calc(19px + 1.25cqi), 34px);
-    border: 1px solid var(--line-1);
-    border-radius: clamp(17px, calc(14.5px + 0.625cqi), 22px);
+    min-width: 0; min-height: 44px; padding: 10px 12px 10px 14px;
+    display: flex; align-items: center; gap: 10px;
+    border: 1px solid var(--line-1); border-radius: var(--radius-xl);
     background: transparent; color: var(--ink-2);
-    box-shadow: none;
-    font-family: var(--font-sans); text-align: left; cursor: pointer;
-    transition: background 160ms ease, color 160ms ease, box-shadow 160ms ease, transform 100ms ease;
+    font: var(--weight-control) var(--text-sm)/1.4 var(--font-sans); text-align: left; cursor: pointer;
+    transition: background-color var(--duration-basic) ease, border-color var(--duration-basic) ease, color var(--duration-basic) ease, transform var(--duration-basic) var(--ease-enter-snappy);
   }
-  .cop-action:hover {
-    background: var(--surface-hover); border-color: var(--line-2); color: var(--ink);
-    box-shadow: none;
+  .cop-action > span { flex: 1; min-width: 0; text-wrap: pretty; }
+  .cop-action-icon,
+  .cop-action-arrow { flex: 0 0 auto; font-size: 16px; transition: color var(--duration-basic) ease, translate var(--duration-basic) var(--ease-enter-snappy); }
+  .cop-action-icon { color: var(--ink-3); }
+  .cop-action-arrow { color: var(--ink-4); }
+  /* Kube InlinePrompt : la flèche avance de 2 px au survol (jamais au focus clavier). */
+  @media (hover: hover) and (pointer: fine) {
+    .cop-action:hover { background: var(--surface-hover); border-color: var(--line-3); color: var(--ink); }
+    .cop-action:hover .cop-action-icon,
+    .cop-action:hover .cop-action-arrow { color: var(--ink); }
+    .cop-action:hover .cop-action-arrow { translate: 2px 0; }
   }
-  .cop-action:active { background: var(--surface-2); transform: scale(0.985); }
-  .cop-action:focus-visible { outline: 2px solid var(--line-3); outline-offset: 2px; }
-  .cop-action-icon {
-    flex: 0 0 auto; color: var(--ink-3);
-    font-size: clamp(21px, calc(19px + 0.5cqi), 25px);
-    transition: color 160ms ease, transform 160ms cubic-bezier(0.22, 1, 0.36, 1);
-  }
-  .cop-action:hover .cop-action-icon { color: var(--ink); transform: translateY(-1px); }
-  .cop-action strong {
-    max-width: 17ch; color: inherit;
-    font-size: clamp(12px, calc(9.5px + 0.625cqi), 17px);
-    line-height: 1.45; font-weight: 600; text-wrap: pretty;
-  }
+  .cop-action:active { background: var(--surface-2); transform: scale(0.97); }
+  .cop-action:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+  .cop-action:focus-visible .cop-action-arrow { color: var(--ink); }
+  :global(:where(:root[data-input='touch'])) .cop-action { min-height: 48px; }
 
-  /* Chat — conversation */
-  .cop-conv { padding: 20px 2px 18px; display: flex; flex-direction: column; gap: 26px; }
-  .cop-history-window { display: flex; align-items: center; gap: 6px; margin: -6px 8px 0; color: var(--ink-5); font-size: 10.5px; line-height: 1.4; }
-  .cop-history-window .msr { flex: 0 0 auto; font-size: 15px; }
-  .cop-user { display: flex; justify-content: flex-end; padding-left: 44px; }
+  /* Chat — conversation (Kube Thread) : 12 px entre tours, 32 px quand le locuteur change. */
+  .cop-conv { padding: 24px 0; display: flex; flex-direction: column; gap: 12px; }
+  .cop-conv > * + .cop-user,
+  .cop-conv > .cop-user + * { margin-top: 20px; }
+  /* Entrée d'un tour ajouté (Kube Message) ; jamais à l'ouverture d'une conversation, ni pour
+     le tour de l'utilisateur (il vient de l'envoyer, souvent par Entrée). */
+  .cop-conv > .enter { animation: cop-turn-enter var(--duration-relaxed) var(--ease-enter-snappy) both; }
+  @keyframes cop-turn-enter { from { opacity: 0; transform: translateY(8px); } }
+  .cop-history-window { display: flex; align-items: center; gap: 6px; margin: 0 8px; color: var(--ink-4); font-size: var(--text-xs); line-height: 1.4; }
+  .cop-history-window .icon { flex: 0 0 auto; font-size: 14px; }
+  .cop-user { display: flex; justify-content: flex-end; }
+  /* Bulle utilisateur (Kube Message) : rayon composer, padding en `em` pour suivre --cop-text
+     (10 / 16 px à 14 px). */
   .cop-user-bubble {
-    max-width: 100%; background: var(--surface-2); border: 0; border-radius: 17px 17px 5px 17px;
-    padding: 9px 13px; font-size: calc(var(--cop-text) - 0.5px); line-height: 1.55; color: var(--ink); white-space: pre-wrap; overflow-wrap: anywhere;
+    max-width: 70%; background: var(--surface-2); border: 0; border-radius: var(--radius-composer);
+    padding: 0.71em 1.14em; font-size: calc(var(--cop-text) - 0.5px); line-height: 1.55; color: var(--ink); white-space: pre-wrap; overflow-wrap: anywhere;
+  }
+  /* Panneau étroit : variante compacte (rayon 2xl, 8 / 12 px, 456 px au plus) qui garde le
+     retrait de 44 px côté réponse. */
+  @container (max-width: 560px) {
+    .cop-user-bubble { max-width: min(456px, calc(100% - 44px)); border-radius: var(--radius-2xl); padding: 0.57em 0.86em; }
   }
   /* Le contenu de la conversation doit être COPIABLE (le body global est en user-select:none) :
      sans ça, une question échouée ne peut même pas être re-copiée pour la retaper. */
   .cop-user-bubble, .cop-md, .cop-md-plain, .cop-err-msg { user-select: text; }
   .cop-asst { padding-right: 4px; }
-  .cop-asst-head { display: flex; align-items: center; gap: 7px; margin-bottom: 10px; }
-  .cop-asst-head > .msr {
-    width: 24px; height: 24px; display: inline-flex; align-items: center; justify-content: center;
-    border-radius: 8px; background: var(--surface-2);
+  .cop-asst-head { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+  /* Tuile sans wrapper : le padding d'un <svg> réduit sa zone de dessin, le tracé Lucide
+     reste à 14 px au centre d'une tuile de 24 px (width: 1em la collait à la tuile). */
+  .cop-asst-head > .icon {
+    width: var(--control-2xs); height: var(--control-2xs); padding: 5px;
+    border-radius: var(--radius-md); background: var(--surface-2); color: var(--ink-4);
   }
-  .cop-asst-name { font-size: 11.5px; color: var(--ink-3); font-weight: 550; }
-  .cop-copy { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border: 0; border-radius: 8px; background: transparent; color: var(--ink-4); cursor: pointer; opacity: 0.72; transition: background 120ms ease, color 120ms ease, opacity 120ms ease, transform 100ms ease; }
-  .cop-copy:hover { background: var(--surface-hover); color: var(--ink); }
-  .cop-copy:hover, .cop-copy:focus-visible { opacity: 1; }
-  .cop-copy:active { transform: scale(0.92); }
-  .cop-copy:focus-visible { outline: 2px solid var(--line-3); outline-offset: 1px; }
-  .cop-status { display: flex; align-items: center; gap: 9px; font-size: 12.5px; color: var(--ink-4); padding-top: 2px; min-height: 20px; }
-  /* Texte d'attente : balayage de lumière en boucle. Le shimmer est un ENRICHISSEMENT posé
-     sous `no-preference` — jamais un override à défaire : le texte transparent (clip) ne
-     peut donc pas survivre à un cas où la règle de repli ne s'appliquerait pas. */
+  .cop-asst-name { font-size: var(--text-xs); color: var(--ink-3); font-weight: var(--weight-control); }
+  /* Rangée d'actions (Kube Message) : toujours dans le DOM (atteignable au clavier),
+     révélée au survol du tour, au focus, pendant une confirmation, et toujours au doigt.
+     Retrait de 6 px : la première icône s'aligne sur le texte. */
+  .cop-msg-actions { display: flex; gap: 2px; margin: 6px 0 0 -6px; opacity: 0; transition: opacity var(--duration-basic) ease; }
+  .cop-msg-actions:focus-within,
+  .cop-msg-actions:has(.done) { opacity: 1; }
+  @media (hover: hover) and (pointer: fine) {
+    .cop-asst:hover > .cop-msg-actions { opacity: 1; }
+  }
+  @media (hover: none) {
+    .cop-msg-actions { opacity: 1; }
+  }
+  /* Au doigt, boutons de 40 px : retrait recalé pour garder l'icône sur le bord du texte. */
+  :global(:where(:root[data-input='touch'])) .cop-msg-actions { opacity: 1; margin-left: -12px; }
+  .cop-copy { display: inline-flex; align-items: center; justify-content: center; width: var(--control-sm); height: var(--control-sm); border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--ink-4); font-size: 16px; cursor: pointer; transition: background-color var(--duration-basic) ease, color var(--duration-basic) ease, transform var(--duration-basic) var(--ease-enter-snappy); }
+  .cop-copy:hover { background: var(--fill-hover); color: var(--ink); }
+  .cop-copy.done { color: var(--ok-text); }
+  .cop-copy:active { transform: scale(0.97); }
+  /* Échange d'icône (copier → coche) : les deux tracés superposés se relaient en fondu,
+     échelle et léger flou — un seul objet qui change, pas deux qui se croisent. */
+  .cop-swap { display: inline-grid; place-items: center; }
+  .cop-swap > .icon {
+    grid-area: 1 / 1;
+    transition: opacity var(--duration-relaxed) var(--ease-icon), transform var(--duration-relaxed) var(--ease-icon), filter var(--duration-relaxed) var(--ease-icon);
+  }
+  .cop-swap > .icon:last-child,
+  .cop-swap.on > .icon:first-child { opacity: 0; transform: scale(0.25); filter: blur(4px); }
+  .cop-swap.on > .icon:last-child { opacity: 1; transform: none; filter: none; }
+  .cop-copy:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
+  .cop-status { display: flex; align-items: center; gap: 8px; font-size: calc(var(--cop-text) - 0.5px); color: var(--ink-3); padding-top: 2px; min-height: 20px; }
+  /* Attente (Kube TypingIndicator + Shimmer) : trois points en vague saccadée et libellé
+     balayé. Les deux sont des ENRICHISSEMENTS posés sous `no-preference` — jamais un
+     override à défaire : le texte transparent (clip) ne peut pas survivre à un cas où la
+     règle de repli ne s'appliquerait pas. */
+  .cop-typing { display: inline-flex; flex: none; align-items: center; gap: 4px; min-height: 20px; }
+  .cop-typing i { width: 4px; height: 4px; border-radius: var(--radius-full); background: color-mix(in srgb, currentColor 70%, transparent); }
   @media (prefers-reduced-motion: no-preference) {
+    .cop-typing i { animation: cop-typing-wave 1s steps(3, end) infinite; }
+    .cop-typing i:nth-child(2) { animation-delay: 0.1s; }
+    .cop-typing i:nth-child(3) { animation-delay: 0.2s; }
+    /* Variante forte de Kube : le libellé porte l'information (statut réel de l'outil). */
     .cop-shimmer {
-      background: linear-gradient(
-        100deg,
-        var(--ink-4) 0%,
-        var(--ink-4) 38%,
-        var(--ink) 50%,
-        var(--ink-4) 62%,
-        var(--ink-4) 100%
-      );
-      background-size: 220% 100%;
+      background-color: var(--ink-3);
+      background-image: linear-gradient(to right, transparent 0%, var(--ink) 40%, var(--ink) 60%, transparent 100%);
+      background-position: -100% 0;
+      background-repeat: no-repeat;
+      background-size: 50% 200%;
       -webkit-background-clip: text;
       background-clip: text;
       -webkit-text-fill-color: transparent;
-      animation: cop-shimmer 2.4s linear infinite;
+      animation: cop-shimmer 2s steps(48, end) infinite;
     }
   }
-  @keyframes cop-shimmer {
-    from { background-position: 140% 0; }
-    to { background-position: -40% 0; }
+  /* Mouvement réduit : la pulsation d'opacité commune du panneau, décalée d'un point à
+     l'autre — l'attente se distingue du repos sans aucun déplacement. La règle globale
+     (app.css) force une itération de 0,01 ms en !important. */
+  @media (prefers-reduced-motion: reduce) {
+    .cop-typing i {
+      animation-name: cop-wait-pulse;
+      animation-timing-function: ease-in-out;
+      animation-duration: 1.6s !important;
+      animation-iteration-count: infinite !important;
+    }
+    .cop-typing i:nth-child(2) { animation-delay: 0.25s; }
+    .cop-typing i:nth-child(3) { animation-delay: 0.5s; }
   }
-  .cop-md-plain { font-size: var(--cop-text); line-height: 1.65; color: var(--ink-2); white-space: pre-wrap; overflow-wrap: anywhere; }
-  /* Curseur de streaming : pulse doux au bout du texte qui s'écrit (retiré au rendu final). */
+  @keyframes cop-typing-wave {
+    0%, 10%, 100% { transform: translateY(0); }
+    25% { animation-timing-function: steps(6, end); transform: translateY(1.2px); }
+    55% { transform: translateY(-2px); }
+    70% { transform: translateY(0); }
+  }
+  @keyframes cop-shimmer { to { background-position: 250% 0; } }
+  .cop-md-plain { font-size: var(--cop-text); line-height: 1.625; color: var(--ink-2); white-space: pre-wrap; overflow-wrap: anywhere; }
+  /* Caret de flux (Kube Message) : point de 7 px à 13,5 px, en `em` pour suivre --cop-text.
+     Mouvement réduit : la règle globale le fige (point plein, le texte qui s'écrit suffit). */
   .cop-md-plain.streaming::after {
     content: '';
     display: inline-block;
-    width: 3px;
-    height: 13px;
-    margin-left: 3px;
-    border-radius: 2px;
-    background: var(--ink-3);
-    vertical-align: -2px;
+    width: 0.52em;
+    height: 0.52em;
+    margin-left: 0.3em;
+    border-radius: var(--radius-full);
+    background: var(--ink);
+    vertical-align: middle;
     animation: cop-caret 1s ease-in-out infinite;
   }
-  @keyframes cop-caret {
-    0%, 100% { opacity: 0.85; }
-    50% { opacity: 0.15; }
-  }
+  @keyframes cop-caret { 50% { opacity: 0.3; transform: scale(0.8); } }
 
-  /* Points chorégraphiés (attente/réflexion) : une boucle de 7,5 s enchaîne quatre figures —
-     vague (2 rebonds décalés) → regroupement au centre → ORBITE (le wrapper tourne 2 tours
-     pendant que les points tiennent un triangle) → retour en ligne → pulse en cascade.
-     Le wrapper finit à 720° ≡ 0° : la boucle reprend sans saut visible. Transform/opacity
-     uniquement (composité GPU). */
-  .cop-think {
-    position: relative;
-    width: 26px;
-    height: 14px;
-    flex: 0 0 auto;
-    animation: cop-think-spin 7.5s linear infinite;
+  /* Rendu Markdown assaini (Kube Prose ; contenu injecté via {@html} → styles :global).
+     Tout dérive de --cop-text : interligne × 1,625, unité --u = taille / 4, petit texte
+     (tables, code) = 87,5 % sans descendre sous 12 px. */
+  .cop-md {
+    --u: calc(var(--cop-text) / 4);
+    --lead: calc(var(--cop-text) * 1.625);
+    --small: max(12px, calc(var(--cop-text) * 0.875));
+    font-size: var(--cop-text); line-height: var(--lead); color: var(--ink-2); overflow-wrap: anywhere;
   }
-  .cop-think i {
-    position: absolute;
-    left: 50%;
-    top: 50%;
-    width: 4.5px;
-    height: 4.5px;
-    margin: -2.25px;
-    border-radius: 50%;
-    background: var(--ink-4);
-    animation-duration: 7.5s;
-    animation-timing-function: ease-in-out;
-    animation-iteration-count: infinite;
+  .cop-md :global(> :first-child) { margin-top: 0; }
+  .cop-md :global(> :last-child) { margin-bottom: 0; }
+  .cop-md :global(p) { margin: 0 0 calc(var(--u) * 4); text-wrap: pretty; }
+  .cop-md :global(:is(strong, b)) { font-weight: var(--weight-strong); }
+  .cop-md :global(:is(h1, h2, h3, h4, h5, h6)) { color: var(--ink); font-weight: var(--weight-strong); letter-spacing: normal; text-wrap: balance; }
+  .cop-md :global(h1) { margin: calc(var(--u) * 4) 0 calc(var(--u) * 2); font-size: calc(var(--cop-text) * 1.5); line-height: calc(var(--u) * 8); }
+  .cop-md :global(h2) { margin: calc(var(--u) * 4) 0 var(--u); font-size: calc(var(--cop-text) * 1.25); line-height: calc(var(--u) * 7); }
+  .cop-md :global(h3) { margin: calc(var(--u) * 4) 0 var(--u); font-size: calc(var(--cop-text) * 1.125); line-height: calc(var(--u) * 7); }
+  .cop-md :global(h4) { margin: calc(var(--u) * 4) 0 0; font-size: var(--cop-text); line-height: calc(var(--u) * 6); }
+  .cop-md :global(:is(h5, h6)) { margin: 0; font-size: var(--cop-text); line-height: var(--lead); }
+  /* Les liens externes arrivent sans href (sanitize) : seul un vrai lien réagit au survol. */
+  .cop-md :global(a) {
+    color: var(--ink); font-weight: var(--weight-control);
+    text-decoration: underline 1px color-mix(in srgb, currentColor 35%, transparent); text-underline-offset: 2px;
+    transition: text-decoration-color var(--duration-basic) ease;
   }
-  .cop-think i:nth-child(1) { animation-name: cop-think-a; }
-  .cop-think i:nth-child(2) { animation-name: cop-think-b; }
-  .cop-think i:nth-child(3) { animation-name: cop-think-c; }
-  @keyframes cop-think-spin {
-    0%, 36% { transform: rotate(0deg); }
-    64%, 100% { transform: rotate(720deg); }
+  .cop-md :global(a[href]:hover) { text-decoration-color: currentColor; }
+  /* Listes : retrait d'un interligne, puces disc > circle > square. */
+  .cop-md :global(:is(ul, ol)) { margin: 0 0 calc(var(--u) * 4); padding-inline-start: var(--lead); }
+  .cop-md :global(ul) { list-style-type: disc; }
+  .cop-md :global(:is(ul, ol) ul) { list-style-type: circle; }
+  .cop-md :global(:is(ul, ol) :is(ul, ol) ul) { list-style-type: square; }
+  .cop-md :global(li) { padding-inline-start: calc(var(--u) * 1.5); }
+  .cop-md :global(li + li) { margin-top: calc(var(--u) * 1.5); }
+  .cop-md :global(li::marker) { color: var(--ink); font-weight: var(--weight-strong); }
+  .cop-md :global(li > p) { margin: 0; }
+  .cop-md :global(li > :is(ul, ol)) { margin: calc(var(--u) * 1.5) 0 0; }
+  /* Cases de tâches : sans puce, la case pend dans la gouttière de la puce. Une liste
+     « espacée » (lignes vides entre items) emballe la case dans un <p>. Une liste qui
+     mêle tâches et puces garde l'alignement de ses puces. */
+  .cop-md :global(li:has(> input[type='checkbox'], > p:first-child > input[type='checkbox'])) { list-style: none; }
+  .cop-md :global(:is(li, li > p:first-child) > input[type='checkbox']:first-child) {
+    width: 1em;
+    height: 1em;
+    margin: 0 calc(var(--u) * 2) 0 calc(-1em - var(--u) * 2);
+    vertical-align: -0.125em;
+    accent-color: var(--ink);
   }
-  /* Repères partagés : 0-24 vague · 28-34 regroupement · 36-62 triangle (l'orbite vient du
-     wrapper) · 66 regroupement · 72 retour en ligne · 76-92 pulse en cascade · 100 boucle. */
-  @keyframes cop-think-a {
-    0% { transform: translate(-8px, 0); }
-    4% { transform: translate(-8px, -4.5px); }
-    9% { transform: translate(-8px, 0); }
-    13% { transform: translate(-8px, -4.5px); }
-    18%, 28% { transform: translate(-8px, 0); }
-    34% { transform: translate(0, 0) scale(0.7); }
-    38%, 62% { transform: translate(0, -5px) scale(1); }
-    66% { transform: translate(0, 0) scale(0.7); }
-    72% { transform: translate(-8px, 0) scale(1); }
-    78% { transform: translate(-8px, 0) scale(1.4); }
-    84%, 100% { transform: translate(-8px, 0) scale(1); }
+  /* Citation : filet de 2 px --line-3 comme dans l'éditeur (DESIGN.md), retrait Kube. */
+  .cop-md :global(blockquote) { position: relative; margin: 0 0 calc(var(--u) * 4); padding: calc(var(--u) * 2) 0 calc(var(--u) * 2) calc(var(--u) * 6); color: var(--ink-3); }
+  .cop-md :global(blockquote::after) {
+    content: ''; position: absolute; left: 0; top: calc(var(--u) * 2); bottom: calc(var(--u) * 2);
+    width: 2px; border-radius: 1px; background: var(--line-3);
   }
-  @keyframes cop-think-b {
-    0%, 3% { transform: translate(0, 0); }
-    7% { transform: translate(0, -4.5px); }
-    12% { transform: translate(0, 0); }
-    16% { transform: translate(0, -4.5px); }
-    21%, 28% { transform: translate(0, 0); }
-    34% { transform: translate(0, 0) scale(0.7); }
-    38%, 62% { transform: translate(-4.3px, 2.6px) scale(1); }
-    66% { transform: translate(0, 0) scale(0.7); }
-    72%, 81% { transform: translate(0, 0) scale(1); }
-    87% { transform: translate(0, 0) scale(1.4); }
-    93%, 100% { transform: translate(0, 0) scale(1); }
+  .cop-md :global(blockquote > :last-child) { margin-bottom: 0; }
+  .cop-md :global(hr) { height: 0; margin: calc(var(--u) * 7) 0; border: 0; border-top: 1px solid var(--line-2); }
+  .cop-md :global(:not(pre) > code) {
+    padding: 0.07em 0.4em; border-radius: var(--radius-sm); background: var(--code-bg);
+    font-family: var(--font-mono); font-size: 0.92em;
+    -webkit-box-decoration-break: clone; box-decoration-break: clone;
   }
-  @keyframes cop-think-c {
-    0%, 6% { transform: translate(8px, 0); }
-    10% { transform: translate(8px, -4.5px); }
-    15% { transform: translate(8px, 0); }
-    19% { transform: translate(8px, -4.5px); }
-    24%, 28% { transform: translate(8px, 0); }
-    34% { transform: translate(0, 0) scale(0.7); }
-    38%, 62% { transform: translate(4.3px, 2.6px) scale(1); }
-    66% { transform: translate(0, 0) scale(0.7); }
-    72%, 84% { transform: translate(8px, 0) scale(1); }
-    90% { transform: translate(8px, 0) scale(1.4); }
-    96%, 100% { transform: translate(8px, 0) scale(1); }
+  /* Bloc de code (Kube CodeBlock, markup de chat-blocks.ts) : surface creusée, en-tête
+     discret langage + Copier, défilement horizontal propre au bloc. */
+  .cop-md :global(.cop-code) {
+    margin: calc(var(--u) * 5) 0; border: 1px solid var(--line-1); border-radius: var(--radius-xl);
+    background: var(--code-bg); contain: inline-size; overflow: clip;
   }
-  /* Mouvement réduit : plus de trajectoires — fondu d'opacité décalé, points en ligne.
-     nth-child (même spécificité que les règles chorégraphiées, source postérieure). */
-  @media (prefers-reduced-motion: reduce) {
-    .cop-think { animation: none; }
-    .cop-think i:nth-child(1) { animation: cop-think-fade 1.6s ease-in-out infinite; transform: translate(-8px, 0); }
-    .cop-think i:nth-child(2) { animation: cop-think-fade 1.6s ease-in-out 0.25s infinite; transform: none; }
-    .cop-think i:nth-child(3) { animation: cop-think-fade 1.6s ease-in-out 0.5s infinite; transform: translate(8px, 0); }
-    .cop-md-plain.streaming::after { animation-duration: 1.6s; }
+  .cop-md :global(.cop-code-head) {
+    display: flex; align-items: center; gap: 8px; min-height: var(--control-lg);
+    padding: 0 4px 0 calc(var(--u) * 4); user-select: none;
   }
-  @keyframes cop-think-fade {
-    0%, 100% { opacity: 1; }
-    50% { opacity: 0.25; }
+  .cop-md :global(.cop-code-lang) {
+    flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+    font: var(--weight-control) var(--text-xs) / 1.5 var(--font-sans); color: var(--ink-3);
   }
+  .cop-md :global(.cop-code-copy) {
+    display: inline-grid; place-items: center; flex: none; width: var(--control-sm); height: var(--control-sm);
+    border: 0; border-radius: var(--radius-md); background: transparent; color: var(--ink-3); font-size: 16px; cursor: pointer;
+    transition: background-color var(--duration-basic) ease, color var(--duration-basic) ease, transform var(--duration-basic) var(--ease-enter-snappy);
+  }
+  .cop-md :global(.cop-code-copy:hover) { background: var(--fill-hover); color: var(--ink); }
+  .cop-md :global(.cop-code-copy:active) { transform: scale(0.97); }
+  .cop-md :global(.cop-code-copy:focus-visible) { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
+  .cop-md :global(.cop-code-copy > .icon) { grid-area: 1 / 1; }
+  /* Copier → coche sans fondu (Kube) ; un clic pendant la confirmation est ignoré. */
+  .cop-md :global(.cop-code-copy > .icon:last-child),
+  .cop-md :global(.cop-code-copy[data-copied] > .icon:first-child) { visibility: hidden; }
+  .cop-md :global(.cop-code-copy[data-copied] > .icon:last-child) { visibility: visible; }
+  .cop-md :global(.cop-code-copy[data-copied]) { color: var(--ok-text); cursor: default; }
+  .cop-md :global(.cop-code pre) {
+    margin: 0; padding: 0 calc(var(--u) * 4) calc(var(--u) * 3);
+    font-family: var(--font-mono); font-size: var(--small); line-height: calc(var(--u) * 5);
+    white-space: pre; tab-size: 4; overflow-x: auto; overflow-wrap: normal;
+  }
+  .cop-md :global(.cop-code pre:focus-visible) { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
+  .cop-md :global(pre code) { font: inherit; background: none; padding: 0; }
+  /* Tables : chacune défile dans son conteneur ; le texte se replie d'abord, la table ne
+     défile que si ses colonnes ne peuvent plus rétrécir. Filets seuls, sans boîte. */
+  .cop-md :global(.cop-table-scroll) { margin: calc(var(--u) * 4) 0; overflow-x: auto; overscroll-behavior-x: contain; }
+  .cop-md :global(table) {
+    width: fit-content; min-width: 100%; border-collapse: separate; border-spacing: 0;
+    font-size: var(--small); line-height: var(--lead); font-variant-numeric: tabular-nums;
+  }
+  /* `anywhere` (hérité de .cop-md) coupait les en-têtes en « Colon/ne ». */
+  .cop-md :global(:is(th, td)) {
+    padding: calc(var(--u) * 2.5) calc(var(--u) * 6) calc(var(--u) * 2.5) 0;
+    vertical-align: top; text-align: start; overflow-wrap: normal;
+  }
+  .cop-md :global(th) { padding-block: calc(var(--u) * 2); border-bottom: 1px solid var(--line-3); color: var(--ink); font-weight: var(--weight-strong); line-height: calc(var(--u) * 4); }
+  .cop-md :global(:is(th, td):last-child) { padding-inline-end: 0; }
+  .cop-md :global(tr:not(:last-child) > td) { border-bottom: 1px solid var(--line-1); }
+  .cop-md :global(:is(th, td)[align='center']) { text-align: center; }
+  .cop-md :global(:is(th, td)[align='right']) { text-align: right; }
+  /* Bords du défilement (Kube ScrollFade --x) : chaque bord s'estompe tant qu'il reste du
+     contenu au-delà. CSS pur là où les animations pilotées par le défilement existent
+     (WebView2) ; ailleurs la table défile simplement, sans fondu. */
+  @supports (animation-timeline: scroll()) {
+    .cop-md :global(.cop-table-scroll) {
+      -webkit-mask-image: linear-gradient(to right, transparent, #000 var(--cop-edge-start), #000 calc(100% - var(--cop-edge-end)), transparent);
+      mask-image: linear-gradient(to right, transparent, #000 var(--cop-edge-start), #000 calc(100% - var(--cop-edge-end)), transparent);
+      animation-name: cop-edge-start, cop-edge-end;
+      animation-duration: auto;
+      animation-timing-function: linear;
+      animation-fill-mode: both;
+      animation-timeline: scroll(self inline), scroll(self inline);
+      animation-range: 0 24px, calc(100% - 24px) 100%;
+    }
+  }
+  @property --cop-edge-start { syntax: '<length>'; inherits: false; initial-value: 0px; }
+  @property --cop-edge-end { syntax: '<length>'; inherits: false; initial-value: 0px; }
+  @keyframes cop-edge-start { from { --cop-edge-start: 0px; } to { --cop-edge-start: 24px; } }
+  @keyframes cop-edge-end { from { --cop-edge-end: 24px; } to { --cop-edge-end: 0px; } }
 
-  /* Rendu Markdown assaini (contenu injecté via {@html} → styles :global) */
-  /* Tout ce qui est imbriqué dans une réponse s'exprime en `em` : les valeurs sont les
-     tailles d'origine rapportées à la base de 13,5 px, si bien que le réglage « Normal »
-     rend exactement la mise en page d'avant, et que les autres suivent proportionnellement. */
-  .cop-md { font-size: var(--cop-text); line-height: 1.65; color: var(--ink-2); overflow-wrap: anywhere; }
-  .cop-md :global(p) { margin: 0 0 10px; }
-  .cop-md :global(> *:last-child) { margin-bottom: 0; }
-  .cop-md :global(ul), .cop-md :global(ol) { padding-left: 18px; margin: 0 0 12px; display: flex; flex-direction: column; gap: 5px; }
-  .cop-md :global(h1), .cop-md :global(h2), .cop-md :global(h3) { font-size: 1.04em; font-weight: 600; color: var(--ink); margin: 12px 0 6px; }
-  .cop-md :global(a) { color: var(--ink); text-decoration: underline; }
-  .cop-md :global(code) { background: var(--code-bg); border-radius: 4px; padding: 1px 4px; font-family: var(--font-mono); font-size: 0.85em; }
-  .cop-md :global(pre) { background: var(--code-bg); border-radius: 8px; padding: 10px 12px; overflow-x: auto; margin: 0 0 10px; }
-  .cop-md :global(pre code) { background: none; padding: 0; }
-  .cop-md :global(blockquote) { padding: 9px 11px; border-radius: 8px; background: var(--surface-2); color: var(--ink-3); margin: 0 0 10px; }
-  /* border-collapse ignore border-radius → separate + spacing 0 (mêmes hairlines, coins ronds réels) */
-  .cop-md :global(table) { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 0.89em; border: 1px solid var(--line-1); border-radius: 8px; overflow: hidden; margin: 0 0 10px; }
-  .cop-md :global(tr:last-child td) { border-bottom: 0; }
-  .cop-md :global(th) { background: var(--surface-2); text-align: left; padding: 5px 9px; color: var(--ink); font-weight: 600; border-bottom: 1px solid var(--line-1); }
-  .cop-md :global(td) { padding: 5px 9px; color: var(--ink-2); border-bottom: 1px solid var(--line-1); }
+  /* « Aller au dernier message » (Kube Thread) : disque sticky au-dessus du fondu du dock. */
+  .cop-jump-dock { position: sticky; bottom: 24px; height: 0; display: flex; align-items: flex-end; justify-content: center; pointer-events: none; }
+  .cop-jump {
+    display: inline-flex; align-items: center; justify-content: center; flex: none;
+    width: var(--control-md); height: var(--control-md);
+    border: 1px solid var(--line-1); border-radius: var(--radius-full);
+    background: var(--composer-bg); background-clip: padding-box; box-shadow: var(--shadow-md);
+    color: var(--ink-3); font-size: 16px; cursor: pointer;
+    opacity: 0; translate: 0 4px; pointer-events: none;
+    transition: opacity var(--duration-basic) ease, translate var(--duration-basic) var(--ease-enter-snappy), color var(--duration-basic) ease, transform var(--duration-basic) var(--ease-enter-snappy);
+  }
+  /* Entrée (200 ms) plus lente que la sortie (150 ms). */
+  .cop-jump.shown { opacity: 1; translate: 0 0; pointer-events: auto; transition-duration: var(--duration-moderate); }
+  .cop-jump:hover { color: var(--ink); }
+  .cop-jump:active { transform: scale(0.97); }
+  .cop-jump:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+  :global(:where(:root[data-input='touch'])) .cop-jump { width: 40px; height: 40px; }
 
   /* Carte d'erreur (génération échouée) */
-  .cop-err-card { display: flex; gap: 11px; padding: 13px; border-radius: 12px; background: var(--surface-2); }
+  .cop-err-card { display: flex; gap: 12px; padding: 12px; border-radius: var(--radius-xl); background: var(--surface-2); }
+  .cop-err-icon { flex: none; font-size: 18px; color: var(--ink-3); }
+  .cop-err-icon.failed { color: var(--err-text); }
   .cop-err-title { font-size: calc(var(--cop-text) - 0.5px); font-weight: 600; color: var(--ink); margin-bottom: 3px; }
-  .cop-err-msg { font-size: calc(var(--cop-text) - 1.5px); line-height: 1.5; color: var(--ink-4); margin: 0 0 11px; }
-  .cop-err-acts { display: flex; gap: 7px; }
-  .cop-err-btn { height: 30px; padding: 0 12px; background: var(--cream-content); color: var(--ink-3); border: 0; border-radius: 8px; font-family: var(--font-sans); font-size: 12px; cursor: pointer; transition: background 120ms ease, color 120ms ease, filter 120ms ease, transform 100ms ease; }
-  .cop-err-btn:hover { background: var(--surface-hover); color: var(--ink); }
+  .cop-err-msg { font-size: calc(var(--cop-text) - 1.5px); line-height: 1.5; color: var(--ink-3); margin: 0 0 12px; text-wrap: pretty; }
+  .cop-err-acts { display: flex; gap: 6px; }
+  .cop-err-btn { height: var(--control-sm); padding: 0 12px; background: var(--cream-content); color: var(--ink-2); border: 0; border-radius: var(--radius-md); font-family: var(--font-sans); font-size: var(--text-sm); font-weight: var(--weight-control); cursor: pointer; transition: background-color var(--duration-basic) ease, color var(--duration-basic) ease, filter var(--duration-basic) ease, transform var(--duration-basic) var(--ease-enter-snappy); }
+  .cop-err-btn:hover { background: var(--accent-soft); color: var(--ink); }
   .cop-err-btn:active { transform: scale(0.97); }
-  .cop-err-btn:focus-visible { outline: 2px solid var(--line-3); outline-offset: 2px; }
+  .cop-err-btn:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
   .cop-err-btn.primary { background: var(--ink); color: var(--cream-content); border-color: var(--ink); }
   .cop-err-btn.primary:hover { background: var(--ink-2); }
-  .cop-err-btn.danger { background: var(--err); color: #fff; border-color: var(--err); }
-  .cop-err-btn.danger:hover { filter: brightness(0.92); }
+  .cop-err-btn.danger { background: var(--danger-action-text); color: var(--cream-content); border-color: var(--danger-action-text); }
+  .cop-err-btn.danger:hover { background: color-mix(in srgb, var(--danger-action-text) 88%, transparent); color: var(--cream-content); }
 
   /* Confirmation inline de suppression (remplace le confirm() natif) */
-  .cop-row.confirm { flex-direction: column; align-items: stretch; gap: 9px; padding: 11px 12px; background: var(--surface-2); }
-  .cop-confirm-txt { font-size: 12px; line-height: 1.5; color: var(--ink-2); overflow-wrap: anywhere; }
+  .cop-row.confirm { flex-direction: column; align-items: stretch; gap: 8px; padding: 12px; border-radius: var(--radius-xl); background: var(--surface-2); }
+  .cop-confirm-txt { font-size: 13px; line-height: 1.5; color: var(--ink-2); overflow-wrap: anywhere; text-wrap: pretty; }
   .cop-confirm-acts { display: flex; gap: 6px; justify-content: flex-end; }
 
   /* Bannière d'erreur (vue modèles) avec dismiss */
   .cop-msg.row { display: flex; align-items: flex-start; gap: 8px; }
   .grow-wrap { flex: 1; min-width: 0; overflow-wrap: anywhere; }
-  .cop-dismiss { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; flex: 0 0 auto; border: 0; border-radius: 7px; background: transparent; color: var(--ink-4); cursor: pointer; transition: background 120ms ease, color 120ms ease, transform 100ms ease; }
-  .cop-dismiss:hover { background: var(--surface-hover); color: var(--ink); }
-  .cop-dismiss:active { transform: scale(0.92); }
-  .cop-dismiss:focus-visible { outline: 2px solid var(--line-3); outline-offset: -2px; }
+  .cop-dismiss { display: inline-flex; align-items: center; justify-content: center; width: var(--control-sm); height: var(--control-sm); flex: 0 0 auto; border: 0; border-radius: var(--radius-md); background: transparent; color: var(--ink-4); font-size: 14px; cursor: pointer; transition: background-color var(--duration-basic) ease, color var(--duration-basic) ease, transform var(--duration-basic) var(--ease-enter-snappy); }
+  .cop-dismiss:hover { background: var(--fill-hover); color: var(--ink); }
+  .cop-dismiss:active { transform: scale(0.97); }
+  .cop-dismiss:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
 
-  /* Composeur à deux plans : Question et Contexte permutent leur profondeur. */
+  /* Dock de saisie : la pile tiroir + composeur, sous un fondu de 24 px (en phase avec
+     `bottom: 24px` du bouton « Aller au dernier message »). */
   .cop-input-wrap {
     position: relative;
     z-index: 2;
     flex-shrink: 0;
     padding: 8px max(16px, calc((100% - 760px) / 2)) 10px;
     background: var(--cream-content);
-    container-type: inline-size;
+    container: cop-input / inline-size;
   }
   .cop-input-wrap::before {
     content: '';
@@ -3805,35 +4191,36 @@
 
   .cop-activity-fab {
     position: absolute;
-    z-index: 10;
+    z-index: var(--z-popover);
     top: 12px;
     right: 12px;
-    width: 34px;
-    height: 34px;
+    width: var(--control-md);
+    height: var(--control-md);
     display: inline-flex;
     align-items: center;
     justify-content: center;
     border: 0;
-    border-radius: 11px;
-    background: color-mix(in srgb, var(--cream-tint) 82%, transparent);
-    box-shadow: 0 7px 20px rgba(var(--shadow-rgb), 0.1);
-    color: var(--ink-4);
+    border-radius: var(--radius-lg);
+    background: var(--composer-bg);
+    box-shadow: var(--shadow-lg);
+    color: var(--ink-3);
+    font-size: 16px;
     cursor: pointer;
-    transition: background 120ms ease, color 120ms ease, transform 100ms ease;
+    transition: background-color var(--duration-basic) ease, color var(--duration-basic) ease, box-shadow var(--duration-basic) ease, transform var(--duration-basic) var(--ease-enter-snappy);
   }
-  .cop-activity-fab > .msr { font-size: 19px; }
   .cop-activity-fab:hover,
   .cop-activity-fab.active {
-    background: color-mix(in srgb, var(--cream-tint) 72%, var(--ink) 8%);
-    box-shadow: 0 9px 24px rgba(var(--shadow-rgb), 0.14);
+    box-shadow: var(--shadow-xl);
     color: var(--ink);
   }
-  .cop-activity-fab:active { transform: scale(0.94); }
-  .cop-activity-fab:focus-visible { outline: 2px solid var(--line-3); outline-offset: 2px; }
+  .cop-activity-fab.active { background: var(--surface-2); }
+  .cop-activity-fab:active { transform: scale(0.97); }
+  .cop-activity-fab:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
 
+  /* Voile juste sous la couche des popovers : le tiroir et son bouton restent au-dessus. */
   .cop-activity-backdrop {
     position: absolute;
-    z-index: 8;
+    z-index: calc(var(--z-popover) - 1);
     inset: 0;
     border: 0;
     background: transparent;
@@ -3841,8 +4228,8 @@
   }
   .cop-activity-drawer {
     position: absolute;
-    z-index: 9;
-    top: 54px;
+    z-index: var(--z-popover);
+    top: 52px;
     right: 12px;
     width: min(380px, calc(100% - 24px));
     max-height: min(72%, 620px);
@@ -3850,28 +4237,25 @@
     flex-direction: column;
     overflow: hidden;
     border: 0;
-    border-radius: 18px;
-    background: var(--cream-tint);
-    box-shadow: 0 20px 52px rgba(var(--shadow-rgb), 0.2);
+    border-radius: var(--radius-2xl);
+    background: var(--surface);
+    box-shadow: var(--shadow-xl);
     color: var(--ink);
     transform-origin: top right;
-    animation: cop-drawer-in 180ms cubic-bezier(.22, 1, .36, 1) both;
-  }
-  :global([data-theme='dark']) .cop-activity-drawer {
-    background: color-mix(in srgb, var(--composer-bg) 96%, white);
+    animation: doku-pop-in var(--duration-basic) var(--ease-enter-snappy);
   }
   .cop-activity-drawer > header {
-    min-height: 54px;
+    min-height: 52px;
     display: flex;
     align-items: center;
     gap: 10px;
-    padding: 8px 9px 8px 14px;
+    padding: 8px 10px 8px 14px;
     border-bottom: 1px solid var(--line-1);
   }
-  .cop-activity-drawer > header > .msr { color: var(--ink-3); font-size: 18px; }
+  .cop-activity-drawer > header > .icon { color: var(--ink-3); font-size: 16px; }
   .cop-activity-drawer > header > div { min-width: 0; flex: 1; display: flex; flex-direction: column; }
-  .cop-activity-drawer > header strong { font: 600 12.5px/1.4 var(--font-sans); }
-  .cop-activity-drawer > header small { color: var(--ink-4); font: 400 10.5px/1.3 var(--font-sans); }
+  .cop-activity-drawer > header strong { font: var(--weight-strong) var(--text-sm)/var(--leading-snug) var(--font-sans); }
+  .cop-activity-drawer > header small { color: var(--ink-3); font: var(--weight-regular) var(--text-xs)/var(--leading-tight) var(--font-sans); }
   .cop-activity-turns { min-height: 0; overflow-y: auto; padding: 6px 12px 18px; }
   .cop-activity-turn { padding: 10px 0 12px; }
   .cop-activity-turn + .cop-activity-turn { border-top: 1px solid var(--line-1); }
@@ -3879,263 +4263,354 @@
     margin: 0 8px 4px;
     overflow: hidden;
     color: var(--ink-2);
-    font: 500 12px/1.45 var(--font-sans);
+    font: var(--weight-control) var(--text-sm)/1.45 var(--font-sans);
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-  @keyframes cop-drawer-in { from { opacity: 0; transform: translateY(-6px) scale(0.985); } }
-  .cop-composer-shell {
-    overflow: visible;
+
+  /* Pile du composeur (Kube ComposerDrawer) : le tiroir (z 0) est rentré de 13 px de chaque
+     côté et glisse ses 20 px du bas (rayon 16 + repli 4) sous la saisie (z 1), dont les
+     coins de 22 px le recouvrent. Ni ombre ni `transform` : il pousse vers le haut. */
+  .cop-composer-stack {
+    --drawer-radius: var(--radius-2xl);
+    --drawer-tuck: 4px;
+    --drawer-inset: 13px;
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
   }
-  .cop-composer-shell:focus-within .cop-composer-front {
-    box-shadow: 0 10px 28px rgba(var(--shadow-rgb), 0.09);
+  .cop-drawer {
+    position: relative;
+    z-index: 0;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    margin-inline: var(--drawer-inset);
+    border-start-start-radius: var(--drawer-radius);
+    border-start-end-radius: var(--drawer-radius);
+    background: color-mix(in srgb, var(--cream-tint) 78%, var(--cream-content));
+    color: var(--ink);
+    overflow: clip;
+    /* Masqué une fois replié (après les 150 ms), pour ne jamais couvrir l'ombre de la saisie. */
+    visibility: hidden;
+    transition:
+      margin-bottom var(--duration-basic) var(--ease-enter-snappy),
+      padding-bottom var(--duration-basic) var(--ease-enter-snappy),
+      visibility 0s linear var(--duration-basic);
   }
-  .cop-composer-back {
-    width: calc(100% - 28px);
-    height: 58px;
-    margin-inline: 14px;
+  :global([data-theme='dark']) .cop-drawer { background: var(--cream-soft); }
+  .cop-drawer.open {
+    margin-bottom: calc((var(--drawer-tuck) + var(--drawer-radius)) * -1);
+    padding-bottom: var(--drawer-radius);
+    /* `inherit` et non `visible` : le panneau fermé (visibility: hidden) garde la main. */
+    visibility: inherit;
+    transition-delay: 0s;
+  }
+  /* Filet sur trois côtés ; la zone repliée sous la saisie en est coupée. */
+  .cop-drawer::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border: 1px solid var(--line-1);
+    border-bottom-width: 0;
+    border-radius: inherit;
+    clip-path: inset(0 0 var(--drawer-radius));
+    pointer-events: none;
+  }
+  /* Chaque élément se révèle en hauteur (rangées 0fr → 1fr) pendant que son contenu
+     apparaît en fondu ; filet de séparation et marges du tiroir suivent, même tempo. */
+  .cop-drawer-item {
+    position: relative;
+    display: grid;
+    grid-template-rows: 0fr;
+    min-width: 0;
+    border-top: 0 solid var(--line-1);
+    transition:
+      grid-template-rows var(--duration-basic) var(--ease-enter-snappy),
+      border-top-width var(--duration-basic) var(--ease-enter-snappy);
+  }
+  .cop-drawer-item.open { grid-template-rows: 1fr; }
+  .cop-drawer-item.open ~ .cop-drawer-item.open { border-top-width: 1px; }
+  .cop-drawer-item:not(.open) { pointer-events: none; }
+  .cop-drawer-content {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    min-height: 0;
+    overflow: hidden;
+    opacity: 0;
+    transition: opacity var(--duration-basic) var(--ease-enter-snappy);
+  }
+  .cop-drawer-item.open .cop-drawer-content { opacity: 1; }
+  /* Le dernier élément ouvert ajoute le repli : son texte dégage le bord de la saisie. */
+  .cop-drawer-item.open:not(:has(~ .cop-drawer-item.open)) .cop-drawer-content { padding-bottom: var(--drawer-tuck); }
+  .cop-composer-stack.kbd .cop-drawer,
+  .cop-composer-stack.kbd .cop-drawer-item,
+  .cop-composer-stack.kbd .cop-drawer-content,
+  .cop-composer-stack.kbd .cop-context-chevron { transition: none; }
+  @media (prefers-reduced-motion: reduce) {
+    .cop-drawer,
+    .cop-drawer-item,
+    .cop-drawer-content { transition: none; }
+  }
+
+  /* Rangée Kube : tête de 28 px (icône 16 px, texte ellipsé sur 20 px), actions de 20 px. */
+  .cop-drawer-row,
+  .cop-context-row {
+    min-width: 0;
+    min-height: var(--control-md);
     display: flex;
     align-items: center;
     gap: 8px;
-    padding: 6px 12px 16px;
+    padding: 2px 6px 2px 8px;
     border: 0;
-    border-radius: 16px;
-    background: color-mix(in srgb, var(--cream-tint) 78%, var(--cream-content));
-    box-shadow: 0 5px 18px rgba(var(--shadow-rgb), 0.04);
+    background: transparent;
     color: var(--ink-3);
-    font-family: var(--font-sans);
+    font: var(--weight-regular) var(--text-sm)/20px var(--font-sans);
     text-align: left;
+    transition: background-color var(--duration-basic) ease, color var(--duration-basic) ease;
+  }
+  /* Rayon concentrique : 16 px de tiroir moins 4 px de marge. */
+  .cop-drawer-row { margin: 4px 4px 0; border-radius: var(--radius-xl); cursor: pointer; }
+  .cop-context-row { border-radius: var(--radius-lg); }
+  button.cop-context-row { cursor: pointer; }
+  .cop-context-row.sel { background: var(--fill-pressed); color: var(--ink); }
+  @media (hover: hover) and (pointer: fine) {
+    .cop-drawer-row:hover,
+    button.cop-context-row:not(.sel):hover { background: var(--fill-hover); color: var(--ink); }
+  }
+  .cop-drawer-row:active,
+  button.cop-context-row:active { background: var(--fill-pressed); }
+  .cop-drawer-row:focus-visible,
+  button.cop-context-row:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
+  .cop-drawer-icon { flex: 0 0 auto; font-size: 16px; color: var(--ink-3); }
+  .cop-drawer-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .cop-drawer-text strong { color: var(--ink-2); font-weight: var(--weight-control); }
+  .cop-drawer-text small { color: var(--ink-3); font-size: var(--text-xs); }
+  .cop-drawer-action {
+    width: 20px; height: 20px; flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center;
+    color: var(--ink-4); font-size: 16px;
+  }
+  .cop-context-chevron { transition: rotate var(--duration-basic) var(--ease-move); }
+  .cop-context-toggle[aria-expanded='true'] .cop-context-chevron { rotate: 180deg; }
+  .cop-drawer-btn {
+    width: 20px; height: 20px; flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center;
+    border: 0; border-radius: var(--radius-full); background: transparent; color: var(--ink-4); font-size: 14px; cursor: pointer;
+    transition: background-color var(--duration-basic) ease, color var(--duration-basic) ease, transform var(--duration-basic) var(--ease-enter-snappy);
+  }
+  @media (hover: hover) and (pointer: fine) {
+    .cop-drawer-btn:hover { background: var(--fill-hover); color: var(--ink); }
+  }
+  .cop-drawer-btn:active { transform: scale(0.97); }
+  .cop-drawer-btn:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 0; }
+  /* La liste des sources défile au-delà de huit rangées environ ; le tiroir reste court. */
+  .cop-context-list {
+    max-height: min(40vh, 264px);
+    padding: 4px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+  .cop-context-state {
+    flex: 0 1 auto; max-width: 50%; height: 20px; padding: 0 8px;
+    overflow: hidden; border-radius: var(--radius-full); background: var(--accent-soft); color: var(--ink-3);
+    font: var(--weight-regular) var(--text-xs)/20px var(--font-sans); text-overflow: ellipsis; white-space: nowrap;
+  }
+  .cop-context-state.warn { background: color-mix(in srgb, var(--warn) 16%, transparent); color: var(--warn-text); }
+  .cop-context-state .icon { margin-right: 4px; font-size: 12px; vertical-align: -2px; }
+  .cop-context-note { margin: 2px 8px; color: var(--ink-3); font: var(--weight-regular) var(--text-xs)/1.35 var(--font-sans); text-wrap: pretty; }
+  .cop-context-destination { display: flex; align-items: center; gap: 6px; }
+  .cop-context-destination .icon { flex: 0 0 auto; font-size: 14px; }
+  .cop-context-error { color: var(--err-text); }
+  .cop-context-error-inline { margin: 0 14px 8px; font: var(--weight-regular) var(--text-xs)/1.35 var(--font-sans); }
+
+  /* Tray des commandes « / » : plus haut, défilant, il déborde de 3 px chaque bord de la
+     saisie. Aucune transition sur la sélection : elle suit le clavier sans traîner. */
+  .cop-tray {
+    --drawer-radius: calc(var(--radius-2xl) + 4px);
+    margin-inline: calc(var(--drawer-inset) - 16px);
+  }
+  /* Retraits portés par la liste et non par `.cop-drawer-content` : un padding sur l'élément
+     qui se replie compte dans la rangée 0fr et laisserait 12 px de tray fermé. 177 px de
+     tray Kube, marges comprises. */
+  .cop-tray-list,
+  .cop-tray-empty { margin: 12px 0 0 8px; }
+  .cop-tray-list { position: relative; max-height: 161px; overflow-y: auto; overscroll-behavior: contain; }
+  .cop-tray-option {
+    width: calc(100% - 8px);
+    min-height: var(--control-sm);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 8px;
+    border-radius: var(--radius-md);
+    color: var(--ink);
+    font: var(--weight-regular) var(--text-sm)/18px var(--font-sans);
     cursor: pointer;
-    transition: background 160ms ease, color 160ms ease;
+    user-select: none;
   }
-  :global([data-theme='dark']) .cop-composer-back { background: var(--cream-soft); }
-  .cop-composer-back:hover { background: var(--surface-hover); color: var(--ink); }
-  .cop-composer-back:active { background: var(--accent-soft); }
-  .cop-composer-back:focus-visible { outline: 2px solid var(--line-3); outline-offset: -3px; border-radius: 16px; }
-  .cop-composer-back-icon {
-    width: 28px; height: 28px; flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center;
-    border: 0; border-radius: 9px; background: var(--cream-content); color: var(--ink-3);
+  .cop-tray-option .icon { flex: 0 0 auto; font-size: 16px; color: var(--ink-3); }
+  .cop-tray-option[aria-selected='true'] { background: var(--fill-pressed); }
+  .cop-tray-option[aria-selected='true'] .icon { color: var(--ink-2); }
+  .cop-tray-name { flex: 0 0 auto; color: var(--ink-3); }
+  .cop-tray-name b { color: var(--ink); font-weight: var(--weight-strong); }
+  .cop-tray-hint {
+    min-width: 0; margin-left: auto; padding-left: 8px; overflow: hidden;
+    color: var(--ink-3); font-size: var(--text-xs); text-overflow: ellipsis; white-space: nowrap;
   }
-  :global([data-theme='dark']) .cop-composer-back-icon { background: var(--surface-2); }
-  .cop-composer-back-icon .msr { font-size: 16px; }
-  .cop-composer-back-label { font-size: 12px; font-weight: 600; }
-  .cop-composer-note {
-    margin-left: auto;
-    min-width: 0;
-    overflow: hidden;
-    color: var(--ink-4);
-    font-size: 10.5px;
-    font-weight: 450;
-    white-space: nowrap;
-    text-overflow: ellipsis;
-  }
-  .cop-composer-switch { flex: 0 0 auto; font-size: 15px; color: var(--ink-4); transition: transform 240ms cubic-bezier(0.22, 1, 0.36, 1); }
-  .cop-composer-back:hover .cop-composer-switch { transform: rotate(180deg); }
+  .cop-tray-empty { padding: 6px 8px; color: var(--ink-3); font: var(--weight-regular) var(--text-sm)/18px var(--font-sans); }
+
+  /* La saisie : surface élevée qui recouvre le tiroir. Conteneur du pied responsive. */
   .cop-composer-front {
     position: relative;
     z-index: 1;
     min-width: 0;
-    margin-top: -16px;
     overflow: hidden;
     border: 0;
-    border-radius: 16px;
+    border-radius: var(--radius-composer);
     background: var(--composer-bg);
-    box-shadow: 0 8px 26px rgba(var(--shadow-rgb), 0.07);
-    animation: cop-composer-drawer-in 240ms cubic-bezier(0.22, 1, 0.36, 1);
+    box-shadow: var(--shadow-composer);
+    container: cop-composer / inline-size;
   }
-  .cop-composer-front-tab {
-    width: 100%; height: 38px; display: flex; align-items: center; gap: 8px; padding: 0 12px;
-    border: 0; background: transparent; color: var(--ink-2);
-    font-family: var(--font-sans); font-size: 12px; font-weight: 600; text-align: left; cursor: default;
-  }
-  .cop-composer-front-tab .msr { font-size: 16px; color: var(--ink-3); }
-  .cop-composer-front-tab:focus-visible { outline: 2px solid var(--line-3); outline-offset: -3px; border-radius: 14px; }
-  .cop-composer-active-label {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    padding: 0;
-    border: 0;
-    background: transparent;
-    overflow: hidden;
-    clip-path: inset(50%);
-    white-space: nowrap;
-  }
-  .cop-composer-front:has(.cop-composer-active-label:focus-visible) {
-    outline: 2px solid var(--line-3);
-    outline-offset: -3px;
-  }
-  .cop-composer-panels { display: grid; min-width: 0; }
-  .cop-composer-panel {
-    grid-area: 1 / 1;
-    min-width: 0;
-    visibility: hidden;
-    opacity: 0;
-    pointer-events: none;
-    transform: translateY(4px);
-    transition: opacity 160ms ease, transform 220ms cubic-bezier(0.22, 1, 0.36, 1);
-  }
-  .cop-composer-panel:not(.active) { display: none; }
-  .cop-composer-panel.active { visibility: visible; opacity: 1; pointer-events: auto; transform: translateY(0); }
-  .cop-question-drawer {
-    min-height: 94px;
+  /* Composeur Kube : saisie en haut (gouttière 12 px), pied de boutons ronds de 28 px
+     à 8 px des bords. */
+  .cop-composer-grid {
+    min-height: 88px;
     padding: 10px 8px 8px;
     display: grid;
-    grid-template-columns: 36px minmax(0, 1fr) 36px;
-    grid-template-rows: minmax(34px, auto) 36px;
-    column-gap: 8px;
+    grid-template-columns: var(--control-sm) minmax(0, 1fr) var(--control-sm);
+    grid-template-rows: minmax(34px, auto) var(--control-sm);
+    column-gap: 4px;
   }
   .cop-input-attach {
     grid-column: 1; grid-row: 2;
-    width: 36px; height: 36px; display: inline-flex; align-items: center; justify-content: center;
-    background: transparent; border: 0; border-radius: 10px; color: var(--ink-4); cursor: pointer;
-    transition: background 120ms ease, color 120ms ease, transform 140ms cubic-bezier(0.22, 1, 0.36, 1);
+    width: var(--control-sm); height: var(--control-sm); display: inline-flex; align-items: center; justify-content: center;
+    background: transparent; border: 0; border-radius: var(--radius-full); color: var(--ink-3); font-size: 16px; cursor: pointer;
+    transition: background-color var(--duration-basic) ease, color var(--duration-basic) ease, transform var(--duration-basic) var(--ease-enter), scale var(--duration-basic) var(--ease-enter-snappy);
   }
-  .cop-input-attach:hover, .cop-input-attach.open { background: var(--surface-hover); color: var(--ink); }
+  .cop-input-attach:hover, .cop-input-attach.open { background: var(--fill-hover); color: var(--ink); }
   .cop-input-attach.open { transform: rotate(45deg); }
-  .cop-input-attach:focus-visible { outline: 2px solid var(--line-3); outline-offset: -2px; }
-  .cop-input-attach:disabled { opacity: 0.45; cursor: wait; }
+  /* `scale` individuel : se compose avec la rotation du « + » ouvert au lieu de l'annuler. */
+  .cop-input-attach:not(:disabled):active { scale: 0.97; }
+  .cop-input-attach:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 0; }
+  .cop-input-attach:disabled { opacity: var(--opacity-disabled); cursor: wait; }
   .cop-input-ta {
     grid-column: 1 / -1; grid-row: 1; align-self: start;
     width: 100%; min-width: 0; border: 0; background: transparent; outline: none; resize: none;
-    font-family: var(--font-sans); font-size: var(--cop-text); line-height: 1.45; color: var(--ink); padding: 2px 4px 7px; max-height: 120px;
+    font-family: var(--font-sans); font-size: var(--cop-text); line-height: 1.45; letter-spacing: -0.15px; color: var(--ink); padding: 2px 4px 8px; max-height: 120px;
+    scroll-padding-block: 6px;
     field-sizing: content; /* auto-grow : les lignes Shift+Entrée restent visibles (WebView2 OK) */
   }
   .cop-input-ta::placeholder { color: var(--ink-4); }
-  .cop-input-send { grid-column: 3; grid-row: 2; width: 36px; height: 36px; display: inline-flex; align-items: center; justify-content: center; background: var(--ink); border: 0; border-radius: 50%; color: var(--cream-content); cursor: pointer; transition: background 140ms ease, opacity 140ms ease, transform 100ms ease; }
+  /* Envoyer / arrêter : disque d'encre de 28 px, comme le bouton d'envoi Kube. */
+  .cop-input-send { grid-column: 3; grid-row: 2; width: var(--control-sm); height: var(--control-sm); display: inline-flex; align-items: center; justify-content: center; background: var(--ink); border: 0; border-radius: var(--radius-full); color: var(--cream-content); font-size: 16px; cursor: pointer; transition: background-color var(--duration-basic) ease, opacity var(--duration-basic) ease, transform var(--duration-basic) var(--ease-enter-snappy); }
   .cop-input-send:hover { background: var(--ink-2); }
-  .cop-input-send:not(:disabled):active { transform: scale(0.94); }
-  .cop-input-send:focus-visible { outline: 2px solid var(--line-3); outline-offset: 2px; }
-  .cop-input-send:disabled { opacity: 0.4; cursor: default; }
-  .cop-context-drawer {
-    min-height: 56px;
-    padding: 6px;
-    display: flex;
-    flex-direction: column;
-    align-items: stretch;
-    gap: 4px;
-  }
-  /* Portée (15.3) : deux lignes sélectionnables — document courant / dossier entier. */
-  .cop-scope {
-    display: flex; align-items: center; gap: 8px; padding: 5px 8px; min-width: 0;
-    border: 0; border-radius: 11px; background: none; color: var(--ink);
-    text-align: left; cursor: pointer; transition: background 120ms ease;
-  }
-  .cop-scope:hover { background: var(--surface-hover); }
-  .cop-scope:active { background: var(--accent-soft); }
-  .cop-scope:focus-visible { outline: 2px solid var(--line-3); outline-offset: -2px; }
-  .cop-scope.sel { background: var(--accent-soft); }
-
-  /* Autocomplétion des commandes « / » : une barre posée sous le composeur, dans son
-     vocabulaire (rayon 14, surface du composeur, ligne dense). */
-  .cop-slash {
-    position: absolute;
-    z-index: 45;
-    /* Douze commandes sur une barre seule : la carte défile plutôt que de couvrir
-       la conversation entière. */
-    max-height: min(320px, 42vh);
-    overflow-y: auto;
-    overscroll-behavior: contain;
-    padding: 5px;
-    border-radius: 16px;
-    background: var(--cream-tint);
-    box-shadow: 0 0 0 1px var(--elevation-ring-soft), 0 14px 34px rgba(var(--shadow-rgb), 0.18);
-    animation: cop-picker-in 140ms cubic-bezier(0.22, 1, 0.36, 1);
-  }
-  .cop-slash-row {
-    width: 100%;
-    min-height: 38px;
-    display: flex;
-    align-items: center;
-    gap: 9px;
-    padding: 4px 9px;
-    border: 0;
-    border-radius: 10px;
-    background: transparent;
-    color: var(--ink-3);
-    font-family: var(--font-sans);
-    font-size: 12px;
-    text-align: left;
-    cursor: pointer;
-  }
-  .cop-slash-row.sel { background: var(--accent-soft); color: var(--ink); }
-  .cop-slash-row:focus-visible { outline: 2px solid var(--line-3); outline-offset: -2px; }
-  .cop-slash-ic { flex: 0 0 auto; font-size: 16px; color: var(--ink-4); }
-  .cop-slash-row.sel .cop-slash-ic { color: var(--ink-3); }
-  /* Le préfixe déjà tapé en gras, la fin en clair : on voit ce qu'il reste à écrire. */
-  .cop-slash-name { flex: 0 0 auto; font-weight: 400; color: var(--ink-4); }
-  .cop-slash-name b { font-weight: 650; color: var(--ink); }
-  .cop-slash-hint {
-    flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-    font-size: 11.5px; color: var(--ink-5);
-  }
+  .cop-send-arrow { translate: 0 0.5px; }
+  .cop-stop-glyph { font-size: 12px; fill: currentColor; }
+  .cop-input-send:not(:disabled):active { transform: scale(0.97); }
+  .cop-input-send:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+  .cop-input-send:disabled { opacity: var(--opacity-disabled); cursor: default; }
 
   /* Sections dépliables du menu du « + » : en-tête cliquable, corps indenté. */
   .cop-sec {
-    width: 100%; min-height: 46px; display: flex; align-items: center; gap: 10px; padding: 7px 9px;
-    border: 0; border-radius: 10px; background: transparent; color: var(--ink);
+    width: 100%; min-height: var(--control-md); display: flex; align-items: center; gap: 10px; padding: 4px 8px 4px 6px;
+    border: 0; border-radius: var(--radius-md); background: transparent; color: var(--ink);
     font-family: var(--font-sans); text-align: left; cursor: pointer;
+    transition: background-color var(--duration-basic) ease;
   }
-  .cop-sec:hover { background: var(--surface-hover); }
-  .cop-sec:focus-visible { outline: 2px solid var(--line-3); outline-offset: -2px; }
+  .cop-sec:hover, .cop-sec:focus-visible { background: var(--accent-soft); }
+  .cop-sec:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
   .cop-sec-ic {
-    width: 28px; height: 28px; flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center;
-    border-radius: 8px; background: var(--surface-2); color: var(--ink-3);
-    transition: background 120ms ease, color 120ms ease;
+    width: var(--control-sm); height: var(--control-sm); flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center;
+    border-radius: var(--radius-md); background: var(--accent-soft); color: var(--ink-3);
+    transition: background-color var(--duration-basic) ease, color var(--duration-basic) ease;
   }
-  .cop-sec.open .cop-sec-ic { background: var(--accent-soft); color: var(--ink); }
-  .cop-sec-ic .msr { font-size: 16px; }
+  .cop-sec.open .cop-sec-ic { background: var(--line-1); color: var(--ink); }
+  .cop-sec-ic .icon { font-size: 15px; }
   .cop-sec-copy { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
-  .cop-sec-copy strong { font-size: 12px; font-weight: 600; }
+  .cop-sec-copy strong { font: var(--weight-control) var(--text-sm)/18px var(--font-sans); }
   .cop-sec-copy small {
-    font-size: 10.5px; color: var(--ink-4);
+    font: var(--weight-regular) var(--text-xs)/14px var(--font-sans); color: var(--ink-3);
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
   .cop-sec-chev {
-    flex: 0 0 auto; font-size: 17px; color: var(--ink-4);
-    transition: transform 180ms cubic-bezier(0.22, 1, 0.36, 1);
+    flex: 0 0 auto; font-size: 14px; color: var(--ink-4);
+    transition: transform var(--duration-basic) var(--ease-enter-snappy);
   }
   .cop-sec.open .cop-sec-chev { transform: rotate(180deg); }
-  .cop-sec-body { padding: 0 2px 6px 8px; }
-  /* Pastille du livrable armé, dans la rangée de saisie. */
+  .cop-sec-body { padding: 0 0 4px 8px; }
+  /* Pastille du livrable armé, dans la rangée de saisie : bouton de composeur Kube (28 px,
+     croix de 20 px). */
   .cop-mode-pill {
-    display: inline-flex; align-items: center; gap: 5px; height: 26px; padding: 0 4px 0 9px;
-    border-radius: 999px; background: var(--ink); color: var(--cream-content);
-    font: 550 11px var(--font-sans); white-space: nowrap;
+    display: inline-flex; align-items: center; gap: 4px; height: var(--control-sm); padding: 0 4px 0 10px;
+    border-radius: var(--radius-full); background: var(--ink); color: var(--cream-content);
+    font: var(--weight-control) var(--text-sm) var(--font-sans); white-space: nowrap;
+    transform-origin: left center;
+    animation: doku-pop-in var(--duration-basic) var(--ease-enter-snappy);
   }
-  .cop-mode-pill > .msr { font-size: 14px; }
+  /* Choix au clavier (menu « / », Entrée dans le menu du « + ») : pas d'entrée animée. */
+  .cop-mode-pill.kbd { animation: none; }
+  .cop-mode-pill > .icon { font-size: 14px; }
   .cop-mode-pill button {
-    width: 18px; height: 18px; display: inline-flex; align-items: center; justify-content: center;
-    border: 0; border-radius: 50%; background: transparent; color: inherit; cursor: pointer; opacity: 0.7;
+    width: 20px; height: 20px; display: inline-flex; align-items: center; justify-content: center;
+    border: 0; border-radius: var(--radius-full); background: transparent; color: inherit; cursor: pointer; opacity: 0.7;
+    transition: opacity var(--duration-basic) ease, background-color var(--duration-basic) ease, transform var(--duration-basic) var(--ease-enter-snappy);
   }
-  .cop-mode-pill button:hover { opacity: 1; background: rgba(255, 255, 255, 0.16); }
-  .cop-mode-pill button:focus-visible { opacity: 1; outline: 2px solid var(--cream-content); outline-offset: 1px; }
-  .cop-mode-pill button .msr { font-size: 13px; }
+  .cop-mode-pill button:active { transform: scale(0.97); }
+  .cop-mode-pill button:hover { opacity: 1; background: color-mix(in srgb, var(--cream-content) 16%, transparent); }
+  .cop-mode-pill button:focus-visible { opacity: 1; outline: 2px solid var(--cream-content); outline-offset: 0; }
+  .cop-mode-pill button .icon { font-size: 12px; }
   .cop-think-toggle {
-    flex: 0 0 auto; display: inline-flex; align-items: center; gap: 4px; height: 26px; padding: 0 9px 0 7px;
-    border: 1px solid var(--line-3); border-radius: 999px; background: transparent; color: var(--ink-3);
-    font: 550 11px var(--font-sans); white-space: nowrap; cursor: pointer;
+    flex: 0 0 auto; display: inline-flex; align-items: center; gap: 4px; height: var(--control-sm); padding: 0 10px 0 8px;
+    border: 0; border-radius: var(--radius-full); background: transparent; color: var(--ink-3);
+    box-shadow: inset 0 0 0 1px var(--line-2);
+    font: var(--weight-control) var(--text-sm) var(--font-sans); white-space: nowrap; cursor: pointer;
+    transition: background-color var(--duration-basic) ease, color var(--duration-basic) ease, box-shadow var(--duration-basic) ease, transform var(--duration-basic) var(--ease-enter-snappy);
   }
-  .cop-think-toggle .msr { font-size: 15px; }
-  .cop-think-toggle:hover:not([aria-disabled='true']) { background: var(--surface-hover); color: var(--ink); }
-  .cop-think-toggle.on { border-color: var(--ink); background: var(--ink); color: var(--cream-content); }
-  .cop-think-toggle.on:hover:not([aria-disabled='true']) { background: var(--ink); color: var(--cream-content); opacity: 0.9; }
-  .cop-think-toggle[aria-disabled='true'] { cursor: default; opacity: 0.75; }
-  .cop-cite-preview.cop-think-tip { width: 260px; }
-  .cop-think-tip .cop-cite-preview-head .msr { font-size: 15px; color: var(--ink-3); }
-  .cop-think-toggle:focus-visible { outline: 2px solid var(--line-3); outline-offset: 1px; }
+  .cop-think-toggle:not([aria-disabled='true']):active { transform: scale(0.97); }
+  .cop-think-toggle .icon { font-size: 14px; }
+  .cop-think-toggle:hover:not([aria-disabled='true']) { background: var(--fill-hover); color: var(--ink); box-shadow: inset 0 0 0 1px var(--line-3); }
+  .cop-think-toggle.on { background: var(--ink); color: var(--cream-content); box-shadow: none; }
+  .cop-think-toggle.on:hover:not([aria-disabled='true']) { background: var(--ink-2); color: var(--cream-content); box-shadow: none; }
+  .cop-think-toggle[aria-disabled='true'] { cursor: default; opacity: var(--opacity-disabled); }
+  /* .cop-compose-options coupe ce qui déborde : l'anneau se dessine à l'intérieur. */
+  .cop-think-toggle:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
   .cop-target-pill { min-width: 0; }
   .cop-target-text { min-width: 0; max-width: 160px; overflow: hidden; text-overflow: ellipsis; }
   .cop-compose-options {
     grid-column: 2;
     grid-row: 2;
     min-width: 0;
-    align-self: end;
+    align-self: center;
     display: flex;
     align-items: center;
     gap: 4px;
-    margin-bottom: 3px;
     overflow: hidden;
+  }
+  /* Pied responsive (Kube Composer, libellés `data-collapse`) : seuils 440 / 300 rapportés à
+     nos pastilles — l'extrait de la cible part d'abord, puis les libellés courts. Les noms
+     accessibles restent (aria-label, title). */
+  @container cop-composer (max-width: 440px) {
+    .cop-target-text { display: none; }
+    .cop-target-pill { padding-left: 8px; }
+  }
+  @container cop-composer (max-width: 300px) {
+    .cop-think-label,
+    .cop-mode-label { display: none; }
+    .cop-think-toggle { padding: 0 7px; }
+    .cop-mode-pill { padding-left: 8px; }
+  }
+  /* Panneau étroit (Kube Composer --compact) : rayon lg, filet au lieu d'ombre, marges
+     resserrées. Souris seulement : au doigt, les boutons de 40 px gardent le rayon de 28. */
+  @container cop-input (max-width: 300px) {
+    :global(:where(:root:not([data-input='touch']))) .cop-composer-front {
+      border-radius: var(--radius-lg);
+      box-shadow: 0 0 0 1px var(--line-2);
+    }
+    .cop-composer-grid { min-height: 76px; padding: 8px 6px 6px; }
   }
   /* Curseur à 3 crans (essai façon « effort ») : piste pleine jusqu'au pouce, ticks.
      Pas d'en-tête : le libellé courant sous le curseur dit déjà tout. */
@@ -4144,7 +4619,7 @@
     position: absolute; inset: 6px 17px 2px; display: flex; align-items: center; justify-content: space-between;
     pointer-events: none;
   }
-  .cop-verb-ticks span { width: 4px; height: 4px; border-radius: 50%; background: rgba(var(--ink-rgb), 0.22); }
+  .cop-verb-ticks span { width: 4px; height: 4px; border-radius: 50%; background: var(--line-2); }
   /* Sous le remplissage (fond = ink) : ton inverse translucide, lisible dans les 2 thèmes. */
   .cop-verb-ticks span.lit { background: var(--cream-content); opacity: 0.7; }
   .cop-verb-ticks span.under-thumb { opacity: 0; }
@@ -4152,97 +4627,62 @@
     -webkit-appearance: none; appearance: none; display: block; width: 100%; height: 26px;
     margin: 0; background: transparent; cursor: pointer;
   }
-  .cop-verb-slider:focus-visible { outline: 2px solid var(--line-3); outline-offset: 3px; border-radius: 999px; }
+  .cop-verb-slider:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 3px; border-radius: var(--radius-full); }
   .cop-verb-slider::-webkit-slider-runnable-track {
-    height: 18px; border-radius: 999px;
+    height: 18px; border-radius: var(--radius-full);
     background: linear-gradient(to right, var(--ink) 0 var(--fill), var(--surface-2) var(--fill) 100%);
     /* Liseré intérieur : l'étendue TOTALE de la course reste lisible même à vide. */
-    box-shadow: inset 0 0 0 1px rgba(var(--ink-rgb), 0.14);
+    box-shadow: inset 0 0 0 1px var(--line-1);
   }
+  /* Même pouce que le contrôle segmenté (`--track-thumb`), ombre de la palette. */
   .cop-verb-slider::-webkit-slider-thumb {
     -webkit-appearance: none; appearance: none;
     width: 24px; height: 24px; margin-top: -3px; border: 0; border-radius: 50%;
-    background: #fff;
-    box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.08), 0 2px 6px rgba(0, 0, 0, 0.25);
+    background: var(--track-thumb);
+    box-shadow: var(--shadow-lg);
   }
-  .cop-context-icon {
-    width: 36px; height: 36px; flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center;
-    border-radius: 10px; background: var(--surface-2); color: var(--ink-3);
-  }
-  .cop-context-icon .msr { font-size: 18px; }
-  .cop-context-copy { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
-  .cop-context-copy strong { overflow: hidden; color: var(--ink-2); font-size: 11.5px; font-weight: 550; white-space: nowrap; text-overflow: ellipsis; }
-  .cop-context-copy small { overflow: hidden; color: var(--ink-4); font-size: 10.5px; line-height: 1.3; white-space: nowrap; text-overflow: ellipsis; }
-  .cop-context-state {
-    height: 24px; flex: 0 0 auto; display: inline-flex; align-items: center; gap: 4px; padding: 0 8px;
-    border-radius: 999px; background: var(--surface-2); color: var(--ink-4); font-size: 10px; white-space: nowrap;
-  }
-  .cop-context-state.warn { background: rgba(180, 130, 60, 0.12); color: var(--warn-text); }
-  .cop-context-state .msr { font-size: 13px; }
-  .cop-context-extra {
-    display: flex; align-items: center; gap: 9px; min-width: 0; padding: 6px 8px;
-    border-radius: 11px; background: var(--surface-2); color: var(--ink-3);
-  }
-  .cop-context-extra > .msr { flex: 0 0 auto; font-size: 17px; color: var(--ink-4); }
-  .cop-context-extra-copy { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 1px; }
-  .cop-context-extra-copy strong { overflow: hidden; font-size: 11.5px; font-weight: 550; color: var(--ink-2); text-overflow: ellipsis; white-space: nowrap; }
-  .cop-context-extra-copy small { font-size: 10px; color: var(--ink-4); }
-  .cop-context-extra > button {
-    width: 28px; height: 28px; flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center;
-    border: 0; border-radius: 999px; background: transparent; color: var(--ink-4); cursor: pointer;
-  }
-  .cop-context-extra > button:hover { background: var(--surface-hover); color: var(--ink); }
-  .cop-context-extra > button:focus-visible { outline: 2px solid var(--line-3); outline-offset: -2px; }
-  .cop-context-extra > button .msr { font-size: 16px; }
-  .cop-context-memory { min-height: 46px; padding: 6px 8px; display: flex; align-items: center; gap: 8px; border: 0; border-radius: 11px; background: transparent; color: var(--ink-2); text-align: left; cursor: pointer; }
-  .cop-context-memory:hover { background: var(--surface-hover); }
-  .cop-context-memory:focus-visible { outline: 2px solid var(--line-3); outline-offset: -2px; }
-  .cop-context-memory > .msr:first-child { font-size: 17px; color: var(--ink-4); }
-  .cop-context-memory > span:nth-child(2) { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 1px; }
-  .cop-context-memory strong { font-size: 11.5px; font-weight: 550; }
-  .cop-context-memory small { font-size: 10px; color: var(--ink-4); }
-  .cop-context-memory > .msr:last-child { font-size: 15px; color: var(--ink-4); }
-  .cop-context-destination, .cop-context-history, .cop-context-error {
-    margin: 2px 8px; font-size: 10px; line-height: 1.35; color: var(--ink-4);
-  }
-  .cop-context-destination { display: flex; align-items: center; gap: 5px; }
-  .cop-context-destination .msr { font-size: 14px; }
-  .cop-context-error { color: var(--danger-text); }
-  .cop-context-error-inline { margin: 4px 14px 8px; }
-  .cop-disclaimer { text-align: center; font-size: 10.5px; line-height: 1.35; color: var(--ink-4); margin-top: 8px; }
+  .cop-disclaimer { text-align: center; font-size: var(--text-xs); line-height: 1.35; color: var(--ink-4); margin-top: 8px; }
 
+  /* Largeur posée en ligne depuis ADD_MENU_W (source unique avec le bornage), origine de
+     l'échelle posée sur le « + ». */
   .cop-add-context-menu {
-    position: absolute; z-index: 45; width: 276px; padding: 6px;
-    border-radius: 14px; background: var(--cream-tint);
-    box-shadow: 0 0 0 1px var(--elevation-ring-soft), 0 14px 34px rgba(var(--shadow-rgb), 0.18);
-    animation: cop-picker-in 140ms cubic-bezier(0.22, 1, 0.36, 1);
+    position: absolute; z-index: var(--z-popover); padding: 4px;
+    border-radius: var(--radius-xl); background: var(--composer-bg);
+    box-shadow: var(--shadow-xl);
+    transform-origin: bottom left;
+    animation: doku-pop-in var(--duration-basic) var(--ease-enter-snappy);
   }
   .cop-add-context-action {
-    width: 100%; min-height: 48px; display: flex; align-items: center; gap: 10px; padding: 7px 9px;
-    border: 0; border-radius: 10px; background: transparent; color: var(--ink); text-align: left; cursor: pointer;
+    width: 100%; min-height: var(--control-md); display: flex; align-items: center; gap: 10px; padding: 4px 8px 4px 6px;
+    border: 0; border-radius: var(--radius-md); background: transparent; color: var(--ink); text-align: left; cursor: pointer;
+    transition: background-color var(--duration-basic) ease;
   }
-  .cop-add-context-action:hover, .cop-add-context-action:focus-visible { background: var(--surface-hover); outline: none; }
+  .cop-add-context-action:hover, .cop-add-context-action:focus-visible { background: var(--accent-soft); }
+  .cop-add-context-action:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
   .cop-add-context-action.active { background: var(--accent-soft); }
-  .cop-add-context-action:disabled { opacity: 0.38; cursor: default; background: transparent; }
-  .cop-add-context-action > .msr {
-    width: 30px; height: 30px; flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center;
-    border-radius: 9px; background: var(--surface-2); color: var(--ink-3); font-size: 17px;
+  .cop-add-context-action:disabled { opacity: var(--opacity-disabled); cursor: default; background: transparent; }
+  /* Tuile sans wrapper : le padding du <svg> ramène le tracé à 15 px dans 28 px. */
+  .cop-add-context-action > .icon {
+    width: var(--control-sm); height: var(--control-sm); flex: 0 0 auto; padding: 6.5px;
+    border-radius: var(--radius-md); background: var(--accent-soft); color: var(--ink-3);
   }
   .cop-add-context-action > span:nth-child(2) { min-width: 0; display: flex; flex: 1; flex-direction: column; gap: 1px; }
   .cop-add-context-action > .cop-add-context-check {
-    width: 24px; height: 24px; margin-left: auto; background: transparent; color: var(--ink-3); font-size: 15px;
+    width: 15px; height: 15px; padding: 0; margin-left: auto; background: transparent; color: var(--ink-3);
   }
-  .cop-add-context-action strong { font-size: 11.5px; font-weight: 600; }
-  .cop-add-context-action small { font-size: 10px; color: var(--ink-4); }
+  .cop-add-context-action strong { font: var(--weight-control) var(--text-sm)/18px var(--font-sans); }
+  .cop-add-context-action small { font: var(--weight-regular) var(--text-xs)/14px var(--font-sans); color: var(--ink-3); }
   .cop-hidden-file { display: none; }
 
   .cop-md :global(.cop-web-cite) {
-    min-width: 18px; height: 18px; margin: 0 2px; padding: 0 5px; border: 0; border-radius: 999px;
-    background: var(--accent-soft); color: var(--ink-2); font: 650 9.5px var(--font-sans);
+    min-width: 18px; height: 18px; margin: 0 2px; padding: 0 5px; border: 0; border-radius: var(--radius-full);
+    background: var(--accent-soft); color: var(--ink-2); font: var(--weight-strong) var(--text-2xs) var(--font-sans); font-variant-numeric: tabular-nums;
     cursor: pointer; vertical-align: 0.08em;
+    transition: background-color var(--duration-basic) ease, color var(--duration-basic) ease, transform var(--duration-basic) var(--ease-enter-snappy);
   }
-  .cop-md :global(.cop-web-cite:hover) { background: var(--surface-hover); color: var(--ink); }
-  .cop-md :global(.cop-web-cite:focus-visible) { outline: 2px solid var(--line-3); outline-offset: 1px; }
+  .cop-md :global(.cop-web-cite:active) { transform: scale(0.97); }
+  .cop-md :global(.cop-web-cite:hover) { background: var(--line-1); color: var(--ink); }
+  .cop-md :global(.cop-web-cite:focus-visible) { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
   /* Puces de citation [n] inline (21.x) — injectées via {@html} après sanitize. */
   .cop-md :global(.cop-cite) {
     display: inline-flex; align-items: center; justify-content: center;
@@ -4250,113 +4690,137 @@
        Les facteurs sont les valeurs d'origine rapportées à ses 10 px (16/10, 15/10, …). */
     min-width: 1.6em; height: 1.5em; margin: 0 0.2em; padding: 0 0.4em; border: 0; border-radius: 0.5em;
     background: var(--accent-soft); color: var(--ink-3);
-    font-family: var(--font-sans); font-size: 0.74em; font-weight: 600; line-height: 1;
+    font-family: var(--font-sans); font-size: 0.74em; font-weight: var(--weight-strong); line-height: 1;
     font-variant-numeric: tabular-nums;
     vertical-align: 0.2em; cursor: pointer;
-    transition: background 120ms ease, color 120ms ease, transform 100ms ease;
+    transition: background-color var(--duration-basic) ease, color var(--duration-basic) ease, transform var(--duration-basic) var(--ease-enter-snappy);
   }
   .cop-md :global(.cop-cite:hover) { background: var(--ink); color: var(--cream-content); }
-  .cop-md :global(.cop-cite:active) { transform: scale(0.9); }
-  .cop-md :global(.cop-cite:focus-visible) { outline: 2px solid var(--line-3); outline-offset: 2px; }
+  .cop-md :global(.cop-cite:active) { transform: scale(0.97); }
+  .cop-md :global(.cop-cite:focus-visible) { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
 
-  /* Aperçu flottant du passage cité — même matériau que les menus flottants.
-     pointer-events: none : la carte ne vole jamais la souris (elle disparaît en
-     quittant la puce, aucun piège de survol possible). */
-  .cop-cite-preview {
-    position: absolute;
-    z-index: 50;
-    width: 300px;
-    padding: 11px 12px 9px;
-    border-radius: 12px;
-    background: var(--cream-tint);
-    box-shadow:
-      0 0 0 1px var(--elevation-ring-soft),
-      0 12px 30px rgba(var(--shadow-rgb), 0.18);
-    transform: translate(-50%, -100%);
+  /* Carte de survol (aperçu de citation, info-bulle Réfléchir) : couche supérieure
+     (`popover`), placée en JS par placeHoverCard, elle grandit depuis son déclencheur.
+     La largeur ne vit qu'ici (la carte est mesurée une fois montée). pointer-events: none :
+     elle ne vole jamais la souris, aucun piège de survol possible. */
+  .cop-hover-card {
+    position: fixed;
+    z-index: var(--z-overlay);
+    inset: auto;
+    width: min(300px, calc(100vw - 16px));
+    margin: 0;
+    padding: 12px 12px 10px;
+    overflow: hidden;
+    border: 0;
+    border-radius: var(--radius-xl);
+    background: var(--composer-bg);
+    color: var(--ink);
+    box-shadow: var(--shadow-xl);
     pointer-events: none;
-    animation: cop-cite-preview-in 130ms cubic-bezier(0.22, 1, 0.36, 1);
+    animation: doku-pop-in var(--duration-basic) var(--ease-enter-snappy);
   }
-  .cop-cite-preview.below { transform: translate(-50%, 0); }
-  @keyframes cop-cite-preview-in {
-    from { opacity: 0; translate: 0 3px; }
-    to { opacity: 1; translate: 0 0; }
+  .cop-hover-card.cop-think-tip { width: min(260px, calc(100vw - 16px)); }
+  .cop-hover-card-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+  .cop-think-tip .cop-hover-card-head .icon { font-size: 14px; color: var(--ink-3); }
+  /* Numéro du passage : même lavis que la puce [n] qu'il prolonge. */
+  .cop-source-num {
+    display: inline-flex; flex: none; align-items: center; justify-content: center;
+    min-width: 18px; height: 18px; padding: 0 5px; border-radius: var(--radius-sm);
+    background: var(--accent-soft); color: var(--ink-2);
+    font: var(--weight-strong) var(--text-2xs) / 1 var(--font-sans); font-variant-numeric: tabular-nums;
   }
-  .cop-cite-preview-head { display: flex; align-items: center; gap: 7px; margin-bottom: 7px; }
-  .cop-cite-preview-name {
-    overflow: hidden; font-size: 11px; font-weight: 600; color: var(--ink-2);
+  .cop-hover-card-name {
+    overflow: hidden; font-size: var(--text-xs); font-weight: var(--weight-strong); color: var(--ink-2);
     white-space: nowrap; text-overflow: ellipsis;
   }
-  .cop-cite-preview-text {
+  .cop-hover-card-text {
     display: -webkit-box;
     -webkit-box-orient: vertical;
     -webkit-line-clamp: 7;
     line-clamp: 7;
     overflow: hidden;
     margin: 0;
-    font-size: 11.5px;
+    font-size: var(--text-sm);
     line-height: 1.55;
     color: var(--ink-2);
     white-space: pre-wrap;
     overflow-wrap: anywhere;
   }
-  .cop-cite-preview-hint {
-    margin-top: 8px; padding-top: 7px; border-top: 1px solid var(--line-1);
-    font-size: 10px; color: var(--ink-4);
-  }
-  @media (prefers-reduced-motion: reduce) {
-    .cop-cite-preview { animation: none; }
+  .cop-hover-card-hint {
+    margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--line-1);
+    font-size: var(--text-xs); color: var(--ink-3);
   }
 
-  :global([data-theme='dark']) .cop-composer-back {
-    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.12);
+  /* Doigt : tout changement VISIBLE se pose sous `data-input='touch'` (dernier pointerdown
+     au doigt ou au stylet, main.ts). `(any-pointer: coarse)` reste vrai à la souris sur la
+     Surface : n'y vivent que des zones de clic invisibles qui ne chevauchent aucun voisin. */
+  :global(:root[data-input='touch']) .cop-copy { width: 40px; height: 40px; }
+  /* Actions révélées au survol : toujours visibles là où le doigt vise. */
+  :global(:root[data-input='touch']) .cop-row .cop-del,
+  :global(:root[data-input='touch']) .cop-memory-item .cop-memory-item-head button { opacity: 1; }
+  :global(:root[data-input='touch']) .cop-picker-sec,
+  :global(:root[data-input='touch']) .cop-picker-opt { min-height: 40px; }
+  :global(:root[data-input='touch']) .cop-ic,
+  :global(:root[data-input='touch']) .cop-del,
+  :global(:root[data-input='touch']) .cop-dismiss,
+  :global(:root[data-input='touch']) .cop-memory-item-head button,
+  :global(:root[data-input='touch']) .cop-memory-toast button.icon { width: 40px; height: 40px; }
+  /* Composeur, tiroir, tray et menus au doigt (`:where` : la cascade reste celle du fichier). */
+  :global(:where(:root[data-input='touch'])) .cop-composer-grid {
+    grid-template-columns: 40px minmax(0, 1fr) 40px;
+    grid-template-rows: minmax(34px, auto) 40px;
   }
-  :global([data-theme='dark']) .cop-composer-front,
-  :global([data-theme='dark']) .cop-composer-shell:focus-within .cop-composer-front {
-    box-shadow: 0 8px 22px rgba(0, 0, 0, 0.2);
+  :global(:where(:root[data-input='touch'])) .cop-input-attach,
+  :global(:where(:root[data-input='touch'])) .cop-input-send,
+  :global(:where(:root[data-input='touch'])) .cop-drawer-btn,
+  :global(:where(:root[data-input='touch'])) .cop-activity-fab { width: 40px; height: 40px; }
+  /* Boutons de 40 + retrait de 8 : rayon du composeur concentrique (40 / 2 + 8). */
+  :global(:where(:root[data-input='touch'])) .cop-composer-stack { --radius-composer: 28px; }
+  :global(:where(:root[data-input='touch'])) .cop-drawer-row,
+  :global(:where(:root[data-input='touch'])) .cop-context-row,
+  :global(:where(:root[data-input='touch'])) .cop-tray-option,
+  :global(:where(:root[data-input='touch'])) .cop-sec,
+  :global(:where(:root[data-input='touch'])) .cop-add-context-action,
+  :global(:where(:root[data-input='touch'])) .cop-identity-menu > button { min-height: 40px; }
+  :global(:where(:root[data-input='touch'])) .cop-think-toggle { height: 40px; padding: 0 14px 0 12px; }
+  /* Pastille à la hauteur du pied (40), croix de 28 centrée à 6 px du bord : concentrique. */
+  :global(:where(:root[data-input='touch'])) .cop-mode-pill { height: 40px; padding: 0 6px 0 14px; }
+  :global(:where(:root[data-input='touch'])) .cop-mode-pill button { width: 28px; height: 28px; }
+  /* Les variantes étroites du pied, redites après les tailles au doigt qu'elles affinent. */
+  @container cop-composer (max-width: 440px) {
+    :global(:where(:root[data-input='touch'])) .cop-target-pill { padding-left: 10px; }
+  }
+  @container cop-composer (max-width: 300px) {
+    :global(:where(:root[data-input='touch'])) .cop-mode-pill { padding-left: 10px; }
+    :global(:where(:root[data-input='touch'])) .cop-think-toggle { padding: 0 12px; }
+  }
+  /* Poignée plus large au doigt, mais sous la barre de titre : l'identité reste touchable. */
+  :global(:root[data-input='touch']) .cop-resize { width: 20px; top: var(--chrome-titlebar-height); }
+  :global(:root[data-input='touch']) .cop-resize::after { top: 0; }
+
+  @media (any-pointer: coarse) {
+    /* 24 + 2 × 8 = 40 : l'extension s'arrête aux bords intérieurs de l'encart d'erreur
+       (padding 8/10, bouton calé en haut), le texte voisin n'est pas interactif. */
+    .cop-memory-error button { position: relative; }
+    .cop-memory-error button::after { content: ''; position: absolute; inset: -8px; }
+    /* Puces de citation : élargies de leur seule marge, donc bord à bord avec une voisine
+       sans la chevaucher ; rien en vertical (à 12,5 px l'interligne laisse < 3 px entre
+       deux puces superposées). */
+    .cop-md :global(.cop-cite),
+    .cop-md :global(.cop-web-cite) { position: relative; }
+    .cop-md :global(.cop-cite)::after { content: ''; position: absolute; inset: 0 -0.2em; }
+    .cop-md :global(.cop-web-cite)::after { content: ''; position: absolute; inset: 0 -2px; }
   }
 
-  @container (max-width: 330px) {
-    .cop-composer-note { display: none; }
-    .cop-context-state { max-width: 86px; overflow: hidden; text-overflow: ellipsis; }
-    .cop-mode-pill { padding-left: 7px; }
-  }
-
-  @media (pointer: coarse) {
-    .cop-copy { width: 40px; height: 40px; }
-    .cop-question-drawer {
-      grid-template-columns: 40px minmax(0, 1fr) 40px;
-      grid-template-rows: minmax(34px, auto) 40px;
-    }
-    .cop-input-attach,
-    .cop-input-send { width: 40px; height: 40px; }
-    .cop-sec { min-height: 52px; }
-  }
-
-  @keyframes cop-composer-drawer-in {
-    from { opacity: 0.82; transform: translateY(8px) scale(0.992); }
-    to { opacity: 1; transform: translateY(0) scale(1); }
-  }
-
-  @media (prefers-reduced-motion: reduce) {
-    .cop-composer-front { animation: none; }
-    .cop-activity-backdrop,
-    .cop-activity-drawer { animation: none; }
-    .cop-panel,
-    .cop-card,
-    .cop-composer-panel,
-    .cop-composer-switch,
-    .cop-advanced-chev,
-    .cop-picker-trigger,
-    .cop-btn-quiet,
-    .cop-btn-fill,
-    .cop-btn-sm,
-    .cop-del,
-    .cop-copy,
-    .cop-err-btn,
-    .cop-dismiss,
-    .cop-activity-fab,
-    .cop-input-send,
-    .cop-sec-chev,
-    .cop-sec-ic { transition-duration: 0.01ms; }
-  }
+  /* Panneau fermé (visibility: hidden) : les boucles tournaient encore et recalculaient
+     le style à chaque image. Le filet de vie du toast n'en fait pas partie : il mesure
+     un vrai compte à rebours. */
+  .cop-panel:not(.open) .cop-typing i,
+  .cop-panel:not(.open) .cop-shimmer,
+  .cop-panel:not(.open) .cop-md-plain.streaming::after,
+  .cop-panel:not(.open) .doku-skel::after,
+  .cop-panel:not(.open) .cop-dot.breathe,
+  .cop-panel:not(.open) .orbit,
+  .cop-panel:not(.open) .cop-memory-sync span,
+  .cop-panel:not(.open) .cop-auth-pending > span { animation-play-state: paused; }
 </style>

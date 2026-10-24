@@ -1,6 +1,16 @@
+<script lang="ts" module>
+  import { EditorView } from '@codemirror/view'
+
+  // Dernier défilement connu de chaque vue, tenu par un écouteur `scroll` passif. L'état
+  // mis en cache à chaque transaction le lit ici au lieu de `scrollDOM.scrollTop` : lu
+  // juste après la mutation du DOM, ce dernier forçait un layout synchrone à chaque touche.
+  // Indexé par VUE et non par instance : un état mis en cache peut être rouvert par l'autre
+  // volet, et son écouteur de mise à jour l'accompagne.
+  const lastScrollTop = new WeakMap<EditorView, number>()
+</script>
+
 <script lang="ts">
   import { onMount, tick } from 'svelte'
-  import { EditorView } from '@codemirror/view'
   import { EditorState, type Extension } from '@codemirror/state'
   import { app, COLUMN_PX, docHeadings, forcePreview, isDirty, openCopilot, workspace, zoomDocText } from '../lib/stores.svelte'
   import { cacheEditorRuntime, editorRuntimeForTab, publishEditorSelection, registerEditor, registeredTabForPane, selectionForPane, unregisterEditor, updateEditorRegistration } from '../lib/editor-registry.svelte'
@@ -9,7 +19,7 @@
   import { revealMatch, searchFlashField } from '../lib/editor/search-flash'
   import { isRephrasePreviewUpdate, rephrasePreviewField, setRephrasePreview, syncRephrasePreview } from '../lib/editor/rephrase-preview'
   import { parentPath } from '../lib/explorer'
-  import { sandboxDoc } from '../lib/html'
+  import { revealHtmlPassage, sandboxDoc } from '../lib/html'
   import { markdownTextLength } from '../lib/images'
   import { writePastedImage } from '../lib/tauri'
   import { imageMarkdown, imageStamp, sniffImageExt } from '../lib/paste-image'
@@ -32,6 +42,7 @@
   import PdfView from './PdfView.svelte'
   import DocxView from './DocxView.svelte'
   import type { PaneId } from '../lib/workspace'
+  import { tooltip } from '../lib/tooltip'
 
   const MAX_PASTE_IMAGE = 25 * 1024 * 1024 // 25 Mo : garde-fou mémoire (tablette ARM)
 
@@ -133,8 +144,14 @@
   const tab = $derived(app.tabs.find((item) => item.id === tabId))
   const paneSelection = $derived(selectionForPane(paneId))
   const sourceMode = $derived(workspace[paneId].sourceMode)
+  // Recalculé à chaque frappe en vue scindée (le contenu change) : un mémo par onglet n'y
+  // gagnerait rien. On saute donc le balayage O(taille) quand le seuil est hors d'atteinte —
+  // omitEmbeddedImageData remplace une image d'au moins 18 caractères par 2 de plus au
+  // pire, le texte ne dépasse jamais 10/9 de la source.
+  const SPLIT_SOURCE_CHARS = 450_000
   const splitLargeSourceMode = $derived(Boolean(
-    workspace.split && tab && (tab.kind === 'md' ? markdownTextLength(tab.content) : tab.content.length) >= 450_000,
+    workspace.split && tab && tab.content.length * 10 >= SPLIT_SOURCE_CHARS * 9 &&
+      (tab.kind === 'md' ? markdownTextLength(tab.content) : tab.content.length) >= SPLIT_SOURCE_CHARS,
   ))
   const effectiveSourceMode = $derived(sourceMode || (tab?.heavy ?? false) || splitLargeSourceMode)
   // Onglet HTML en mode rendu : aperçu sandboxé (iframe), pas l'éditeur (FR-8).
@@ -145,12 +162,18 @@
   const docxRender = $derived(tab?.kind === 'docx')
 
   let host: HTMLElement | undefined = $state()
+  let htmlFrame: HTMLIFrameElement | undefined = $state()
+  // Nouvel objet à chaque chargement : l'effet de révélation se relance même pour le même onglet.
+  let htmlFrameLoad = $state<{ tabId: number } | null>(null)
   let view: EditorView | null = null
   // rev auquel l'état caché de chaque onglet a été construit (invalidation au reload externe).
   let renderedId = -1
   let renderedRev = -1
   let registeredId: number | null = null
-  let selectionMenu = $state<{ left: number; top: number } | null>(null)
+  let selectionMenu = $state<{ left: number; top: number; origin: string; kbd: boolean } | null>(null)
+  // Dernier geste : clavier (Maj+flèches, Ctrl+A…) ou pointeur. Un menu de sélection né du
+  // clavier apparaît sans animation.
+  let selectionByKey = false
   let selectionMenuExpanded = $state(false)
   let selectionMenuInsertOpen = $state(false)
   let selectionMenuConfig = $state(false)
@@ -241,7 +264,12 @@
     // courte) se voyait remonter au-dessus du bord supérieur et clippé de l'autre côté.
     const below = Math.max(viewportMargin, Math.min(selectionBottom + gap, window.innerHeight - menuHeight - viewportMargin))
     const top = above >= 48 ? above : below
-    selectionMenu = { left, top }
+    // Le menu grandit depuis la sélection (fin de sélection en x, bord le plus proche en
+    // y), pas depuis son centre.
+    const originX = Math.min(Math.max(anchorX - left, 0), menuWidth)
+    // `kbd` décidé à l'ouverture seulement : retirer `.kbd` d'un menu affiché relancerait
+    // son animation d'entrée.
+    selectionMenu = { left, top, origin: `${originX}px ${above >= 48 ? '100%' : '0'}`, kbd: selectionMenu ? selectionMenu.kbd : selectionByKey }
     selectionMenuTimer = undefined
 
     // Le menu est RETIRÉ du DOM à chaque fermeture : `selectionMenuEl` est donc undefined
@@ -257,7 +285,7 @@
     }
   }
 
-  function publishSelection(currentView: EditorView, publishedTabId = renderedId) {
+  function publishSelection(currentView: EditorView, publishedTabId = renderedId, pointerUp = false) {
     const sel = currentView.state.selection.main
     const text = sel.empty ? '' : currentView.state.sliceDoc(sel.from, sel.to)
     publishEditorSelection(paneId, publishedTabId, currentView, { from: sel.from, to: sel.to, text })
@@ -275,7 +303,11 @@
       suppressMenuOnce = false
       return
     }
-    selectionMenuTimer = setTimeout(() => positionSelectionMenu(currentView), 120)
+    // Sélection à la souris terminée (relâché) : la bulle vient tout de suite. Les 120 ms ne
+    // servent qu'au clavier (Maj+flèches en rafale) et au glisser en cours. 0 et non un appel
+    // direct : le `mouseup` de CM6 (qui peut encore réduire la sélection) passe d'abord.
+    const delay = pointerUp && !selectionByKey ? 0 : 120
+    selectionMenuTimer = setTimeout(() => positionSelectionMenu(currentView), delay)
   }
 
   function toggleRewriteOptions() {
@@ -441,7 +473,7 @@
           if (rephrase.current && !isRephrasePreviewUpdate(u)) cancelRephrase()
         }
         const runtimeTab = app.tabs.find((item) => item.id === tabId)
-        if (runtimeTab) cacheEditorRuntime(tabId, u.state, runtimeTab.rev, u.view.scrollDOM.scrollTop)
+        if (runtimeTab) cacheEditorRuntime(tabId, u.state, runtimeTab.rev, lastScrollTop.get(u.view) ?? 0)
         // Publie la sélection courante (16.1) : le copilote propose « Reformuler » quand
         // `text` est non vide. Sur édition, les bornes bougent → on republie aussi.
         if (u.selectionSet || u.docChanged) {
@@ -483,16 +515,24 @@
   }
 
   // Le zoom change la hauteur des lignes : CodeMirror remesure (curseur, défilement), et le
-  // volet actif affiche brièvement le niveau — y compris au clavier (Ctrl+0/=/-).
+  // volet actif affiche brièvement le niveau — y compris au clavier (Ctrl+0/=/-), mais
+  // l'entrée du badge ne s'anime que pour Ctrl+molette : un raccourci reste immobile.
   let zoomBadge = $state(false)
+  let zoomBadgeKbd = $state(false)
   let zoomBadgeTimer: ReturnType<typeof setTimeout> | undefined
   let seenZoom = app.docZoom
+  // Posé par Ctrl+molette juste avant zoomDocText, consommé par l'effet ci-dessous.
+  let wheelZoomPending = false
   $effect(() => {
     const zoom = app.docZoom
     view?.requestMeasure()
     if (zoom === seenZoom) return
     seenZoom = zoom
+    const fromWheel = wheelZoomPending
+    wheelZoomPending = false
     if (paneId !== workspace.activePaneId) return
+    // Décidé à l'apparition seulement : retirer `.kbd` du badge affiché rejouerait l'entrée.
+    if (!zoomBadge) zoomBadgeKbd = !fromWheel
     zoomBadge = true
     clearTimeout(zoomBadgeTimer)
     zoomBadgeTimer = setTimeout(() => (zoomBadge = false), 1400)
@@ -509,8 +549,11 @@
     let scrollScheduled = false
     const onScroll = () => {
       selectionMenu = null
+      if (!view) return
+      const top = view.scrollDOM.scrollTop
+      lastScrollTop.set(view, top)
       const current = app.tabs.find((item) => item.id === renderedId)
-      if (current && view) cacheEditorRuntime(current.id, view.state, current.rev, view.scrollDOM.scrollTop)
+      if (current) cacheEditorRuntime(current.id, view.state, current.rev, top)
       if (scrollScheduled) return
       scrollScheduled = true
       requestAnimationFrame(() => {
@@ -520,15 +563,17 @@
     }
     const onSelectionIntent = () => {
       if (!view) return
-      publishSelection(view)
+      publishSelection(view, renderedId, true)
     }
     const onPointerDown = (event: PointerEvent) => {
+      selectionByKey = false
       const target = event.target as Node | null
       if (selectionMenuEl?.contains(target)) return
       if (view?.dom.contains(target)) return
       hideSelectionMenu()
     }
     const onKeyDown = (event: KeyboardEvent) => {
+      selectionByKey = true
       if (event.key !== 'Escape') return
       // Un Échap déjà consommé par un autre overlay (modale, recherche…) ne doit pas écarter
       // une proposition qui a coûté une génération complète.
@@ -553,7 +598,10 @@
       lastWheelZoom = now
       const anchor = view.posAtCoords({ x: event.clientX, y: event.clientY })
       const offset = event.clientY - view.scrollDOM.getBoundingClientRect().top
-      if (!zoomDocText(event.deltaY < 0 ? 1 : -1) || anchor == null) return
+      wheelZoomPending = true
+      const changed = zoomDocText(event.deltaY < 0 ? 1 : -1)
+      if (!changed) wheelZoomPending = false
+      if (!changed || anchor == null) return
       requestAnimationFrame(() => {
         view?.requestMeasure()
         view?.dispatch({ effects: EditorView.scrollIntoView(anchor, { y: 'start', yMargin: offset }) })
@@ -705,8 +753,16 @@
   // (contenu prêt), puis celui-ci saute + surligne. Onglet déjà actif : contenu déjà là.
   $effect(() => {
     const reveal = app.pendingReveal
-    if (!reveal || !view) return
-    if (!tab || tab.path !== reveal.path) return
+    if (!reveal || !tab || tab.path !== reveal.path || (reveal.tabId != null && reveal.tabId !== tab.id)) return
+    // HTML en aperçu : l'éditeur est masqué, le passage se révèle dans l'iframe. Tant que
+    // srcdoc charge (ou montre encore l'onglet précédent), `htmlFrameLoad` relancera l'effet.
+    if (htmlRender && reveal.text) {
+      if (!htmlFrame || htmlFrameLoad?.tabId !== tab.id) return
+      if (revealHtmlPassage(htmlFrame, reveal.text, app.theme === 'dark') === 'pending') return
+      app.pendingReveal = null
+      return
+    }
+    if (!view) return
     revealMatch(view, reveal.line, reveal.col, reveal.length, { select: reveal.select })
     app.pendingReveal = null
   })
@@ -714,18 +770,18 @@
 
 <div class="doc">
   {#if zoomBadge}
-    <button class="zoom-badge" title="Revenir à 100 % (Ctrl+0)" onclick={() => zoomDocText(0)}>{Math.round(app.docZoom * 100)} %</button>
+    <button class="zoom-badge" class:kbd={zoomBadgeKbd} use:tooltip={{ label: 'Revenir à 100 %', kbd: 'Ctrl+0' }} onclick={() => zoomDocText(0)}>{Math.round(app.docZoom * 100)} %</button>
   {/if}
   {#if tab?.heavy && !app.focus}
     <div class="heavy-notice" role="status">
-      <span class="msr" style="font-size:16px">bolt</span>
+      <svg class="icon" style="font-size:16px" aria-hidden="true"><use href="#i-zap" /></svg>
       <span>Fichier volumineux — affiché en mode source pour rester fluide.</span>
       <button class="heavy-action" onclick={() => forcePreview(tab!.id)}>Afficher l'aperçu</button>
     </div>
   {/if}
   {#if splitLargeSourceMode && !tab?.heavy && !app.focus}
     <div class="heavy-notice" role="status">
-      <span class="msr" style="font-size:16px">bolt</span>
+      <svg class="icon" style="font-size:16px" aria-hidden="true"><use href="#i-zap" /></svg>
       <span>Vue scindée — aperçu suspendu pour garder ce document volumineux fluide.</span>
     </div>
   {/if}
@@ -734,7 +790,7 @@
     <span class="focus-dirty" title="Modifications non enregistrées" aria-label="Modifications non enregistrées"></span>
   {/if}
   {#if htmlRender}
-    <iframe class="html-view" title="Aperçu HTML" sandbox="" srcdoc={sandboxDoc(tab!.content, app.theme, COLUMN_PX[app.columnWidth])}></iframe>
+    <iframe class="html-view" title="Aperçu HTML" sandbox="allow-same-origin" bind:this={htmlFrame} onload={() => (htmlFrameLoad = { tabId: tab!.id })} srcdoc={sandboxDoc(tab!.content, app.theme, COLUMN_PX[app.columnWidth])}></iframe>
   {/if}
   {#if docxRender}
     <!-- Keyé par id, comme le PDF : changer d'onglet détruit l'instance SuperDoc. -->
@@ -754,39 +810,40 @@
     <div
       class="selection-menu"
       class:expanded={selectionMenuExpanded}
+      class:kbd={selectionMenu.kbd}
       bind:this={selectionMenuEl}
-      style="left:{selectionMenu.left}px;top:{selectionMenu.top}px"
+      style="left:{selectionMenu.left}px;top:{selectionMenu.top}px;transform-origin:{selectionMenu.origin}"
       role="menu"
       aria-label="Actions sur la sélection"
     >
       {#if tab?.kind === 'md'}
         <div class="selection-format-row" role="group" aria-label="Mise en forme">
-          <button class="selection-format-btn" title="Gras (Ctrl+B)" aria-label="Gras" onmousedown={keepEditorFocus} onclick={() => runFormat(toggleBold)}>
-            <span class="msr">format_bold</span>
+          <button class="selection-format-btn" use:tooltip={{ label: 'Gras', kbd: 'Ctrl+B' }} aria-label="Gras" onmousedown={keepEditorFocus} onclick={() => runFormat(toggleBold)}>
+            <svg class="icon" aria-hidden="true"><use href="#i-bold" /></svg>
           </button>
-          <button class="selection-format-btn" title="Italique (Ctrl+I)" aria-label="Italique" onmousedown={keepEditorFocus} onclick={() => runFormat(toggleItalic)}>
-            <span class="msr">format_italic</span>
+          <button class="selection-format-btn" use:tooltip={{ label: 'Italique', kbd: 'Ctrl+I' }} aria-label="Italique" onmousedown={keepEditorFocus} onclick={() => runFormat(toggleItalic)}>
+            <svg class="icon" aria-hidden="true"><use href="#i-italic" /></svg>
           </button>
-          <button class="selection-format-btn" title="Barré" aria-label="Barré" onmousedown={keepEditorFocus} onclick={() => runFormat(toggleStrike)}>
-            <span class="msr">strikethrough_s</span>
+          <button class="selection-format-btn" use:tooltip={'Barré'} aria-label="Barré" onmousedown={keepEditorFocus} onclick={() => runFormat(toggleStrike)}>
+            <svg class="icon" aria-hidden="true"><use href="#i-strikethrough" /></svg>
           </button>
-          <button class="selection-format-btn" title="Code inline" aria-label="Code inline" onmousedown={keepEditorFocus} onclick={() => runFormat(toggleInlineCode)}>
-            <span class="msr">code</span>
+          <button class="selection-format-btn" use:tooltip={'Code inline'} aria-label="Code inline" onmousedown={keepEditorFocus} onclick={() => runFormat(toggleInlineCode)}>
+            <svg class="icon" aria-hidden="true"><use href="#i-code" /></svg>
           </button>
-          <button class="selection-format-btn" title="Lien (Ctrl+K)" aria-label="Lien" onmousedown={keepEditorFocus} onclick={() => runFormat(toggleLink)}>
-            <span class="msr">link</span>
+          <button class="selection-format-btn" use:tooltip={{ label: 'Lien', kbd: 'Ctrl+K' }} aria-label="Lien" onmousedown={keepEditorFocus} onclick={() => runFormat(toggleLink)}>
+            <svg class="icon" aria-hidden="true"><use href="#i-link" /></svg>
           </button>
         </div>
         <div class="selection-menu-sep"></div>
       {/if}
       <button class="selection-menu-action" role="menuitem" onclick={copySelection}>
-        <span class="msr">content_copy</span><span class="selection-menu-label">Copier</span><kbd>Ctrl+C</kbd>
+        <svg class="icon" aria-hidden="true"><use href="#i-copy" /></svg><span class="selection-menu-label">Copier</span><kbd>Ctrl+C</kbd>
       </button>
       <button class="selection-menu-action" role="menuitem" onclick={cutSelection}>
-        <span class="msr">content_cut</span><span class="selection-menu-label">Couper</span><kbd>Ctrl+X</kbd>
+        <svg class="icon" aria-hidden="true"><use href="#i-scissors" /></svg><span class="selection-menu-label">Couper</span><kbd>Ctrl+X</kbd>
       </button>
       <button class="selection-menu-action" role="menuitem" onclick={pasteClipboard}>
-        <span class="msr">content_paste</span><span class="selection-menu-label">Coller</span><kbd>Ctrl+V</kbd>
+        <svg class="icon" aria-hidden="true"><use href="#i-clipboard-paste" /></svg><span class="selection-menu-label">Coller</span><kbd>Ctrl+V</kbd>
       </button>
       <div class="selection-menu-sep"></div>
       {#if tab?.kind === 'md'}
@@ -798,9 +855,9 @@
           aria-expanded={selectionMenuInsertOpen}
           onclick={toggleInsertOptions}
         >
-          <span class="msr">format_h1</span>
+          <svg class="icon" aria-hidden="true"><use href="#i-heading-1" /></svg>
           <span class="selection-menu-label">Titres &amp; blocs</span>
-          <span class="msr selection-menu-chevron">chevron_right</span>
+          <svg class="icon selection-menu-chevron" aria-hidden="true"><use href="#i-chevron-right" /></svg>
         </button>
         <div
           class="selection-rewrite-options"
@@ -812,28 +869,28 @@
         >
           <div class="selection-insert-inner">
             <button class="selection-menu-action selection-menu-subaction" role="menuitem" onmousedown={keepEditorFocus} onclick={() => runInsertAction((v) => setHeading(v, 1))}>
-              <span class="msr">format_h1</span><span>Titre 1</span>
+              <svg class="icon" aria-hidden="true"><use href="#i-heading-1" /></svg><span>Titre 1</span>
             </button>
             <button class="selection-menu-action selection-menu-subaction" role="menuitem" onmousedown={keepEditorFocus} onclick={() => runInsertAction((v) => setHeading(v, 2))}>
-              <span class="msr">format_h2</span><span>Titre 2</span>
+              <svg class="icon" aria-hidden="true"><use href="#i-heading-2" /></svg><span>Titre 2</span>
             </button>
             <button class="selection-menu-action selection-menu-subaction" role="menuitem" onmousedown={keepEditorFocus} onclick={() => runInsertAction((v) => setHeading(v, 3))}>
-              <span class="msr">format_h3</span><span>Titre 3</span>
+              <svg class="icon" aria-hidden="true"><use href="#i-heading-3" /></svg><span>Titre 3</span>
             </button>
             <button class="selection-menu-action selection-menu-subaction" role="menuitem" onmousedown={keepEditorFocus} onclick={() => runInsertAction(toggleList)}>
-              <span class="msr">format_list_bulleted</span><span>Liste</span>
+              <svg class="icon" aria-hidden="true"><use href="#i-list" /></svg><span>Liste</span>
             </button>
             <button class="selection-menu-action selection-menu-subaction" role="menuitem" onmousedown={keepEditorFocus} onclick={() => runInsertAction(toggleQuote)}>
-              <span class="msr">format_quote</span><span>Citation</span>
+              <svg class="icon" aria-hidden="true"><use href="#i-quote" /></svg><span>Citation</span>
             </button>
             <button class="selection-menu-action selection-menu-subaction" role="menuitem" onmousedown={keepEditorFocus} onclick={() => runInsertAction(wrapCodeBlock)}>
-              <span class="msr">code</span><span>Bloc de code</span>
+              <svg class="icon" aria-hidden="true"><use href="#i-code" /></svg><span>Bloc de code</span>
             </button>
             <button class="selection-menu-action selection-menu-subaction" role="menuitem" onmousedown={keepEditorFocus} onclick={() => runInsertAction(insertHr)}>
-              <span class="msr">horizontal_rule</span><span>Séparateur</span>
+              <svg class="icon" aria-hidden="true"><use href="#i-minus" /></svg><span>Séparateur</span>
             </button>
             <button class="selection-menu-action selection-menu-subaction" role="menuitem" onmousedown={keepEditorFocus} onclick={() => runInsertAction(insertTable)}>
-              <span class="msr">table</span><span>Tableau</span>
+              <svg class="icon" aria-hidden="true"><use href="#i-table" /></svg><span>Tableau</span>
             </button>
           </div>
         </div>
@@ -846,9 +903,9 @@
         aria-expanded={selectionMenuExpanded}
         onclick={toggleRewriteOptions}
       >
-        <span class="selection-menu-spark"><span class="msr">auto_awesome</span></span>
+        <span class="selection-menu-spark"><svg class="icon" aria-hidden="true"><use href="#i-sparkles" /></svg></span>
         <span class="selection-menu-label">Réécrire avec Doku-San</span>
-        <span class="msr selection-menu-chevron">chevron_right</span>
+        <svg class="icon selection-menu-chevron" aria-hidden="true"><use href="#i-chevron-right" /></svg>
       </button>
       <div
         class="selection-rewrite-options"
@@ -862,26 +919,26 @@
           {#if selectionMenuConfig}
             <div class="selection-menu-note" role="note">{setupNote}</div>
             <button class="selection-menu-action selection-menu-subaction" role="menuitem" onclick={openModelSettings}>
-              <span class="msr">layers</span><span>Choisir un modèle</span>
+              <svg class="icon" aria-hidden="true"><use href="#i-layers" /></svg><span>Choisir un modèle</span>
             </button>
           {:else}
             <button class="selection-menu-action selection-menu-subaction" role="menuitem" onclick={() => runSelectionAction('clarify')}>
-              <span class="msr">auto_fix_high</span><span>Clarifier</span>
+              <svg class="icon" aria-hidden="true"><use href="#i-wand-sparkles" /></svg><span>Clarifier</span>
             </button>
             <button class="selection-menu-action selection-menu-subaction" role="menuitem" onclick={() => runSelectionAction('shorten')}>
-              <span class="msr">compress</span><span>Raccourcir</span>
+              <svg class="icon" aria-hidden="true"><use href="#i-shrink" /></svg><span>Raccourcir</span>
             </button>
             <button class="selection-menu-action selection-menu-subaction" role="menuitem" onclick={() => runSelectionAction('tone')}>
-              <span class="msr">tune</span><span>Adopter un ton neutre</span>
+              <svg class="icon" aria-hidden="true"><use href="#i-sliders-horizontal" /></svg><span>Adopter un ton neutre</span>
             </button>
             <button class="selection-menu-action selection-menu-subaction" role="menuitem" onclick={() => runSelectionAction('correct')}>
-              <span class="msr">spellcheck</span><span>Corriger</span>
+              <svg class="icon" aria-hidden="true"><use href="#i-spell-check" /></svg><span>Corriger</span>
             </button>
             <button class="selection-menu-action selection-menu-subaction" role="menuitem" onclick={() => runSelectionAction('bullets')}>
-              <span class="msr">format_list_bulleted</span><span>En liste à puces</span>
+              <svg class="icon" aria-hidden="true"><use href="#i-list" /></svg><span>En liste à puces</span>
             </button>
             <button class="selection-menu-action selection-menu-subaction" role="menuitem" onclick={() => runSelectionAction('tasks')}>
-              <span class="msr">checklist</span><span>En cases à cocher</span>
+              <svg class="icon" aria-hidden="true"><use href="#i-list-checks" /></svg><span>En cases à cocher</span>
             </button>
             <div class="selection-menu-sep"></div>
             {#if selectionMenuCustomOpen}
@@ -899,12 +956,12 @@
                   aria-label="Votre consigne pour Doku-San"
                 />
                 <button class="selection-custom-send" type="submit" disabled={!customInstruction.trim()} aria-label="Appliquer la consigne">
-                  <span class="msr">arrow_upward</span>
+                  <svg class="icon" aria-hidden="true"><use href="#i-arrow-up" /></svg>
                 </button>
               </form>
             {:else}
               <button class="selection-menu-action selection-menu-subaction" role="menuitem" onclick={openCustomInstruction}>
-                <span class="msr">edit_note</span><span>Demander autre chose…</span>
+                <svg class="icon" aria-hidden="true"><use href="#i-notebook-pen" /></svg><span>Demander autre chose…</span>
               </button>
             {/if}
           {/if}
@@ -918,15 +975,15 @@
       <span class="empty-mark"><DokuMark size={64} /></span>
       <p class="empty-title">Aucun document ouvert</p>
       <button class="empty-open" onclick={onOpen}>
-        <span class="msr" style="font-size:18px">folder_open</span>
+        <svg class="icon" style="font-size:16px" aria-hidden="true"><use href="#i-folder-open" /></svg>
         Ouvrir un fichier
-        <span class="keys"><kbd>Ctrl</kbd><kbd>O</kbd></span>
+        <span class="keys"><kbd>Ctrl+O</kbd></span>
       </button>
       <dl class="empty-shortcuts">
-        <div><dt><kbd>Ctrl</kbd><kbd>/</kbd></dt><dd>source ↔ rendu</dd></div>
+        <div><dt><kbd>Ctrl+/</kbd></dt><dd>source ↔ rendu</dd></div>
         <div><dt><kbd>F9</kbd></dt><dd>mode focus</dd></div>
-        <div><dt><kbd>Ctrl</kbd><kbd>⇧</kbd><kbd>E</kbd></dt><dd>explorateur</dd></div>
-        <div><dt><kbd>Ctrl</kbd><kbd>⇧</kbd><kbd>P</kbd></dt><dd>plan</dd></div>
+        <div><dt><kbd>Ctrl+Maj+E</kbd></dt><dd>explorateur</dd></div>
+        <div><dt><kbd>Ctrl+Maj+P</kbd></dt><dd>plan</dd></div>
       </dl>
     </div>
   {/if}
@@ -936,41 +993,50 @@
   .doc { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; background: var(--cream-content); }
   .zoom-badge {
     position: absolute; z-index: 20; left: 50%; bottom: 22px; transform: translateX(-50%);
-    padding: 6px 13px; border: 0; border-radius: 999px; background: var(--ink); color: var(--cream-content);
-    font: 600 12px var(--font-sans); font-variant-numeric: tabular-nums; cursor: pointer;
-    box-shadow: 0 6px 18px rgba(var(--shadow-rgb), 0.18); animation: zoom-badge-in 120ms ease-out;
+    height: var(--control-sm); padding: 0 12px; border: 0; border-radius: var(--radius-full);
+    background: var(--ink); color: var(--cream-content);
+    font: var(--weight-control) var(--text-sm) var(--font-sans); font-variant-numeric: tabular-nums; cursor: pointer;
+    box-shadow: var(--shadow-lg); animation: zoom-badge-in var(--duration-basic) var(--ease-enter);
   }
-  @keyframes zoom-badge-in { from { opacity: 0; translate: 0 4px; } to { opacity: 1; translate: 0 0; } }
-  @media (prefers-reduced-motion: reduce) { .zoom-badge { animation: none; } }
+  @keyframes zoom-badge-in { from { opacity: 0; translate: 0 4px; } }
+  .zoom-badge.kbd { animation: none; }
 
+  /* Alerte en ligne à la Kube : filet plutôt qu'ombre, une seule action secondaire. */
   .heavy-notice {
     flex: none;
     max-width: var(--doc-width, 680px);
     width: 100%;
     margin: 8px auto 0;
-    padding: 8px 12px;
+    padding: 6px 6px 6px 12px;
+    min-height: var(--control-lg);
     display: flex;
     align-items: center;
     gap: 8px;
-    border-radius: 8px;
+    border-radius: var(--radius-xl);
     background: var(--surface);
+    box-shadow: inset 0 0 0 1px var(--line-1);
     color: var(--ink-3);
-    font-size: 12.5px;
+    font-size: var(--text-xs);
   }
-  .heavy-notice > .msr { color: var(--warn); flex: none; }
-  .heavy-notice > span:not(.msr) { flex: 1; min-width: 0; }
+  /* --warn seul tombe à 2,2:1 sur la surface : la teinte texte garde le sens lisible. */
+  .heavy-notice > .icon { color: var(--warn-text); }
+  .heavy-notice > span { flex: 1; min-width: 0; }
   .heavy-action {
     flex: none;
-    padding: 4px 10px;
-    border-radius: 6px;
+    height: var(--control-2xs);
+    padding: 0 10px;
     border: 0;
-    background: var(--surface-2);
-    color: var(--ink-2);
-    font-size: 12px;
+    /* Concentrique : notice --radius-xl (12) − gouttière 6 = 6. */
+    border-radius: var(--radius-sm);
+    background: var(--accent-soft);
+    color: var(--ink);
+    font-size: var(--text-sm);
+    font-weight: var(--weight-control);
     cursor: pointer;
-    transition: background 140ms ease, color 140ms ease;
+    transition: background-color var(--duration-basic) ease;
   }
-  .heavy-action:hover { background: var(--surface-hover); color: var(--ink); }
+  .heavy-action:hover { background: rgba(var(--ink-rgb), 0.12); }
+  .heavy-action:focus-visible { outline-offset: -1px; }
 
   .empty {
     position: absolute;
@@ -979,49 +1045,54 @@
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    gap: 16px;
+    gap: 12px;
+    padding: 24px 12px;
     background: var(--cream-content);
-    color: var(--ink-4);
     user-select: none;
   }
   .empty-mark { display: inline-flex; color: var(--ink-4); opacity: 0.35; }
-  .empty-title { margin: 0; font-size: 14px; color: var(--ink-3); }
+  .empty-title { margin: 0; font-size: var(--text-lg); line-height: 24px; font-weight: var(--weight-strong); letter-spacing: var(--tracking-tight); color: var(--ink-2); text-wrap: balance; }
   .empty-open {
     display: inline-flex;
     align-items: center;
     gap: 8px;
-    padding: 8px 14px;
+    height: var(--control-md);
+    margin-top: 4px;
+    padding: 0 8px 0 12px;
     border: 0;
-    border-radius: 9px;
-    background: var(--surface-2);
-    color: var(--ink-2);
+    border-radius: var(--radius-lg);
+    background: var(--accent-soft);
+    color: var(--ink);
     font-size: 13px;
+    font-weight: 510;
     cursor: pointer;
-    transition: background 140ms ease, color 140ms ease;
+    transition: background-color var(--duration-basic) ease;
   }
-  .empty-open:hover { background: var(--accent-soft); color: var(--ink); }
-  .empty-open .keys { display: inline-flex; gap: 3px; margin-left: 4px; }
+  .empty-open:hover { background: rgba(var(--ink-rgb), 0.12); }
+  .empty-open .keys { display: inline-flex; gap: 2px; margin-left: 4px; color: var(--ink-3); }
+  /* Touche à la Kube : capuchon plat teinté par la couleur du texte qui l'entoure, donc
+     juste dans le bouton comme dans la liste des raccourcis sans règle de plus. */
   .empty kbd {
-    font-family: var(--font-mono);
-    font-size: 10.5px;
+    min-width: 16px;
+    padding: 2px 5px;
+    border-radius: var(--radius-xs);
+    background: color-mix(in srgb, currentColor 10%, transparent);
+    font-family: var(--font-sans);
+    font-size: var(--text-xs);
+    font-weight: 400;
     line-height: 1;
-    padding: 3px 5px;
-    border-radius: 4px;
-    background: var(--surface-2);
-    color: var(--ink-4);
+    text-align: center;
   }
-  /* Dans le bouton (lui-même surface-2), les touches passent un cran plus sombre. */
-  .empty-open kbd { background: var(--accent-soft); }
   .empty-shortcuts {
-    margin: 8px 0 0;
+    margin: 12px 0 0;
     display: grid;
     grid-template-columns: auto auto;
-    gap: 8px 22px;
+    gap: 8px 24px;
     font-size: 12px;
-    color: var(--ink-4);
+    color: var(--ink-3);
   }
   .empty-shortcuts div { display: flex; align-items: center; gap: 8px; }
-  .empty-shortcuts dt { display: inline-flex; gap: 3px; }
+  .empty-shortcuts dt { display: inline-flex; gap: 2px; }
   .empty-shortcuts dd { margin: 0; }
   .focus-dirty {
     position: absolute;
@@ -1030,7 +1101,7 @@
     z-index: 2;
     width: 7px;
     height: 7px;
-    border-radius: 50%;
+    border-radius: var(--radius-full);
     background: var(--ink-3);
     opacity: 0.55;
     pointer-events: none;
@@ -1046,93 +1117,99 @@
   }
   .editor-host :global(.cm-editor) { height: 100%; }
 
+  /* Menu de sélection à la Kube : surface élevée opaque (le texte dessous bouge), gouttière
+     4px, rangées de 32px au rayon concentrique (12 − 4 = 8), ombre de rôle « menu ». */
   .selection-menu {
     position: fixed;
-    z-index: 30;
+    z-index: var(--z-popover);
     width: 264px;
-    padding: 6px;
-    border-radius: 14px;
-    background: var(--cream-tint);
-    box-shadow:
-      0 0 0 1px var(--elevation-ring-soft),
-      0 12px 30px rgba(var(--shadow-rgb), 0.16);
-    color: var(--ink-2);
+    padding: 4px;
+    border-radius: var(--radius-xl);
+    background: var(--composer-bg);
+    box-shadow: var(--shadow-xl);
+    color: var(--ink);
     font-family: var(--font-sans);
+    font-size: 13px;
     user-select: none;
-    animation: selection-menu-in 160ms cubic-bezier(0.22, 1, 0.36, 1);
+    animation: doku-pop-in var(--duration-basic) var(--ease-enter-snappy);
     /* Filet : même si la mesure se trompe, le menu reste entièrement atteignable —
        il défile au lieu d'avoir ses derniers boutons coupés hors écran. */
     max-height: calc(100vh - 24px);
     overflow-y: auto;
     overscroll-behavior: contain;
   }
-  .selection-menu-sep { height: 1px; margin: 5px 7px; background: var(--line-1); }
-  .selection-format-row { display: flex; gap: 2px; padding: 1px 2px; }
+  .selection-menu.kbd { animation: none; }
+  .selection-menu-sep { height: 1px; margin: 4px 8px; background: var(--line-1); }
+  .selection-format-row { display: flex; gap: 2px; }
   .selection-format-btn {
     flex: 1;
-    height: 32px;
+    height: var(--control-sm);
     display: grid;
     place-items: center;
     border: 0;
-    border-radius: 8px;
+    border-radius: var(--radius-md);
     background: transparent;
     color: var(--ink-3);
     cursor: pointer;
-    transition: background 140ms ease, color 140ms ease, scale 100ms ease;
+    transition: background-color var(--duration-basic) ease, color var(--duration-basic) ease;
   }
-  .selection-format-btn .msr { font-size: 18px; }
-  .selection-format-btn:hover { background: var(--surface-hover); color: var(--ink); }
-  .selection-format-btn:focus-visible { outline: 2px solid var(--line-3); outline-offset: -2px; }
-  .selection-format-btn:active { scale: 0.92; }
+  .selection-format-btn .icon { font-size: 16px; }
+  .selection-format-btn:hover { background: rgba(var(--ink-rgb), 0.06); color: var(--ink); }
+  .selection-format-btn:active { background: rgba(var(--ink-rgb), 0.12); }
+  .selection-format-btn:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -1px; }
+  /* Doigt : changements VISIBLES → dernier pointeur utilisé (main.ts), pas `any-pointer`. */
+  :global(:root[data-input='touch']) .selection-format-btn { height: 40px; min-width: 36px; }
+  :global(:root[data-input='touch']) .selection-menu-action,
+  :global(:root[data-input='touch']) .selection-custom { min-height: 40px; }
   .selection-menu-action {
     width: 100%;
-    height: 40px;
+    height: var(--control-md);
     display: flex;
     align-items: center;
-    gap: 9px;
-    padding: 0 9px;
+    gap: 8px;
+    padding: 0 8px;
     border: 0;
-    border-radius: 9px;
+    border-radius: var(--radius-md);
     background: transparent;
-    color: var(--ink-2);
-    font-family: var(--font-sans);
-    font-size: 12.5px;
+    color: var(--ink);
+    font: inherit;
     text-align: left;
     cursor: pointer;
-    transition: background 140ms ease, color 140ms ease, scale 100ms ease;
+    transition: background-color var(--duration-basic) ease;
   }
-  .selection-menu-action .msr { width: 19px; font-size: 17px; color: var(--ink-4); }
+  .selection-menu-action .icon { font-size: 15px; color: var(--ink-4); transition: color var(--duration-basic) ease; }
   /* `overflow: hidden` n'est PAS décoratif : sans lui, un libellé trop long pour la largeur
      du menu ne rétrécit pas — il déborde et se superpose à ce qui suit (vécu : « Réécrire avec
      Doku-San » passait par-dessus le compteur de caractères, depuis retiré). */
   .selection-menu-label { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
   .selection-menu-action kbd {
     margin-left: auto;
-    color: var(--ink-5);
-    font-family: var(--font-sans);
-    font-size: 10px;
-    font-weight: 400;
+    color: var(--ink-4);
+    font-family: inherit;
+    font-size: 12px;
   }
-  .selection-menu-action:hover { background: var(--surface-hover); color: var(--ink); }
-  .selection-menu-action:hover .msr { color: var(--ink-2); }
-  .selection-menu-action:focus-visible { outline: 2px solid var(--line-3); outline-offset: -2px; }
-  .selection-menu-action:active { scale: 0.96; }
-  .selection-menu-rewrite { padding-left: 7px; }
+  .selection-menu-action:hover,
+  .selection-menu-rewrite.open { background: var(--accent-soft); }
+  .selection-menu-action:hover .icon { color: var(--ink-2); }
+  .selection-menu-action:active { background: rgba(var(--ink-rgb), 0.12); }
+  .selection-menu-action:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
+  /* Tuile de 20px à la place d'une icône de 15px : les marges négatives la ramènent à
+     l'encombrement d'une icône, le libellé reste dans l'axe des autres rangées. */
   .selection-menu-spark {
-    width: 23px;
-    height: 23px;
+    flex: none;
+    margin: 0 -2px 0 -3px;
+    width: 20px;
+    height: 20px;
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    border-radius: 7px;
+    border-radius: var(--radius-sm);
     background: var(--surface-2);
-    color: var(--ink-3);
   }
-  .selection-menu-spark .msr { width: auto; font-size: 14px; }
-  .selection-menu-chevron {
-    width: 16px !important;
-    font-size: 16px !important;
-    transition: transform 180ms cubic-bezier(0.2, 0, 0, 1);
+  .selection-menu-spark .icon { font-size: 12px; color: var(--ink-3); }
+  .selection-menu-action .selection-menu-chevron {
+    font-size: 14px;
+    transition: transform var(--duration-basic) var(--ease-enter-snappy), color var(--duration-basic) ease;
   }
   .selection-menu-rewrite.open .selection-menu-chevron { transform: rotate(90deg); }
   .selection-rewrite-options {
@@ -1140,21 +1217,25 @@
     grid-template-rows: 0fr;
     opacity: 0;
     transition:
-      grid-template-rows 190ms cubic-bezier(0.2, 0, 0, 1),
-      opacity 130ms ease-in;
+      grid-template-rows var(--duration-moderate) var(--ease-enter-snappy),
+      opacity var(--duration-basic) ease;
   }
   .selection-rewrite-options.open { grid-template-rows: 1fr; opacity: 1; }
+  /* Sortie plus brève que l'entrée : replier, c'est congédier. */
+  .selection-rewrite-options:not(.open) { transition-duration: var(--duration-basic); }
   .selection-rewrite-inner,
   .selection-insert-inner { min-height: 0; overflow: hidden; }
+  /* Sous-rangées : l'icône s'aligne sur le libellé de la rangée parente. */
   .selection-menu-subaction {
-    height: 38px;
-    padding-left: 39px;
-    font-size: 12px;
+    height: var(--control-md);
+    padding-left: 31px;
+    color: var(--ink-2);
   }
-  .selection-menu-subaction .msr { width: 17px; font-size: 16px; }
+  .selection-menu-subaction:hover { color: var(--ink); }
+  .selection-menu-subaction .icon { font-size: 14px; }
   .selection-menu-note {
-    margin: 4px 10px 2px 39px;
-    font-size: 11.5px;
+    margin: 4px 8px 4px 31px;
+    font-size: 12px;
     line-height: 1.5;
     color: var(--ink-3);
   }
@@ -1165,61 +1246,60 @@
   .selection-custom {
     display: flex;
     align-items: center;
-    gap: 5px;
-    margin: 2px 3px 2px;
-    padding: 3px 3px 3px 10px;
-    border-radius: 11px;
+    gap: 4px;
+    margin: 2px 0;
+    padding: 2px 2px 2px 10px;
+    /* Pilule : le bouton d'envoi rond, à 2px du bord, reste concentrique. */
+    border-radius: var(--radius-full);
     background: var(--composer-bg);
     box-shadow: inset 0 0 0 1px var(--line-1);
-    transition: box-shadow 140ms ease;
+    transition: box-shadow var(--duration-basic) ease;
   }
-  .selection-custom:focus-within { box-shadow: inset 0 0 0 1px var(--line-3); }
+  .selection-custom:hover { box-shadow: inset 0 0 0 1px var(--line-3); }
+  .selection-custom:focus-within { box-shadow: inset 0 0 0 1px var(--focus-ring); }
   .selection-custom-field {
     flex: 1;
     min-width: 0;
-    height: 28px;
+    height: var(--control-sm);
     border: 0;
     padding: 0;
     background: none;
     color: var(--ink);
-    font-family: var(--font-sans);
-    font-size: 12px;
+    font: inherit;
   }
   /* L'anneau de focus vit sur la rangée entière (:focus-within) — un second liseré autour du
      seul champ ferait deux cadres concentriques. */
   .selection-custom-field:focus { outline: none; }
   .selection-custom-field::placeholder { color: var(--ink-4); }
   .selection-custom-send {
+    position: relative;
     flex: none;
-    width: 26px;
-    height: 26px;
+    width: var(--control-2xs);
+    height: var(--control-2xs);
     display: inline-flex;
     align-items: center;
     justify-content: center;
     border: 0;
-    border-radius: 50%;
+    border-radius: var(--radius-full);
     background: var(--ink);
     color: var(--cream-content);
     cursor: pointer;
-    transition: background 140ms ease, opacity 140ms ease, scale 100ms ease;
+    transition:
+      background-color var(--duration-basic) ease,
+      opacity var(--duration-basic) ease,
+      transform var(--duration-basic) var(--ease-enter-snappy);
   }
-  .selection-custom-send .msr { width: auto; font-size: 16px; }
-  .selection-custom-send:hover { background: var(--ink-2); }
-  .selection-custom-send:focus-visible { outline: 2px solid var(--line-3); outline-offset: 2px; }
-  .selection-custom-send:not(:disabled):active { scale: 0.92; }
-  .selection-custom-send:disabled { opacity: 0.35; cursor: default; }
+  .selection-custom-send:active:not(:disabled) { transform: scale(0.97); }
+  .selection-custom-send .icon { font-size: 14px; }
+  .selection-custom-send:not(:disabled):hover { background: var(--ink-2); }
+  .selection-custom-send:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+  .selection-custom-send:disabled { opacity: var(--opacity-disabled); cursor: default; }
+  /* 24px au doigt : zone portée à 40 sans changer le rendu. À gauche, 4px seulement :
+     l'écart avec le champ voisin n'est que de 4px. */
+  @media (any-pointer: coarse) {
+    .selection-custom-send::after { content: ''; position: absolute; inset: -8px -8px -8px -4px; }
+  }
 
-  @keyframes selection-menu-in {
-    from { opacity: 0; transform: translateY(4px) scale(0.98); }
-    to { opacity: 1; transform: translateY(0) scale(1); }
-  }
-  @media (prefers-reduced-motion: reduce) {
-    .selection-menu { animation: none; }
-    .selection-rewrite-options,
-    .selection-custom,
-    .selection-custom-send,
-    .selection-menu-chevron { transition: none; }
-  }
   .editor-host.source-mode :global(.cm-content),
   .editor-host.txt :global(.cm-content) {
     font-family: var(--font-mono);

@@ -6,6 +6,7 @@
     clusterPdfNotePins,
     parsePdfAnnotationManifest,
     pdfAnnotationIdentity,
+    pdfFileComments,
     pdfNoteFromDrawing,
     pdfNotes,
     removeOrphanedPdfDrawings,
@@ -13,6 +14,7 @@
     updatePdfDrawingComment,
     upsertPdfDrawing,
     type PdfAnnotationManifest,
+    type PdfFileComment,
     type PdfNote,
   } from '../lib/pdf-annotations'
   import {
@@ -50,6 +52,7 @@
   import type { TextLayer } from 'pdfjs-dist'
   import { PDF_MAX_ZOOM, PDF_MIN_ZOOM, clampPdfZoom, fitPdfPage, stepPdfZoom } from '../lib/pdf-layout'
   import type { PaneId } from '../lib/workspace'
+  import { tooltip } from '../lib/tooltip'
 
   let { path, sourceBytes, paneId = 'primary' }: { path: string; sourceBytes?: Uint8Array; paneId?: PaneId } = $props()
 
@@ -90,6 +93,11 @@
   // Une note déjà écrite s'ouvre en LECTURE ; on n'entre en écriture qu'en le
   // demandant (crayon), ou d'emblée quand la note n'existe pas encore.
   let noteBubbleEditing = $state(false)
+  // Commentaires écrits DANS le fichier (export Doku, Acrobat…) : lus à l'ouverture, épinglés
+  // comme les notes du carnet mais en lecture seule — ils n'appartiennent pas au carnet.
+  const fileComments = new Map<number, PdfFileComment[]>()
+  let hasFileComments = $state(false)
+  let noteBubbleReadOnly = $state(false)
   let undoStack: PdfAnnotationManifest[] = $state([])
   let redoStack: PdfAnnotationManifest[] = $state([])
   let annotationMode = $state(false)
@@ -158,7 +166,7 @@
   })
   const drawingColor = $derived(selectedDrawing?.color ?? toolStyles[paletteKind].color)
   const drawingStrokeWidth = $derived(selectedDrawing?.strokeWidth ?? toolStyles[paletteKind].strokeWidth)
-  const annotationRailVisible = $derived(notes.some((note) => note.status === 'active' && Boolean(note.comment)))
+  const annotationRailVisible = $derived(hasFileComments || notes.some((note) => note.status === 'active' && Boolean(note.comment)))
   // Un dessin orphelin n'est plus rendu (ses coordonnées ne veulent plus rien dire sur
   // la nouvelle mise en page) : sans ce compte, il resterait dans le manifeste sans
   // qu'aucun écran ne le mentionne ni ne permette de s'en débarrasser.
@@ -207,13 +215,13 @@
     { value: 32, label: 'Épais' },
   ] as const
   const drawingShapes = [
-    { value: 'rectangle', label: 'Rectangle', icon: 'rectangle' },
+    { value: 'rectangle', label: 'Rectangle', icon: 'rectangle-horizontal' },
     { value: 'ellipse', label: 'Ellipse', icon: 'circle' },
   ] as const satisfies readonly { value: PdfShapeKind; label: string; icon: string }[]
   const inkModes = [
-    { value: 'ink', label: 'Crayon', icon: 'stylus' },
-    { value: 'text', label: 'Surligneur', icon: 'ink_highlighter' },
-    { value: 'highlight', label: 'Surligneur libre', icon: 'gesture' },
+    { value: 'ink', label: 'Crayon', icon: 'pen' },
+    { value: 'text', label: 'Surligneur', icon: 'highlighter' },
+    { value: 'highlight', label: 'Surligneur libre', icon: 'signature' },
   ] as const satisfies readonly { value: PdfInkMode; label: string; icon: string }[]
   const highlighterPalette = $derived(paletteKind === 'highlight' || paletteKind === 'text')
   const paletteColors = $derived<readonly { value: string; label: string; darkCheck: boolean }[]>(
@@ -223,7 +231,7 @@
     paletteKind === 'highlight' ? highlightStrokeWidths : drawingStrokeWidths,
   )
   const inkModeLabel = $derived.by(() => inkModes.find((mode) => mode.value === inkMode)?.label ?? 'Crayon')
-  const inkModeIcon = $derived.by(() => inkModes.find((mode) => mode.value === inkMode)?.icon ?? 'stylus')
+  const inkModeIcon = $derived.by(() => inkModes.find((mode) => mode.value === inkMode)?.icon ?? 'pen')
   const noteKindLabels: Record<PdfNote['kind'], string> = {
     text: 'Surlignage',
     highlight: 'Surlignage libre',
@@ -863,36 +871,48 @@
     if (!force && !visibleAnnotationPages.has(page)) return
     const pageNotes = notes.filter((note) => note.page === page)
     for (const cluster of clusterPdfNotePins(pageNotes, wrap.clientHeight)) {
-      const first = cluster[0]
-      const pin = document.createElement('button')
-      pin.type = 'button'
-      pin.className = `pdf-annotation-comment-pin${cluster.length > 1 ? ' cluster' : ''}`
-      pin.dataset.annotationId = first.id
-      pin.style.top = `${Math.max(first.top, 0.015) * 100}%`
-      if (cluster.length === 1) {
-        const icon = document.createElement('span')
-        icon.className = 'msr'
-        icon.textContent = 'edit_note'
-        pin.title = first.comment
-        pin.setAttribute('aria-label', `Commentaire : ${first.comment}`)
-        pin.appendChild(icon)
-      } else {
-        pin.textContent = String(cluster.length)
-        pin.title = `${cluster.length} commentaires proches`
-        pin.setAttribute('aria-label', `${cluster.length} commentaires proches`)
-      }
-      pin.addEventListener('click', (event) => {
-        event.stopPropagation()
+      appendCommentPin(wrap, cluster, () => {
         // Une seule note : la bulle s'ouvre sur place. Plusieurs notes voisines : le
         // carnet, seul endroit qui peut les montrer côte à côte.
         const single = cluster.length === 1
-          ? annotationManifest?.drawings.find((drawing) => drawing.id === first.id)
+          ? annotationManifest?.drawings.find((drawing) => drawing.id === cluster[0].id)
           : null
         if (single) void openNoteBubble(single)
         else void openNoteGroup(cluster)
       })
-      wrap.appendChild(pin)
     }
+    for (const cluster of clusterPdfNotePins(fileComments.get(page) ?? [], wrap.clientHeight)) {
+      appendCommentPin(wrap, cluster, () => openFileComments(cluster))
+    }
+  }
+
+  function appendCommentPin(wrap: HTMLElement, cluster: PdfNote[], open: () => void) {
+    const first = cluster[0]
+    const pin = document.createElement('button')
+    pin.type = 'button'
+    pin.className = `pdf-annotation-comment-pin${cluster.length > 1 ? ' cluster' : ''}`
+    pin.dataset.annotationId = first.id
+    pin.style.top = `${Math.max(first.top, 0.015) * 100}%`
+    if (cluster.length === 1) {
+      const icon = document.createElementNS('http://www.w3.org/2000/svg', 'svg')
+      icon.setAttribute('class', 'icon')
+      icon.setAttribute('aria-hidden', 'true')
+      const use = document.createElementNS('http://www.w3.org/2000/svg', 'use')
+      use.setAttribute('href', '#i-notebook-pen')
+      icon.appendChild(use)
+      pin.title = first.comment
+      pin.setAttribute('aria-label', `Commentaire : ${first.comment}`)
+      pin.appendChild(icon)
+    } else {
+      pin.textContent = String(cluster.length)
+      pin.title = `${cluster.length} commentaires proches`
+      pin.setAttribute('aria-label', `${cluster.length} commentaires proches`)
+    }
+    pin.addEventListener('click', (event) => {
+      event.stopPropagation()
+      open()
+    })
+    wrap.appendChild(pin)
   }
 
   function renderAnnotationMarks() {
@@ -1164,7 +1184,17 @@
 
   async function copyArea() {
     if (!areaResult) return
-    await navigator.clipboard.writeText(areaResult.text).catch(() => {})
+    try {
+      await navigator.clipboard.writeText(areaResult.text)
+    } catch (err) {
+      // La zone reste ouverte : on peut réessayer, ou l'envoyer au copilote.
+      app.banner = {
+        tone: 'warning',
+        title: 'Copie impossible',
+        message: `Le presse-papiers a refusé le texte (${err instanceof Error ? err.message : String(err)}).`,
+      }
+      return
+    }
     areaResult = null
     app.banner = { tone: 'success', title: 'Zone copiée', message: 'Le texte est dans le presse-papiers.' }
   }
@@ -1290,13 +1320,13 @@
   const NOTE_BUBBLE_WIDTH = 272
   const NOTE_BUBBLE_MARGIN = 12
 
-  function noteBubbleAnchor(drawing: PdfDrawing) {
-    const wrap = pageWraps.get(drawing.page)
+  function noteBubbleAnchor(target: { id: string; page: number; box: PdfDrawingRect }) {
+    const { box } = target
+    const wrap = pageWraps.get(target.page)
     const view = container
     if (!wrap || !view) return null
     const width = Math.max(wrap.clientWidth, 1)
     const height = Math.max(wrap.clientHeight, 1)
-    const box = pdfDrawingBox(drawing)
     const centre = wrap.offsetLeft + (box.left + box.width / 2) * width
     // On borne les ARÊTES de la bulle, pas son centre : centrée sur une annotation
     // proche d'un bord, une bulle de 272 px déborderait de 136 px et serait tronquée.
@@ -1310,8 +1340,8 @@
     const highest = Math.max(lowest, span - NOTE_BUBBLE_MARGIN - half)
     const left = Math.min(Math.max(centre, lowest), highest)
     return {
-      id: drawing.id,
-      page: drawing.page,
+      id: target.id,
+      page: target.page,
       left,
       top: wrap.offsetTop + (box.top + box.height) * height + 12,
       // La queue rattrape le décalage pour continuer à désigner l'annotation, sans
@@ -1321,10 +1351,11 @@
   }
 
   async function openNoteBubble(drawing: PdfDrawing) {
-    const anchor = noteBubbleAnchor(drawing)
+    const anchor = noteBubbleAnchor({ id: drawing.id, page: drawing.page, box: pdfDrawingBox(drawing) })
     if (!anchor) return
     noteBubble = anchor
     noteBubbleDraft = drawing.comment
+    noteBubbleReadOnly = false
     editingNoteId = null
     if (drawing.comment) {
       noteBubbleEditing = false
@@ -1341,6 +1372,44 @@
     noteBubbleInput?.setSelectionRange(noteBubbleDraft.length, noteBubbleDraft.length)
   }
 
+  // Sous l'épingle de la gouttière droite : le pense-bête du fichier vit dans une marge
+  // quelconque (la gauche pour un export Doku), la bulle y paraîtrait sans lien avec le clic.
+  function fileCommentAnchor(comment: PdfFileComment) {
+    return noteBubbleAnchor({ id: comment.id, page: comment.page, box: { ...comment.box, left: 1, width: 0 } })
+  }
+
+  // Voisins trop proches pour deux épingles : leurs textes se lisent à la suite dans la même bulle.
+  function openFileComments(cluster: PdfFileComment[]) {
+    const anchor = fileCommentAnchor(cluster[0])
+    if (!anchor) return
+    noteBubble = anchor
+    noteBubbleDraft = cluster.map((comment) => comment.comment).join('\n\n')
+    noteBubbleReadOnly = true
+    noteBubbleEditing = false
+  }
+
+  async function loadFileComments(doc: PdfDoc, cancelled: () => boolean) {
+    for (let n = 1; n <= doc.numPages && !cancelled(); n++) {
+      const page = await doc.getPage(n)
+      try {
+        const viewport = page.getViewport({ scale: 1 })
+        const comments = pdfFileComments(await page.getAnnotations(), n, (x, y) => viewport.convertToViewportPoint(x, y), viewport)
+        if (!comments.length || cancelled()) continue
+        fileComments.set(n, comments)
+        hasFileComments = true
+        renderAnnotationMarksForPage(n)
+      } catch {
+        // Une page aux annotations illisibles ne prive pas les autres de leurs commentaires.
+      } finally {
+        page.cleanup()
+      }
+    }
+    if (hasFileComments && !cancelled()) {
+      await tick()
+      requestFit()
+    }
+  }
+
   function closeNoteBubble() {
     noteBubble = null
     noteBubbleDraft = ''
@@ -1349,13 +1418,18 @@
 
   function repositionNoteBubble() {
     const open = noteBubble
-    const drawing = open && annotationManifest?.drawings.find((item) => item.id === open.id)
     if (!open) return
+    const fileComment = fileComments.get(open.page)?.find((comment) => comment.id === open.id)
+    if (fileComment) {
+      noteBubble = fileCommentAnchor(fileComment) ?? null
+      return
+    }
+    const drawing = annotationManifest?.drawings.find((item) => item.id === open.id)
     if (!drawing || drawing.status !== 'active') {
       closeNoteBubble()
       return
     }
-    noteBubble = noteBubbleAnchor(drawing) ?? null
+    noteBubble = noteBubbleAnchor({ id: drawing.id, page: drawing.page, box: pdfDrawingBox(drawing) }) ?? null
   }
 
   async function saveNoteBubble() {
@@ -1452,6 +1526,9 @@
     const { getCitedRects } = await import('../lib/pdf')
     const rects = await getCitedRects(pdf, page, text).catch(() => [])
     if (!rects.length) return null
+    // Une citation en remplace une autre : sans purge, les marques en multiply
+    // s'empilaient et fonçaient à chaque clic.
+    container?.querySelectorAll('.pdf-cite-mark').forEach((m) => m.remove())
     const marks: HTMLElement[] = []
     for (const r of rects) {
       const m = document.createElement('div')
@@ -1471,6 +1548,7 @@
   // en boucle asynchrone après le montage : on réessaie jusqu'à ce que la page existe
   // (borné — un PDF corrompu ne doit pas faire boucler à vide).
   let revealTimer: ReturnType<typeof setTimeout> | undefined
+  let citedHaloTimer: ReturnType<typeof setTimeout> | undefined
   $effect(() => {
     const reveal = app.pendingPdfReveal
     if (!reveal || reveal.path !== path) return
@@ -1483,8 +1561,15 @@
         canvas.scrollIntoView({ block: 'start', behavior: reduced ? 'auto' : 'smooth' })
         const wrap = canvas.parentElement
         const fallbackHalo = () => {
-          canvas.classList.add('pdf-page-cited')
-          setTimeout(() => canvas.classList.remove('pdf-page-cited'), 1800)
+          if (!wrap) return
+          clearTimeout(citedHaloTimer)
+          container?.querySelectorAll('.pdf-page-cited').forEach((el) => el.classList.remove('pdf-page-cited'))
+          // Deux frames : la première applique le retrait, sans quoi une seconde citation
+          // pendant le halo ne relancerait pas l'animation.
+          requestAnimationFrame(() => requestAnimationFrame(() => {
+            wrap.classList.add('pdf-page-cited')
+            citedHaloTimer = setTimeout(() => wrap.classList.remove('pdf-page-cited'), 1800)
+          }))
         }
         // Surlignage précis si le passage est fourni ET retrouvé ; sinon halo de page.
         // Second cadrage une fois le passage localisé : le premier (haut de page) sert de
@@ -1919,6 +2004,47 @@
     }
     requestFit = scheduleFit
 
+    // Rideaux de largeur (copilote, barre latérale, vue scindée, expansion) : refaire le
+    // fit à chaque frame réécrivait la taille de toutes les pages et `--scale-factor`,
+    // hérité par chaque span de la couche texte. Les pages gardent leur taille pendant le
+    // rideau, un seul fit est posé à la fin. Les événements de transition remontent
+    // jusqu'au document : un compteur global suffit, sans connaître les panneaux.
+    const chromeProperties = new Set(['flex-basis', 'flex-grow', 'width'])
+    let chromeTransitions = 0
+    let pendingFit = false
+    let chromeSafety: ReturnType<typeof setTimeout> | undefined
+    const settleChrome = () => {
+      clearTimeout(chromeSafety)
+      chromeTransitions = 0
+      host.style.overflowX = ''
+      if (pendingFit) {
+        pendingFit = false
+        scheduleFit()
+      }
+    }
+    const onChromeTransitionRun = (event: TransitionEvent) => {
+      if (!chromeProperties.has(event.propertyName)) return
+      // Pages figées dans un hôte qui rétrécit : sans ce masquage, une barre de
+      // défilement horizontale clignoterait le temps du rideau. Pas quand la page
+      // déborde déjà (zoom) : la barre légitime disparaîtrait, puis reviendrait.
+      if (chromeTransitions++ === 0 && host.scrollWidth <= host.clientWidth) host.style.overflowX = 'hidden'
+      clearTimeout(chromeSafety)
+      // Filet : un élément retiré en pleine transition peut n'émettre ni end ni cancel.
+      chromeSafety = setTimeout(settleChrome, 500)
+    }
+    // Une transition interrompue émet `transitioncancel`, jamais `transitionend`.
+    const onChromeTransitionDone = (event: TransitionEvent) => {
+      if (!chromeProperties.has(event.propertyName) || chromeTransitions === 0) return
+      if (--chromeTransitions === 0) settleChrome()
+    }
+    const scheduleResizeFit = () => {
+      if (chromeTransitions > 0) pendingFit = true
+      else scheduleFit()
+    }
+    document.addEventListener('transitionrun', onChromeTransitionRun)
+    document.addEventListener('transitionend', onChromeTransitionDone)
+    document.addEventListener('transitioncancel', onChromeTransitionDone)
+
     ;(async () => {
       const bytes = sourceBytes ?? await readFileBytes(path)
       if (cancelled) return
@@ -2027,7 +2153,8 @@
 
         applyFit()
         renderAnnotationMarks()
-        resizeObserver = new ResizeObserver(scheduleFit)
+        void loadFileComments(loaded.doc, () => cancelled)
+        resizeObserver = new ResizeObserver(scheduleResizeFit)
         resizeObserver.observe(host)
         window.addEventListener('resize', scheduleFit)
       } catch (err) {
@@ -2043,6 +2170,10 @@
       observer?.disconnect()
       resizeObserver?.disconnect()
       window.removeEventListener('resize', scheduleFit)
+      document.removeEventListener('transitionrun', onChromeTransitionRun)
+      document.removeEventListener('transitionend', onChromeTransitionDone)
+      document.removeEventListener('transitioncancel', onChromeTransitionDone)
+      clearTimeout(chromeSafety)
       if (fitFrame) cancelAnimationFrame(fitFrame)
       if (drawingFrame) cancelAnimationFrame(drawingFrame)
       clearTimeout(rerenderTimer)
@@ -2081,9 +2212,21 @@
   role="group"
   aria-label="Lecteur PDF"
 >
-  <div class="pdf-view" class:with-annotation-rail={annotationRailVisible} bind:this={container} role="document" aria-label="Document PDF">
+  <div class="pdf-view" class:with-annotation-rail={annotationRailVisible} bind:this={container} role="document" aria-label="Document PDF" aria-busy={status === 'loading'}>
     {#if status === 'loading'}
-      <div class="pdf-state">Chargement du PDF…</div>
+      <!-- Pages fantômes (motif de DocxView) : ce qui arrive, ce sont des feuilles.
+           Invisibles pendant 400 ms, pour qu'une ouverture rapide ne clignote pas. -->
+      <div class="pdf-loading" role="status" aria-label="Chargement du PDF">
+        {#each [0, 1] as sheet (sheet)}
+          <div class="pdf-ghost" aria-hidden="true">
+            <span class="doku-skel titre"></span>
+            <span class="doku-skel"></span>
+            <span class="doku-skel"></span>
+            <span class="doku-skel"></span>
+            <span class="doku-skel"></span>
+          </div>
+        {/each}
+      </div>
     {:else if status === 'error'}
       <div class="pdf-state pdf-error">Impossible d'afficher ce PDF. {message}</div>
     {/if}
@@ -2111,27 +2254,29 @@
             <button
               class="primary round"
               type="button"
-              title="Valider (Ctrl + Entrée)"
+              use:tooltip={{ label: 'Valider la note', kbd: 'Ctrl+Entrée' }}
               aria-label="Valider la note"
               disabled={savingAnnotation}
               onclick={() => void saveNoteBubble()}
             >
-              <span class="msr">check</span>
+              <svg class="icon" aria-hidden="true"><use href="#i-check" /></svg>
             </button>
           </div>
         {:else}
           <p class="note-bubble-text">{noteBubbleDraft}</p>
-          <div class="note-bubble-actions">
-            <button
-              class="round"
-              type="button"
-              title="Modifier la note"
-              aria-label="Modifier la note"
-              onclick={() => void editNoteBubble()}
-            >
-              <span class="msr">edit_square</span>
-            </button>
-          </div>
+          {#if !noteBubbleReadOnly}
+            <div class="note-bubble-actions">
+              <button
+                class="round"
+                type="button"
+                use:tooltip={'Modifier la note'}
+                aria-label="Modifier la note"
+                onclick={() => void editNoteBubble()}
+              >
+                <svg class="icon" aria-hidden="true"><use href="#i-square-pen" /></svg>
+              </button>
+            </div>
+          {/if}
         {/if}
       </div>
     {/if}
@@ -2141,26 +2286,26 @@
     <div class="zoom-control" role="group" aria-label="Zoom du document">
       <button
         aria-label="Réduire"
-        title="Réduire (Ctrl + molette)"
+        use:tooltip={{ label: 'Réduire', kbd: 'Ctrl+-' }}
         disabled={status !== 'ready' || zoom <= PDF_MIN_ZOOM}
         onclick={() => zoomBy(-1)}
       >
-        <span class="msr">remove</span>
+        <svg class="icon" aria-hidden="true"><use href="#i-minus" /></svg>
       </button>
       <!-- Le niveau n'apparaît qu'une fois zoomé : au repos il ne dirait rien, et
            c'est exactement là qu'il devient le bouton « revenir à la normale ». -->
       {#if zoom !== 1}
-        <button class="zoom-level" title="Revenir à 100 % (Ctrl + 0)" onclick={resetZoom}>
+        <button class="zoom-level" use:tooltip={{ label: 'Revenir à 100 %', kbd: 'Ctrl+0' }} onclick={resetZoom}>
           {Math.round(zoom * 100)} %
         </button>
       {/if}
       <button
         aria-label="Agrandir"
-        title="Agrandir (Ctrl + molette)"
+        use:tooltip={{ label: 'Agrandir', kbd: 'Ctrl+=' }}
         disabled={status !== 'ready' || zoom >= PDF_MAX_ZOOM}
         onclick={() => zoomBy(1)}
       >
-        <span class="msr">add</span>
+        <svg class="icon" aria-hidden="true"><use href="#i-plus" /></svg>
       </button>
     </div>
     <button
@@ -2168,11 +2313,11 @@
       class:active={annotationMode}
       aria-label={annotationMode ? 'Terminer l’annotation' : 'Annoter le PDF'}
       aria-pressed={annotationMode}
-      title={annotationMode ? 'Terminer l’annotation' : 'Annoter le PDF'}
+      use:tooltip={annotationMode ? 'Terminer l’annotation' : 'Annoter le PDF'}
       disabled={status !== 'ready'}
       onclick={toggleAnnotationMode}
     >
-      <span class="msr">stylus</span>
+      <svg class="icon" aria-hidden="true"><use href="#i-pen" /></svg>
       <span class="annotate-toggle-label">Annoter</span>
     </button>
     <button
@@ -2180,11 +2325,11 @@
       class:active={areaMode}
       aria-label="Sélectionner une zone"
       aria-pressed={areaMode}
-      title="Sélectionner une zone — encadrer plutôt que viser des mots"
+      use:tooltip={'Sélectionner une zone — encadrer plutôt que viser des mots'}
       disabled={status !== 'ready'}
       onclick={() => { areaMode = !areaMode; areaResult = null; areaRect = null }}
     >
-      <span class="msr">highlight_alt</span>
+      <svg class="icon" aria-hidden="true"><use href="#i-square-dashed-mouse-pointer" /></svg>
     </button>
 
   {#if notes.length || orphanedDrawings}
@@ -2193,10 +2338,10 @@
       class:active={annotationListOpen}
       aria-label="Afficher les annotations"
       aria-expanded={annotationListOpen}
-      title="Annotations du PDF"
+      use:tooltip={'Annotations du PDF'}
       onclick={() => annotationListOpen = !annotationListOpen}
     >
-      <span class="msr">edit_note</span>
+      <svg class="icon" aria-hidden="true"><use href="#i-notebook-pen" /></svg>
       <span>{notes.length + hiddenOrphanDrawings}</span>
     </button>
   {/if}
@@ -2267,12 +2412,12 @@
           · page {areaResult.page}
         </span>
         <button onclick={() => void highlightArea()} disabled={areaResult.rects.length === 0}>
-          <span class="msr">ink_highlighter</span>Surligner
+          <svg class="icon" aria-hidden="true"><use href="#i-highlighter" /></svg>Surligner
         </button>
-        <button onclick={() => void copyArea()}><span class="msr">content_copy</span>Copier</button>
-        <button onclick={() => void sendAreaToCopilot()}><span class="msr">auto_awesome</span>Doku-San</button>
+        <button onclick={() => void copyArea()}><svg class="icon" aria-hidden="true"><use href="#i-copy" /></svg>Copier</button>
+        <button onclick={() => void sendAreaToCopilot()}><svg class="icon" aria-hidden="true"><use href="#i-sparkles" /></svg>Doku-San</button>
         <button class="pdf-area-close" aria-label="Fermer" onclick={() => { areaResult = null }}>
-          <span class="msr">close</span>
+          <svg class="icon" aria-hidden="true"><use href="#i-x" /></svg>
         </button>
       </div>
     </div>
@@ -2286,7 +2431,7 @@
 
   {#if signatureNotice}
     <p class="pdf-signature-notice" role="note" title={signatureNotice}>
-      <span class="msr" aria-hidden="true">verified</span>
+      <svg class="icon" aria-hidden="true"><use href="#i-badge-check" /></svg>
       <span>{signatureNotice}</span>
     </p>
   {/if}
@@ -2295,8 +2440,8 @@
   {#if annotationMode}
     <div class="drawing-toolbar" role="toolbar" aria-label="Outils d’annotation PDF">
       <div class="drawing-tools" aria-label="Outil actif">
-        <button class:active={drawingTool === 'select'} aria-pressed={drawingTool === 'select'} title="Sélectionner du texte ou un dessin" aria-label="Sélectionner du texte ou un dessin" onclick={() => setDrawingTool('select')}>
-          <span class="msr">near_me</span>
+        <button class:active={drawingTool === 'select'} aria-pressed={drawingTool === 'select'} use:tooltip={'Sélectionner du texte ou un dessin'} aria-label="Sélectionner du texte ou un dessin" onclick={() => setDrawingTool('select')}>
+          <svg class="icon" aria-hidden="true"><use href="#i-mouse-pointer-2" /></svg>
         </button>
         <div class="drawing-control">
           <button
@@ -2304,7 +2449,7 @@
             class:active={drawingTool === 'pen' || drawingInkMenuOpen}
             aria-pressed={drawingTool === 'pen'}
             aria-expanded={drawingInkMenuOpen}
-            title={inkModeLabel}
+            use:tooltip={inkModeLabel}
             aria-label={`Choisir le type de trait, outil sélectionné : ${inkModeLabel.toLowerCase()}`}
             onclick={() => {
               const open = !drawingInkMenuOpen
@@ -2315,8 +2460,8 @@
               if (!selectedDrawing) setDrawingTool('pen')
             }}
           >
-            <span class="msr">{inkModeIcon}</span>
-            <span class="msr control-chevron">expand_more</span>
+            <svg class="icon" aria-hidden="true"><use href="#i-{inkModeIcon}" /></svg>
+            <svg class="icon control-chevron" aria-hidden="true"><use href="#i-chevron-down" /></svg>
           </button>
           {#if drawingInkMenuOpen}
             <div class="drawing-ink-menu drawing-popover" role="radiogroup" aria-label="Type de trait">
@@ -2328,9 +2473,9 @@
                   class:selected={inkMode === mode.value}
                   onclick={() => void chooseInkMode(mode.value)}
                 >
-                  <span class="msr">{mode.icon}</span>
+                  <svg class="icon" aria-hidden="true"><use href="#i-{mode.icon}" /></svg>
                   <span>{mode.label}</span>
-                  {#if inkMode === mode.value}<span class="msr shape-check">check</span>{/if}
+                  {#if inkMode === mode.value}<svg class="icon shape-check" aria-hidden="true"><use href="#i-check" /></svg>{/if}
                 </button>
               {/each}
             </div>
@@ -2342,7 +2487,7 @@
             class:active={drawingTool === 'shape' || drawingShapeMenuOpen}
             aria-pressed={drawingTool === 'shape'}
             aria-expanded={drawingShapeMenuOpen}
-            title={`Forme : ${drawingShape === 'ellipse' ? 'Ellipse' : 'Rectangle'}`}
+            use:tooltip={`Forme : ${drawingShape === 'ellipse' ? 'Ellipse' : 'Rectangle'}`}
             aria-label={`Choisir une forme, forme sélectionnée : ${drawingShape === 'ellipse' ? 'ellipse' : 'rectangle'}`}
             onclick={() => {
               const open = !drawingShapeMenuOpen
@@ -2351,8 +2496,8 @@
               if (!selectedDrawing) setDrawingTool('shape')
             }}
           >
-            <span class="msr">{drawingShape === 'ellipse' ? 'circle' : 'rectangle'}</span>
-            <span class="msr control-chevron">expand_more</span>
+            <svg class="icon" aria-hidden="true"><use href="#i-{drawingShape === 'ellipse' ? 'circle' : 'rectangle-horizontal'}" /></svg>
+            <svg class="icon control-chevron" aria-hidden="true"><use href="#i-chevron-down" /></svg>
           </button>
           {#if drawingShapeMenuOpen}
             <div class="drawing-shape-menu drawing-popover" role="radiogroup" aria-label="Forme du dessin">
@@ -2364,16 +2509,16 @@
                   class:selected={drawingShape === shape.value}
                   onclick={() => void chooseDrawingShape(shape.value)}
                 >
-                  <span class="msr">{shape.icon}</span>
+                  <svg class="icon" aria-hidden="true"><use href="#i-{shape.icon}" /></svg>
                   <span>{shape.label}</span>
-                  {#if drawingShape === shape.value}<span class="msr shape-check">check</span>{/if}
+                  {#if drawingShape === shape.value}<svg class="icon shape-check" aria-hidden="true"><use href="#i-check" /></svg>{/if}
                 </button>
               {/each}
             </div>
           {/if}
         </div>
-        <button class:active={drawingTool === 'eraser'} aria-pressed={drawingTool === 'eraser'} title="Gomme" aria-label="Gomme" onclick={() => setDrawingTool('eraser')}>
-          <span class="msr">ink_eraser</span>
+        <button class:active={drawingTool === 'eraser'} aria-pressed={drawingTool === 'eraser'} use:tooltip={'Gomme'} aria-label="Gomme" onclick={() => setDrawingTool('eraser')}>
+          <svg class="icon" aria-hidden="true"><use href="#i-eraser" /></svg>
         </button>
       </div>
       {#if drawingTool === 'pen' || drawingTool === 'shape' || selectedDrawingId}
@@ -2384,7 +2529,7 @@
           class:active={drawingStrokeMenuOpen}
           aria-label={`Choisir l'épaisseur, ${paletteStrokeWidths.find((item) => item.value === drawingStrokeWidth)?.label ?? drawingStrokeWidth}`}
           aria-expanded={drawingStrokeMenuOpen}
-          title="Épaisseur du trait"
+          use:tooltip={'Épaisseur du trait'}
           onclick={() => {
             const open = !drawingStrokeMenuOpen
             closeToolMenus()
@@ -2400,7 +2545,7 @@
                 role="radio"
                 aria-checked={drawingStrokeWidth === stroke.value}
                 aria-label={stroke.label}
-                title={stroke.label}
+                use:tooltip={stroke.label}
                 class:selected={drawingStrokeWidth === stroke.value}
                 onclick={() => void chooseDrawingStrokeWidth(stroke.value)}
               >
@@ -2417,7 +2562,7 @@
           class:active={drawingPaletteOpen}
           aria-label="Choisir la couleur"
           aria-expanded={drawingPaletteOpen}
-          title={highlighterPalette ? 'Couleur du surligneur' : 'Couleur du crayon et des formes'}
+          use:tooltip={highlighterPalette ? 'Couleur du surligneur' : 'Couleur du crayon et des formes'}
           onclick={() => {
             const open = !drawingPaletteOpen
             closeToolMenus()
@@ -2433,14 +2578,14 @@
                 role="radio"
                 aria-checked={drawingColor === color.value}
                 aria-label={color.label}
-                title={color.label}
+                use:tooltip={color.label}
                 class:selected={drawingColor === color.value}
                 style={`--drawing-swatch:${color.value}`}
                 onclick={() => void chooseDrawingColor(color.value)}
               >
                 <span></span>
                 {#if drawingColor === color.value}
-                  <span class="msr" class:dark-check={color.darkCheck}>check</span>
+                  <svg class="icon" class:dark-check={color.darkCheck} aria-hidden="true"><use href="#i-check" /></svg>
                 {/if}
               </button>
             {/each}
@@ -2449,15 +2594,15 @@
       </div>
       <span class="toolbar-divider" aria-hidden="true"></span>
       {/if}
-      <button disabled={!undoStack.length || savingAnnotation} title="Annuler (Ctrl+Z)" aria-label="Annuler" onclick={() => void undoAnnotation()}>
-        <span class="msr">undo</span>
+      <button disabled={!undoStack.length || savingAnnotation} use:tooltip={{ label: 'Annuler', kbd: 'Ctrl+Z' }} aria-label="Annuler" onclick={() => void undoAnnotation()}>
+        <svg class="icon" aria-hidden="true"><use href="#i-undo-2" /></svg>
       </button>
-      <button disabled={!redoStack.length || savingAnnotation} title="Rétablir (Ctrl+Y)" aria-label="Rétablir" onclick={() => void redoAnnotation()}>
-        <span class="msr">redo</span>
+      <button disabled={!redoStack.length || savingAnnotation} use:tooltip={{ label: 'Rétablir', kbd: 'Ctrl+Y' }} aria-label="Rétablir" onclick={() => void redoAnnotation()}>
+        <svg class="icon" aria-hidden="true"><use href="#i-redo-2" /></svg>
       </button>
       <span class="toolbar-divider" aria-hidden="true"></span>
-      <button class="drawing-done" title="Terminer" aria-label="Terminer l’annotation" onclick={toggleAnnotationMode}>
-        <span class="msr">check</span>
+      <button class="drawing-done" use:tooltip={'Terminer l’annotation'} aria-label="Terminer l’annotation" onclick={toggleAnnotationMode}>
+        <svg class="icon" aria-hidden="true"><use href="#i-check" /></svg>
         <span>Terminer</span>
       </button>
     </div>
@@ -2472,7 +2617,7 @@
             {notes.length} au total{hiddenOrphanDrawings ? ` · ${hiddenOrphanDrawings} tracé${hiddenOrphanDrawings > 1 ? 's' : ''} orphelin${hiddenOrphanDrawings > 1 ? 's' : ''}` : ''}
           </span>
         </div>
-        <button class="icon-button" aria-label="Fermer" onclick={() => annotationListOpen = false}><span class="msr">close</span></button>
+        <button class="icon-button" aria-label="Fermer" onclick={() => annotationListOpen = false}><svg class="icon" aria-hidden="true"><use href="#i-x" /></svg></button>
       </header>
       {#if staleAnnotations}
         <div class="annotation-warning">
@@ -2529,10 +2674,10 @@
                   aria-label={note.comment ? 'Modifier le commentaire' : 'Ajouter un commentaire'}
                   onclick={() => void startNoteEdit(note)}
                 >
-                  <span class="msr">edit_square</span>
+                  <svg class="icon" aria-hidden="true"><use href="#i-square-pen" /></svg>
                 </button>
                 <button class="annotation-delete" aria-label="Supprimer l’annotation" onclick={() => void deleteNote(note)}>
-                  <span class="msr">delete</span>
+                  <svg class="icon" aria-hidden="true"><use href="#i-trash" /></svg>
                 </button>
               </div>
             {/if}
@@ -2605,7 +2750,11 @@
     position: relative;
     z-index: 0;
     display: block;
-    box-shadow: 0 1px 6px rgba(var(--shadow-rgb), 0.14);
+    /* Trois couches : filet (bord net sur fond clair), contact, diffusion. */
+    box-shadow:
+      0 0 0 1px rgba(var(--shadow-rgb), 0.06),
+      0 1px 2px rgba(var(--shadow-rgb), 0.08),
+      0 2px 8px rgba(var(--shadow-rgb), 0.08);
     border-radius: 2px;
     background: #fff;
     scroll-margin-top: 14px;
@@ -2743,19 +2892,22 @@
     place-items: center;
     padding: 0;
     border: 0;
-    border-radius: 999px;
+    border-radius: var(--radius-full);
     left: calc(100% + 8px);
     transform: translateY(-46%);
     background: var(--pdf-annotation-pin-bg);
     color: var(--pdf-annotation-pin-ink);
-    box-shadow: 0 0 0 1px var(--elevation-ring), 0 4px 12px rgba(var(--shadow-rgb), 0.22);
-    font: 700 11px/1 var(--font-sans);
+    box-shadow: var(--shadow-lg);
+    font: 600 11px/1 var(--font-sans);
     font-variant-numeric: tabular-nums;
     cursor: pointer;
-    transition: background-color 140ms ease, box-shadow 140ms ease, opacity 140ms ease, transform 100ms ease;
+    transition:
+      box-shadow var(--duration-basic) ease,
+      opacity var(--duration-basic) ease,
+      transform var(--duration-basic) var(--ease-enter-snappy);
   }
-  .pdf-view :global(.pdf-annotation-comment-pin .msr) {
-    font-size: 16px;
+  .pdf-view :global(.pdf-annotation-comment-pin .icon) {
+    font-size: 14px;
   }
   .pdf-view :global(.pdf-annotation-comment-pin::before) {
     content: '';
@@ -2763,15 +2915,14 @@
     inset: -7px;
   }
   .pdf-view :global(.pdf-annotation-comment-pin:hover) {
-    background: var(--pdf-annotation-pin-bg);
     opacity: 0.88;
-    box-shadow: 0 0 0 1px var(--elevation-ring), 0 6px 16px rgba(var(--shadow-rgb), 0.28);
+    box-shadow: var(--shadow-xl);
   }
   .pdf-view :global(.pdf-annotation-comment-pin:active) {
-    transform: translateY(-46%) scale(0.96);
+    transform: translateY(-46%) scale(0.97);
   }
   .pdf-view :global(.pdf-annotation-comment-pin:focus-visible) {
-    outline: 2px solid var(--ink-3);
+    outline: 2px solid var(--focus-ring);
     outline-offset: 2px;
   }
   /* Surlignage d'un passage cité : marqueur ambré en multiply (le texte du canvas reste
@@ -2790,13 +2941,27 @@
     100% { opacity: 0; }
   }
   /* Halo transitoire de la page citée : même vocabulaire que le flash de recherche de
-     l'éditeur (révélation brève, sans état persistant). */
-  .pdf-view :global(canvas.pdf-page-cited) {
-    animation: pdf-cited 1.8s ease;
+     l'éditeur (révélation brève, sans état persistant). Anneau STATIQUE sur un
+     pseudo-élément dont seule l'opacité s'anime : animer le box-shadow du canvas
+     repeignait toute la page à chaque frame. */
+  .pdf-view :global(.pdf-page-wrap.pdf-page-cited::after) {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: 2px;
+    box-shadow: 0 0 0 3px var(--ink-3);
+    pointer-events: none;
+    animation: pdf-cited 1.8s ease forwards;
   }
   @keyframes pdf-cited {
-    0%, 60% { box-shadow: 0 0 0 3px var(--ink-3), 0 1px 6px rgba(var(--shadow-rgb), 0.14); }
-    100% { box-shadow: 0 1px 6px rgba(var(--shadow-rgb), 0.14); }
+    0%, 60% { opacity: 1; }
+    100% { opacity: 0; }
+  }
+  /* Fondus d'opacité sans mouvement : le 0.01ms global les rendait invisibles, le
+     passage cité n'était alors jamais montré. */
+  @media (prefers-reduced-motion: reduce) {
+    .pdf-view :global(.pdf-cite-mark) { animation-duration: 4.2s !important; }
+    .pdf-view :global(.pdf-page-wrap.pdf-page-cited::after) { animation-duration: 1.8s !important; }
   }
   /* Bulle de note : la queue pointe l'annotation, décalée de --tail quand la bulle a
      dû être ramenée dans la page. */
@@ -2809,24 +2974,21 @@
     display: grid;
     gap: 4px;
     padding: 12px 12px 10px;
-    transform: translateX(-50%);
+    /* `translate` et non `transform` : la propriété `scale` de doku-pop-in s'applique
+       APRÈS `transform`, le centre d'agrandissement aurait glissé d'une demi-largeur
+       hors de la bulle ; `translate` s'applique avant, comme l'ancien keyframe. */
+    translate: -50% 0;
     /* Aucune bordure : un filet posé en ombre suit le thème (clair ou sombre) et se
-       superpose à deux ombres portées — une de contact, une diffuse — au lieu de
-       cerner la bulle d'un trait dur. */
-    border-radius: 18px;
+       superpose à l'ombre de rôle au lieu de cerner la bulle d'un trait dur. Le filet
+       reste à 1 px : c'est l'épaisseur que reprend la queue ci-dessous. */
+    border-radius: var(--radius-2xl);
     background: var(--surface);
-    box-shadow:
-      0 0 0 1px var(--elevation-ring),
-      0 2px 6px rgba(var(--shadow-rgb), 0.05),
-      0 16px 40px rgba(var(--shadow-rgb), 0.18);
+    box-shadow: 0 0 0 1px var(--elevation-ring), var(--shadow-xl);
     transform-origin: calc(50% + var(--tail, 0px)) 0;
-    transition: box-shadow 160ms cubic-bezier(0.2, 0, 0, 1);
+    transition: box-shadow var(--duration-basic) var(--ease-enter);
   }
   .note-bubble:focus-within {
-    box-shadow:
-      0 0 0 1px var(--line-3),
-      0 2px 6px rgba(var(--shadow-rgb), 0.05),
-      0 18px 44px rgba(var(--shadow-rgb), 0.22);
+    box-shadow: 0 0 0 1px var(--line-3), var(--shadow-2xl);
   }
   /* Queue : même surface, et son filet ne couvre que les deux arêtes exposées après
      rotation — la ligne de contour reste continue tout autour de la bulle. */
@@ -2843,11 +3005,7 @@
     box-shadow: -1px -1px 0 0 var(--elevation-ring);
   }
   @media (prefers-reduced-motion: no-preference) {
-    .note-bubble { animation: note-bubble-pop 150ms cubic-bezier(0.2, 0, 0, 1); }
-    @keyframes note-bubble-pop {
-      from { opacity: 0; transform: translateX(-50%) scale(0.94); }
-      to { opacity: 1; transform: translateX(-50%) scale(1); }
-    }
+    .note-bubble { animation: doku-pop-in var(--duration-basic) var(--ease-enter-snappy); }
   }
   /* Le champ n'a ni cadre ni fond : la bulle EST sa surface. */
   .note-bubble textarea {
@@ -2867,7 +3025,7 @@
   }
   .note-bubble textarea::placeholder {
     color: var(--ink-4);
-    opacity: 0.7;
+    opacity: 1;
   }
   /* Même métrique que le champ : passer de la lecture à l'écriture ne fait pas
      sauter le texte d'un pixel. */
@@ -2888,51 +3046,81 @@
     gap: 2px;
   }
   .note-bubble-actions button {
-    height: 32px;
-    padding: 0 13px;
+    height: var(--control-sm);
+    padding: 0 10px;
     border: 0;
-    border-radius: 999px;
+    border-radius: var(--radius-sm);
     background: transparent;
-    color: var(--ink-4);
-    font: 600 12px/1 var(--font-sans);
+    color: var(--ink-3);
+    font: 510 13px/1 var(--font-sans);
     cursor: pointer;
-    transition: background-color 140ms cubic-bezier(0.2, 0, 0, 1), color 140ms cubic-bezier(0.2, 0, 0, 1), transform 100ms cubic-bezier(0.2, 0, 0, 1);
+    transition:
+      background-color var(--duration-basic) ease,
+      color var(--duration-basic) ease,
+      transform var(--duration-basic) var(--ease-enter-snappy);
   }
-  .note-bubble-actions button:hover { background: var(--surface-hover); color: var(--ink-2); }
-  .note-bubble-actions button:active:not(:disabled) { transform: scale(0.96); }
-  /* Boutons ronds : rayon concentrique avec la bulle (18 − 12 de marge = 6), donc un
-     cercle de 32 px tombe juste dans l'angle intérieur. */
+  .note-bubble-actions button:hover { background: var(--fill-hover); color: var(--ink-2); }
+  .note-bubble-actions button:active:not(:disabled) { transform: scale(0.97); }
+  .note-bubble-actions button:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
   .note-bubble-actions .round {
-    width: 32px;
+    width: var(--control-sm);
     padding: 0;
     display: inline-grid;
     place-items: center;
   }
-  .note-bubble-actions .round .msr { font-size: 17px; }
-  .note-bubble-actions .primary.round .msr { font-size: 18px; }
+  .note-bubble-actions .round .icon { font-size: 16px; }
   .note-bubble-actions .primary { background: var(--ink); color: var(--cream-content); }
   .note-bubble-actions .primary:hover { background: var(--ink-2); color: var(--cream-content); }
-  .note-bubble-actions button:disabled { opacity: 0.45; cursor: default; }
+  .note-bubble-actions button:disabled { opacity: var(--opacity-disabled); cursor: default; }
   .pdf-state {
     margin: auto;
-    color: var(--ink-4);
-    font-size: 13px;
-    font-family: var(--font-mono);
+    color: var(--ink-3);
+    font-size: var(--text-sm);
   }
+  .pdf-loading {
+    flex: none;
+    width: min(794px, 100%);
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    animation: doku-fade-in var(--duration-moderate) ease 400ms backwards;
+  }
+  .pdf-ghost {
+    flex: none;
+    aspect-ratio: 210 / 297;
+    display: flex;
+    flex-direction: column;
+    gap: 11px;
+    padding: 11% 12%;
+    border-radius: 2px;
+    background: #fff;
+    box-shadow:
+      0 0 0 1px rgba(var(--shadow-rgb), 0.06),
+      0 1px 2px rgba(var(--shadow-rgb), 0.08),
+      0 2px 8px rgba(var(--shadow-rgb), 0.08);
+  }
+  /* Gris de PAPIER, indépendant du thème (comme DocxView) : la feuille reste blanche en
+     thème sombre, une trame en --ink y deviendrait blanche sur blanc. */
+  .pdf-ghost .doku-skel { height: 9px; border-radius: var(--radius-xs); background: rgba(28, 26, 22, 0.09); }
+  .pdf-ghost .doku-skel::after { background: linear-gradient(90deg, transparent 0%, rgba(28, 26, 22, 0.07) 50%, transparent 100%); }
+  .pdf-ghost .titre { height: 15px; width: 46%; margin-bottom: 7px; background: rgba(28, 26, 22, 0.14); }
+  .pdf-ghost .doku-skel:nth-child(3) { width: 94%; }
+  .pdf-ghost .doku-skel:nth-child(4) { width: 72%; }
   .pdf-error {
     max-width: 420px;
     text-align: center;
-    color: var(--err);
+    color: var(--err-text);
   }
   .annotation-toggle,
   .annotate-toggle,
+  .area-toggle,
   .drawing-toolbar button,
   .icon-button,
   .annotation-edit,
   .annotation-delete {
     border: 0;
     color: var(--ink-2);
-    font: 500 12.5px/1 var(--font-sans);
+    font: 510 13px/1 var(--font-sans);
     cursor: pointer;
   }
   .pdf-actions {
@@ -2947,48 +3135,64 @@
     right: 12px;
     display: flex;
     align-items: center;
-    gap: 5px;
+    gap: 6px;
   }
   /* Là où le bouton du copilote surplombe ce lecteur, on lui laisse sa place. */
   :global(.workspace:not(.split)) .pdf-actions,
   :global(.workspace.split:not(.vertical) .workspace-pane.secondary) .pdf-actions {
     right: 56px;
   }
+  /* Capsules flottantes (ButtonGroup compact de Kube) : 32 px, opaques, posées sur le
+     document par un filet et une ombre de carte plutôt qu'une ombre portée lourde. */
+  .zoom-control,
+  .annotate-toggle,
+  .area-toggle,
+  .annotation-toggle,
+  .pdf-signature-notice {
+    height: var(--control-md);
+    border-radius: var(--radius-full);
+    background: var(--surface);
+    box-shadow: var(--shadow-card);
+  }
   .zoom-control {
-    height: 32px;
     display: inline-flex;
     align-items: center;
+    gap: 2px;
     padding: 0 2px;
-    border-radius: 999px;
-    background: var(--surface);
-    box-shadow: 0 5px 16px rgba(var(--shadow-rgb), 0.14);
   }
   .zoom-control button {
-    height: 28px;
-    min-width: 28px;
+    height: var(--control-sm);
+    min-width: var(--control-sm);
     display: inline-grid;
     place-items: center;
     padding: 0;
     border: 0;
-    border-radius: 999px;
+    border-radius: var(--radius-full);
     background: transparent;
-    color: var(--ink-2);
+    color: var(--ink-3);
     cursor: pointer;
-    transition: background-color 140ms cubic-bezier(0.2, 0, 0, 1), color 140ms cubic-bezier(0.2, 0, 0, 1), transform 100ms cubic-bezier(0.2, 0, 0, 1);
+    transition:
+      background-color var(--duration-basic) ease,
+      color var(--duration-basic) ease,
+      transform var(--duration-basic) var(--ease-enter-snappy);
   }
-  .zoom-control button:hover:not(:disabled) { background: var(--surface-hover); color: var(--ink); }
-  .zoom-control button:active:not(:disabled) { transform: scale(0.96); }
-  .zoom-control button:disabled { opacity: 0.35; cursor: default; }
-  .zoom-control button:focus-visible { outline: 2px solid var(--line-3); outline-offset: -2px; }
-  .zoom-control .msr { font-size: 16px; }
+  .zoom-control button:hover:not(:disabled) { background: var(--fill-hover); color: var(--ink); }
+  .zoom-control button:active:not(:disabled) { transform: scale(0.97); }
+  .zoom-control button:disabled { opacity: 0.4; cursor: default; }
+  .zoom-control button:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
+  .zoom-control .icon { font-size: 16px; }
+  @media (any-pointer: coarse) {
+    .zoom-control button { position: relative; }
+    .zoom-control button::before { content: ''; position: absolute; inset: -6px 0; }
+  }
+  :global(:root[data-input='touch']) .zoom-control button { min-width: 36px; }
   .zoom-control .zoom-level {
-    min-width: 46px;
-    padding: 0 4px;
+    min-width: 48px;
+    padding: 0 6px;
     color: var(--ink-2);
-    font: 600 11.5px/1 var(--font-sans);
+    font: 510 13px/1 var(--font-sans);
     font-variant-numeric: tabular-nums;
   }
-  .annotation-toggle,
   /* Mode présentation : le document, rien d'autre. Le chrome n'est pas seulement
      masqué visuellement — il est retiré du flux ET des cibles de pointeur, pour qu'un
      clic parasite ne rouvre pas un outil pendant une projection. */
@@ -3002,11 +3206,12 @@
     transform: translateX(-50%);
     z-index: 40;
     padding: 6px 14px;
-    border-radius: 999px;
+    border-radius: var(--radius-full);
     background: rgba(0, 0, 0, 0.55);
     color: #fff;
     font-family: var(--font-sans);
     font-size: 12px;
+    font-variant-numeric: tabular-nums;
     pointer-events: none;
     /* Elle s'efface d'elle-même : une aide permanente deviendrait un meuble. */
     animation: present-hint-fade 4s ease forwards;
@@ -3015,22 +3220,16 @@
     0%, 60% { opacity: 1; }
     100% { opacity: 0; }
   }
+  /* Pur fondu d'opacité : gardé en mouvement réduit (le 0.01ms global la ferait
+     disparaître d'un coup), sinon la consigne ne s'effaçait plus jamais. */
   @media (prefers-reduced-motion: reduce) {
-    [data-presenting='true'] .present-hint { animation: none; opacity: 0.85; }
+    [data-presenting='true'] .present-hint { animation-duration: 4s !important; }
   }
   .area-toggle {
-    width: 32px;
-    height: 32px;
+    width: var(--control-md);
     display: inline-grid;
     place-items: center;
-    border: 0;
-    border-radius: 999px;
-    background: var(--surface);
-    box-shadow: 0 5px 16px rgba(var(--shadow-rgb), 0.14);
-    color: var(--ink-2);
   }
-  .area-toggle:disabled { opacity: 0.45; }
-  .area-toggle.active { background: var(--ink); color: var(--surface); }
 
   /* Sélection de zone. Le calque couvre le lecteur et prend le pointeur — c'est
      précisément son rôle : encadrer une région plutôt que viser des caractères. */
@@ -3049,7 +3248,7 @@
     z-index: 26;
     pointer-events: none;
     border: 1px solid var(--ink);
-    background: rgba(var(--shadow-rgb), 0.10);
+    background: var(--accent-soft);
     border-radius: 2px;
   }
   .pdf-area-result {
@@ -3059,11 +3258,18 @@
     transform: translateX(-50%);
     z-index: 27;
     max-width: min(560px, calc(100% - 32px));
-    padding: 10px 12px;
-    border-radius: 14px;
-    background: var(--cream-tint);
-    box-shadow: 0 0 0 1px var(--elevation-ring-soft), 0 12px 30px rgba(var(--shadow-rgb), 0.16);
+    padding: 12px 12px 8px 14px;
+    border-radius: var(--radius-2xl);
+    background: var(--surface);
+    box-shadow: var(--shadow-xl);
     font-family: var(--font-sans);
+  }
+  @media (prefers-reduced-motion: no-preference) {
+    .pdf-area-result { animation: pdf-island-in var(--duration-moderate) var(--ease-enter); }
+    @keyframes pdf-island-in {
+      from { opacity: 0; transform: translate(-50%, 12px); }
+      to { opacity: 1; transform: translate(-50%, 0); }
+    }
   }
   /* Troncature HONNÊTE. La version d'avant coupait de deux façons à la fois : un « … »
      ajouté au-delà de 220 caractères, ET un `max-height` + `overflow: hidden` qui
@@ -3078,26 +3284,46 @@
     line-clamp: 3;
     overflow: hidden;
     color: var(--ink);
-    font-size: 12.5px;
+    font-size: 13px;
     line-height: 1.45;
     white-space: pre-wrap;
   }
-  .pdf-area-actions { display: flex; align-items: center; gap: 6px; }
-  .pdf-area-count { flex: 1; color: var(--ink-2); font-size: 11.5px; }
+  .pdf-area-actions { display: flex; align-items: center; gap: 2px; }
+  .pdf-area-count {
+    flex: 1;
+    margin-right: 6px;
+    color: var(--ink-3);
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
+  }
+  /* Boutons de barre d'outils Kube : fantômes, le survol est une couche qui se fond. */
   .pdf-area-actions button {
     display: inline-flex;
     align-items: center;
-    gap: 4px;
-    height: 28px;
-    padding: 0 10px;
+    gap: 6px;
+    height: var(--control-sm);
+    padding: 0 8px 0 6px;
     border: 0;
-    border-radius: 999px;
-    background: var(--surface);
-    color: var(--ink);
-    font-size: 12px;
+    border-radius: var(--radius-md);
+    background: transparent;
+    color: var(--ink-2);
+    font: 510 13px/1 var(--font-sans);
+    cursor: pointer;
+    transition:
+      background-color var(--duration-basic) ease,
+      transform var(--duration-basic) var(--ease-enter-snappy);
   }
-  .pdf-area-actions .msr { font-size: 16px; }
-  .pdf-area-close { padding: 0 6px !important; }
+  .pdf-area-actions button:hover:not(:disabled) { background: var(--fill-hover); color: var(--ink); }
+  .pdf-area-actions button:active:not(:disabled) { transform: scale(0.97); }
+  .pdf-area-actions button:disabled { opacity: var(--opacity-disabled); cursor: default; }
+  .pdf-area-actions button:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -1px; }
+  .pdf-area-actions .icon { font-size: 15px; }
+  .pdf-area-actions .pdf-area-close {
+    width: var(--control-sm);
+    justify-content: center;
+    padding: 0;
+    color: var(--ink-3);
+  }
 
   /* Mention informative, pas une alerte : ton neutre, jamais de vert « validé ».
      Elle s'efface derrière le document et se tronque plutôt que de pousser la barre —
@@ -3107,14 +3333,10 @@
     align-items: center;
     gap: 6px;
     max-width: 42ch;
-    height: 32px;
     margin: 0;
-    padding: 0 12px;
-    border-radius: 999px;
-    background: var(--surface);
-    box-shadow: 0 5px 16px rgba(var(--shadow-rgb), 0.14);
+    padding: 0 12px 0 10px;
     color: var(--ink-2);
-    font-size: 12px;
+    font-size: var(--text-xs);
     line-height: 1.2;
   }
   .pdf-signature-notice > span:last-child {
@@ -3122,41 +3344,47 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-  .pdf-signature-notice .msr { font-size: 17px; opacity: 0.7; }
+  .pdf-signature-notice .icon { font-size: 15px; color: var(--ink-3); }
 
-  .annotate-toggle {
-    height: 32px;
+  /* Interrupteurs du coin : la capsule reste opaque, le survol et l'état enfoncé sont un
+     voile intérieur (ombre incrustée) — il se fond sans toucher au fond ni à l'ombre. */
+  .annotate-toggle,
+  .area-toggle,
+  .annotation-toggle {
+    --toggle-wash: transparent;
+    padding: 0;
+    color: var(--ink-3);
+    box-shadow: inset 0 0 0 var(--control-md) var(--toggle-wash), var(--shadow-card);
+    transition:
+      box-shadow var(--duration-basic) ease,
+      color var(--duration-basic) ease,
+      transform var(--duration-basic) var(--ease-enter-snappy);
+  }
+  .annotate-toggle,
+  .annotation-toggle {
     display: inline-flex;
     align-items: center;
-    gap: 5px;
-    padding: 0 10px;
-    border: 0;
-    border-radius: 999px;
-    background: var(--surface);
-    box-shadow: 0 5px 16px rgba(var(--shadow-rgb), 0.14);
-    transition: background-color 140ms ease, color 140ms ease, box-shadow 140ms ease, transform 100ms ease;
+    gap: 6px;
+    padding: 0 12px 0 10px;
   }
-  .annotation-toggle:hover,
-  .annotation-toggle.active,
-  .annotate-toggle:hover,
-  .annotate-toggle.active {
-    background: var(--surface-2);
+  :is(.annotate-toggle, .area-toggle, .annotation-toggle):hover:not(:disabled) {
+    --toggle-wash: var(--fill-hover);
     color: var(--ink);
-    box-shadow: 0 0 0 1px var(--elevation-ring), 0 6px 18px rgba(var(--shadow-rgb), 0.20);
   }
-  .annotation-toggle:active,
-  .annotate-toggle:active { transform: scale(0.96); }
-  .annotation-toggle:focus-visible,
-  .annotate-toggle:focus-visible,
-  .drawing-toolbar button:focus-visible { outline: 2px solid var(--line-3); outline-offset: 2px; }
-  .annotate-toggle:disabled {
-    opacity: 0.45;
+  :is(.annotate-toggle, .area-toggle, .annotation-toggle).active {
+    --toggle-wash: var(--accent-soft);
+    color: var(--ink);
+  }
+  :is(.annotate-toggle, .area-toggle, .annotation-toggle):active:not(:disabled) { transform: scale(0.97); }
+  :is(.annotate-toggle, .area-toggle, .annotation-toggle, .drawing-toolbar button):focus-visible {
+    outline: 2px solid var(--focus-ring);
+    outline-offset: 2px;
+  }
+  :is(.annotate-toggle, .area-toggle):disabled {
+    opacity: 0.4;
     cursor: default;
   }
-  .annotation-toggle .msr,
-  .annotate-toggle .msr {
-    font-size: 16px;
-  }
+  :is(.annotate-toggle, .area-toggle, .annotation-toggle) .icon { font-size: 16px; }
   .annotation-toggle > span:last-child { font-variant-numeric: tabular-nums; }
   .drawing-toolbar {
     position: absolute;
@@ -3164,21 +3392,19 @@
     left: 50%;
     bottom: 18px;
     max-width: calc(100% - 24px);
-    min-height: 46px;
     display: flex;
     align-items: center;
-    gap: 3px;
+    gap: 2px;
     padding: 4px;
     transform: translateX(-50%);
-    border: 1px solid var(--line-2);
-    border-radius: 999px;
+    border-radius: var(--radius-full);
     background: var(--surface);
-    box-shadow: 0 14px 38px rgba(var(--shadow-rgb), 0.26);
+    box-shadow: var(--shadow-xl);
   }
   .drawing-tools {
     display: flex;
     align-items: center;
-    gap: 3px;
+    gap: 2px;
   }
   .drawing-control {
     position: relative;
@@ -3186,8 +3412,8 @@
     align-items: center;
   }
   .drawing-toolbar button {
-    height: 36px;
-    min-width: 36px;
+    height: var(--control-md);
+    min-width: var(--control-md);
     /* Jamais comprimé sous son contenu : le flex rétrécissait les boutons libellés
        sans que leur texte ne rétrécisse, et celui-ci débordait par-dessus le voisin —
        des boîtes qui ne se chevauchent pas, mais un rendu qui se chevauche. */
@@ -3195,41 +3421,46 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    gap: 7px;
-    padding: 0 9px;
+    gap: 6px;
+    padding: 0 8px;
     border: 0;
-    border-radius: 999px;
+    border-radius: var(--radius-full);
     background: transparent;
-    transition: background-color 140ms ease, color 140ms ease, transform 100ms ease;
+    color: var(--ink-3);
+    transition:
+      background-color var(--duration-basic) ease,
+      color var(--duration-basic) ease,
+      transform var(--duration-basic) var(--ease-enter-snappy);
   }
   .drawing-toolbar button:hover:not(:disabled) {
-    background: var(--surface-hover);
+    background: var(--fill-hover);
     color: var(--ink);
   }
   .drawing-toolbar button.active {
     background: var(--accent-soft);
     color: var(--ink);
   }
-  .drawing-toolbar button:active:not(:disabled) { transform: scale(0.96); }
+  .drawing-toolbar button:active:not(:disabled) { transform: scale(0.97); }
+  .drawing-toolbar .drawing-popover button:active { transform: none; }
   .drawing-toolbar button:disabled {
-    opacity: 0.36;
+    opacity: 0.4;
     cursor: default;
   }
-  .drawing-toolbar .msr { font-size: 18px; }
+  .drawing-toolbar .icon { font-size: 16px; }
   .drawing-toolbar .drawing-shape-toggle {
-    gap: 1px;
+    gap: 2px;
     padding: 0 6px 0 8px;
   }
   .drawing-toolbar .control-chevron {
     margin-right: -2px;
-    font-size: 13px;
+    font-size: 12px;
     color: var(--ink-4);
   }
   .drawing-stroke-preview,
   .drawing-stroke-sample {
     width: 20px;
     display: block;
-    border-radius: 999px;
+    border-radius: var(--radius-full);
     background: currentColor;
   }
   .drawing-stroke-preview { height: clamp(2px, var(--stroke-preview), 8px); }
@@ -3238,50 +3469,58 @@
     width: 18px;
     height: 18px;
     display: block;
-    border-radius: 999px;
+    border-radius: var(--radius-full);
     background: var(--drawing-swatch);
     box-shadow: 0 0 0 1px rgba(var(--shadow-rgb), 0.28), inset 0 0 0 1px rgba(255, 255, 255, 0.24);
   }
+  /* Menus des outils : surface élevée de Kube (filet 0,5 px compris dans --shadow-xl),
+     ouverts depuis la barre — ils grandissent depuis son bord. */
   .drawing-popover {
     position: absolute;
     left: 50%;
-    bottom: calc(100% + 8px);
-    padding: 5px;
-    transform: translateX(-50%);
-    border: 1px solid var(--line-2);
-    border-radius: 999px;
+    bottom: calc(100% + 10px);
+    padding: 4px;
+    /* `translate` : voir .note-bubble. */
+    translate: -50% 0;
+    transform-origin: 50% 100%;
+    border-radius: var(--radius-full);
     background: var(--surface);
-    box-shadow: 0 12px 30px rgba(var(--shadow-rgb), 0.24);
+    box-shadow: var(--shadow-xl);
+  }
+  @media (prefers-reduced-motion: no-preference) {
+    .drawing-popover { animation: doku-pop-in var(--duration-basic) var(--ease-enter-snappy); }
   }
   .drawing-color-menu,
   .drawing-stroke-menu {
     display: flex;
     align-items: center;
-    gap: 4px;
+    gap: 2px;
   }
   .drawing-shape-menu,
   .drawing-ink-menu {
-    width: 152px;
+    min-width: 168px;
     display: grid;
     gap: 2px;
-    padding: 5px;
-    border-radius: 12px;
+    border-radius: var(--radius-xl);
   }
   .drawing-toolbar .drawing-shape-menu button,
   .drawing-toolbar .drawing-ink-menu button {
     width: 100%;
     justify-content: flex-start;
-    padding: 0 9px;
+    gap: 8px;
+    padding: 0 8px;
+    border-radius: var(--radius-md);
+    color: var(--ink-2);
   }
   .drawing-shape-menu button span:nth-child(2),
   .drawing-ink-menu button span:nth-child(2) { flex: 1; text-align: left; }
   .drawing-shape-menu .shape-check,
-  .drawing-ink-menu .shape-check { font-size: 14px; }
+  .drawing-ink-menu .shape-check { font-size: 14px; color: var(--ink); }
   .drawing-shape-menu button.selected,
   .drawing-ink-menu button.selected,
   .drawing-stroke-menu button.selected { background: var(--accent-soft); }
   .drawing-toolbar .drawing-ink-toggle {
-    gap: 1px;
+    gap: 2px;
     padding: 0 6px 0 8px;
   }
   .drawing-color-menu button {
@@ -3292,38 +3531,38 @@
     padding: 0;
   }
   .drawing-stroke-menu button {
-    width: 36px;
-    min-width: 36px;
+    width: var(--control-lg);
+    min-width: var(--control-lg);
     padding: 0 8px;
   }
   .drawing-color-menu button > span:first-child {
     position: absolute;
     inset: 5px;
-    border-radius: 999px;
+    border-radius: var(--radius-full);
     background: var(--drawing-swatch);
     box-shadow: 0 0 0 1px rgba(var(--shadow-rgb), 0.24), inset 0 0 0 1px rgba(255, 255, 255, 0.22);
   }
   .drawing-color-menu button.selected { background: var(--accent-soft); }
-  .drawing-color-menu button .msr {
+  .drawing-color-menu button .icon {
     position: relative;
     z-index: 1;
     color: white;
     font-size: 14px;
     text-shadow: 0 1px 2px rgba(0, 0, 0, 0.55);
   }
-  .drawing-color-menu button .msr.dark-check {
+  .drawing-color-menu button .icon.dark-check {
     color: #111111;
     text-shadow: 0 1px 1px rgba(255, 255, 255, 0.45);
   }
   .toolbar-divider {
     width: 1px;
-    height: 22px;
+    height: 16px;
     flex: 0 0 auto;
-    margin: 0 2px;
-    background: var(--line-2);
+    margin: 0 4px;
+    background: var(--line-1);
   }
   .drawing-toolbar .drawing-done {
-    padding: 0 13px 0 10px;
+    padding: 0 12px 0 10px;
     background: var(--ink);
     color: var(--cream-content);
   }
@@ -3342,101 +3581,126 @@
     display: flex;
     flex-direction: column;
     overflow: hidden;
-    border: 1px solid var(--line-2);
-    border-radius: 14px;
+    border-radius: var(--radius-2xl);
     background: var(--surface);
-    box-shadow: 0 16px 42px rgba(var(--shadow-rgb), 0.24);
+    box-shadow: var(--shadow-xl);
+    transform-origin: calc(100% - 16px) 0;
+  }
+  @media (prefers-reduced-motion: no-preference) {
+    .annotation-list { animation: doku-pop-in var(--duration-basic) var(--ease-enter-snappy); }
   }
   .annotation-list header {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 14px 14px 10px 16px;
+    padding: 12px 8px 8px 16px;
   }
   .annotation-list header div {
     display: grid;
-    gap: 3px;
+    gap: 2px;
   }
   .annotation-list header strong {
     color: var(--ink);
-    font: 600 13px/1.2 var(--font-sans);
+    font: 590 14px/1.25 var(--font-sans);
+    letter-spacing: -0.01em;
   }
   .annotation-list header div > span,
   .annotation-body > span {
-    color: var(--ink-4);
-    font: 500 10.5px/1.2 var(--font-sans);
+    color: var(--ink-3);
+    font: 400 12px/1.3 var(--font-sans);
   }
   .icon-button,
   .annotation-edit,
   .annotation-delete {
-    width: 30px;
-    height: 30px;
+    width: var(--control-sm);
+    height: var(--control-sm);
     display: grid;
     place-items: center;
     flex: 0 0 auto;
-    border-radius: 999px;
+    border-radius: var(--radius-lg);
     background: transparent;
+    color: var(--ink-3);
+    transition:
+      background-color var(--duration-basic) ease,
+      color var(--duration-basic) ease,
+      transform var(--duration-basic) var(--ease-enter-snappy);
   }
+  :is(.icon-button, .annotation-edit, .annotation-delete):active { transform: scale(0.97); }
   .icon-button:hover,
   .annotation-edit:hover,
   .annotation-delete:hover {
-    background: var(--surface-hover);
+    background: var(--fill-hover);
     color: var(--ink);
   }
-  .icon-button .msr,
-  .annotation-edit .msr,
-  .annotation-delete .msr {
-    font-size: 16px;
+  :is(.icon-button, .annotation-edit, .annotation-delete):focus-visible {
+    outline: 2px solid var(--focus-ring);
+    outline-offset: -1px;
   }
+  .icon-button .icon,
+  .annotation-edit .icon,
+  .annotation-delete .icon {
+    font-size: 15px;
+  }
+  :global(:root[data-input='touch']) :is(.icon-button, .annotation-edit, .annotation-delete) { width: 36px; height: 40px; }
   .annotation-warning {
     display: grid;
-    gap: 7px;
+    gap: 8px;
     justify-items: start;
-    margin: 0 12px 10px;
-    padding: 9px 10px;
-    border-radius: 8px;
+    margin: 0 12px 8px;
+    padding: 10px 12px;
+    border-radius: var(--radius-2xl);
     background: color-mix(in srgb, var(--warn) 12%, transparent);
     color: var(--warn-text);
-    font: 500 11.5px/1.4 var(--font-sans);
+    font: 400 12px/1.4 var(--font-sans);
+    text-wrap: pretty;
   }
   .annotation-warning p { margin: 0; }
   .annotation-warning button {
-    min-height: 26px;
+    height: var(--control-sm);
     padding: 0 10px;
     border: 1px solid color-mix(in srgb, var(--warn-text) 32%, transparent);
-    border-radius: 999px;
+    border-radius: var(--radius-sm);
     background: transparent;
     color: var(--warn-text);
-    font: 600 11px/1 var(--font-sans);
+    font: 510 12px/1 var(--font-sans);
     cursor: pointer;
+    transition:
+      background-color var(--duration-basic) ease,
+      transform var(--duration-basic) var(--ease-enter-snappy);
   }
+  .annotation-warning button:active:not(:disabled) { transform: scale(0.97); }
+  .annotation-warning button:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
   .annotation-warning button:hover:not(:disabled) {
     background: color-mix(in srgb, var(--warn) 18%, transparent);
   }
   .annotation-warning button:disabled {
-    opacity: 0.5;
+    opacity: var(--opacity-disabled);
     cursor: default;
   }
   .annotation-empty {
     margin: 0;
-    padding: 14px 8px 12px;
-    color: var(--ink-4);
-    font: 400 11.5px/1.45 var(--font-sans);
+    padding: 12px 8px;
+    color: var(--ink-3);
+    font: 400 var(--text-xs)/1.45 var(--font-sans);
+    text-wrap: pretty;
   }
   .annotation-items {
     min-height: 0;
+    display: grid;
+    gap: 2px;
     overflow: auto;
     padding: 0 8px 8px;
   }
+  /* Rangées de liste Kube : pas de filets, un voile au survol, la sélection en
+     --accent-soft et les actions révélées au survol ou au focus. */
   .annotation-items article {
     display: flex;
     align-items: flex-start;
-    border-top: 1px solid var(--line-1);
+    border-radius: var(--radius-md);
+    transition: background-color var(--duration-basic) ease;
   }
-  .annotation-items article.current {
-    border-radius: 8px;
-    background: var(--accent-soft);
-  }
+  .annotation-items article:hover { background: var(--surface-hover); }
+  .annotation-items article.current { background: var(--accent-soft); }
   .annotation-items article.orphaned {
     opacity: 0.58;
   }
@@ -3444,20 +3708,33 @@
     display: flex;
     flex-direction: column;
     gap: 2px;
-    padding: 8px 2px 0 0;
+    padding: 6px 4px 0 0;
   }
+  /* Révélation réservée aux pointeurs fins qui survolent : au doigt, les actions restent
+     visibles, sinon elles seraient introuvables. « Au doigt » = dernier pointeur utilisé
+     (main.ts) : sur Surface, `any-pointer: coarse` est vrai même à la souris. */
+  @media (hover: hover) and (pointer: fine) {
+    .annotation-item-actions {
+      opacity: 0;
+      transition: opacity var(--duration-basic) ease;
+    }
+    .annotation-items article:is(:hover, :focus-within, .current) .annotation-item-actions { opacity: 1; }
+  }
+  :global(:root[data-input='touch']) .annotation-item-actions { opacity: 1; }
   .annotation-body {
     min-width: 0;
     flex: 1;
     display: grid;
-    gap: 5px;
-    padding: 12px 8px;
+    gap: 4px;
+    padding: 10px 8px 10px 10px;
     border: 0;
+    border-radius: var(--radius-md);
     background: transparent;
     color: var(--ink-2);
     text-align: left;
     cursor: pointer;
   }
+  .annotation-body:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
   .annotation-body:disabled {
     cursor: default;
   }
@@ -3468,61 +3745,67 @@
     -webkit-line-clamp: 2;
     line-clamp: 2;
     color: var(--ink-2);
-    font: 500 12px/1.4 var(--font-sans);
+    font: 400 13px/1.4 var(--font-sans);
   }
   .annotation-body p {
     margin: 0;
-    color: var(--ink-4);
-    font: 400 11.5px/1.4 var(--font-sans);
+    color: var(--ink-3);
+    font: 400 var(--text-xs)/1.4 var(--font-sans);
   }
   .annotation-editor {
     min-width: 0;
     flex: 1;
     display: grid;
     gap: 8px;
-    padding: 10px 8px 12px;
+    padding: 10px 8px 10px 10px;
   }
   .annotation-editor label {
     display: grid;
     gap: 6px;
   }
   .annotation-editor label > span {
-    color: var(--ink-4);
-    font: 500 10.5px/1.2 var(--font-sans);
+    color: var(--ink-3);
+    font: 400 12px/1.3 var(--font-sans);
   }
   .annotation-editor textarea {
     width: 100%;
     min-height: 72px;
     resize: vertical;
-    padding: 9px 10px;
+    padding: 8px 10px;
     border: 0;
-    border-radius: 10px;
+    border-radius: var(--radius-xs);
     outline: none;
     background: var(--cream-content);
     color: var(--ink);
-    box-shadow: inset 0 0 0 1px var(--line-2);
-    font: 400 12.5px/1.45 var(--font-sans);
+    box-shadow: inset 0 0 0 1px var(--line-1);
+    font: 400 13px/1.45 var(--font-sans);
+    transition: box-shadow var(--duration-basic) ease;
   }
-  .annotation-editor textarea:focus {
-    box-shadow: inset 0 0 0 1px var(--ink-3), 0 0 0 2px color-mix(in srgb, var(--ink-3) 14%, transparent);
-  }
+  .annotation-editor textarea:hover { box-shadow: inset 0 0 0 1px var(--line-3); }
+  .annotation-editor textarea:focus { box-shadow: inset 0 0 0 1px var(--focus-ring); }
   .annotation-editor-actions {
     display: flex;
     justify-content: flex-end;
-    gap: 6px;
+    gap: 4px;
   }
   .annotation-editor-actions button {
-    min-height: 30px;
-    padding: 0 12px;
+    height: var(--control-sm);
+    padding: 0 10px;
     border: 0;
-    border-radius: 999px;
+    border-radius: var(--radius-lg);
     background: transparent;
     color: var(--ink-3);
-    font: 600 11.5px/1 var(--font-sans);
+    font: 510 13px/1 var(--font-sans);
     cursor: pointer;
+    transition:
+      background-color var(--duration-basic) ease,
+      color var(--duration-basic) ease,
+      transform var(--duration-basic) var(--ease-enter-snappy);
   }
+  .annotation-editor-actions button:active:not(:disabled) { transform: scale(0.97); }
+  .annotation-editor-actions button:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
   .annotation-editor-actions button:hover {
-    background: var(--surface-hover);
+    background: var(--fill-hover);
     color: var(--ink);
   }
   .annotation-editor-actions .primary {
@@ -3556,15 +3839,14 @@
     .drawing-done span:last-child {
       display: none;
     }
-    .drawing-toolbar .drawing-done { padding: 0 9px; }
+    .drawing-toolbar .drawing-done { padding: 0 8px; }
     .drawing-toolbar {
       gap: 1px;
       padding: 3px;
     }
     .drawing-tools { gap: 1px; }
     .drawing-toolbar button {
-      height: 34px;
-      min-width: 32px;
+      min-width: var(--control-md);
       padding: 0 7px;
     }
     .drawing-toolbar .drawing-shape-toggle {
@@ -3575,22 +3857,20 @@
     .drawing-stroke-menu button { min-width: 32px; }
     .toolbar-divider { display: none; }
   }
-  @media (pointer: coarse) {
-    .drawing-toolbar button {
-      width: 44px;
-      height: 44px;
-    }
-    .drawing-toolbar .drawing-done { width: auto; }
+  /* `:where` : sans poids, comme l'ancienne requête média — sinon `.drawing-toolbar button`
+     écraserait la largeur 100 % des rangées des menus de forme et d'encre. */
+  :global(:where(:root[data-input='touch'])) .drawing-toolbar button {
+    width: 44px;
+    height: 44px;
   }
-  @media (pointer: coarse) {
-    @container (max-width: 440px) {
-      .drawing-toolbar button {
-        width: 36px;
-        min-width: 36px;
-        height: 40px;
-      }
-      .drawing-toolbar .drawing-shape-toggle { width: 42px; }
-      .drawing-toolbar .drawing-done { width: 36px; }
+  :global(:where(:root[data-input='touch'])) .drawing-toolbar .drawing-done { width: auto; }
+  @container (max-width: 440px) {
+    :global(:where(:root[data-input='touch'])) .drawing-toolbar button {
+      width: 36px;
+      min-width: 36px;
+      height: 40px;
     }
+    :global(:where(:root[data-input='touch'])) .drawing-toolbar .drawing-shape-toggle { width: 42px; }
+    :global(:where(:root[data-input='touch'])) .drawing-toolbar .drawing-done { width: 36px; }
   }
 </style>

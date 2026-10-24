@@ -49,24 +49,49 @@ const dokuHighlight = HighlightStyle.define([
 const dokuTheme = EditorView.theme({
   '&': { height: '100%', backgroundColor: 'transparent' },
   // Panneau Rechercher/Remplacer (@codemirror/search) : posé en haut, dans le vocabulaire
-  // de la barre d'outils (sans-serif, filet --line-2, champs et boutons arrondis).
-  '.cm-panels': { backgroundColor: 'var(--cream-tint)', color: 'var(--ink-2)', fontFamily: 'var(--font-sans)', fontSize: '12.5px' },
+  // de la barre d'outils (sans-serif, filet --line-2, champ arrondi, boutons fantômes).
+  '.cm-panels': { backgroundColor: 'var(--cream-tint)', color: 'var(--ink-2)', fontFamily: 'var(--font-sans)', fontSize: 'var(--text-xs)' },
   '.cm-panels-top': { borderBottom: '1px solid var(--line-2)' },
-  '.cm-panel.cm-search': { display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '6px 8px', padding: '8px 14px' },
+  '.cm-panel.cm-search': { display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '6px 4px', padding: '8px 14px' },
   '.cm-panel.cm-search br': { display: 'none' },
-  '.cm-panel.cm-search label': { display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '12px', color: 'var(--ink-3)' },
-  '.cm-panel.cm-search [name=close]': { position: 'static', marginLeft: 'auto', fontSize: '16px', color: 'var(--ink-4)', cursor: 'pointer' },
-  '.cm-textfield': { fontFamily: 'var(--font-sans)', fontSize: '12.5px', padding: '4px 9px', border: '1px solid var(--line-2)', borderRadius: '8px', background: 'var(--cream-content)', color: 'var(--ink)' },
-  '.cm-textfield:focus': { outline: 'none', borderColor: 'var(--line-3)' },
-  '.cm-button': { fontFamily: 'var(--font-sans)', fontSize: '12px', padding: '4px 10px', border: '1px solid var(--line-2)', borderRadius: '8px', background: 'var(--cream-content)', backgroundImage: 'none', color: 'var(--ink-2)', cursor: 'pointer' },
-  '.cm-button:hover': { background: 'var(--surface-hover)', color: 'var(--ink)' },
-  '.cm-searchMatch': { backgroundColor: 'var(--accent-soft)', borderRadius: '2px' },
-  '.cm-searchMatch.cm-searchMatch-selected': { boxShadow: '0 0 0 2px var(--ink-3)' },
+  // Les marges du baseTheme (.2em .6em) s'ajoutaient au gap.
+  '.cm-panel.cm-search input, .cm-panel.cm-search button, .cm-panel.cm-search label': { margin: '0' },
+  '.cm-panel.cm-search label': { display: 'inline-flex', alignItems: 'center', gap: '4px', margin: '0 4px', fontSize: 'var(--text-xs)', color: 'var(--ink-3)' },
+  '.cm-panel.cm-search [name=close]': {
+    position: 'static', marginLeft: 'auto', width: 'var(--control-sm)', height: 'var(--control-sm)', borderRadius: 'var(--radius-md)',
+    fontSize: '16px', color: 'var(--ink-4)', cursor: 'pointer',
+  },
+  '.cm-panel.cm-search [name=close]:hover': { backgroundColor: 'var(--fill-hover)', color: 'var(--ink)' },
+  '.cm-textfield': {
+    boxSizing: 'border-box', height: 'var(--control-sm)', padding: '0 9px',
+    fontFamily: 'var(--font-sans)', fontSize: 'var(--text-xs)',
+    border: '1px solid var(--line-2)', borderRadius: 'var(--radius-md)', background: 'var(--cream-content)', color: 'var(--ink)',
+  },
+  // Anneau de focus du champ (le filet seul ne se voyait pas) : même écriture que le champ
+  // de recherche de la barre latérale.
+  '.cm-textfield:focus': { borderColor: 'var(--line-3)', outline: '2px solid var(--focus-ring)', outlineOffset: '-1px' },
+  // Boutons fantômes compacts (DESIGN.md button-ghost, hauteur 28) : une barre d'outils
+  // ne borde pas ses boutons.
+  '.cm-button': {
+    height: 'var(--control-sm)', padding: '0 10px', border: '0', borderRadius: 'var(--radius-md)',
+    background: 'transparent', backgroundImage: 'none', color: 'var(--ink-2)',
+    fontFamily: 'var(--font-sans)', fontSize: 'var(--text-xs)', fontWeight: 'var(--weight-control)', cursor: 'pointer',
+  },
+  '.cm-button:hover': { background: 'var(--fill-hover)', color: 'var(--ink)' },
+  '.cm-button:active': { backgroundImage: 'none', background: 'var(--fill-pressed)' },
+  // Intensités de SearchHighlight (Kube : 24 % / 52 % + halo), ramenées à l'encre : 8 %
+  // (--accent-soft) disparaissait sur le crème. La courante garde son anneau pour ne pas
+  // dépendre de la seule teinte.
+  '.cm-searchMatch': { backgroundColor: 'rgba(var(--ink-rgb), 0.16)', borderRadius: '2px' },
+  '.cm-searchMatch.cm-searchMatch-selected': { backgroundColor: 'rgba(var(--ink-rgb), 0.32)', boxShadow: '0 0 0 2px var(--ink-3)' },
   '&.cm-focused': { outline: 'none' },
   '.cm-scroller': {
     fontFamily: 'var(--font-serif)',
     lineHeight: '1.78',
     overflow: 'auto',
+    // Place de la barre réservée des DEUX côtés : la colonne centrée ne saute plus quand
+    // le document dépasse la hauteur de la vue en cours de frappe.
+    scrollbarGutter: 'stable both-edges',
   },
   '.cm-content': {
     // La colonne suit le zoom : même nombre de caractères par ligne, comme un vrai zoom.
@@ -86,18 +111,18 @@ const dokuTheme = EditorView.theme({
     borderRadius: '3px',
     boxShadow: '0 0 0 2px var(--ink-3)',
   },
-  // Aperçu de reformulation en place (16.2, rephrase-preview.ts) — carte papier par-dessus
-  // la sélection, vocabulaire visuel du menu de sélection (filet --line-2, rayons 10).
+  // Aperçu de reformulation en place (16.2, rephrase-preview.ts) — carte flottante par-dessus
+  // la sélection : ombre de rôle « menu » (son anneau tient lieu de filet), rayon 16 =
+  // boutons 8 + gouttière 8 (concentrique).
   '.cm-rephrase-preview': {
     display: 'inline-block',
     maxWidth: '100%',
     boxSizing: 'border-box',
     verticalAlign: 'baseline',
     padding: '8px 12px',
-    border: '1px solid var(--line-2)',
-    borderRadius: '10px',
+    borderRadius: '16px',
     background: 'var(--cream-content)',
-    boxShadow: '0 4px 14px rgba(var(--shadow-rgb), 0.10)',
+    boxShadow: 'var(--shadow-xl)',
   },
   '.cm-rephrase-head': {
     display: 'block',
@@ -125,8 +150,8 @@ const dokuTheme = EditorView.theme({
   '.cm-rephrase-bar': { display: 'flex', gap: '8px', marginTop: '8px' },
   '.cm-rephrase-btn': {
     fontFamily: 'var(--font-sans)',
-    fontSize: '12.5px',
-    fontWeight: '500',
+    fontSize: 'var(--text-sm)',
+    fontWeight: 'var(--weight-control)',
     padding: '4px 12px',
     borderRadius: '8px',
     border: '1px solid var(--line-2)',
@@ -141,8 +166,8 @@ const dokuTheme = EditorView.theme({
     borderColor: 'var(--ink)',
     color: 'var(--cream-content)',
   },
-  '.cm-rephrase-btn.accept:hover': { opacity: '0.88', color: 'var(--cream-content)' },
-  '.cm-rephrase-btn:disabled': { opacity: '0.5', cursor: 'default' },
+  '.cm-rephrase-btn.accept:hover': { background: 'var(--ink-2)', borderColor: 'var(--ink-2)', color: 'var(--cream-content)' },
+  '.cm-rephrase-btn:disabled': { opacity: 'var(--opacity-disabled)', cursor: 'default' },
   '&.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground, .cm-selectionBackground': {
     background: 'rgba(var(--ink-rgb), 0.12)',
   },
@@ -220,7 +245,7 @@ const dokuTheme = EditorView.theme({
     // et une cible qui n'existe pas tant qu'on ne la survole pas est fragile à l'usage.
     display: 'inline-flex',
     opacity: '0',
-    transition: 'opacity 120ms ease-out',
+    transition: 'opacity var(--duration-basic) ease',
     gap: '2px',
     userSelect: 'none',
   },
@@ -239,6 +264,11 @@ const dokuTheme = EditorView.theme({
     fontFamily: 'var(--font-sans)',
     fontSize: '11px',
     cursor: 'pointer',
+    position: 'relative',
+    // Zone portée à 25px de haut pour le doigt, sans changer le rendu. Latéralement -1px
+    // seulement : les deux boutons ne sont séparés que de 2px, et leurs zones ne doivent
+    // pas se chevaucher (un « + » ne doit jamais déclencher « − »).
+    '&::before': { content: "''", position: 'absolute', inset: '-4px -1px' },
   },
   '.cm-lp-tool:hover': { color: 'var(--ink)', borderColor: 'var(--line-3)' },
   '.cm-lp-table th': {
@@ -253,6 +283,9 @@ const dokuTheme = EditorView.theme({
     maxWidth: '100%',
     borderRadius: '8px',
     margin: '6px 0',
+    // Contour intérieur : une image claire sur le papier garde un bord, en clair comme en sombre.
+    outline: '1px solid var(--image-outline)',
+    outlineOffset: '-1px',
   },
   '.cm-lp-image-missing': {
     display: 'inline-flex',
@@ -275,9 +308,12 @@ const dokuTheme = EditorView.theme({
     verticalAlign: '-4px',
     marginRight: '10px',
     position: 'relative',
+    // Cible au doigt 29×35 sans changer le rendu (::after porte la coche). Reste dans la
+    // ligne (interligne 33px) et dans la marge droite : aucun texte voisin n'est recouvert.
+    '&::before': { content: "''", position: 'absolute', inset: '-5px -8px' },
     // Props ciblées ('all' oblige Blink à diffuser chaque propriété animable à chaque
     // recalcul de style, pour chaque case du document).
-    transition: 'background-color 140ms ease, border-color 140ms ease',
+    transition: 'background-color var(--duration-basic) ease, border-color var(--duration-basic) ease',
   },
   '.cm-task-checkbox:hover': { borderColor: 'var(--ink-3)' },
   '.cm-task-checkbox:checked': { background: 'var(--ink)', borderColor: 'var(--ink)' },

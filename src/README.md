@@ -7,7 +7,7 @@ Frontend Svelte 5 de Doku : shell applicatif, éditeur Markdown *live preview*, 
 | File | Purpose |
 |---|---|
 | `main.ts` | Point d'entrée : fonts bundlées, montage de `App`, affichage sans flash puis activation du backdrop natif |
-| `app.css` | Tokens du design AIR, repli CSS du chrome, styles de base et icônes Material Symbols |
+| `app.css` | Tokens du design AIR (couleurs) et structure Kube (rayons, ombres, tailles, mouvement), repli CSS du chrome, styles de base, règle `svg.icon` |
 | `App.svelte` | Assemblage du shell (sidebar + titlebar + bureau + copilote) et raccourcis clavier globaux |
 
 ## components/
@@ -58,6 +58,13 @@ Frontend Svelte 5 de Doku : shell applicatif, éditeur Markdown *live preview*, 
 | `demo.ts` | Contenu de démonstration (mode navigateur / premier lancement) |
 | `sanitize.ts` | Assainit tout HTML issu de contenu non fiable |
 | `html.ts` | Prépare un document HTML pour l'aperçu sandboxé |
+| `html-escape.ts` | Échappement HTML seul, sans tirer l'export ni `marked` au démarrage |
+| `middle-truncate.ts` | Troncature au milieu des noms de fichiers (listes d'onglets, arbre), logique pure |
+| `file-icon.ts` | Glyphe Lucide par type de fichier et dossier ouvert/fermé (arbre, recherche), logique pure |
+| `stick-to-bottom.ts` | Suivi du bas du fil du copilote (seuil 96 px, défilement propre ignoré, ResizeObserver) |
+| `chat-blocks.ts` | En-tête langage + Copier des blocs de code des réponses du copilote |
+| `tooltip.ts` | Action `use:tooltip` : bulles d'aide Kube (200 ms, fenêtre de 300 ms, clavier immédiat, jamais au doigt) |
+| `hover-card.ts` | Placement d'un aperçu flottant (au-dessus si la place manque, dans la fenêtre), logique pure |
 | `images.ts` | Résolution des sources d'images Markdown, logique pure |
 | `paste-image.ts` | Helpers purs du collage d'image |
 | `format.ts` | Formatage Markdown de la sélection — couche pure, calculs sur chaînes |
@@ -136,6 +143,6 @@ Frontend Svelte 5 de Doku : shell applicatif, éditeur Markdown *live preview*, 
 
 ## Dependencies
 - Internal : `docs/design/w1/` (maquette de référence et source de vérité des tokens), `src-tauri/` (IPC)
-- External : CodeMirror 6, pdf.js, MuPDF, SuperDoc, `@cantoo/pdf-lib`, `docx`, `marked`, DOMPurify, fonts @fontsource (Inter Variable, Geist Mono, Source Serif 4), material-symbols, `@tauri-apps/*`
+- External : CodeMirror 6, pdf.js, MuPDF, SuperDoc, `@cantoo/pdf-lib`, `docx`, `marked`, DOMPurify, fonts @fontsource (Geist Mono, Source Serif 4), icônes Lucide (`lucide-static`, sprite `assets/icons.svg`), `@tauri-apps/*`
 
 > Les fichiers `*.test.ts` ne sont pas listés : chaque module testé a son test à côté de lui.

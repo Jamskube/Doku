@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { matchSlashCommand, slashQuery, suggestSlashCommands } from './composer-commands'
+import { matchSlashCommand, nextTrayIndex, slashQuery, suggestSlashCommands } from './composer-commands'
 
 const action = (draft: string, terminal = false) => matchSlashCommand(draft, terminal)?.command.action
 
@@ -71,5 +71,20 @@ describe('autocomplétion', () => {
     expect(suggestSlashCommands('p').map((s) => s.token)).toEqual(['pdf', 'page', 'presse-papiers'])
     expect(suggestSlashCommands('sch').map((s) => s.token)).toEqual(['schema'])
     expect(suggestSlashCommands('zz')).toEqual([])
+  })
+})
+
+describe('navigation du tray', () => {
+  it('boucle aux flèches', () => {
+    expect(nextTrayIndex(0, 'ArrowDown', 3)).toBe(1)
+    expect(nextTrayIndex(2, 'ArrowDown', 3)).toBe(0)
+    expect(nextTrayIndex(0, 'ArrowUp', 3)).toBe(2)
+  })
+
+  it('laisse la touche à la saisie hors navigation ou sur liste vide', () => {
+    expect(nextTrayIndex(0, 'ArrowLeft', 3)).toBeNull()
+    expect(nextTrayIndex(0, 'ArrowDown', 0)).toBeNull()
+    expect(nextTrayIndex(1, 'Home', 3)).toBeNull()
+    expect(nextTrayIndex(0, 'End', 3)).toBeNull()
   })
 })

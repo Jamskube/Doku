@@ -4,12 +4,10 @@
     orientation,
     ratio,
     onChange,
-    onDragging,
   }: {
     orientation: 'horizontal' | 'vertical'
     ratio: number
     onChange: (ratio: number) => void
-    onDragging: (dragging: boolean) => void
   } = $props()
 
   let frame = 0
@@ -35,14 +33,12 @@
   function pointerDown(event: PointerEvent) {
     const target = event.currentTarget as HTMLElement
     target.setPointerCapture(event.pointerId)
-    onDragging(true)
   }
 
 
   function pointerEnd(event: PointerEvent) {
     const target = event.currentTarget as HTMLElement
     if (target.hasPointerCapture(event.pointerId)) target.releasePointerCapture(event.pointerId)
-    onDragging(false)
   }
 
   function pointerMove(event: PointerEvent) {
@@ -110,18 +106,17 @@
     border: 0;
     background: transparent;
   }
+  /* Filet de 1 px au repos (deux volets de même fond), --line-3 au survol et pendant le
+     glisser ; au clavier, une barre de 3 px à la couleur du focus tient lieu d'anneau. */
   .divider span {
     position: absolute;
     inset: 0 4px;
     background: var(--line-1);
-    transition: background 140ms ease, box-shadow 140ms ease;
+    transition: background-color var(--duration-basic) ease;
   }
-  .divider:hover span,
-  .divider:focus-visible span {
-    background: var(--line-3);
-    box-shadow: 0 0 0 1px var(--cream-content);
-  }
+  .divider:is(:hover, :active) span { background: var(--line-3); }
   .divider:focus-visible { outline: none; }
+  .divider:focus-visible span { inset: 0 3px; background: var(--focus-ring); }
   .divider.vertical {
     flex-basis: 9px;
     width: auto;
@@ -130,7 +125,22 @@
     cursor: row-resize;
   }
   .divider.vertical span { inset: 4px 0; }
-  @media (prefers-reduced-motion: reduce) {
-    .divider span { transition: none; }
+  .divider.vertical:focus-visible span { inset: 3px 0; }
+  /* Au doigt, 9 px ne se saisissent pas : 24 px, le filet reste sur la couture et l'encombrement
+     net reste 1 px. La zone déborde surtout sur le volet de DROITE : à gauche, elle
+     recouvrirait la barre de défilement du premier volet, que la souris doit garder.
+     Empilé, le bas est pris par le sélecteur du volet (.selector.local) et le haut peut porter
+     la barre de défilement horizontale d'un PDF zoomé : 4 px de chaque côté, comme à la souris.
+     Seulement après un geste au doigt (qui fait défiler sans la barre), la zone monte de 19 px. */
+  @media (any-pointer: coarse) {
+    .divider { flex-basis: 24px; width: 24px; margin: 0 -19px 0 -4px; }
+    .divider span { inset: 0 19px 0 4px; }
+    .divider:focus-visible span { inset: 0 18px 0 3px; }
+    .divider.vertical { flex-basis: 9px; width: auto; height: 9px; margin: -4px 0; }
+    .divider.vertical span { inset: 4px 0; }
+    .divider.vertical:focus-visible span { inset: 3px 0; }
+    :global(:root[data-input='touch']) .divider.vertical { flex-basis: 24px; height: 24px; margin: -19px 0 -4px; }
+    :global(:root[data-input='touch']) .divider.vertical span { inset: 19px 0 4px; }
+    :global(:root[data-input='touch']) .divider.vertical:focus-visible span { inset: 18px 0 3px; }
   }
 </style>

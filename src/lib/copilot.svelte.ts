@@ -2347,18 +2347,14 @@ export async function jumpToCitation(s: CitedPassage): Promise<void> {
       return
     }
     const loc = locatePassage(tab.content, s.text)
-    if (loc) app.pendingReveal = { path: s.path, line: loc.line, col: loc.col, length: loc.length, select: false }
+    if (loc) app.pendingReveal = { path: s.path, line: loc.line, col: loc.col, length: loc.length, select: false, text: s.text }
     return
   }
-  // Document sans chemin (non enregistré) : l'onglet est déjà actif, révélation directe.
+  // Document sans chemin (non enregistré) : l'onglet est déjà actif, ciblé par son id.
   const tab = activeTab()
-  const view = activeEditorView()
-  if (!tab || tab.kind === 'pdf' || !view) return
+  if (!tab || tab.kind === 'pdf') return
   const loc = locatePassage(tab.content, s.text)
-  if (loc) {
-    const { revealMatch } = await import('./editor/search-flash')
-    revealMatch(view, loc.line, loc.col, loc.length, { select: false })
-  }
+  if (loc) app.pendingReveal = { path: null, tabId: tab.id, line: loc.line, col: loc.col, length: loc.length, select: false, text: s.text }
 }
 
 // Une recherche dossier est-elle en vol ? stopChat s'en sert pour annuler AUSSI un
@@ -2632,7 +2628,10 @@ export async function summarizeDoc(
   // Doc texte vide → message clair (FR-4). Un PDF a `text=''` avant extraction : sa vacuité
   // se juge APRÈS résolution (plus bas), pas ici.
   if (doc.kind !== 'pdf' && !doc.text.trim()) {
-    reply("Ce document est vide — il n'y a rien à résumer.")
+    // Sans onglet, l'appelant passe un nom nul : ce n'est pas un document vide.
+    reply(doc.name === null && !doc.path
+      ? 'Aucun document ouvert — ouvrez-en un pour que je puisse le résumer.'
+      : "Ce document est vide — il n'y a rien à résumer.")
     return
   }
 

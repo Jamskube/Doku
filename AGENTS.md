@@ -23,7 +23,7 @@ Doku — petite application pour **ouvrir, lire et éditer des fichiers Markdown
 - AppImage Linux : **CI uniquement** (WebKitGTK ne se cross-compile pas depuis Windows) — workflow `Build Linux x64`, `gh workflow run "Build Linux x64" --ref main`
 - Typecheck : `npm run check`
 - Tests : `npm test` (vitest)
-- Icônes : `npm run subset:icons` (réseau requis) — à relancer quand `icons.test.ts` échoue (icône ajoutée hors subset), puis committer `src/assets/material-symbols-*`
+- Icônes (Lucide, kit Kube `G:\KUBE_style`) : `<svg class="icon"><use href="#i-nom" /></svg>` ; `npm run subset:icons` à relancer quand `icons.test.ts` échoue (icône hors sprite), puis committer `src/assets/icons.svg`
 
 ## Conventions
 - Commentaires uniquement sur le code non évident (des identifiants bien nommés font le reste)
