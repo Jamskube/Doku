@@ -105,16 +105,127 @@ static NEXT_WINDOW: AtomicUsize = AtomicUsize::new(1);
 #[derive(Default)]
 struct Handoffs(Mutex<HashMap<String, String>>);
 
-// async : créer une fenêtre depuis une commande synchrone bloque la boucle d'événements sous Windows.
-#[tauri::command]
-async fn new_window(app: tauri::AppHandle, handoffs: tauri::State<'_, Handoffs>, handoff: Option<String>) -> Result<(), String> {
+fn open_window_with(app: &tauri::AppHandle, handoffs: &Handoffs, handoff: Option<String>) -> Result<tauri::WebviewWindow, String> {
     let label = format!("doku-{}", NEXT_WINDOW.fetch_add(1, Ordering::Relaxed));
     if let Some(handoff) = handoff {
         handoffs.0.lock().unwrap_or_else(|e| e.into_inner()).insert(label.clone(), handoff);
     }
-    create_window(&app, &label).map(|_| ()).inspect_err(|_| {
+    create_window(app, &label).inspect_err(|_| {
         handoffs.0.lock().unwrap_or_else(|e| e.into_inner()).remove(&label);
     })
+}
+
+// async : créer une fenêtre depuis une commande synchrone bloque la boucle d'événements sous Windows.
+#[tauri::command]
+async fn new_window(app: tauri::AppHandle, handoffs: tauri::State<'_, Handoffs>, handoff: Option<String>) -> Result<(), String> {
+    open_window_with(&app, &handoffs, handoff).map(|_| ())
+}
+
+// Hauteur de la barre de titre en px CSS (`--chrome-titlebar-height`).
+const TAB_STRIP_HEIGHT: f64 = 40.0;
+
+// Le point (px physiques d'écran) est-il sur la barre d'onglets de cette fenêtre ?
+fn in_tab_strip(point: (f64, f64), origin: (i32, i32), size: (u32, u32), scale: f64) -> bool {
+    let (x, y) = (point.0 - f64::from(origin.0), point.1 - f64::from(origin.1));
+    (0.0..f64::from(size.0)).contains(&x) && (0.0..TAB_STRIP_HEIGHT * scale).contains(&y)
+}
+
+// Glisser un onglet comme dans Chrome : la fenêtre qui porte l'onglet suit le curseur
+// (`drag_tab_window`), et lâchée sur la barre d'onglets d'une autre fenêtre Doku, elle s'y
+// fond (`drop_tab_window` → `doku://merge-into`). La fenêtre d'origine garde la capture de
+// la souris et pilote tout ; le curseur est lu ici, en px physiques (écrans et échelles mêlés).
+
+// Fenêtre glissée à fondre dans une autre : elle le lit à l'événement, ou à son démarrage si
+// on l'a lâchée avant qu'elle écoute (`take_merge`).
+#[derive(Default)]
+struct Merges(Mutex<HashMap<String, String>>);
+
+// Fenêtre Doku visible dont la barre d'onglets est sous le curseur, la fenêtre glissée exclue.
+// ponytail: première trouvée si deux barres se superposent, ordre Z (WindowFromPoint) si ça gêne.
+fn tab_strip_under_cursor(app: &tauri::AppHandle, dragged: &str) -> Result<(tauri::PhysicalPosition<f64>, Option<tauri::WebviewWindow>), String> {
+    let cursor = app.cursor_position().map_err(|error| error.to_string())?;
+    let target = app.webview_windows().into_values().find(|other| {
+        other.label() != dragged
+            && matches!(other.is_visible(), Ok(true))
+            && !matches!(other.is_minimized(), Ok(true))
+            && match (other.outer_position(), other.outer_size(), other.scale_factor()) {
+                (Ok(origin), Ok(size), Ok(scale)) => in_tab_strip((cursor.x, cursor.y), (origin.x, origin.y), (size.width, size.height), scale),
+                _ => false,
+            }
+    });
+    Ok((cursor, target))
+}
+
+// Pose la fenêtre pour que le point tenu (`grab`, px CSS depuis son coin) soit sous le curseur.
+fn follow_cursor(window: &tauri::WebviewWindow, cursor: tauri::PhysicalPosition<f64>, grab: (f64, f64)) {
+    let scale = window.scale_factor().unwrap_or(1.0);
+    let _ = window.set_position(tauri::PhysicalPosition::new(cursor.x - grab.0 * scale, cursor.y - grab.1 * scale));
+}
+
+// Onglet arraché de sa barre : il part aussitôt dans une nouvelle fenêtre posée sous le curseur.
+#[tauri::command]
+async fn tear_off_tab(app: tauri::AppHandle, handoffs: tauri::State<'_, Handoffs>, handoff: String, grab: (f64, f64)) -> Result<String, String> {
+    let created = open_window_with(&app, &handoffs, Some(handoff))?;
+    follow_cursor(&created, app.cursor_position().map_err(|error| error.to_string())?, grab);
+    Ok(created.label().to_string())
+}
+
+// Au-dessus de la barre d'une autre fenêtre, la fenêtre glissée s'efface (hors écran plutôt que
+// masquée : si c'est la fenêtre d'origine, elle doit garder la capture de la souris) et laisse
+// voir la barre visée. Rend le label de cette fenêtre, pour y montrer l'onglet en approche, et
+// si la fenêtre glissée est déjà peinte à l'écran (l'aperçu de la fenêtre d'origine s'efface alors).
+#[derive(serde::Serialize)]
+struct TabDragState {
+    target: Option<String>,
+    shown: bool,
+}
+
+#[tauri::command]
+fn drag_tab_window(app: tauri::AppHandle, label: String, grab: (f64, f64)) -> Result<TabDragState, String> {
+    let Some(window) = app.get_webview_window(&label) else { return Ok(TabDragState { target: None, shown: false }) };
+    let (cursor, target) = tab_strip_under_cursor(&app, &label)?;
+    match &target {
+        Some(_) => {
+            let _ = window.set_position(tauri::PhysicalPosition::new(-32_000, -32_000));
+        }
+        None => follow_cursor(&window, cursor, grab),
+    }
+    Ok(TabDragState {
+        shown: target.is_none() && matches!(window.is_visible(), Ok(true)),
+        target: target.map(|target| target.label().to_string()),
+    })
+}
+
+#[tauri::command]
+fn drop_tab_window(app: tauri::AppHandle, merges: tauri::State<'_, Merges>, label: String) -> Result<(), String> {
+    let Some(window) = app.get_webview_window(&label) else { return Ok(()) };
+    let (_, target) = tab_strip_under_cursor(&app, &label)?;
+    let Some(target) = target else {
+        let _ = window.set_focus();
+        return Ok(());
+    };
+    merges.0.lock().unwrap_or_else(|e| e.into_inner()).insert(label.clone(), target.label().to_string());
+    window.emit_to(label.as_str(), "doku://merge-into", ()).map_err(|error| error.to_string())?;
+    // Filet : une fusion qui n'aboutit pas (fenêtre bloquée) ne laisse pas une fenêtre hors écran.
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_secs(4));
+        let _ = window.center();
+    });
+    Ok(())
+}
+
+#[tauri::command]
+fn take_merge(window: tauri::WebviewWindow, merges: tauri::State<'_, Merges>) -> Option<String> {
+    merges.0.lock().unwrap_or_else(|e| e.into_inner()).remove(window.label())
+}
+
+// Remet un onglet à une fenêtre existante, qui le reprend (`doku://tab-dropped`) et passe devant.
+#[tauri::command]
+fn give_tab(app: tauri::AppHandle, target: String, handoff: String) -> Result<(), String> {
+    let window = app.get_webview_window(&target).ok_or("fenêtre visée fermée")?;
+    window.emit_to(target.as_str(), "doku://tab-dropped", handoff).map_err(|error| error.to_string())?;
+    let _ = window.set_focus();
+    Ok(())
 }
 
 #[tauri::command]
@@ -236,11 +347,17 @@ fn main() {
         .manage(OpenAiState::default())
         .manage(CompatState::default())
         .manage(Handoffs::default())
+        .manage(Merges::default())
         .invoke_handler(tauri::generate_handler![
             set_system_backdrop,
             move_to_trash,
             new_window,
             take_handoff,
+            tear_off_tab,
+            drag_tab_window,
+            drop_tab_window,
+            give_tab,
+            take_merge,
             launched_at_startup,
             set_background_mode,
             background_mode,
@@ -285,4 +402,22 @@ fn main() {
                 }
             }
         });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::in_tab_strip;
+
+    #[test]
+    fn tab_strip_hit_follows_window_origin_and_scale() {
+        // Fenêtre en (100, 50), 800 × 600 px physiques, échelle 1,5 : barre de 60 px physiques.
+        let window = ((100, 50), (800, 600), 1.5);
+        let hit = |x, y| in_tab_strip((x, y), window.0, window.1, window.2);
+        assert!(hit(100.0, 50.0));
+        assert!(hit(899.0, 109.0));
+        assert!(!hit(899.0, 111.0), "sous la barre : contenu, pas onglets");
+        assert!(!hit(99.0, 60.0), "à gauche de la fenêtre");
+        assert!(!hit(900.0, 60.0), "à droite de la fenêtre");
+        assert!(!hit(500.0, 49.0), "au-dessus de la fenêtre");
+    }
 }
