@@ -678,6 +678,35 @@ export async function writePdfAnnotationManifest(key: string, content: string): 
   await writeTextFileAtomic(await join(dir, 'manifest.json'), content)
 }
 
+// Signature manuscrite : UN fichier pour toute l'application, hors de tout document.
+const SIGNATURE_STORAGE_KEY = 'doku:signature'
+
+export async function readSavedSignature(): Promise<string | null> {
+  if (!isTauri) return globalThis.localStorage?.getItem(SIGNATURE_STORAGE_KEY) ?? null
+  try {
+    const { appDataDir, join } = await import('@tauri-apps/api/path')
+    const { readTextFile } = await import('@tauri-apps/plugin-fs')
+    return await readTextFile(await join(await appDataDir(), 'signature.json'))
+  } catch {
+    return null
+  }
+}
+
+// Une chaîne vide OUBLIE la signature : le fichier est vidé plutôt que supprimé, ce qui
+// évite d'élargir `fs:allow-remove`. Lève en cas d'échec — l'appelant ne doit jamais
+// annoncer « enregistrée » sur une écriture qui n'a pas eu lieu.
+export async function writeSavedSignature(content: string): Promise<void> {
+  if (!isTauri) {
+    globalThis.localStorage?.setItem(SIGNATURE_STORAGE_KEY, content)
+    return
+  }
+  const { appDataDir, join } = await import('@tauri-apps/api/path')
+  const { mkdir } = await import('@tauri-apps/plugin-fs')
+  const dir = await appDataDir()
+  await mkdir(dir, { recursive: true })
+  await writeTextFileAtomic(await join(dir, 'signature.json'), content)
+}
+
 // Jumeau binaire de writeTextFileAtomic (tmp + rename) : écrire un .docx directement
 // via writeFile corromprait un fichier existant en cas d'interruption.
 export async function writeFileAtomic(path: string, bytes: Uint8Array) {

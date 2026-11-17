@@ -1,7 +1,10 @@
 <script lang="ts">
   import { onMount, tick } from 'svelte'
   import { app, workspace } from '../lib/stores.svelte'
-  import { keepPdfAnnotationManifestAside, readFileBytes, readPdfAnnotationManifest, writePdfAnnotationManifest } from '../lib/tauri'
+  import { keepPdfAnnotationManifestAside, readFileBytes, readPdfAnnotationManifest, readSavedSignature, writePdfAnnotationManifest, writeSavedSignature } from '../lib/tauri'
+  import { parseSavedSignature, signatureTargetBox, stampSignature, type SavedSignature } from '../lib/pdf-signature-stamp'
+  import { pdfResizeFactor, pdfRotationAngle, rotatePdfStrokeDrawing, scalePdfStrokeDrawing } from '../lib/pdf-drawing-transform'
+  import SignaturePad from './SignaturePad.svelte'
   import {
     clusterPdfNotePins,
     parsePdfAnnotationManifest,
@@ -101,7 +104,12 @@
   let undoStack: PdfAnnotationManifest[] = $state([])
   let redoStack: PdfAnnotationManifest[] = $state([])
   let annotationMode = $state(false)
-  let drawingTool: 'select' | 'pen' | 'shape' | 'eraser' = $state('select')
+  let drawingTool: 'select' | 'pen' | 'shape' | 'signature' | 'eraser' = $state('select')
+  // Signature manuscrite (pdf-signature-stamp.ts) : relue du disque à chaque
+  // activation de l'outil — une autre fenêtre a pu la refaire ou l'oublier entre-temps.
+  let activeSignature = $state<SavedSignature | null>(null)
+  let signaturePadOpen = $state(false)
+  let signatureMenuOpen = $state(false)
   // Le surligneur est un MODE du crayon, pas un outil à part. Deux variantes : celle
   // qui épouse le texte sélectionné, et le trait libre.
   let inkMode: PdfInkMode = $state('ink')
@@ -124,6 +132,8 @@
     | { kind: 'stroke'; pointerId: number; page: number; drawing: PdfStrokeDrawing }
     | { kind: 'shape'; pointerId: number; page: number; start: PdfDrawingPoint; drawing: PdfShapeDrawing }
     | { kind: 'move'; pointerId: number; page: number; start: PdfDrawingPoint; original: PdfDrawing; drawing: PdfDrawing }
+    | { kind: 'transform'; mode: 'resize' | 'rotate'; pointerId: number; page: number; start: PdfDrawingPoint; original: PdfStrokeDrawing; drawing: PdfDrawing; pageAspect: number }
+    | { kind: 'stamp'; pointerId: number; page: number; start: PdfDrawingPoint; signature: SavedSignature; pageAspect: number; drawing: PdfStrokeDrawing }
   let drawingGesture: DrawingGesture | null = null
   let requestFit = () => {}
   // Style mémorisé par famille d'outil : un surligneur noir de 4 px n'aurait aucun
@@ -161,7 +171,7 @@
   const pointerMode = $derived.by((): 'pick' | 'text' | 'draw' | 'erase' => {
     if (drawingTool === 'eraser') return 'erase'
     if (drawingTool === 'select') return 'pick'
-    if (drawingTool === 'shape') return 'draw'
+    if (drawingTool === 'shape' || drawingTool === 'signature') return 'draw'
     return inkMode === 'text' ? 'text' : 'draw'
   })
   const drawingColor = $derived(selectedDrawing?.color ?? toolStyles[paletteKind].color)
@@ -221,7 +231,7 @@
   const inkModes = [
     { value: 'ink', label: 'Crayon', icon: 'pen' },
     { value: 'text', label: 'Surligneur', icon: 'highlighter' },
-    { value: 'highlight', label: 'Surligneur libre', icon: 'signature' },
+    { value: 'highlight', label: 'Surligneur libre', icon: 'brush' },
   ] as const satisfies readonly { value: PdfInkMode; label: string; icon: string }[]
   const highlighterPalette = $derived(paletteKind === 'highlight' || paletteKind === 'text')
   const paletteColors = $derived<readonly { value: string; label: string; darkCheck: boolean }[]>(
@@ -260,7 +270,9 @@
 
   // Épaisseur écran d'un trait : relative à la page, donc stable au zoom et au DPR.
   function strokePixels(strokeWidth: number, width: number, height: number): number {
-    return Math.max(1.6, strokeWidth * Math.min(width, height) / 1_000)
+    // Plancher à 1 px et non plus 1,6 : à 1,6, le « Très fin » de la signature (1,2) et
+    // le « Fin » (2) se confondaient à l'écran sur une page de moins de 800 px.
+    return Math.max(1, strokeWidth * Math.min(width, height) / 1_000)
   }
 
   function svgElement(tag: string): SVGElement {
@@ -313,6 +325,41 @@
     return [ellipse]
   }
 
+  // Cadre d'un tracé sélectionné : tout son intérieur déplace (un trait fin est dur à
+  // attraper au doigt), le coin redimensionne, la poignée détachée tourne.
+  function selectionFrame(drawing: PdfDrawing, width: number, height: number): SVGGElement {
+    const box = pdfDrawingBox(drawing)
+    const margin = 8
+    const x = box.left * width - margin
+    const y = box.top * height - margin
+    const w = box.width * width + margin * 2
+    const h = box.height * height + margin * 2
+    const group = svgGroup(drawing.id)
+    const attrs = (element: SVGElement, values: Record<string, number>) => {
+      for (const [name, value] of Object.entries(values)) element.setAttribute(name, String(value))
+      return element
+    }
+    const frame = attrs(svgElement('rect'), { x, y, width: w, height: h, rx: 4 })
+    frame.classList.add('pdf-drawing-frame')
+    // En haut de page, la poignée de rotation passe SOUS le cadre plutôt que hors page.
+    const stemLength = 24
+    const above = y - stemLength > 4
+    const rotateY = above ? y - stemLength : y + h + stemLength
+    const stem = attrs(svgElement('line'), { x1: x + w / 2, y1: above ? y : y + h, x2: x + w / 2, y2: rotateY })
+    stem.classList.add('pdf-drawing-stem')
+    group.append(frame, stem)
+    for (const [name, cx, cy] of [['rotate', x + w / 2, rotateY], ['resize', x + w, y + h]] as const) {
+      // Deux cercles : la pastille qu'on voit, et une cible de 36 px pour le doigt.
+      const target = attrs(svgElement('circle'), { cx, cy, r: 18 })
+      target.classList.add('pdf-drawing-handle-hit')
+      target.dataset.handle = name
+      const dot = attrs(svgElement('circle'), { cx, cy, r: 6.5 })
+      dot.classList.add('pdf-drawing-handle')
+      group.append(target, dot)
+    }
+    return group
+  }
+
   function renderPdfDrawingsForPage(page: number, force = false) {
     const wrap = pageWraps.get(page)
     const layer = wrap?.querySelector<SVGSVGElement>('.pdf-drawing-layer')
@@ -352,7 +399,8 @@
         if (!painted) shape.setAttribute('stroke-width', String(strokeWidth))
         group.appendChild(shape)
       }
-      if (drawing.id === selectedDrawingId && annotationMode) {
+      const framed = drawing.id === selectedDrawingId && annotationMode && drawing.kind === 'ink'
+      if (drawing.id === selectedDrawingId && annotationMode && !framed) {
         const outline = svgGroup(drawing.id)
         for (const shape of shapes) {
           const selection = shape.cloneNode(true) as SVGElement
@@ -382,6 +430,7 @@
         hitGroup.appendChild(hit)
       }
       layer.appendChild(hitGroup)
+      if (framed) layer.appendChild(selectionFrame(drawing, width, height))
     }
   }
 
@@ -622,6 +671,18 @@
       return
     }
     if (drawingTool === 'select') {
+      const handle = event.target instanceof Element ? event.target.closest<SVGElement>('[data-handle]')?.dataset.handle : undefined
+      const grabbed = handle ? annotationManifest?.drawings.find((drawing) => drawing.id === drawingId) : undefined
+      if (grabbed && isPdfStrokeDrawing(grabbed)) {
+        const bounds = layer.getBoundingClientRect()
+        drawingGesture = {
+          kind: 'transform', mode: handle === 'rotate' ? 'rotate' : 'resize', pointerId: event.pointerId, page, start: point,
+          original: grabbed, drawing: grabbed, pageAspect: Math.max(bounds.width, 1) / Math.max(bounds.height, 1),
+        }
+        previewDrawing = grabbed
+        try { layer.setPointerCapture(event.pointerId) } catch { /* capture indisponible hors geste natif */ }
+        return
+      }
       selectedDrawingId = drawingId
       renderPdfDrawings()
       if (!drawingId) return
@@ -638,6 +699,21 @@
       drawingGesture = { kind: 'move', pointerId: event.pointerId, page, start: point, original, drawing: original }
       previewDrawing = original
       try { layer.setPointerCapture(event.pointerId) } catch { /* capture indisponible hors geste natif */ }
+      return
+    }
+    if (drawingTool === 'signature') {
+      const signature = activeSignature
+      if (!signature) return
+      // Les fractions de page ne sont pas isotropes : sans le rapport de la page, la
+      // signature serait étirée sur toute page qui n'est pas carrée.
+      const bounds = layer.getBoundingClientRect()
+      const pageAspect = Math.max(bounds.width, 1) / Math.max(bounds.height, 1)
+      const drawing = stampSignature(signature, page, signatureTargetBox(point, point, signature.aspect, pageAspect), pageAspect)
+      drawingGesture = { kind: 'stamp', pointerId: event.pointerId, page, start: point, signature, pageAspect, drawing }
+      previewDrawing = drawing
+      selectedDrawingId = null
+      try { layer.setPointerCapture(event.pointerId) } catch { /* capture indisponible hors geste natif */ }
+      scheduleDrawingRender(page)
       return
     }
     const now = new Date().toISOString()
@@ -684,6 +760,21 @@
         width: Math.abs(gesture.start.x - point.x),
         height: Math.abs(gesture.start.y - point.y),
       }
+    } else if (gesture.kind === 'transform') {
+      // Toujours depuis l'ORIGINAL : transformer l'aperçu précédent cumulerait les
+      // arrondis de chaque mouvement.
+      const box = pdfDrawingBox(gesture.original)
+      const point = drawingPoint(event, layer)
+      gesture.drawing = gesture.mode === 'resize'
+        ? scalePdfStrokeDrawing(gesture.original, pdfResizeFactor(box, gesture.start, point, gesture.pageAspect))
+        : rotatePdfStrokeDrawing(gesture.original, pdfRotationAngle(box, gesture.start, point, gesture.pageAspect), gesture.pageAspect)
+    } else if (gesture.kind === 'stamp') {
+      // Appui simple : taille par défaut sous le doigt. Glisser : la signature s'inscrit
+      // dans le cadre tracé — c'est ainsi qu'on choisit sa taille.
+      const box = signatureTargetBox(gesture.start, drawingPoint(event, layer), gesture.signature.aspect, gesture.pageAspect)
+      gesture.drawing = stampSignature(gesture.signature, gesture.page, box, gesture.pageAspect, {
+        id: gesture.drawing.id, now: gesture.drawing.createdAt,
+      })
     } else {
       const point = drawingPoint(event, layer)
       gesture.drawing = translatePdfDrawing(gesture.original, { x: point.x - gesture.start.x, y: point.y - gesture.start.y })
@@ -727,6 +818,8 @@
       } catch {
         drawing = null
       }
+    } else if (gesture.kind === 'stamp') {
+      // Déjà finale : le dernier mouvement l'a posée.
     } else if (JSON.stringify(gesture.drawing) === JSON.stringify(gesture.original)) {
       drawing = null
     } else if (isPdfStrokeDrawing(gesture.drawing)) {
@@ -737,10 +830,20 @@
     renderPdfDrawingsForPage(gesture.page)
     if (!drawing) return
     if (!block) endHighlightBlock()
-    selectedDrawingId = gesture.kind === 'move' ? drawing.id : null
+    selectedDrawingId = gesture.kind === 'stroke' || gesture.kind === 'shape' ? null : drawing.id
+    // Une signature posée repasse en sélection, signature désignée : on l'ajuste en la
+    // faisant glisser, sans risquer d'en poser une seconde par mégarde.
+    if (gesture.kind === 'stamp') drawingTool = 'select'
     try {
-      if (await commitAnnotationManifest(upsertPdfDrawing(annotationManifest, drawing)) && block) {
-        rememberHighlightBlock(drawing.id, gesture.page)
+      const committed = await commitAnnotationManifest(upsertPdfDrawing(annotationManifest, drawing))
+      if (committed && block) rememberHighlightBlock(drawing.id, gesture.page)
+      // Le carnet n'est PAS le fichier : sans ce rappel, on enverrait l'original non signé.
+      if (committed && gesture.kind === 'stamp') {
+        app.banner = {
+          tone: 'success',
+          title: 'Signature posée',
+          message: 'Glissez-la pour la déplacer ; ses poignées changent sa taille et la font tourner. Fichier signé : menu Exporter › PDF avec les annotations.',
+        }
       }
     } catch {
       app.banner = { tone: 'warning', title: 'Carnet de dessins rempli', message: 'Supprimez un dessin avant d’en ajouter un nouveau.' }
@@ -770,6 +873,51 @@
     drawingStrokeMenuOpen = false
     drawingShapeMenuOpen = false
     drawingInkMenuOpen = false
+    signatureMenuOpen = false
+  }
+
+  // Même geste que les boutons voisins : activer l'outil ET ouvrir son menu. Sans
+  // signature enregistrée, le bouton ouvre le pavé — on ne pose pas ce qui n'existe pas.
+  async function chooseSignatureTool() {
+    const open = !signatureMenuOpen
+    closeToolMenus()
+    activeSignature = parseSavedSignature(await readSavedSignature())
+    if (!activeSignature) {
+      signaturePadOpen = true
+      return
+    }
+    setDrawingTool('signature')
+    signatureMenuOpen = open
+  }
+
+  async function saveSignature(signature: SavedSignature) {
+    let kept = true
+    try {
+      await writeSavedSignature(JSON.stringify(signature))
+    } catch {
+      kept = false
+    }
+    // Non conservée ne veut pas dire inutilisable : elle sert pour cette séance, et
+    // l'utilisateur sait qu'il devra la refaire.
+    activeSignature = signature
+    signaturePadOpen = false
+    setDrawingTool('signature')
+    app.banner = kept
+      ? { tone: 'success', title: 'Signature enregistrée', message: 'Touchez la page là où la poser, ou tracez un cadre pour choisir sa taille.' }
+      : { tone: 'warning', title: 'Signature non conservée', message: 'Doku n’a pas pu l’écrire sur cet appareil : elle reste utilisable tant que ce document est ouvert.' }
+  }
+
+  async function forgetSignature() {
+    signatureMenuOpen = false
+    try {
+      await writeSavedSignature('')
+    } catch {
+      app.banner = { tone: 'error', title: 'Signature toujours conservée', message: 'Doku n’a pas pu effacer le fichier de signature sur cet appareil.' }
+      return
+    }
+    activeSignature = null
+    setDrawingTool('select')
+    app.banner = { tone: 'success', title: 'Signature oubliée', message: 'Elle n’est plus conservée sur cet appareil. Celles déjà posées restent dans leurs documents.' }
   }
 
   function setDrawingTool(tool: typeof drawingTool) {
@@ -1650,6 +1798,9 @@
       if (drawingInkMenuOpen && !target?.closest('.drawing-ink-menu') && !target?.closest('.drawing-ink-toggle')) {
         drawingInkMenuOpen = false
       }
+      if (signatureMenuOpen && !target?.closest('.drawing-signature-menu') && !target?.closest('.drawing-signature-toggle')) {
+        signatureMenuOpen = false
+      }
     }
     // Échap épluche UNE couche à la fois, de la plus éphémère à la plus durable :
     // sans cette cascade, fermer un menu d'outil faisait AUSSI sortir du mode Annoter
@@ -1660,7 +1811,7 @@
         cancelDrawingGesture()
       } else if (noteBubble) {
         closeNoteBubble()
-      } else if (drawingPaletteOpen || drawingStrokeMenuOpen || drawingShapeMenuOpen || drawingInkMenuOpen) {
+      } else if (drawingPaletteOpen || drawingStrokeMenuOpen || drawingShapeMenuOpen || drawingInkMenuOpen || signatureMenuOpen) {
         closeToolMenus()
       } else if (annotationListOpen) {
         annotationListOpen = false
@@ -2517,6 +2668,31 @@
             </div>
           {/if}
         </div>
+        <div class="drawing-control">
+          <button
+            class="drawing-signature-toggle"
+            class:active={drawingTool === 'signature' || signatureMenuOpen}
+            aria-pressed={drawingTool === 'signature'}
+            aria-expanded={signatureMenuOpen}
+            use:tooltip={'Signature'}
+            aria-label="Poser ma signature"
+            onclick={() => void chooseSignatureTool()}
+          >
+            <svg class="icon" aria-hidden="true"><use href="#i-signature" /></svg>
+          </button>
+          {#if signatureMenuOpen}
+            <div class="drawing-signature-menu drawing-popover" role="menu" aria-label="Ma signature">
+              <button role="menuitem" onclick={() => { signatureMenuOpen = false; signaturePadOpen = true }}>
+                <svg class="icon" aria-hidden="true"><use href="#i-pencil-line" /></svg>
+                <span>Refaire ma signature</span>
+              </button>
+              <button role="menuitem" onclick={() => void forgetSignature()}>
+                <svg class="icon" aria-hidden="true"><use href="#i-trash" /></svg>
+                <span>Oublier ma signature</span>
+              </button>
+            </div>
+          {/if}
+        </div>
         <button class:active={drawingTool === 'eraser'} aria-pressed={drawingTool === 'eraser'} use:tooltip={'Gomme'} aria-label="Gomme" onclick={() => setDrawingTool('eraser')}>
           <svg class="icon" aria-hidden="true"><use href="#i-eraser" /></svg>
         </button>
@@ -2687,6 +2863,12 @@
     </section>
   {/if}
 </div>
+
+<!-- Hors du shell : Échap dans le pavé ne doit pas AUSSI éplucher une couche du lecteur
+     (ownsGlobalKeys teste le focus dans le shell). -->
+{#if signaturePadOpen}
+  <SignaturePad strokeWidth={activeSignature?.strokeWidth} onsave={saveSignature} onclose={() => { signaturePadOpen = false }} />
+{/if}
 
 <style>
   .pdf-shell {
@@ -2876,6 +3058,37 @@
     pointer-events: all;
     cursor: var(--pdf-eraser-cursor);
   }
+  /* Cadre à poignées d'un tracé sélectionné. Inerte hors du mode sélection, comme les
+     cibles de pointage des tracés. */
+  .pdf-view :global(.pdf-drawing-frame) {
+    fill: transparent;
+    stroke: color-mix(in srgb, #74536f 55%, white);
+    stroke-width: 1;
+    stroke-dasharray: 5 4;
+    pointer-events: none;
+  }
+  .pdf-view :global(.pdf-drawing-stem) {
+    stroke: color-mix(in srgb, #74536f 55%, white);
+    stroke-width: 1;
+    pointer-events: none;
+  }
+  .pdf-view :global(.pdf-drawing-handle) {
+    fill: #fff;
+    stroke: #74536f;
+    stroke-width: 1.5;
+    pointer-events: none;
+  }
+  .pdf-view :global(.pdf-drawing-handle-hit) {
+    fill: transparent;
+    pointer-events: none;
+  }
+  [data-pointer-mode='pick'] .pdf-view :global(.pdf-drawing-frame) {
+    pointer-events: all;
+    cursor: move;
+  }
+  [data-pointer-mode='pick'] .pdf-view :global(.pdf-drawing-handle-hit) { pointer-events: all; }
+  [data-pointer-mode='pick'] .pdf-view :global(.pdf-drawing-handle-hit[data-handle='resize']) { cursor: nwse-resize; }
+  [data-pointer-mode='pick'] .pdf-view :global(.pdf-drawing-handle-hit[data-handle='rotate']) { cursor: grab; }
   .pdf-view :global(.pdf-drawing-selection) {
     fill: none;
     stroke: color-mix(in srgb, #74536f 38%, white);
@@ -3497,14 +3710,16 @@
     gap: 2px;
   }
   .drawing-shape-menu,
-  .drawing-ink-menu {
+  .drawing-ink-menu,
+  .drawing-signature-menu {
     min-width: 168px;
     display: grid;
     gap: 2px;
     border-radius: var(--radius-xl);
   }
   .drawing-toolbar .drawing-shape-menu button,
-  .drawing-toolbar .drawing-ink-menu button {
+  .drawing-toolbar .drawing-ink-menu button,
+  .drawing-toolbar .drawing-signature-menu button {
     width: 100%;
     justify-content: flex-start;
     gap: 8px;
@@ -3513,7 +3728,8 @@
     color: var(--ink-2);
   }
   .drawing-shape-menu button span:nth-child(2),
-  .drawing-ink-menu button span:nth-child(2) { flex: 1; text-align: left; }
+  .drawing-ink-menu button span:nth-child(2),
+  .drawing-signature-menu button span:nth-child(2) { flex: 1; text-align: left; white-space: nowrap; }
   .drawing-shape-menu .shape-check,
   .drawing-ink-menu .shape-check { font-size: 14px; color: var(--ink); }
   .drawing-shape-menu button.selected,
