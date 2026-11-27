@@ -1,5 +1,6 @@
 <script lang="ts">
   import DocumentView from './DocumentView.svelte'
+  import DokuMark from '../lib/DokuMark.svelte'
   import PaneTabSelector from './PaneTabSelector.svelte'
   import { activatePane, app, workspace } from '../lib/stores.svelte'
   import type { PaneId } from '../lib/workspace'
@@ -19,6 +20,8 @@
   const tabId = $derived(workspace[paneId].tabId)
   const tab = $derived(app.tabs.find((item) => item.id === tabId))
   const active = $derived(workspace.activePaneId === paneId)
+  // Aucun document du tout : accueil (raccourcis) ; sinon simple volet libre d'une vue scindée.
+  const welcome = $derived(app.tabs.length === 0)
 
   function activate() {
     activatePane(paneId)
@@ -36,18 +39,26 @@
     <PaneTabSelector {paneId} {onOpen} local />
   {/if}
   {#if tab}
-    <DocumentView {onOpen} {paneId} {tabId} />
+    <DocumentView {paneId} {tabId} />
   {:else}
     <div class="pane-empty">
-      <svg class="icon" aria-hidden="true"><use href="#i-file-text" /></svg>
+      <span class="pane-empty-mark"><DokuMark size={56} trace="once" /></span>
       <div class="pane-empty-text">
-        <strong>Volet disponible</strong>
-        <p>Affichez un document ouvert ou commencez une note Markdown.</p>
+        <strong class="rise"><span>{welcome ? 'Aucun document ouvert' : 'Volet disponible'}</span></strong>
+        <p class="settle">{welcome ? 'Ouvrez un fichier ou commencez une note Markdown.' : 'Affichez un document ouvert ou commencez une note Markdown.'}</p>
       </div>
-      <div class="pane-empty-actions">
-        <button onclick={onOpen}>Ouvrir un document</button>
+      <div class="pane-empty-actions settle">
+        <button onclick={onOpen}>Ouvrir un document{#if welcome}<kbd>Ctrl+O</kbd>{/if}</button>
         <button class="primary" onclick={() => onNewNote(paneId)}>Nouvelle note</button>
       </div>
+      {#if welcome}
+        <dl class="pane-empty-shortcuts settle">
+          <div><dt><kbd>Ctrl+/</kbd></dt><dd>source ↔ rendu</dd></div>
+          <div><dt><kbd>F9</kbd></dt><dd>mode focus</dd></div>
+          <div><dt><kbd>Ctrl+Maj+E</kbd></dt><dd>explorateur</dd></div>
+          <div><dt><kbd>Ctrl+Maj+P</kbd></dt><dd>plan</dd></div>
+        </dl>
+      {/if}
     </div>
   {/if}
 </section>
@@ -71,9 +82,21 @@
     gap: 12px;
     padding: 24px 16px;
     text-align: center;
+    user-select: none;
+    /* Grain de papier : le bruit du chrome, déjà dosé très bas (3,5 % / 1,4 % en sombre). */
+    background-image: var(--chrome-material-noise);
   }
-  .pane-empty > .icon { color: var(--ink-4); font-size: 24px; stroke-width: 1.5; }
+  .pane-empty-mark { display: inline-flex; margin-bottom: 4px; color: var(--ink-4); opacity: 0.55; }
   .pane-empty-text { display: grid; gap: 6px; }
+  /* Titre qui monte de derrière son propre masque, après le début du tracé de la marque. */
+  .rise { display: block; overflow: hidden; }
+  .rise > span { display: block; animation: pane-empty-rise 500ms var(--ease-enter) 250ms both; }
+  @keyframes pane-empty-rise { from { transform: translateY(100%); } }
+  .settle { animation: doku-fade-in 400ms ease 400ms both; }
+  @media (prefers-reduced-motion: reduce) {
+    .rise > span { animation: none; }
+    .settle { animation-delay: 0ms; }
+  }
   .pane-empty strong {
     color: var(--ink);
     font-size: var(--text-lg);
@@ -91,6 +114,9 @@
   .pane-empty-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin-top: 4px; }
   /* Bouton secondaire = remplissage d'encre léger ; primaire = encre, un seul par vue. */
   .pane-empty-actions button {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
     height: var(--control-md);
     padding: 0 12px;
     border: 0;
@@ -104,4 +130,24 @@
   .pane-empty-actions button:hover { background: var(--fill-pressed); }
   .pane-empty-actions button.primary { background: var(--ink); color: var(--cream-content); }
   .pane-empty-actions button.primary:hover { background: var(--ink-2); }
+  /* Touche à la Kube : capuchon plat teinté par la couleur du texte qui l'entoure. */
+  .pane-empty kbd {
+    min-width: 16px;
+    padding: 2px 5px;
+    border-radius: var(--radius-xs);
+    background: color-mix(in srgb, currentColor 10%, transparent);
+    font: 400 var(--text-xs)/1 var(--font-sans);
+    text-align: center;
+  }
+  .pane-empty-actions kbd { margin-right: -4px; color: var(--ink-3); }
+  .pane-empty-shortcuts {
+    margin: 12px 0 0;
+    display: grid;
+    grid-template-columns: auto auto;
+    gap: 8px 24px;
+    color: var(--ink-3);
+    font-size: var(--text-xs);
+  }
+  .pane-empty-shortcuts div { display: flex; align-items: center; gap: 8px; }
+  .pane-empty-shortcuts dd { margin: 0; }
 </style>

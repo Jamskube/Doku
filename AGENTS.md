@@ -8,11 +8,11 @@ Doku — petite application pour **ouvrir, lire et éditer des fichiers Markdown
 ## Stack
 - Language: TypeScript (frontend) + Rust borné à trois rôles : secrets et réseau authentifié, sidecar, API système (ADR-0030 ; l'I/O fichiers reste en TS via plugin-fs, ADR-0004)
 - Framework: Tauri 2 + Svelte 5 + Vite — décidé, ADR-0001 accepted (`docs/adr/`)
-- Machine de développement principale : **Windows ARM64** — Surface Pro 11, Snapdragon X Elite. Distribution prise en charge : installateurs Windows ARM64 et x64, chacun avec son sidecar Ollama CPU natif ; **AppImage Linux x64** construite en CI, sur l'Ollama du système (ADR-0025)
+- Machine de développement principale : **Windows ARM64** — Surface Pro 11, Snapdragon X Elite. Distribution prise en charge : installateurs Windows ARM64 et x64, chacun avec son moteur llama.cpp CPU natif ; **AppImage/.deb/paquet Arch Linux x64** construits en CI, moteur embarqué (ADR-0025, ADR-0032)
 - Référence : `G:\KUDE` (mode lecture/édition Markdown + design system AIR) ; maquettes officielles dans `docs/design/w1/`
 - Éditeur : CodeMirror 6 « live preview » (ADR-0002) — `src/lib/editor/`
 - Database / ORM: aucune (fichiers locaux)
-- IA : Ollama local par défaut ; OpenAI optionnel via connexion du compte ChatGPT/Codex (ADR-0014, jamais de clé API pour OpenAI) ; MiniMax optionnel via clé API validée avant stockage (ADR-0018 — seule voie d'auth existante chez eux). Tous les secrets au coffre du système (`secrets.rs`) — Gestionnaire d'identifiants sous Windows, Secret Service via `keyring` ailleurs (ADR-0026) ; aucune base URL configurable côté frontend
+- IA : llama.cpp local par défaut (routeur `llama-server`, modèle LFM3-Omni-2B, catalogue fermé `models.rs` — ADR-0032) ; OpenAI optionnel via connexion du compte ChatGPT/Codex (ADR-0014, jamais de clé API pour OpenAI) ; MiniMax optionnel via clé API validée avant stockage (ADR-0018 — seule voie d'auth existante chez eux). Tous les secrets au coffre du système (`secrets.rs`) — Gestionnaire d'identifiants sous Windows, Secret Service via `keyring` ailleurs (ADR-0026) ; aucune base URL configurable côté frontend
 - Package manager: npm
 
 ## Setup commands

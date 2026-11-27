@@ -1,6 +1,6 @@
 # 0012. Cycle de vie du sidecar Ollama : instance dédiée, port éphémère, modèles isolés, spawn paresseux
 
-**Date** : 2026-07-14 · **Status** : accepted · **Deciders** : nicos (+ Claude) · **Tags** : ia, sidecar, ollama, process-lifecycle, arm64, csp
+**Date** : 2026-07-14 · **Status** : superseded by [ADR-0032](./0032-moteur-local-llamacpp-lfm3.md) (port éphémère, spawn paresseux et Job Object repris) · **Deciders** : nicos (+ Claude) · **Tags** : ia, sidecar, ollama, process-lifecycle, arm64, csp
 
 ## Context
 

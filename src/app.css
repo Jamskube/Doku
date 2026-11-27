@@ -95,6 +95,10 @@
   --duration-relaxed: 300ms;
   --ease-enter: cubic-bezier(.19, 1, .22, 1);
   --ease-enter-snappy: cubic-bezier(.23, 1, .32, 1);
+  /* Ressort amorti (raideur 180, amortissement 17, ~7 % de dépassement sur 600 ms) : la matière
+     « liquide » (src/lib/liquid.ts) — une goutte qui dépasse un peu sa cible puis se pose. */
+  --ease-spring-liquid: linear(0, 0.052, 0.173, 0.328, 0.49, 0.642, 0.774, 0.88, 0.96, 1.016, 1.051, 1.069, 1.074, 1.071, 1.062, 1.051, 1.039, 1.027, 1.017, 1.009, 1.003, 0.999, 0.996, 0.995, 1);
+  --duration-liquid: 560ms;
   --ease-move: cubic-bezier(.65, 0, .35, 1);
   /* Rideaux de largeur (panneau copilote, barre latérale) : décision documentée dans
      CopilotPanel.svelte — un seul tempo pour que les deux bords bougent ensemble. */
@@ -116,7 +120,48 @@
   --image-outline: rgba(0, 0, 0, 0.1);
   /* Bulles d'aide : sombres dans les deux thèmes (Kube ne les inverse pas en sombre). */
   --tooltip-bg: #1A1C1F;
+  --tooltip-glass: rgb(26 28 31 / 0.86);
   --on-tooltip: #FFFFFF;
+
+  /* Verre des COUCHES FLOTTANTES (menus, popovers, capsules, bulles) — recette Apple
+     macOS 27 (menus / liquid glass : reflet = box-shadow inset blancs, anneau 0,5 px),
+     teintée crème AIR et montée au niveau « thick » pour rester lisible sur un document.
+     Jamais sur une surface de contenu ni sur un grand panneau (DESIGN.md, coût WebView2). */
+  --glass-bg: rgb(251 247 237 / 0.80);
+  --glass-filter: blur(24px) saturate(1.5);
+  --glass-filter-sm: blur(12px) saturate(1.6);
+  --glass-highlight: rgb(255 255 255 / 0.62);
+  --glass-shadow:
+    0 12px 28px -8px rgba(var(--shadow-rgb), 0.20),
+    0 2px 6px -2px rgba(var(--shadow-rgb), 0.08),
+    0 0 0 0.5px var(--elevation-ring),
+    inset 0 0.5px 0 var(--glass-highlight),
+    inset 0 -0.5px 0 rgb(255 255 255 / 0.18);
+  /* Surbrillance neutre des rangées de menu (Apple : pas de bleu). */
+  --menu-row-hover: rgba(var(--ink-rgb), 0.07);
+
+  /* Refonte v2 (docs/plans/refonte-premium-v2.md) — fenêtre en « cartes » posées sur le bureau
+     (matériau du chrome / Mica) : barre latérale, feuille du document, panneau copilote. */
+  --canvas-gap: 8px;
+  --sheet-radius: 14px;
+  --sheet-shadow:
+    0 0 0 0.5px var(--elevation-ring),
+    0 1px 2px rgba(var(--shadow-rgb), 0.05),
+    0 10px 28px -14px rgba(var(--shadow-rgb), 0.16);
+  --panel-bg: rgb(251 248 240 / 0.72);
+  --panel-shadow:
+    0 0 0 0.5px var(--elevation-ring),
+    0 8px 24px -14px rgba(var(--shadow-rgb), 0.14),
+    inset 0 0.5px 0 rgb(255 255 255 / 0.55);
+  --row-selected: rgba(var(--ink-rgb), 0.075);
+  --section-label: var(--ink-4);
+  /* Tuiles d'icônes teintées (réglages, en-têtes de sections) : sourdes, jamais saturées. */
+  --tint-ochre-bg: #F1E2C2; --tint-ochre-fg: #8A5F26;
+  --tint-sage-bg: #DCE8DA;  --tint-sage-fg: #3F6B47;
+  --tint-slate-bg: #DDE3EC; --tint-slate-fg: #42536B;
+  --tint-clay-bg: #F1D9CF;  --tint-clay-fg: #9A4A32;
+  --tint-plum-bg: #E6DDEB;  --tint-plum-fg: #65476F;
+  --tint-ink-bg: #E4E0D6;   --tint-ink-fg: #3A362F;
 
   /* Échelle typographique du chrome (le contenu des documents et --cop-text en sont
      exclus). Cliquable = --text-sm/510 ; secondaire = --text-xs/400. */
@@ -144,6 +189,7 @@
   --z-overlay: 50;
   --z-context: 60;
   --z-drag: 80;
+  --z-tooltip: 90;
 }
 
 :root[data-theme='dark'] {
@@ -176,7 +222,33 @@
   --track: var(--cream-base);
   --image-outline: rgba(255, 255, 255, 0.1);
   --tooltip-bg: #2E2E2E;
+  --tooltip-glass: rgb(46 46 46 / 0.86);
   --on-tooltip: #E6E6E6;
+  --glass-bg: rgb(36 36 36 / 0.76);
+  --glass-highlight: rgb(255 255 255 / 0.09);
+  --glass-shadow:
+    0 12px 28px -8px rgba(0, 0, 0, 0.45),
+    0 2px 6px -2px rgba(0, 0, 0, 0.25),
+    0 0 0 0.5px var(--elevation-ring),
+    inset 0 0.5px 0 var(--glass-highlight),
+    inset 0 -0.5px 0 rgb(255 255 255 / 0.03);
+  --menu-row-hover: rgba(var(--ink-rgb), 0.09);
+  --panel-bg: rgb(30 30 30 / 0.72);
+  --panel-shadow:
+    0 0 0 0.5px var(--elevation-ring),
+    0 8px 24px -14px rgba(0, 0, 0, 0.5),
+    inset 0 0.5px 0 rgb(255 255 255 / 0.06);
+  --sheet-shadow:
+    0 0 0 0.5px var(--elevation-ring),
+    0 1px 2px rgba(0, 0, 0, 0.3),
+    0 10px 28px -14px rgba(0, 0, 0, 0.55);
+  --row-selected: rgba(var(--ink-rgb), 0.10);
+  --tint-ochre-bg: #3A3022; --tint-ochre-fg: #E2B96E;
+  --tint-sage-bg: #24332A;  --tint-sage-fg: #93C9A0;
+  --tint-slate-bg: #262E3A; --tint-slate-fg: #9DB2CF;
+  --tint-clay-bg: #3A2620;  --tint-clay-fg: #E59C83;
+  --tint-plum-bg: #31263A;  --tint-plum-fg: #C7A3D6;
+  --tint-ink-bg: #2C2C2C;   --tint-ink-fg: #D8D8D8;
   --track-thumb: var(--surface-2);
   --scrim: rgba(0, 0, 0, 0.32);
   --shadow-dialog: 0 8px 16px 0 rgba(0, 0, 0, 0.35), 0 2px 8px 0 rgba(0, 0, 0, 0.2), inset 0 0 0 1px rgba(255, 255, 255, 0.04), 0 0 0 1px var(--elevation-ring);
@@ -246,7 +318,8 @@ svg.icon {
   background: transparent;
 }
 
-:root[data-window-backdrop='mica'] :is(.titlebar, .sidebar, .cop-head) {
+:root[data-window-backdrop='mica'] :is(.titlebar, .sidebar, .cop-head),
+:root[data-window-backdrop='mica'] :is(.titlebar, .sidebar)::before {
   -webkit-backdrop-filter: none;
   backdrop-filter: none;
 }
@@ -324,12 +397,21 @@ button { font-family: inherit; }
   *, *::before, *::after {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
+    /* Sans ça, une entrée retardée en `both` reste invisible le temps de son délai. */
+    animation-delay: 0ms !important;
     transition-property: opacity, color, background-color, border-color, outline-color, box-shadow !important;
   }
 }
 
 @media (prefers-reduced-transparency: reduce) {
-  :root { --chrome-material: var(--chrome-material-base); }
+  :root {
+    --chrome-material: var(--chrome-material-base);
+    --glass-filter: none;
+    --glass-filter-sm: none;
+    --tooltip-glass: var(--tooltip-bg);
+  }
+  :root:not([data-theme='dark']) { --glass-bg: var(--surface); --panel-bg: var(--cream-soft); }
+  :root[data-theme='dark'] { --glass-bg: var(--surface-2); --panel-bg: var(--cream-soft); }
 }
 
 @media (forced-colors: active) {
@@ -338,8 +420,23 @@ button { font-family: inherit; }
     --chrome-material: Canvas;
     --chrome-material-filet: CanvasText;
     --chrome-material-divider: CanvasText;
+    --glass-bg: Canvas;
+    --glass-filter: none;
+    --glass-filter-sm: none;
   }
 }
+
+/* Fermeture animée des modales : closeDialog() (lib/dialog-close.ts) pose .closing,
+   attend la fin de doku-dialog-out, puis appelle dialog.close(). Plus court que l'entrée. */
+@keyframes doku-dialog-out { to { opacity: 0; transform: translateY(4px) scale(0.985); } }
+@keyframes doku-fade-out { to { opacity: 0; } }
+dialog.closing { animation: doku-dialog-out 150ms cubic-bezier(.4, 0, 1, 1) forwards !important; pointer-events: none; }
+dialog.closing::backdrop { animation: doku-fade-out 150ms linear forwards !important; }
+
+/* Bascule de thème en cercle depuis le bouton (View Transitions) : le nouvel instantané
+   est révélé par clip-path animé en WAAPI ; on coupe le fondu croisé par défaut. */
+::view-transition-old(root),
+::view-transition-new(root) { animation: none; mix-blend-mode: normal; }
 
 /* Animations du copilote (panneau droit — maquette docs/design/w2-copilot) */
 @keyframes doku-shimmer { to { transform: translateX(100%); } }
@@ -377,3 +474,269 @@ button { font-family: inherit; }
   animation-delay: inherit;
   will-change: transform;
 }
+
+/* === Primitives de dialogue (refonte v2) === */
+/* Grammaire commune des modales (docs/plans/refonte-premium-v2.md §5) : réglages, alertes,
+   fenêtres outils. Un composant n'écrit plus que ce qui lui est propre ; ses styles scopés
+   l'emportent sur ces classes globales (spécificité du hachage Svelte). */
+
+/* <dialog> nu : le reset d'app.css écrase le centrage natif, `margin: auto` le rend. */
+dialog.doku-modal {
+  max-width: none;
+  max-height: none;
+  margin: auto;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  overflow: visible;
+}
+/* --scrim passe par --shadow-rgb : en sombre, --ink-rgb est CLAIR et éclaircirait la page. */
+dialog.doku-modal::backdrop {
+  background: var(--scrim);
+  animation: doku-fade-in var(--duration-dialog) var(--ease-enter-snappy);
+}
+
+/* Fenêtre : en-tête, corps qui défile, barre de pied. */
+.doku-window {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--surface);
+  border-radius: 18px;
+  box-shadow: var(--shadow-dialog);
+  animation: doku-dialog-in var(--duration-dialog) var(--ease-enter-snappy);
+}
+.doku-window-head {
+  flex: 0 0 auto;
+  min-height: 60px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px 12px 16px;
+}
+.doku-window-heading { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.doku-window-title {
+  margin: 0;
+  font-size: 15px;
+  line-height: var(--leading-tight);
+  font-weight: var(--weight-strong);
+  letter-spacing: var(--tracking-tight);
+  text-wrap: balance;
+}
+.doku-window-sub {
+  margin: 0;
+  overflow: hidden;
+  font-size: var(--text-xs);
+  line-height: var(--leading-tight);
+  color: var(--ink-3);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* Fermer en capsule (pastille ronde, macOS 27) : visible au repos, sans rivaliser. */
+.doku-window-close {
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  display: inline-grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-full);
+  background: var(--fill-hover);
+  color: var(--ink-3);
+  font-size: 14px;
+  cursor: pointer;
+  transition: background-color var(--duration-basic) ease, color var(--duration-basic) ease, transform var(--duration-basic) var(--ease-enter-snappy);
+}
+.doku-window-close:hover { background: var(--fill-pressed); color: var(--ink); }
+.doku-window-close:active { transform: scale(0.94); }
+@media (any-pointer: coarse) {
+  .doku-window-close { position: relative; }
+  .doku-window-close::after { content: ''; position: absolute; inset: -8px; }
+}
+.doku-window-foot {
+  flex: 0 0 auto;
+  min-height: 56px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 14px 12px 16px;
+  border-top: 1px solid var(--line-1);
+  background: var(--surface);
+}
+.doku-foot-note { flex: 1 1 auto; min-width: 0; margin: 0; font-size: var(--text-xs); line-height: var(--leading-snug); color: var(--ink-3); }
+
+/* Tuile d'icône teintée : la teinte vient d'une classe .tint-* (jetons --tint-*). */
+.doku-tile {
+  --tile-size: 32px;
+  flex: 0 0 auto;
+  width: var(--tile-size);
+  height: var(--tile-size);
+  display: inline-grid;
+  place-items: center;
+  border-radius: calc(var(--tile-size) * 0.28);
+  background: var(--tile-bg, var(--tint-ink-bg));
+  color: var(--tile-fg, var(--tint-ink-fg));
+  font-size: calc(var(--tile-size) * 0.5);
+  box-shadow: inset 0 0 0 0.5px rgba(var(--shadow-rgb), 0.06);
+}
+.doku-tile.tint-ochre { --tile-bg: var(--tint-ochre-bg); --tile-fg: var(--tint-ochre-fg); }
+.doku-tile.tint-sage { --tile-bg: var(--tint-sage-bg); --tile-fg: var(--tint-sage-fg); }
+.doku-tile.tint-slate { --tile-bg: var(--tint-slate-bg); --tile-fg: var(--tint-slate-fg); }
+.doku-tile.tint-clay { --tile-bg: var(--tint-clay-bg); --tile-fg: var(--tint-clay-fg); }
+.doku-tile.tint-plum { --tile-bg: var(--tint-plum-bg); --tile-fg: var(--tint-plum-fg); }
+.doku-tile.tint-ink { --tile-bg: var(--tint-ink-bg); --tile-fg: var(--tint-ink-fg); }
+
+/* Boutons en capsule. Principal = encre pleine (une seule action pleine par écran). */
+.doku-btn {
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: var(--radius-full);
+  background: var(--accent-soft);
+  color: var(--ink);
+  font: inherit;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-control);
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color var(--duration-basic) ease, color var(--duration-basic) ease, transform var(--duration-basic) var(--ease-enter-snappy);
+}
+.doku-btn:hover:not(:disabled) { background: var(--fill-pressed); }
+.doku-btn:not(:disabled):active { transform: scale(0.97); }
+.doku-btn:disabled { opacity: var(--opacity-disabled); cursor: default; }
+.doku-btn.is-primary { background: var(--ink); color: var(--cream-content); }
+.doku-btn.is-primary:hover:not(:disabled) { background: var(--ink-2); }
+.doku-btn.is-danger { background: color-mix(in srgb, var(--danger-action-text) 11%, transparent); color: var(--danger-action-text); }
+.doku-btn.is-danger:hover:not(:disabled) { background: color-mix(in srgb, var(--danger-action-text) 17%, transparent); }
+.doku-btn.is-danger-solid { background: var(--danger-action-text); color: #fff; }
+.doku-btn.is-danger-solid:hover:not(:disabled) { background: color-mix(in srgb, var(--danger-action-text) 88%, #000); }
+.doku-btn.is-ghost { background: transparent; color: var(--ink-3); }
+.doku-btn.is-ghost:hover:not(:disabled) { background: var(--fill-hover); color: var(--ink); }
+.doku-btn .icon { font-size: 15px; }
+
+/* Alerte macOS 27 empilée : centrée, boutons pleine largeur l'un sous l'autre. */
+.doku-alert {
+  width: min(320px, calc(100vw - 32px));
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 24px 16px 16px;
+  border-radius: 22px;
+  background: var(--surface);
+  box-shadow: var(--shadow-dialog);
+  text-align: center;
+  animation: doku-dialog-in var(--duration-dialog) var(--ease-enter-snappy);
+}
+.doku-alert > .doku-tile { --tile-size: 44px; margin-bottom: 14px; }
+.doku-alert-title {
+  margin: 0;
+  font-size: 15px;
+  line-height: var(--leading-tight);
+  font-weight: var(--weight-strong);
+  letter-spacing: var(--tracking-tight);
+  text-wrap: balance;
+}
+.doku-alert-message {
+  margin: 6px 0 0;
+  font-size: var(--text-sm);
+  line-height: var(--leading-snug);
+  color: var(--ink-3);
+  text-wrap: pretty;
+  overflow-wrap: anywhere;
+}
+.doku-alert-message strong { color: var(--ink); font-weight: var(--weight-strong); }
+.doku-alert-actions { align-self: stretch; display: flex; flex-direction: column; gap: 8px; margin-top: 20px; }
+.doku-alert-actions .doku-btn { width: 100%; height: 32px; }
+
+/* Interrupteur macOS (38 × 22), monochrome : piste encre allumée, pastille en relief. */
+.doku-switch {
+  --switch-off: rgba(var(--ink-rgb), 0.14);
+  --switch-on: var(--ink);
+  --knob-off: #fff;
+  --knob-on: #fff;
+  position: relative;
+  flex: 0 0 auto;
+  width: 38px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-full);
+  background: var(--switch-off);
+  cursor: pointer;
+  transition: background-color var(--duration-moderate) ease;
+}
+:root[data-theme='dark'] .doku-switch {
+  --switch-off: rgba(var(--ink-rgb), 0.18);
+  --knob-off: #D9D9D9;
+  --knob-on: #1E1E1E;
+}
+.doku-switch::before {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--knob-off);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.18), 0 0 0 0.5px rgba(0, 0, 0, 0.06);
+  transition: translate var(--duration-moderate) var(--ease-enter-snappy), background-color var(--duration-moderate) ease;
+}
+.doku-switch[aria-checked='true'] { background: var(--switch-on); }
+.doku-switch[aria-checked='true']::before { translate: 16px 0; background: var(--knob-on); }
+.doku-switch:disabled { opacity: var(--opacity-disabled); cursor: not-allowed; }
+@media (any-pointer: coarse) {
+  .doku-switch::after { content: ''; position: absolute; inset: -11px -3px; }
+}
+
+/* Liste encastrée (Réglages macOS) : rangées ≥ 44 px, filets en retrait du bord gauche. */
+.doku-inset-group {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  border-radius: var(--radius-xl);
+  background: var(--cream-content);
+  box-shadow: 0 0 0 1px var(--line-1);
+}
+/* En sombre, --cream-content est PLUS sombre que la fenêtre : le groupe s'en détache en
+   s'éclaircissant, comme les listes des Réglages macOS. */
+:root[data-theme='dark'] .doku-inset-group { background: rgba(var(--ink-rgb), 0.045); }
+.doku-group-title {
+  margin: 0 0 8px;
+  padding-inline: 4px;
+  font-size: var(--text-xs);
+  line-height: var(--leading-tight);
+  font-weight: var(--weight-strong);
+  color: var(--section-label);
+}
+.doku-inset-group + .doku-inset-group,
+.doku-inset-group + .doku-group-title { margin-top: 20px; }
+.doku-inset-row {
+  --row-inset: 14px;
+  position: relative;
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  gap: 8px 16px;
+  padding: 10px 14px;
+}
+.doku-inset-row + .doku-inset-row::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: var(--row-inset);
+  right: 0;
+  height: 1px;
+  background: var(--line-1);
+}
+.doku-inset-copy { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.doku-inset-label { font-size: var(--text-sm); line-height: var(--leading-snug); font-weight: var(--weight-control); color: var(--ink); }
+.doku-inset-help { font-size: var(--text-xs); line-height: var(--leading-snug); color: var(--ink-3); text-wrap: pretty; }
+.doku-inset-control { flex: 0 0 auto; display: flex; align-items: center; gap: 8px; }
+/* === fin primitives de dialogue === */

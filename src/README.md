@@ -26,14 +26,23 @@ Frontend Svelte 5 de Doku : shell applicatif, éditeur Markdown *live preview*, 
 | `PdfPagesDialog.svelte` | Modale « Organiser les pages » : vignettes paresseuses, glisser-déposer, insertion d'un autre PDF |
 | `PdfTextEditDialog.svelte` | Modale d'édition du texte d'une page PDF, ligne par ligne, saisie manuelle (ADR-0023) |
 | `SignaturePad.svelte` | Pavé de signature (doigt, stylet, souris) ouvert par l'outil Signature du lecteur PDF |
-| `CopilotPanel.svelte` | Chat Doku-San : fournisseurs, composeur Question/Contexte, mémoire cloud, citations cliquables |
+| `CopilotPanel.svelte` | Chat Doku-San en carte flottante : fournisseurs, composeur unifié (puces de contexte, outils, capsule modèle), mémoire cloud, citations cliquables |
 | `CopilotConversationList.svelte` | Navigateur compact des discussions durables : périodes, recherche, reprise, renommage et archivage |
 | `CopilotEvidence.svelte` | Trace compacte d’activité et bloc unifié des sources, réutilisés dans les réponses et le panneau temporaire |
 | `CopilotDiagram.svelte` | Carte de diagramme Doku-San : rendu SVG sûr, comparaison des variantes, sélection, aperçu, modification et export |
 | `CopilotDocument.svelte` | Carte de document Doku-San : aperçu HTML/PDF sandboxé, agrandissement, modification et export |
-| `SettingsDialog.svelte` | Réglages : modèles et fournisseurs, apparence, à propos (version lue dans `package.json`) |
+| `CopilotDropletMenu.svelte` | Menu « goutte » du « + » de contexte : actions qui sortent du « + » et y refondent (filtre `#doku-goo`, couche nette au-dessus), clavier sans animation |
+| `SettingsDialog.svelte` | Paramètres façon Réglages Système : recherche, sections à tuiles teintées (Apparence, Système, Raccourcis, Données, À propos — version lue dans `package.json`), listes encastrées |
 | `ConfirmDialog.svelte` | Confirmation modale générique (actions destructrices) |
 | `WikilinkPrompt.svelte` | Résolution interactive d'un `[[wikilink]]` ambigu ou absent |
+| `CommandPalette.svelte` | Palette de commandes (Ctrl+Maj+A) : recherche floue, groupes, raccourcis, ouverte aussi par `app.paletteOpen` |
+| `DocContextMenu.svelte` | Menu contextuel en verre du document Markdown (presse-papiers, mise en forme, Doku-San) |
+| `HeadingRail.svelte` | Rail des titres au bord du document : un trait par titre, effet dock au survol, clic pour y aller |
+| `HoldButton.svelte` | Bouton « maintenir pour confirmer » (souris, doigt, Entrée/Espace) des actions sans retour |
+| `NumberRoll.svelte` | Chiffres qui roulent (page, zoom, compteurs) ; texte complet lu par les lecteurs d'écran |
+| `TitleIsland.svelte` | Îlot d'encre accroché en haut de la feuille, centré sur elle (façon Dynamic Island) : notifications de l'app (carte puis pastille), rechargement proposé, travaux longs en direct (indexation, téléchargement de modèle, export, Doku-San qui écrit), « Enregistré », question rapide ; second élément en bourgeon goo ; mini-capsule au repos (masquée en mode focus) |
+| `IslandAskCard.svelte` | Carte « question rapide » de l'îlot : champ, réponse en flux, « Continuer dans Doku-San » / « Copier » |
+| `IslandSiri.svelte` | Bande irisée « Siri » (écoute, réflexion, réponse), CSS seul sur le compositeur — **non montée** : réservée au futur mode vocal de l'îlot |
 
 ## lib/ — socle
 | File | Purpose |
@@ -65,7 +74,13 @@ Frontend Svelte 5 de Doku : shell applicatif, éditeur Markdown *live preview*, 
 | `stick-to-bottom.ts` | Suivi du bas du fil du copilote (seuil 96 px, défilement propre ignoré, ResizeObserver) |
 | `chat-blocks.ts` | En-tête langage + Copier des blocs de code des réponses du copilote |
 | `tooltip.ts` | Action `use:tooltip` : bulles d'aide Kube (200 ms, fenêtre de 300 ms, clavier immédiat, jamais au doigt) |
+| `dialog-close.ts` | Sortie animée d'un `<dialog>` natif (`closeDialog`, `reopenDialog`) avant son `close()` |
+| `notice-queue.ts` | File des notifications derrière `app.banner` (affichées par l'îlot) : dédoublonnage, plafond de 3, retrait par id |
+| `command-palette.ts` | Filtrage et classement de la palette (sans accents, début de mot, sous-séquence), logique pure |
+| `theme-reveal.ts` | Changement de thème révélé en cercle (View Transitions), immédiat en mouvement réduit |
 | `hover-card.ts` | Placement d'un aperçu flottant (au-dessus si la place manque, dans la fenêtre), logique pure |
+| `island.ts` | Moteur pur de l'îlot : placement dans l'espace libre de la barre, file de priorité (îlot + bourgeon), courbes de morphose qui dépassent |
+| `quick-ask.svelte.ts` | Question rapide à Doku-San depuis l'îlot (Ctrl+Espace) : machine d'états, envoi par `sendChat` dans une vraie discussion, reprise dans le panneau |
 | `images.ts` | Résolution des sources d'images Markdown, logique pure |
 | `paste-image.ts` | Helpers purs du collage d'image |
 | `format.ts` | Formatage Markdown de la sélection — couche pure, calculs sur chaînes |
@@ -84,15 +99,25 @@ Frontend Svelte 5 de Doku : shell applicatif, éditeur Markdown *live preview*, 
 | `copilot-memory.ts` | Mémoire durable du copilote cloud : schéma Markdown, validation, déduplication, prompts purs |
 | `copilot-memory.svelte.ts` | Chargement, rappel, extraction, mutations atomiques et annulation de la mémoire cloud |
 | `copilot-width.ts` | Bornes de la largeur du panneau copilote (séparateur, préférence persistée) |
+| `copilot-stream-reveal.ts` | Action `use:streamReveal` : seuls les mots ajoutés au flux montent d'un léger flou |
+| `copilot-model-label.ts` | Nom court d'un modèle pour la capsule du composeur (sans quantification ni variante) |
 | `copilot-activity.ts` | Étapes factuelles d’une réponse (contexte, mémoire, Web, rédaction), sans exposer le raisonnement interne |
-| `web-search.ts` | Recherche Web pilotée par Doku pour Ollama/MiniMax : requête rédigée par le modèle, boucle d'affinage, classement et injection sûre des extraits |
+| `web-search.ts` | Recherche Web pilotée par Doku pour le moteur local/MiniMax : requête rédigée par le modèle, boucle d'affinage, classement et injection sûre des extraits |
 | `web-citations.ts` | Normalisation HTTPS et rendu des citations Web OpenAI ou pilotées par Doku |
 | `bgraph.ts` | Contrat fournisseur-neutre, compilation WASM et assainissement strict des diagrammes bgraph |
 | `diagram-studio.ts` | Catalogue bgraph et pipeline cloud multi-passe : brief, variantes, critique, sélection et persistance |
 | `document-studio.ts` | Contrat éditorial et visuel injecté aux modèles cloud pour choisir structure, densité, direction graphique et règles print |
 | `generated-document.ts` | Contrat, validation, assainissement et rendu des documents HTML/PDF générés par le cloud |
 | `generated-document-review.ts` | Rendu hors écran, audit de mise en page, capture et contrat de critique visuelle avant publication |
-| `ollama.ts` | Client du sidecar Ollama local (ADR-0006/0012) |
+| `llama.ts` | Client du moteur local llama.cpp (ADR-0032) : démarrage, SSE `/v1/chat/completions`, `/v1/embeddings`, transcription et synthèse vocales (ADR-0033), catalogue de modèles côté Rust |
+| `voice.svelte.ts` | Mode vocal (ADR-0033) : écoute, transcription, `sendChat` en style oral, synthèse phrase par phrase, retour à l'écoute |
+| `voice-text.ts` | Texte parlé : Markdown et numéros d'extraits retirés, nombres/heures/€/% en toutes lettres, découpe en phrases |
+| `mic.ts` | Micro partagé (mode vocal, dictée) : capture webview, bascule d'un micro muet, micro retenu, un seul propriétaire à la fois |
+| `speech-segmenter.ts` | Découpage de la parole par énergie au-dessus du bruit de fond appris, avec pré-roulement (repris de Handy) |
+| `dictation.svelte.ts` | Dictée de notes (ADR-0034) : mains libres ou Espace maintenue, transcription LFM3 en file, écriture au curseur |
+| `dictation-text.ts` | Nettoyage d'une dictée porté de Handy (« euh », bégaiements) et raccord au texte qui précède (espace, majuscule) |
+| `wav.ts` | Micro → WAV PCM 16 kHz mono (rééchantillonnage) et énergie RMS pour la détection de parole |
+| `voice-e2e.manual.test.ts` | Banc manuel voix et dictée de bout en bout contre un routeur réel (sauté sans `VOICE_E2E_PORT`) |
 | `openai.ts` | Client IPC OpenAI : connexion du compte Codex, statut, streaming, annulation — jamais de jeton exposé |
 | `compat.ts` | Fournisseurs cloud compatibles OpenAI (ADR-0018, MiniMax) — miroir d'`openai.ts` pour le chemin « clé API » |
 | `think-scrub.ts` | Scrubber avec état des blocs `<think>…</think>` streamés |
@@ -130,7 +155,9 @@ Frontend Svelte 5 de Doku : shell applicatif, éditeur Markdown *live preview*, 
 | `reveal.ts` | Révélation de la syntaxe Markdown à la demande (ADR-0017) |
 | `format-commands.ts` | Commandes de formatage de la sélection (Ctrl+B / Ctrl+I / Ctrl+K, titres, listes, blocs) |
 | `rephrase-preview.ts` | Aperçu de reformulation en place : la plage sélectionnée est recouverte par le diff mot à mot |
+| `hold-space.ts` | Espace maintenue = dictée (ADR-0034) ; une frappe brève tape toujours une espace |
 | `search-flash.ts` | Saut vers une occurrence de recherche et surlignage transitoire |
+| `search-count.ts` | Compteur « 2 sur 9 » du panneau de recherche |
 
 ## lib/export/
 | File | Purpose |
@@ -143,6 +170,7 @@ Frontend Svelte 5 de Doku : shell applicatif, éditeur Markdown *live preview*, 
 | `docx-to-pdf.ts` | Export DOCX → PDF (ADR-0023), la marche retour écrite par Doku |
 | `pdf-annotated.ts` | Export « PDF annoté » (ADR-0022) : une copie contenant réellement les annotations |
 | `pdf-edit-text.ts` | Édition du texte d'un PDF en place — rendue possible par le passage en AGPL |
+| `progress.ts` | Travail d'export en cours (libellé, pages faites), lu par l'îlot comme activité en direct |
 
 ## Dependencies
 - Internal : `docs/design/w1/` (maquette de référence et source de vérité des tokens), `src-tauri/` (IPC)

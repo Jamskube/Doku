@@ -21,6 +21,23 @@ describe('session workspace v2', () => {
     expect(session?.tabs).toEqual(['C:/Docs/A.md'])
   })
 
+  it('écarte les notes strictement identiques et repointe les volets sur la première', () => {
+    const note = { name: 'Notes — document', label: null, content: 'poème', kind: 'md', at: 0, pristine: false }
+    const other = { ...note, name: 'Notes — document (2)', content: '' }
+    const session = parseSession(JSON.stringify({
+      version: 2,
+      tabs: [],
+      activePath: null,
+      workspace: { split: true, activePaneId: 'primary', primaryPath: null, secondaryPath: null, ratio: 50 },
+      notes: [note, { ...note, at: 1 }, other, { ...note, at: 3 }],
+      primaryNote: 3,
+      secondaryNote: 2,
+    }))
+    expect(session?.notes.map((n) => n?.name ?? null)).toEqual(['Notes — document', null, 'Notes — document (2)', null])
+    expect(session?.primaryNote).toBe(0)
+    expect(session?.secondaryNote).toBe(2)
+  })
+
   it('borne le ratio et neutralise un doublon de volet', () => {
     const session = parseSession(JSON.stringify({
       version: 2,

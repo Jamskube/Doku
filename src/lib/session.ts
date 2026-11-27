@@ -96,6 +96,21 @@ function noteIndex(value: unknown, count: number): number | null {
   return typeof value === 'number' && Number.isInteger(value) && value >= 0 && value < count ? value : null
 }
 
+// Doublons stricts (même nom, type, libellé, texte) : une restauration rejouée en a déjà empilé
+// des centaines (rechargement à chaud). Les noms étant uniques à la création (« (2) »), deux notes
+// identiques ne peuvent venir que de là : on garde la première, et les volets pointent vers elle.
+function dedupeNotes(notes: Array<SessionNote | null>): { notes: Array<SessionNote | null>; first: number[] } {
+  const seen = new Map<string, number>()
+  const first = notes.map((note, i) => {
+    if (!note) return i
+    const key = JSON.stringify([note.name, note.kind, note.label, note.content])
+    const at = seen.get(key)
+    if (at === undefined) seen.set(key, i)
+    return at ?? i
+  })
+  return { notes: notes.map((note, i) => (first[i] === i ? note : null)), first }
+}
+
 function isTextTab(tab: SessionTab): tab is SessionTab & { kind: SaveableTextKind } {
   return !isBinaryKind(tab.kind)
 }
@@ -174,9 +189,10 @@ export function parseSession(raw: string | null): SessionV2 | null {
       secondaryNote: null,
     }
   }
-  const notes = parseNotes(value.notes)
-  const primaryNote = noteIndex(value.primaryNote, notes.length)
-  const secondaryCandidate = noteIndex(value.secondaryNote, notes.length)
+  const { notes, first } = dedupeNotes(parseNotes(value.notes))
+  const toFirst = (i: number | null) => (i == null ? null : first[i])
+  const primaryNote = toFirst(noteIndex(value.primaryNote, notes.length))
+  const secondaryCandidate = toFirst(noteIndex(value.secondaryNote, notes.length))
   const secondaryNote = secondaryCandidate !== primaryNote ? secondaryCandidate : null
   const ws = value.workspace as Record<string, unknown>
   const workspace = parseWorkspacePathSnapshot(ws)

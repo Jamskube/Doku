@@ -119,12 +119,98 @@ class CheckboxWidget extends WidgetType {
   }
 }
 
+// Corps du bloc de code clôturé qui contient `pos`, sans ses lignes de clôture. Lu dans
+// l'état au moment du geste : un widget réutilisé après une édition n'a pas d'offset fiable.
+export function codeBlockBody(state: EditorState, pos: number): string | null {
+  let node: SyntaxNode | null = syntaxTree(state).resolveInner(pos, -1)
+  while (node && node.name !== 'FencedCode') node = node.parent
+  if (!node) return null
+  const first = state.doc.lineAt(node.from).number
+  const last = state.doc.lineAt(node.to).number
+  // Bloc non refermé (fin de document) : sa dernière ligne est du code, pas une clôture.
+  const closed = last > first && node.lastChild?.name === 'CodeMark' && state.doc.lineAt(node.lastChild.from).number === last
+  const end = closed ? last - 1 : last
+  if (end <= first) return ''
+  return state.sliceDoc(state.doc.line(first + 1).from, state.doc.line(end).to)
+}
+
+const COPIED_MS = 1500
+
+// Langage + bouton Copier en haut à droite d'un bloc de code (parité avec le copilote,
+// chat-blocks.ts). L'état « copié » vit sur le bouton : `eq` sur le seul langage garde le
+// même DOM pendant la frappe dans le bloc, la confirmation n'est pas coupée.
+class CodeBlockChrome extends WidgetType {
+  constructor(private lang: string) {
+    super()
+  }
+
+  eq(o: CodeBlockChrome) {
+    return o.lang === this.lang
+  }
+
+  toDOM(view: EditorView) {
+    const wrap = document.createElement('span')
+    wrap.className = 'cm-lp-code-chrome'
+    wrap.contentEditable = 'false'
+    if (this.lang) {
+      const label = document.createElement('span')
+      label.className = 'cm-lp-code-lang'
+      label.textContent = this.lang
+      wrap.appendChild(label)
+    }
+    const button = document.createElement('button')
+    button.type = 'button'
+    button.className = 'cm-lp-code-copy'
+    button.tabIndex = -1
+    button.setAttribute('aria-label', 'Copier le code')
+    button.innerHTML =
+      '<svg class="icon" aria-hidden="true"><use href="#i-copy" /></svg>' +
+      '<svg class="icon" aria-hidden="true"><use href="#i-check" /></svg>'
+    // Ni curseur déplacé ni focus volé à l'éditeur.
+    button.addEventListener('mousedown', (e) => e.preventDefault())
+    button.addEventListener('click', async () => {
+      if (button.dataset.copied !== undefined) return
+      let body: string | null = null
+      try {
+        body = codeBlockBody(view.state, view.posAtDOM(wrap))
+      } catch {
+        // widget détaché entre-temps
+      }
+      if (body == null) return
+      try {
+        await navigator.clipboard.writeText(body)
+      } catch (e) {
+        console.error('[editor] copy code', e)
+        // Import paresseux : le store applicatif n'a rien à faire dans les tests de l'éditeur.
+        const { app } = await import('../stores.svelte')
+        app.banner = {
+          tone: 'error',
+          title: 'Copie impossible',
+          message: 'Le presse-papiers a refusé le code. Sélectionnez-le et copiez-le avec Ctrl+C.',
+        }
+        return
+      }
+      button.dataset.copied = ''
+      setTimeout(() => delete button.dataset.copied, COPIED_MS)
+    })
+    wrap.appendChild(button)
+    return wrap
+  }
+
+  ignoreEvent() {
+    return true
+  }
+}
+
 const WIKILINK = /\[\[([^[\]\n]+)\]\]/g
 const HIDDEN_MARKS = new Set(['HeaderMark', 'EmphasisMark', 'CodeMark', 'StrikethroughMark', 'QuoteMark'])
 const HEADING_LINE = new Map([
   ['ATXHeading1', 'cm-lp-h1'],
   ['ATXHeading2', 'cm-lp-h2'],
   ['ATXHeading3', 'cm-lp-h3'],
+  ['ATXHeading4', 'cm-lp-h4'],
+  ['ATXHeading5', 'cm-lp-h5'],
+  ['ATXHeading6', 'cm-lp-h6'],
 ])
 
 // Lignes où la syntaxe est révélée (ADR-0017, 20.1).
@@ -177,6 +263,12 @@ function buildDecorations(view: EditorView): DecorationSet {
             (name === 'HeaderMark' || name === 'QuoteMark') &&
             state.sliceDoc(node.to, node.to + 1) === ' '
           decos.push(Decoration.replace({}).range(node.from, eatSpace ? node.to + 1 : node.to))
+          return
+        }
+
+        // `\*`, `\_`, `\#`… : seul le caractère littéral s'affiche, la barre se masque.
+        if (name === 'Escape' && !isActive(node.from, node.to)) {
+          decos.push(Decoration.replace({}).range(node.from, node.from + 1))
           return
         }
 
@@ -241,8 +333,31 @@ function buildDecorations(view: EditorView): DecorationSet {
           const first = state.doc.lineAt(node.from).number
           const last = state.doc.lineAt(node.to).number
           for (let n = first; n <= last; n++) {
-            decos.push(Decoration.line({ class: 'cm-lp-codeblock' }).range(state.doc.line(n).from))
+            const cls = 'cm-lp-codeblock' +
+              (n === first ? ' cm-lp-codeblock-first' : '') +
+              (n === last ? ' cm-lp-codeblock-last' : '')
+            decos.push(Decoration.line({ class: cls }).range(state.doc.line(n).from))
           }
+          // Habillage (langage + Copier) seulement quand la clôture d'ouverture est masquée :
+          // révélée, la ligne montre déjà « ```lang » et le bloc redevient de la source.
+          const open = state.doc.line(first)
+          if (!isActive(open.from, open.to)) {
+            const info = node.node.getChild('CodeInfo')
+            const lang = info ? state.sliceDoc(info.from, info.to).trim().split(/\s/)[0] : ''
+            decos.push(Decoration.widget({ widget: new CodeBlockChrome(lang), side: 1 }).range(open.to))
+          }
+        }
+
+        if (name === 'HorizontalRule') {
+          const line = state.doc.lineAt(node.from)
+          // Toute la ligne est de la syntaxe : la masquer sous le curseur la rendrait
+          // impossible à corriger (on effacerait des tirets invisibles).
+          const underCursor = state.selection.ranges.some((r) => r.from <= line.to && r.to >= line.from)
+          if (!underCursor && !isActive(node.from, node.to)) {
+            decos.push(Decoration.line({ class: 'cm-lp-hr' }).range(line.from))
+            decos.push(Decoration.replace({}).range(node.from, node.to))
+          }
+          return false
         }
 
         if (name === 'CodeInfo' && !isActive(node.from, node.to)) {

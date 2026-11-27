@@ -12,6 +12,7 @@
   } from '../lib/stores.svelte'
   import { tabDiscriminator, tabLabel } from '../lib/tabs'
   import { middleTruncate } from '../lib/middle-truncate'
+  import { fileIcon } from '../lib/file-icon'
   import { tooltip } from '../lib/tooltip'
   import { otherPane, type PaneId } from '../lib/workspace'
 
@@ -171,6 +172,7 @@
       }
     }}
   >
+    {#if tab}<svg class="icon tab-icon" aria-hidden="true"><use href="#i-{fileIcon(tab.name)}" /></svg>{/if}
     {#if tab && isDirty(tab)}<span class="dirty-dot" aria-hidden="true"></span>{/if}
     <span class="name">{tab ? tabLabel(tab) : 'Choisir un document'}</span>
     {#if app.tabs.length > 1}<span class="count">+{app.tabs.length - 1}</span>{/if}
@@ -246,19 +248,19 @@
     padding: 4px 8px;
     background: var(--cream-content);
   }
-  /* Dans la barre de titre, le déclencheur prend l'allure de l'onglet actif (TitleBar .tab.active). */
+  /* Dans la barre de titre, le déclencheur prend l'allure de l'onglet actif (TitleBar .tab.active),
+     congés inversés compris : il est soudé au haut de la feuille de son volet. */
   .trigger {
     position: relative;
     display: inline-flex;
     align-items: center;
-    gap: 6px;
-    height: var(--control-md);
+    gap: 8px;
+    height: var(--tab-height, 34px);
     min-width: 0;
     max-width: 100%;
     flex: 0 1 auto;
-    padding: 0 8px 0 12px;
-    border: 1px solid transparent;
-    border-bottom-width: 0;
+    padding: 0 10px 0 12px;
+    border: 0;
     border-radius: var(--radius-lg) var(--radius-lg) 0 0;
     background: var(--cream-content);
     box-shadow: 0 4px 0 var(--cream-content);
@@ -267,7 +269,26 @@
     cursor: pointer;
   }
   .trigger.empty { color: var(--ink-3); }
+  .selector:not(.local) .trigger::before,
+  .selector:not(.local) .trigger::after {
+    content: '';
+    position: absolute;
+    bottom: -4px;
+    width: 11px;
+    height: 11px;
+    pointer-events: none;
+  }
+  .selector:not(.local) .trigger::before {
+    left: -11px;
+    background: radial-gradient(circle at top left, transparent 10.5px, var(--cream-content) 10.5px);
+  }
+  .selector:not(.local) .trigger::after {
+    right: -11px;
+    background: radial-gradient(circle at top right, transparent 10.5px, var(--cream-content) 10.5px);
+  }
+  .tab-icon { flex: none; font-size: 15px; color: var(--ink-3); }
   .selector.local .trigger {
+    height: var(--control-md);
     padding: 0 8px;
     border: 0;
     border-radius: var(--radius-lg);
@@ -324,9 +345,11 @@
     padding: 0;
     border: 0;
     border-radius: var(--radius-xl);
-    background: var(--composer-bg);
+    background: var(--glass-bg);
+    -webkit-backdrop-filter: var(--glass-filter);
+    backdrop-filter: var(--glass-filter);
     color: var(--ink);
-    box-shadow: var(--shadow-xl);
+    box-shadow: var(--glass-shadow);
     transform-origin: var(--menu-origin-x, 0px) var(--menu-origin-y, top);
     animation: doku-pop-in var(--duration-basic) var(--ease-enter-snappy);
   }
@@ -341,7 +364,6 @@
   .menu-actions {
     flex: 0 0 auto;
     padding: 0 4px 4px;
-    background: var(--composer-bg);
   }
   .menu-row { display: flex; align-items: center; gap: 2px; }
   /* Fond de survol = couche ::before, instantanée (motif des menus de TitleBar) : les flèches
@@ -373,7 +395,7 @@
     inset: 0;
     z-index: -1;
     border-radius: inherit;
-    background: var(--accent-soft);
+    background: var(--menu-row-hover);
     opacity: 0;
   }
   .menu-item:not(:disabled):is(:hover, :focus-visible)::before { opacity: 1; }

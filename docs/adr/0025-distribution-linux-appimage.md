@@ -1,6 +1,6 @@
 # 0025. Distribution Linux : AppImage, et l'Ollama de la distribution
 
-**Date** : 2026-08-18 · **Status** : accepted · **Deciders** : nicos · **Tags** : distribution, linux, appimage, ollama, sidecar, ci
+**Date** : 2026-08-18 · **Status** : accepted — moteur remplacé par [ADR-0032](./0032-moteur-local-llamacpp-lfm3.md) (llama.cpp embarqué, plus d'Ollama du système) · **Deciders** : nicos · **Tags** : distribution, linux, appimage, ollama, sidecar, ci
 
 ## Contexte
 

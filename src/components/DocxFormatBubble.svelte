@@ -454,7 +454,7 @@
 {/if}
 
 <style>
-  /* Barre flottante à la Kube : surface élevée opaque, gouttière 4px, boutons de barre
+  /* Barre flottante à la Kube : verre épais des couches flottantes, gouttière 4px, boutons de barre
      d'outils 28px au rayon concentrique (12 − 4 = 8), ombre de rôle « menu ». Elle grandit
      depuis la sélection (origine posée en ligne par placer()) : en bas quand elle la coiffe,
      en haut quand elle passe dessous. */
@@ -466,8 +466,10 @@
     gap: 4px;
     padding: 4px;
     border-radius: var(--radius-xl);
-    background: var(--composer-bg);
-    box-shadow: var(--shadow-xl);
+    background: var(--glass-bg);
+    -webkit-backdrop-filter: var(--glass-filter);
+    backdrop-filter: var(--glass-filter);
+    box-shadow: var(--glass-shadow);
     color: var(--ink);
     font-size: 13px;
     animation: doku-pop-in var(--duration-basic) var(--ease-enter-snappy);
@@ -530,7 +532,7 @@
     cursor: pointer;
     transition: background-color var(--duration-basic) ease, color var(--duration-basic) ease;
   }
-  .styles button:hover, .large:hover { background: var(--accent-soft); color: var(--ink); }
+  .styles button:hover, .large:hover { background: var(--menu-row-hover); color: var(--ink); transition: none; }
   .styles button.coche { background: var(--accent-soft); color: var(--ink); }
   .styles button:focus-visible, .large:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
   .large .icon { font-size: 15px; color: var(--ink-4); }

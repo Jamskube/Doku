@@ -1,26 +1,20 @@
 <script lang="ts">
   import { onMount, untrack, type Component } from 'svelte'
-  import { fly } from 'svelte/transition'
-  import { cubicOut } from 'svelte/easing'
   import Sidebar, { snapSidebarToggle } from './components/Sidebar.svelte'
   import TitleBar from './components/TitleBar.svelte'
+  import TitleIsland from './components/TitleIsland.svelte'
   import WorkspaceView from './components/WorkspaceView.svelte'
   import ConfirmDialog from './components/ConfirmDialog.svelte'
   import WikilinkPrompt from './components/WikilinkPrompt.svelte'
   import { openSearchPanel } from './lib/editor/editor'
   import { NOTE_MAX_CHARS } from './lib/session'
-  import { activatePane, activeEditorView, app, activeTab, askSave, checkExternalChanges, cycleTab, dialog, dismissReloadPrompt, initApp, isDirty, newWindow, openCopilot, openDropped, openPath, openTab, openWikilink, reloadPromptedTab, requestCloseTab, saveSession, saveSettings, setBackgroundModeSetting, saveTabOrSaveAs, toggleActiveSourceMode, togglePin, toggleSidebarView, workspace, zoomDocText } from './lib/stores.svelte'
+  import { closeQuickAsk, openQuickAsk, quickAsk } from './lib/quick-ask.svelte'
+  import { activatePane, activeEditorView, app, activeTab, askSave, checkExternalChanges, cycleTab, dialog, initApp, isDirty, newWindow, openDropped, openPath, openTab, openWikilink, requestCloseTab, saveSession, saveSettings, setBackgroundModeSetting, saveTabOrSaveAs, toggleActiveSourceMode, togglePin, toggleSidebarView, workspace, zoomDocText } from './lib/stores.svelte'
   import { backgroundModeActive, closeWindow, hideWindow, isMainWindow, isTauri, onFileDrop, onOpenFile, onQuitRequested, onWindowCloseRequested, onWindowFocus, openFileDialog, showWindow } from './lib/tauri'
   import { detectUnsupported } from './lib/encoding'
   import { isBinaryDocumentName } from './lib/doc-kind'
   import { otherPane, type PaneId } from './lib/workspace'
-  import { NOTICE_DELAY, autoDismiss } from './lib/auto-dismiss'
-  import { tooltip } from './lib/tooltip'
   import { COPILOT_MIN_DOCUMENT_WIDTH, SIDEBAR_OPEN_WIDTH, copilotMaxWidthCss, copilotWidthCss } from './lib/copilot-width'
-
-  // Les transitions Svelte passent par WAAPI et échappent à la règle reduced-motion d'app.css.
-  // Lu à chaque transition : la préférence système peut changer pendant que l'app tourne.
-  const reducedMotion = () => matchMedia('(prefers-reduced-motion: reduce)').matches
 
   // Persiste les préférences (thème, état sidebar) à chaque changement — les lectures
   // de app.* dans saveSettings sont suivies par l'effet.
@@ -67,8 +61,9 @@
     const stage = stageEl
     if (!main || !stage) return
     // Rideau interrompu : la largeur déjà figée est la bonne, pas celle de mi-course.
+    // La scène, pas `.main` : celui-ci porte les écarts du bureau (--canvas-gap) en padding.
     if (expanded && !releaseStage) {
-      sharedWidth = main.getBoundingClientRect().width
+      sharedWidth = stage.getBoundingClientRect().width
       sharedWidthAt = innerWidth
     }
     // ponytail: seule la largeur de fenêtre est rattrapée ; une barre latérale basculée
@@ -127,6 +122,16 @@
     if (app.settingsOpen && !SettingsDialogComp) {
       void import('./components/SettingsDialog.svelte').then((m) => {
         SettingsDialogComp = m.default as unknown as Component
+      })
+    }
+  })
+
+  // Palette de commandes : même schéma, chargée au premier Ctrl+Maj+A.
+  let CommandPaletteComp: Component<{ onOpen: () => void }> | null = $state(null)
+  $effect(() => {
+    if (app.paletteOpen && !CommandPaletteComp) {
+      void import('./components/CommandPalette.svelte').then((m) => {
+        CommandPaletteComp = m.default
       })
     }
   })
@@ -339,6 +344,11 @@
       } else if (e.key === '/') {
         e.preventDefault()
         toggleActiveSourceMode()
+      } else if (k === 'p' && !e.shiftKey) {
+        // Toujours bloqué : l'impression native de la webview imprimerait l'interface.
+        e.preventDefault()
+        const tab = activeTab()
+        if (tab) void import('./lib/export/print').then((m) => m.printDocument(tab))
       } else if (k === 'o' && !e.shiftKey) {
         e.preventDefault()
         await openFromDialog()
@@ -367,12 +377,21 @@
           view.focus()
           openSearchPanel(view)
         }
+      } else if (k === 'a' && e.shiftKey) {
+        // Pas Ctrl+Maj+P (Plan) ni Ctrl+K (lien) : Ctrl+Maj+A, la « recherche d'action » des IDE JetBrains.
+        e.preventDefault()
+        app.paletteOpen = !app.paletteOpen
       } else if (k === 't' && e.shiftKey) {
         e.preventDefault()
         togglePin()
       } else if (k === 'n' && e.shiftKey && isTauri) {
         e.preventDefault()
         newWindow()
+      } else if (e.code === 'Space' && !e.shiftKey && !e.altKey) {
+        // Ctrl+Espace : question rapide à Doku-San dans l'îlot (libre dans CodeMirror ; Alt+Espace = menu système).
+        e.preventDefault()
+        if (quickAsk.open) closeQuickAsk()
+        else openQuickAsk()
       }
     }
 
@@ -398,87 +417,15 @@
   })
 </script>
 
-<div class="app">
+<div class="app" class:focus={app.focus}>
   {#if !app.focus}<Sidebar />{/if}
   <div class="main" class:copilot-expanded={app.copilotExpanded} bind:this={mainEl}>
     {#if !app.focus}<TitleBar onOpen={openFromDialog} />{/if}
-    {#if !app.focus}
-      <!-- Pile toujours montée (vide, elle ne capte rien) : la sortie de la notification
-           peut se jouer. Pas d'aria-live ici : les rôles alert/status des cartes annoncent
-           déjà, la région en plus doublait l'annonce. -->
-      <div class="notice-stack">
-        {#if app.banner}
-          <!-- Sortie sur l'enveloppe : elle ne joue qu'à l'effacement. Au remplacement, la
-               carte reste montée (pas de nouvelle entrée) ; seul le filet de vie repart, et
-               autoDismiss remet le minuteur à zéro par `key`. -->
-          <div class="notice-slot" out:fly={{ y: 8, opacity: 0, duration: reducedMotion() ? 0 : 150, easing: cubicOut }}>
-          <div
-            class="notice"
-            class:error={app.banner.tone === 'error'}
-            class:warning={app.banner.tone === 'warning'}
-            class:success={app.banner.tone === 'success'}
-            role={app.banner.tone === 'error' ? 'alert' : 'status'}
-            use:autoDismiss={{
-              delay: NOTICE_DELAY[app.banner.tone],
-              key: app.banner,
-              onDismiss: () => (app.banner = null),
-            }}
-          >
-            <svg class="icon notice-icon" aria-hidden="true"><use href="#i-{app.banner.tone === 'success' ? 'check' : app.banner.tone === 'warning' ? 'triangle-alert' : 'circle-alert'}" /></svg>
-            <span class="notice-copy">
-              <strong>{app.banner.title}</strong>
-              <span>{app.banner.message}</span>
-            </span>
-            <button class="notice-close" onclick={() => (app.banner = null)} aria-label="Fermer la notification">
-              <svg class="icon" aria-hidden="true"><use href="#i-x" /></svg>
-            </button>
-            <!-- Pas de filet sur une notification persistante (erreur) : il promettrait un
-                 effacement qui ne viendra pas. -->
-            {#if NOTICE_DELAY[app.banner.tone] > 0}
-              {#key app.banner}
-                <span class="notice-life" aria-hidden="true" style:animation-duration="{NOTICE_DELAY[app.banner.tone]}ms"></span>
-              {/key}
-            {/if}
-          </div>
-          </div>
-        {/if}
-        {#if app.reloadPrompt}
-          <div class="notice reload" role="status">
-            <svg class="icon notice-icon" aria-hidden="true"><use href="#i-refresh-cw" /></svg>
-            <span class="notice-copy">
-              <strong>Fichier modifié sur le disque</strong>
-              <span>« {app.reloadPrompt.name} » a changé ailleurs. Le recharger remplacera vos modifications locales.</span>
-            </span>
-            <button class="notice-action" onclick={() => void reloadPromptedTab()}>Recharger</button>
-            <button class="notice-close" onclick={dismissReloadPrompt} aria-label="Ignorer la notification">
-              <svg class="icon" aria-hidden="true"><use href="#i-x" /></svg>
-            </button>
-          </div>
-        {/if}
-      </div>
-    {/if}
     <div class="stage" bind:this={stageEl}>
-      <div class="page" class:with-copilot={app.copilotOpen}>
-        {#if !app.focus}
-          <button
-            class="collapse-btn"
-            class:on={app.copilotOpen}
-            use:tooltip={'Copilote — panneau latéral'}
-            aria-label="Copilote"
-            aria-pressed={app.copilotOpen}
-            onclick={() => {
-              if (app.copilotOpen) {
-                app.copilotOpen = false
-                app.copilotView = 'chat'
-                app.copilotExpanded = false
-              } else {
-                openCopilot()
-              }
-            }}
-          >
-            <svg width="17" height="17" viewBox="-0.5 -0.5 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" style="transform:scaleX(-1)"><path d="M5.625 2.1875v10.625M1.875 5.875c0 -1.4 0 -2.1 0.2725 -2.635a2.5 2.5 0 0 1 1.0925 -1.0925C3.775 1.875 4.475 1.875 5.875 1.875h3.25c1.4 0 2.1 0 2.635 0.2725a2.5 2.5 0 0 1 1.0925 1.0925C13.125 3.775 13.125 4.475 13.125 5.875v3.25c0 1.4 0 2.1 -0.2725 2.635a2.5 2.5 0 0 1 -1.0925 1.0925C11.225 13.125 10.525 13.125 9.125 13.125H5.875c-1.4 0 -2.1 0 -2.635 -0.2725a2.5 2.5 0 0 1 -1.0925 -1.0925C1.875 11.225 1.875 10.525 1.875 9.125z"></path></svg>
-          </button>
-        {/if}
+      <div class="page">
+        <!-- Notifications, activités et question rapide : l'îlot est accroché en haut de la
+             feuille, centré sur elle, et s'ouvre par-dessus le document. -->
+        <TitleIsland />
         <WorkspaceView onOpen={openFromDialog} />
       </div>
     </div>
@@ -502,34 +449,52 @@
 <ConfirmDialog />
 <WikilinkPrompt />
 {#if app.settingsOpen && SettingsDialogComp}<SettingsDialogComp />{/if}
+{#if app.paletteOpen && CommandPaletteComp}<CommandPaletteComp onOpen={openFromDialog} />{/if}
 {#if app.pdfPagesPath && PdfPagesDialogComp}<PdfPagesDialogComp />{/if}
 {#if app.pdfTextEditPath && PdfTextEditDialogComp}<PdfTextEditDialogComp />{/if}
 
 <style>
+  /* Bureau : matériau du chrome (ou Mica, transparent). Les surfaces — barre latérale,
+     feuilles du document, copilote — y sont posées en cartes (refonte v2, §1). */
   .app {
     position: relative;
     height: 100%;
     display: flex;
     background: var(--chrome-material);
     background-color: var(--chrome-material-base);
+    box-shadow: inset 0 1px 0 var(--chrome-material-filet);
+  }
+  /* En sombre, le bureau descend vers --desk (#101010) : sans cela, feuille (#181818) et
+     matériau (#16171A) se confondent et les cartes ne se détachent plus. */
+  :global(:root[data-theme='dark']) .app {
+    background: linear-gradient(rgb(0 0 0 / 0.5) 0 0), var(--chrome-material);
   }
   :global(:root[data-window-backdrop='mica']) .app {
     background: transparent;
     background-color: transparent;
   }
+  /* Les écarts du bureau à gauche, à droite et en bas de la feuille vivent ici : la barre
+     de titre couvre ainsi exactement la largeur des feuilles (onglets alignés sur elles).
+     `clip` + marge : l'ombre de la feuille déborde dans l'écart au lieu d'y être tranchée. */
   .main {
     position: relative;
     flex: 1 1 0;
     min-width: 0;
     display: flex;
     flex-direction: column;
-    overflow: hidden;
+    padding: 0 var(--canvas-gap) var(--canvas-gap);
+    overflow: clip;
+    overflow-clip-margin: var(--canvas-gap);
     opacity: 1;
     transition:
       flex-grow var(--duration-relaxed) var(--ease-curtain),
+      padding-right var(--duration-relaxed) var(--ease-curtain),
       opacity 100ms var(--ease-enter-snappy);
   }
-  .main.copilot-expanded { flex-grow: 0; opacity: 0; pointer-events: none; }
+  /* Copilote agrandi : il garde l'écart gauche du bureau, rien d'autre. */
+  .main.copilot-expanded { flex-grow: 0; padding-right: 0; opacity: 0; pointer-events: none; }
+  /* Mode focus : plus de bureau, la feuille seule bord à bord. */
+  .app.focus .main { padding: 0; }
   .cop-placeholder { flex: 0 0 auto; min-width: 0; }
   .drop-overlay {
     position: absolute;
@@ -538,7 +503,7 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    border-radius: var(--radius-2xl);
+    border-radius: var(--sheet-radius);
     border: 2px dashed var(--line-3);
     background: rgba(var(--ink-rgb), 0.06);
     backdrop-filter: blur(1px);
@@ -560,153 +525,14 @@
     animation: doku-pop-in var(--duration-moderate) var(--ease-enter-snappy);
   }
   .drop-hint > .icon { color: var(--ink-3); font-size: 28px; stroke-width: 1.5; }
-  /* En BAS de la zone document : en haut, la carte recouvrait le titre du document qu'on lit.
-     `.main` exclut le copilote : le composer n'est jamais masqué. */
-  .notice-stack {
-    position: absolute;
-    z-index: var(--z-toast);
-    bottom: 16px;
-    left: 50%;
-    width: min(540px, calc(100% - 32px));
-    display: grid;
-    gap: 8px;
-    pointer-events: none;
-    transform: translateX(-50%);
-  }
-  /* Notification (motif Toast de Kube) : surface élevée, pastille d'icône teintée par le ton,
-     entrée qui monte en fondu depuis le bord bas. */
-  @keyframes notice-in { from { opacity: 0; transform: translateY(6px) scale(0.98); } }
-  .notice {
-    pointer-events: auto;
-    position: relative;
-    overflow: hidden;
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    min-height: 52px;
-    padding: 8px;
-    border-radius: var(--radius-2xl);
-    background: var(--surface);
-    color: var(--ink);
-    box-shadow: var(--shadow-xl);
-    animation: notice-in var(--duration-moderate) var(--ease-enter);
-  }
-  /* Pastille de 36 px : le padding ramène le glyphe (qui remplit la boîte de contenu du svg) à 16 px. */
-  .notice-icon {
-    flex: none;
-    width: 36px;
-    height: 36px;
-    padding: 10px;
-    border-radius: var(--radius-md);
-    background: var(--accent-soft);
-    color: var(--ink-3);
-  }
-  .notice.error .notice-icon { background: color-mix(in srgb, var(--err) 14%, transparent); color: var(--err-text); }
-  .notice.warning .notice-icon { background: color-mix(in srgb, var(--warn) 16%, transparent); color: var(--warn-text); }
-  .notice.success .notice-icon { background: color-mix(in srgb, var(--ok) 16%, transparent); color: var(--ok-text); }
-  .notice-copy {
-    flex: 1;
-    min-width: 0;
-    display: grid;
-    gap: 2px;
-    font-size: var(--text-xs);
-    line-height: var(--leading-snug);
-    /* Un message d'erreur se copie (chemin, cause) : le body interdit la sélection. */
-    user-select: text;
-  }
-  .notice-copy strong { color: var(--ink); font-size: var(--text-sm); font-weight: var(--weight-strong); text-wrap: balance; }
-  .notice-copy > span { color: var(--ink-3); overflow-wrap: anywhere; text-wrap: pretty; }
-  /* Rayon concentrique : carte 16 − padding 8 = 8. */
-  .notice-action {
-    flex: none;
-    height: var(--control-sm);
-    padding: 0 12px;
-    border-radius: var(--radius-md);
-    border: 0;
-    background: var(--ink);
-    color: var(--cream-content);
-    font: var(--weight-control) var(--text-sm) var(--font-sans);
-    cursor: pointer;
-    transition: background-color var(--duration-basic) ease, transform var(--duration-basic) var(--ease-enter-snappy);
-  }
-  .notice-action:hover { background: var(--ink-2); }
-  .notice-close {
-    flex: none;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: var(--control-sm);
-    height: var(--control-sm);
-    border: 0;
-    background: transparent;
-    color: var(--ink-4);
-    cursor: pointer;
-    border-radius: var(--radius-md);
-    transition: background-color var(--duration-basic) ease, color var(--duration-basic) ease, transform var(--duration-basic) var(--ease-enter-snappy);
-  }
-  .notice-close .icon { font-size: 16px; }
-  .notice-close:hover { background: var(--fill-hover); color: var(--ink); }
-  .notice-action:active,
-  .notice-close:active,
-  .collapse-btn:active { transform: scale(0.97); }
-  /* Filet de vie : dit que la notification est TRANSITOIRE, et combien de temps il
-     reste. Sans lui, l'effacement automatique surprend au lieu d'être attendu. Il se
-     fige sur `data-paused`, posé par le compte à rebours JS lui-même : jamais de barre
-     qui court sur une minuterie suspendue, ni l'inverse (survol collant au doigt). */
-  .notice-life {
-    position: absolute;
-    left: 0; right: 0; bottom: 0;
-    height: 2px;
-    background: var(--line-2);
-    transform-origin: left center;
-    animation: doku-life linear forwards;
-  }
-  .notice.error .notice-life { background: color-mix(in srgb, var(--err) 45%, transparent); }
-  .notice.warning .notice-life { background: color-mix(in srgb, var(--warn) 45%, transparent); }
-  .notice.success .notice-life { background: color-mix(in srgb, var(--ok) 45%, transparent); }
-  .notice:global([data-paused]) .notice-life { animation-play-state: paused; }
-  @media (prefers-reduced-motion: reduce) {
-    /* La notification part toujours seule ; seule l'ANIMATION du filet disparaît. */
-    .notice-life { animation: none; transform: scaleX(1); opacity: 0.5; }
-  }
   .stage { flex: 1; min-height: 0; display: flex; background: transparent; }
+  /* Conteneur des feuilles : la carte (fond, rayon, ombre) est portée par chaque volet
+     (WorkspaceView), pour que la vue scindée montre deux feuilles. */
   .page {
     position: relative;
     flex: 1;
     min-width: 0;
-    background: var(--cream-content);
-    border-radius: var(--radius-2xl) var(--radius-2xl) 0 0;
-    overflow: hidden;
     display: flex;
     flex-direction: column;
-    /* Couplé au rideau du copilote : même durée, même courbe. */
-    transition: border-radius var(--duration-curtain) var(--ease-curtain);
-  }
-  /* Panneau copilote ouvert : la jonction document↔chat est à angle droit. */
-  .page.with-copilot { border-radius: var(--radius-2xl) 0 0 0; }
-  /* PdfView aligne ses contrôles flottants sur ce bouton (top 8, hauteur 32). */
-  .collapse-btn {
-    position: absolute;
-    top: 8px;
-    right: 12px;
-    z-index: 5;
-    width: var(--control-md);
-    height: var(--control-md);
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    border: 0;
-    /* Même famille que les capsules flottantes du PDF : rond, ombre de carte. */
-    border-radius: var(--radius-full);
-    background: var(--surface);
-    color: var(--ink-3);
-    box-shadow: var(--shadow-card);
-    cursor: pointer;
-    transition: background-color var(--duration-basic) ease, color var(--duration-basic) ease, transform var(--duration-basic) var(--ease-enter-snappy);
-  }
-  .collapse-btn:hover,
-  .collapse-btn.on {
-    background: var(--cream-tint);
-    color: var(--ink);
   }
 </style>

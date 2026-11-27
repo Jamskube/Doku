@@ -9,7 +9,9 @@ import { HighlightStyle, syntaxHighlighting, syntaxTree } from '@codemirror/lang
 import { tags } from '@lezer/highlight'
 import { formatKeymap } from './format-commands'
 import { livePreview } from './live-preview'
+import { searchCount } from './search-count'
 import { revealScope, revealScopeField, setRevealScope } from './reveal'
+import { holdSpace } from './hold-space'
 
 // Taille du TEXTE du document, multipliée par le zoom (Ctrl+molette, doc-zoom.ts). Les
 // commandes posées dans l'éditeur (recherche, outils de tableau, reformulation) gardent la leur.
@@ -20,7 +22,10 @@ const dokuHighlight = HighlightStyle.define([
   { tag: tags.heading1, fontFamily: 'var(--font-serif)', fontWeight: '600', fontSize: docPx(38), letterSpacing: '-0.012em', color: 'var(--ink)' },
   { tag: tags.heading2, fontFamily: 'var(--font-serif)', fontWeight: '600', fontSize: docPx(25), letterSpacing: '-0.008em', color: 'var(--ink)' },
   { tag: tags.heading3, fontFamily: 'var(--font-serif)', fontWeight: '600', fontSize: docPx(21), color: 'var(--ink)' },
-  { tag: [tags.heading4, tags.heading5, tags.heading6], fontFamily: 'var(--font-serif)', fontWeight: '600', color: 'var(--ink)' },
+  // h4 à la taille du texte (le poids seul le distingue), h5-h6 descendent sous le corps.
+  { tag: tags.heading4, fontFamily: 'var(--font-serif)', fontWeight: '600', fontSize: docPx(18.5), color: 'var(--ink)' },
+  { tag: tags.heading5, fontFamily: 'var(--font-serif)', fontWeight: '600', fontSize: docPx(16.5), color: 'var(--ink)' },
+  { tag: tags.heading6, fontFamily: 'var(--font-serif)', fontWeight: '600', fontSize: docPx(15.5), letterSpacing: '0.01em', color: 'var(--ink-3)' },
   { tag: tags.emphasis, fontStyle: 'italic' },
   { tag: tags.strong, fontWeight: '600', color: 'var(--ink)' },
   { tag: tags.strikethrough, textDecoration: 'line-through', textDecorationColor: 'var(--line-3)' },
@@ -62,6 +67,13 @@ const dokuTheme = EditorView.theme({
     fontSize: '16px', color: 'var(--ink-4)', cursor: 'pointer',
   },
   '.cm-panel.cm-search [name=close]:hover': { backgroundColor: 'var(--fill-hover)', color: 'var(--ink)' },
+  // « 2 sur 9 » (search-count.ts) : chiffres tabulaires et largeur minimale, les boutons
+  // voisins ne sautent pas pendant suivant/précédent.
+  '.cm-search-count': {
+    minWidth: '9ch', margin: '0 4px', fontSize: 'var(--text-xs)', color: 'var(--ink-4)',
+    fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap',
+  },
+  '.cm-search-count:empty': { display: 'none' },
   '.cm-textfield': {
     boxSizing: 'border-box', height: 'var(--control-sm)', padding: '0 9px',
     fontFamily: 'var(--font-sans)', fontSize: 'var(--text-xs)',
@@ -89,9 +101,11 @@ const dokuTheme = EditorView.theme({
     fontFamily: 'var(--font-serif)',
     lineHeight: '1.78',
     overflow: 'auto',
-    // Place de la barre réservée des DEUX côtés : la colonne centrée ne saute plus quand
-    // le document dépasse la hauteur de la vue en cours de frappe.
-    scrollbarGutter: 'stable both-edges',
+    // Place de la barre réservée : la colonne ne saute plus quand le document dépasse la
+    // hauteur de la vue en cours de frappe. Jamais `both-edges` : CodeMirror place sa couche
+    // de sélection/curseur depuis le bord de la bordure, sans compter la gouttière GAUCHE —
+    // sélection et curseur étaient dessinés 9 px (≈ un caractère) à droite du texte.
+    scrollbarGutter: 'stable',
   },
   '.cm-content': {
     // La colonne suit le zoom : même nombre de caractères par ligne, comme un vrai zoom.
@@ -175,12 +189,89 @@ const dokuTheme = EditorView.theme({
   '.cm-lp-h1': { paddingBottom: '8px' },
   '.cm-lp-h2': { paddingTop: '30px', paddingBottom: '6px' },
   '.cm-lp-h3': { paddingTop: '20px', paddingBottom: '4px' },
+  '.cm-lp-h4': { paddingTop: '16px', paddingBottom: '2px' },
+  '.cm-lp-h5, .cm-lp-h6': { paddingTop: '12px', paddingBottom: '2px' },
+  // Bloc de code en carte (parité avec le copilote) : chaque ligne porte le fond et les
+  // flancs, la première et la dernière ferment les coins. La ligne d'ouverture, vide une
+  // fois la clôture masquée, sert d'en-tête au langage et au bouton Copier.
   '.cm-lp-codeblock': {
     fontFamily: 'var(--font-mono)',
     fontSize: docPx(13.5),
     lineHeight: '1.7',
     backgroundColor: 'var(--code-bg)',
     padding: '0 18px',
+    borderInline: '1px solid var(--line-1)',
+  },
+  '.cm-lp-codeblock-first': {
+    position: 'relative',
+    paddingTop: '6px',
+    borderTop: '1px solid var(--line-1)',
+    borderStartStartRadius: 'var(--radius-xl)',
+    borderStartEndRadius: 'var(--radius-xl)',
+  },
+  '.cm-lp-codeblock-last': {
+    paddingBottom: '6px',
+    borderBottom: '1px solid var(--line-1)',
+    borderEndStartRadius: 'var(--radius-xl)',
+    borderEndEndRadius: 'var(--radius-xl)',
+  },
+  '.cm-lp-code-chrome': {
+    position: 'absolute',
+    top: '2px',
+    insetInlineEnd: '4px',
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: '4px',
+    userSelect: 'none',
+  },
+  '.cm-lp-code-lang': {
+    maxWidth: '16ch',
+    overflow: 'hidden',
+    whiteSpace: 'nowrap',
+    textOverflow: 'ellipsis',
+    fontFamily: 'var(--font-sans)',
+    fontSize: 'var(--text-2xs)',
+    fontWeight: 'var(--weight-control)',
+    lineHeight: '1',
+    color: 'var(--ink-4)',
+  },
+  // Toujours visible, mais à l'encre la plus douce : rien à aller chercher, au doigt non plus.
+  '.cm-lp-code-copy': {
+    display: 'inline-grid',
+    placeItems: 'center',
+    width: 'var(--control-2xs)',
+    height: 'var(--control-2xs)',
+    padding: '0',
+    border: '0',
+    borderRadius: 'var(--radius-md)',
+    background: 'transparent',
+    color: 'var(--ink-4)',
+    fontSize: '14px',
+    cursor: 'pointer',
+    transition: 'background-color var(--duration-basic) ease, color var(--duration-basic) ease, transform var(--duration-basic) var(--ease-enter-snappy)',
+  },
+  '@media (any-pointer: coarse)': {
+    '.cm-lp-code-copy': { position: 'relative' },
+    '.cm-lp-code-copy::before': { content: "''", position: 'absolute', inset: '-6px' },
+  },
+  '.cm-lp-code-copy:hover': { background: 'var(--fill-hover)', color: 'var(--ink)' },
+  '.cm-lp-code-copy:active': { transform: 'scale(0.97)' },
+  '.cm-lp-code-copy[data-copied]': { color: 'var(--ok-text)', cursor: 'default', background: 'transparent' },
+  // Copier → coche : un seul objet qui change (fondu, échelle, léger flou), comme .cop-swap.
+  '.cm-lp-code-copy > .icon': {
+    gridArea: '1 / 1',
+    transition: 'opacity var(--duration-relaxed) var(--ease-icon), transform var(--duration-relaxed) var(--ease-icon), filter var(--duration-relaxed) var(--ease-icon)',
+  },
+  '.cm-lp-code-copy > .icon:last-child, .cm-lp-code-copy[data-copied] > .icon:first-child': {
+    opacity: '0', transform: 'scale(0.25)', filter: 'blur(4px)',
+  },
+  '.cm-lp-code-copy[data-copied] > .icon:last-child': { opacity: '1', transform: 'none', filter: 'none' },
+  // Filet de `---` / `***` hors du curseur : la ligne vidée porte un trait centré.
+  '.cm-lp-hr': {
+    backgroundImage: 'linear-gradient(var(--line-2), var(--line-2))',
+    backgroundSize: '100% 1px',
+    backgroundPosition: 'center',
+    backgroundRepeat: 'no-repeat',
   },
   '.cm-lp-quote': {
     borderLeft: '2px solid var(--line-3)',
@@ -371,6 +462,7 @@ export function serializeDoc(doc: string, eol: '\n' | '\r\n'): string {
 // dossier (Ctrl+Maj+F) était branchée.
 const searchExtensions: Extension[] = [
   search({ top: true }),
+  searchCount,
   keymap.of(searchKeymap),
   EditorState.phrases.of({
     'Find': 'Rechercher',
@@ -465,6 +557,7 @@ export function baseExtensions(sourceMode: boolean, extra: Extension[] = []): Ex
     livePreviewComp.of(sourceMode ? sourceExtensions() : previewExtensions()),
     suppressToggleComment,
     searchExtensions,
+    holdSpace,
     // Formatage Markdown (20.4) : éditeur md seulement — un .txt n'a pas de gras,
     // un .html source non plus (les keymaps de txt/htmlSource ne l'embarquent pas).
     formatKeymap,
@@ -481,6 +574,7 @@ export function txtExtensions(extra: Extension[] = []): Extension[] {
     dokuTheme,
     suppressToggleComment,
     searchExtensions,
+    holdSpace,
     ...extra,
   ]
 }
@@ -496,6 +590,7 @@ export function htmlSourceExtensions(extra: Extension[] = []): Extension[] {
     syntaxHighlighting(dokuHighlight),
     suppressToggleComment,
     searchExtensions,
+    holdSpace,
     ...extra,
   ]
 }

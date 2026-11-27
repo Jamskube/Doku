@@ -2,15 +2,17 @@
   import { onMount, tick, untrack } from 'svelte'
   import { fade } from 'svelte/transition'
   import { quintOut } from 'svelte/easing'
-  import { app, activeTab, assignTabToPane, closeOtherTabs, closeTabsToRight, docxActions, duplicateTab, canMoveTabToNewWindow, isBinaryKind, moveTabToNewWindow, newWindow, openPath, tearOffTab, openPdfPages, openPdfTextEdit, renameTab, requestCloseTab, isDirty, saveTabOrSaveAs, selectTab, setColumnWidth, swapPanes, toggleActiveSourceMode, togglePin, toggleWorkspaceSplit, workspace, workspaceLayout, type ColumnWidth, type DocKind, type DocTab } from '../lib/stores.svelte'
+  import { app, activeTab, assignTabToPane, closeOtherTabs, closeTabsToRight, docxActions, duplicateTab, canMoveTabToNewWindow, isBinaryKind, moveTabToNewWindow, newWindow, openCopilot, openPath, tearOffTab, openPdfPages, openPdfTextEdit, renameTab, requestCloseTab, isDirty, saveTabOrSaveAs, selectTab, setColumnWidth, swapPanes, toggleActiveSourceMode, togglePin, toggleWorkspaceSplit, workspace, workspaceLayout, type ColumnWidth, type DocKind, type DocTab } from '../lib/stores.svelte'
   import type { PaneId } from '../lib/workspace'
   import { tabDiscriminator, tabLabel } from '../lib/tabs'
   import { middleTruncate } from '../lib/middle-truncate'
   import { tooltip } from '../lib/tooltip'
   import { parentPath } from '../lib/explorer'
+  import { fileIcon } from '../lib/file-icon'
   import { closeWindow, currentWindowLabel, dragTabWindow, dropTabWindow, isTauri, minimizeWindow, onTabHover, signalTabHover, readFileBytes, readImageDataUrl, readPdfAnnotationManifest, saveDocxDialog, saveHtmlDialog, saveMarkdownDialog, savePdfDialog, toggleMaximizeWindow } from '../lib/tauri'
   import DokuMark from '../lib/DokuMark.svelte'
   import PaneTabSelector from './PaneTabSelector.svelte'
+  import { dictation, stopDictation, toggleDictation, type DictationMode } from '../lib/dictation.svelte'
 
   let { onOpen }: { onOpen: (paneId?: PaneId) => void } = $props()
 
@@ -103,13 +105,26 @@
     }
   }
 
-  let railHover = $state(false)
   let menuOpen = $state(false)
   let submenu = $state<'export' | 'width' | null>(null)
   let menuKbd = $state(false)
   let submenuKbd = $state(false)
   let submenuFlip = $state(false)
   let menuRootEl: HTMLElement | undefined = $state()
+  // Dictée (ADR-0034) : documents texte seulement ; active, le bouton l'arrête d'un clic.
+  let dictMenuOpen = $state(false)
+  let dictRootEl: HTMLElement | undefined = $state()
+  const dictatable = $derived(['md', 'txt', 'html'].includes(activeTab()?.kind ?? ''))
+  const DICTATION_TIPS: Record<DictationMode, string> = { off: 'Dicter', handsfree: 'Arrêter la dictée (mains libres)', hold: 'Arrêter la dictée (Espace maintenue)' }
+  function clickDictation(event: MouseEvent) {
+    if (dictation.mode !== 'off') return stopDictation()
+    dictMenuOpen = !dictMenuOpen
+    if (dictMenuOpen && event.detail === 0) void tick().then(() => dictRootEl?.querySelector<HTMLButtonElement>('.app-menu-item')?.focus())
+  }
+  function pickDictation(mode: Exclude<DictationMode, 'off'>) {
+    dictMenuOpen = false
+    void toggleDictation(mode)
+  }
   let menuTriggerEl: HTMLButtonElement | undefined = $state()
   let mainMenuEl: HTMLElement | undefined = $state()
   let exportMenuEl: HTMLElement | undefined = $state()
@@ -117,7 +132,6 @@
   let exportTriggerEl: HTMLButtonElement | undefined = $state()
   let widthTriggerEl: HTMLButtonElement | undefined = $state()
   let burningPdf = $state(false)
-  const showLogo = $derived(!app.sidebarOpen && !railHover)
   // Un onglet PDF n'exporte pas vers les autres formats, mais il exporte sa propre
   // copie annotée (ADR-0022) — le menu change donc de contenu au lieu d'être grisé.
   const activeIsPdf = $derived(activeTab()?.kind === 'pdf')
@@ -134,15 +148,15 @@
   // listant tous les onglets — des onglets écrasés à la seule croix ne se distinguent
   // plus (vécu en fenêtre étroite avec sidebar + copilote ouverts).
   // Même valeur que `.tab { min-width }` : sinon la bascule vers le menu diverge du rendu.
-  const TAB_MIN = 120
-  const TAB_GAP = 3
-  const NEW_TAB_W = 32
+  const TAB_MIN = 132
+  const TAB_GAP = 4
+  const NEW_TAB_W = 36
   // Plafond d'un onglet (Kube : 90 à 240 px), = `.tab { max-width }`.
   const TAB_MAX = 240
   // Caractères que montre un nom dans `px` de large : le reste de l'onglet (marges, croix,
-  // pastille) prend ~50 px, un caractère ~7 px en 13 px. La coupe se fait au MILIEU ;
+  // icône, pastille) prend ~74 px, un caractère ~7 px en 13 px. La coupe se fait au MILIEU ;
   // l'ellipsis CSS reste le dernier recours si l'estimation déborde.
-  const nameChars = (px: number) => Math.max(6, Math.floor((px - 50) / 7))
+  const nameChars = (px: number) => Math.max(6, Math.floor((px - 74) / 7))
   let tabsBox = $state<HTMLElement | null>(null)
 
   // Glisser un onglet comme dans Chrome. Tenu, il se soulève et suit la souris ; tiré hors de
@@ -340,6 +354,20 @@
     tabsMenuItems()[0]?.focus()
   }
 
+  // Largeur réelle des outils de droite : en vue scindée, le sélecteur du volet secondaire
+  // s'arrête avant eux (la capsule change de largeur avec le copilote).
+  let toolsWidth = $state(0)
+
+  function toggleCopilot() {
+    if (app.copilotOpen) {
+      app.copilotOpen = false
+      app.copilotView = 'chat'
+      app.copilotExpanded = false
+    } else {
+      openCopilot()
+    }
+  }
+
   type ExportTab = { kind: DocKind; name: string; content: string; path: string | null }
 
   function closeMenus(restoreFocus = false) {
@@ -461,11 +489,7 @@
   }
 
   function exportPrint(tab: ExportTab) {
-    if (isBinaryKind(tab.kind)) return
-    const kind = tab.kind // rétrécissement capturé (perdu sinon dans la closure du .then)
-    import('../lib/export/print')
-      .then((m) => m.exportViaPrint({ kind, name: tab.name, content: tab.content, dir: parentPath(tab.path ?? null) ?? '' }))
-      .catch((err) => console.error('Export impression échoué', err))
+    void import('../lib/export/print').then((m) => m.printDocument(tab))
   }
 
   function exportActive(format: 'docx' | 'html' | 'pdf') {
@@ -615,6 +639,7 @@
   onMount(() => {
     const onPointerDown = (event: PointerEvent) => {
       if (!menuRootEl?.contains(event.target as Node | null)) closeMenus()
+      if (!dictRootEl?.contains(event.target as Node | null)) dictMenuOpen = false
       if (!tabsMenuRootEl?.contains(event.target as Node | null)) closeTabsMenu()
       if (!tabMenuEl?.contains(event.target as Node | null)) closeTabMenu()
       if (renaming && !renameInput?.contains(event.target as Node | null)) commitRename()
@@ -622,12 +647,14 @@
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return
       if (menuOpen) closeMenus()
+      dictMenuOpen = false
       if (tabsMenuOpen) closeTabsMenu()
       if (tabMenu) closeTabMenu()
       if (renaming) renaming = null
     }
     const onWindowChange = () => {
       closeMenus()
+      dictMenuOpen = false
       closeTabsMenu()
       closeTabMenu()
     }
@@ -651,26 +678,25 @@
   })
 </script>
 
-<div class="titlebar" class:split={workspace.split} class:copilot-open={app.copilotOpen}>
-  <div class="rail-zone">
+<div
+  class="titlebar"
+  class:split={workspace.split}
+  class:copilot-open={app.copilotOpen}
+  class:lead-shown={!app.sidebarOpen}
+  style={`--titlebar-right-safe:${toolsWidth + 8}px`}
+  data-tauri-drag-region
+>
+  <!-- Barre latérale repliée : la marque et le bouton qui la rouvre prennent sa place. Le
+       bouton reste monté (inerte quand elle est ouverte) : la barre y rend le focus. -->
+  <div class="lead" inert={app.sidebarOpen} aria-hidden={app.sidebarOpen} data-tauri-drag-region>
+    <span class="lead-mark" aria-hidden="true"><DokuMark size={18} /></span>
     <button
       class="rail-btn"
-      class:lit={app.sidebarOpen || railHover}
-      use:tooltip={app.sidebarOpen ? 'Replier la barre latérale' : 'Déplier la barre latérale'}
-      aria-label={app.sidebarOpen ? 'Replier la barre latérale' : 'Déplier la barre latérale'}
-      aria-pressed={app.sidebarOpen}
-      onpointerenter={(e) => { if (e.pointerType === 'mouse') railHover = true }}
-      onpointerleave={() => (railHover = false)}
-      onclick={() => (app.sidebarOpen = !app.sidebarOpen)}
+      use:tooltip={{ label: 'Déplier la barre latérale', kbd: 'Ctrl+Maj+E' }}
+      aria-label="Déplier la barre latérale"
+      onclick={() => (app.sidebarOpen = true)}
     >
-      <span class="layer" class:shown={showLogo}>
-        <DokuMark size={22} />
-      </span>
-      <span class="layer" class:shown={!showLogo}>
-        <svg width="18" height="18" viewBox="-0.5 -0.5 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M5.625 2.1875v10.625M1.875 5.875c0 -1.4 0 -2.1 0.2725 -2.635a2.5 2.5 0 0 1 1.0925 -1.0925C3.775 1.875 4.475 1.875 5.875 1.875h3.25c1.4 0 2.1 0 2.635 0.2725a2.5 2.5 0 0 1 1.0925 1.0925C13.125 3.775 13.125 4.475 13.125 5.875v3.25c0 1.4 0 2.1 -0.2725 2.635a2.5 2.5 0 0 1 -1.0925 1.0925C11.225 13.125 10.525 13.125 9.125 13.125H5.875c-1.4 0 -2.1 0 -2.635 -0.2725a2.5 2.5 0 0 1 -1.0925 -1.0925C1.875 11.225 1.875 10.525 1.875 9.125z" />
-        </svg>
-      </span>
+      <svg width="18" height="18" viewBox="-0.5 -0.5 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5.625 2.1875v10.625M1.875 5.875c0 -1.4 0 -2.1 0.2725 -2.635a2.5 2.5 0 0 1 1.0925 -1.0925C3.775 1.875 4.475 1.875 5.875 1.875h3.25c1.4 0 2.1 0 2.635 0.2725a2.5 2.5 0 0 1 1.0925 1.0925C13.125 3.775 13.125 4.475 13.125 5.875v3.25c0 1.4 0 2.1 -0.2725 2.635a2.5 2.5 0 0 1 -1.0925 1.0925C11.225 13.125 10.525 13.125 9.125 13.125H5.875c-1.4 0 -2.1 0 -2.635 -0.2725a2.5 2.5 0 0 1 -1.0925 -1.0925C1.875 11.225 1.875 10.525 1.875 9.125z" /></svg>
     </button>
   </div>
 
@@ -709,6 +735,7 @@
           onclick={toggleTabsMenu}
           onkeydown={openTabsMenuFromKeyboard}
         >
+          {#if active}<svg class="icon tab-icon" aria-hidden="true"><use href="#i-{fileIcon(active.name)}" /></svg>{/if}
           {#if active && isDirty(active)}<span class="dot" aria-hidden="true"></span>{/if}
           <span class="name">{active ? middleTruncate(tabLabel(active), nameChars(tabRowWidth - 70)) : ''}</span>
           {#if app.tabs.length > 1}<span class="tabs-overflow-count">+{app.tabs.length - 1}</span>{/if}
@@ -763,7 +790,7 @@
           onauxclick={(e) => { if (e.button === 1) requestCloseTab(tab.id) }}
           oncontextmenu={(e) => openTabMenu(e, tab.id)}
         >
-          {#if isDirty(tab)}<span class="dot" aria-hidden="true"></span>{/if}
+          <svg class="icon tab-icon" aria-hidden="true"><use href="#i-{fileIcon(tab.name)}" /></svg>
           {#if shown === label}
             <span class="name">{label}</span>
           {:else}
@@ -776,6 +803,7 @@
                valide, et Ctrl+W ferme l'onglet au clavier. Souris et doigt gardent le clic. -->
           <span
             class="close"
+            class:dirty={isDirty(tab)}
             use:tooltip={{ label: "Fermer l'onglet", kbd: tab.id === app.activeId ? 'Ctrl+W' : undefined }}
             role="button"
             tabindex="-1"
@@ -789,12 +817,14 @@
             }}
             onkeydown={(e) => { if (e.key === 'Enter') { e.stopPropagation(); requestCloseTab(tab.id) } }}
           >
-            <svg class="icon" aria-hidden="true"><use href="#i-x" /></svg>
+            <svg class="icon close-x" aria-hidden="true"><use href="#i-x" /></svg>
+            <!-- « Non enregistré » : la pastille tient la place de la croix, qui la remplace au survol. -->
+            {#if isDirty(tab)}<span class="close-dot"></span>{/if}
           </span>
         </button>
       {/each}
       {#if incomingTab}
-        <div class="tab active incoming" aria-hidden="true"><span class="name">{incomingTab}</span></div>
+        <div class="tab active incoming" aria-hidden="true"><svg class="icon tab-icon"><use href="#i-{fileIcon(incomingTab)}" /></svg><span class="name">{incomingTab}</span></div>
       {/if}
     {/if}
     {#if !workspace.split}
@@ -881,6 +911,8 @@
     {/if}
   {/if}
 
+  <div class="tools" bind:offsetWidth={toolsWidth}>
+  <div class="capsule" role="group" aria-label="Outils du document">
   <div class="document-menu-root" bind:this={menuRootEl}>
     <button
       class="document-menu-trigger"
@@ -973,6 +1005,18 @@
           {/if}
         </div>
 
+        <button
+          class="app-menu-item"
+          role="menuitem"
+          disabled={!activeTab() || (activeIsDocx && (docxActions.busy !== '' || !docxActions.print))}
+          onmouseenter={() => (submenu = null)}
+          onclick={() => runMenuAction(() => { const tab = activeTab(); if (tab) exportPrint(tab) })}
+        >
+          <svg class="icon" aria-hidden="true"><use href="#i-printer" /></svg>
+          <span class="menu-label">Imprimer…</span>
+          <kbd>Ctrl+P</kbd>
+        </button>
+
         <div class="app-menu-sep"></div>
 
         <button
@@ -983,7 +1027,7 @@
           onmouseenter={() => (submenu = null)}
           onclick={() => runMenuAction(toggleActiveSourceMode)}
         >
-          <span class="menu-check">{app.sourceMode ? '✓' : ''}</span><span class="menu-label">Mode source</span><kbd>Ctrl+/</kbd>
+          <span class="menu-check">{#if app.sourceMode}<svg class="icon" aria-hidden="true"><use href="#i-check" /></svg>{/if}</span><span class="menu-label">Mode source</span><kbd>Ctrl+/</kbd>
         </button>
         <button
           class="app-menu-item"
@@ -992,7 +1036,7 @@
           onmouseenter={() => (submenu = null)}
           onclick={() => runMenuAction(() => { app.focus = !app.focus })}
         >
-          <span class="menu-check">{app.focus ? '✓' : ''}</span><span class="menu-label">Mode focus</span><kbd>F9</kbd>
+          <span class="menu-check">{#if app.focus}<svg class="icon" aria-hidden="true"><use href="#i-check" /></svg>{/if}</span><span class="menu-label">Mode focus</span><kbd>F9</kbd>
         </button>
 
         <div class="submenu-root" role="none" onmouseenter={() => hoverSubmenu('width')}>
@@ -1011,13 +1055,13 @@
           {#if submenu === 'width'}
             <div class="app-menu flyout-menu width-menu" class:kbd={submenuKbd} class:flip={submenuFlip} role="menu" tabindex="-1" aria-label="Largeur du document" bind:this={widthMenuEl} onkeydown={(event) => handleSubmenuKeydown(event, 'width')}>
               <button class="app-menu-item" role="menuitemradio" aria-checked={app.columnWidth === 'narrow'} onclick={() => pickColumnWidth('narrow')}>
-                <span class="menu-check">{app.columnWidth === 'narrow' ? '✓' : ''}</span><svg class="icon" aria-hidden="true"><use href="#i-fold-horizontal" /></svg><span class="menu-label">Étroit</span>
+                <span class="menu-check">{#if app.columnWidth === 'narrow'}<svg class="icon" aria-hidden="true"><use href="#i-check" /></svg>{/if}</span><svg class="icon" aria-hidden="true"><use href="#i-fold-horizontal" /></svg><span class="menu-label">Étroit</span>
               </button>
               <button class="app-menu-item" role="menuitemradio" aria-checked={app.columnWidth === 'wide'} onclick={() => pickColumnWidth('wide')}>
-                <span class="menu-check">{app.columnWidth === 'wide' ? '✓' : ''}</span><svg class="icon" aria-hidden="true"><use href="#i-unfold-horizontal" /></svg><span class="menu-label">Confortable</span>
+                <span class="menu-check">{#if app.columnWidth === 'wide'}<svg class="icon" aria-hidden="true"><use href="#i-check" /></svg>{/if}</span><svg class="icon" aria-hidden="true"><use href="#i-unfold-horizontal" /></svg><span class="menu-label">Confortable</span>
               </button>
               <button class="app-menu-item" role="menuitemradio" aria-checked={app.columnWidth === 'full'} onclick={() => pickColumnWidth('full')}>
-                <span class="menu-check">{app.columnWidth === 'full' ? '✓' : ''}</span><svg class="icon" aria-hidden="true"><use href="#i-move-horizontal" /></svg><span class="menu-label">Pleine largeur</span>
+                <span class="menu-check">{#if app.columnWidth === 'full'}<svg class="icon" aria-hidden="true"><use href="#i-check" /></svg>{/if}</span><svg class="icon" aria-hidden="true"><use href="#i-move-horizontal" /></svg><span class="menu-label">Pleine largeur</span>
               </button>
             </div>
           {/if}
@@ -1029,11 +1073,41 @@
             <svg class="icon" aria-hidden="true"><use href="#i-external-link" /></svg><span class="menu-label">Nouvelle fenêtre</span><kbd>Ctrl+Maj+N</kbd>
           </button>
         {/if}
+        <div class="app-menu-sep"></div>
+        <button class="app-menu-item" role="menuitem" onmouseenter={() => (submenu = null)} onclick={() => runMenuAction(() => { app.paletteOpen = true })}>
+          <svg class="icon" aria-hidden="true"><use href="#i-search" /></svg><span class="menu-label">Commandes…</span><kbd>Ctrl+Maj+A</kbd>
+        </button>
       </div>
     {/if}
   </div>
 
-  <div class="win-controls">
+    {#if dictatable || dictation.mode !== 'off'}
+      <div class="document-menu-root" bind:this={dictRootEl}>
+        <button
+          class="ctrl"
+          class:dictating={dictation.mode !== 'off'}
+          use:tooltip={DICTATION_TIPS[dictation.mode]}
+          aria-label={DICTATION_TIPS[dictation.mode]}
+          aria-pressed={dictation.mode !== 'off'}
+          aria-haspopup={dictation.mode === 'off' ? 'menu' : undefined}
+          aria-expanded={dictation.mode === 'off' ? dictMenuOpen : undefined}
+          disabled={dictation.starting}
+          onclick={clickDictation}
+        >
+          <svg class="icon" aria-hidden="true"><use href="#i-mic" /></svg>
+        </button>
+        {#if dictMenuOpen}
+          <div class="app-menu document-menu" role="menu" tabindex="-1" aria-label="Dictée">
+            <button class="app-menu-item" role="menuitem" onclick={() => pickDictation('handsfree')}>
+              <svg class="icon" aria-hidden="true"><use href="#i-mic" /></svg><span class="menu-label">Mains libres</span>
+            </button>
+            <button class="app-menu-item" role="menuitem" onclick={() => pickDictation('hold')}>
+              <svg class="icon" aria-hidden="true"><use href="#i-keyboard" /></svg><span class="menu-label">Maintenir pour dicter</span><kbd>Espace</kbd>
+            </button>
+          </div>
+        {/if}
+      </div>
+    {/if}
     <button
       class="ctrl"
       use:tooltip={workspace.split ? 'Réunir les volets' : 'Scinder la vue'}
@@ -1046,9 +1120,20 @@
     <button class="ctrl" use:tooltip={{ label: 'Toujours au-dessus', kbd: 'Ctrl+Maj+T' }} aria-label="Toujours au-dessus" aria-pressed={app.pinned} onclick={togglePin}>
       <svg class="icon" aria-hidden="true"><use href="#i-pin" /></svg>
     </button>
-    {#if !app.copilotOpen}
-      <!-- Panneau copilote ouvert → ces contrôles migrent dans son en-tête (maquette w2). -->
-      <div class="sep"></div>
+    <span class="cap-sep" aria-hidden="true"></span>
+    <button
+      class="ctrl"
+      use:tooltip={'Copilote Doku-San'}
+      aria-label="Copilote"
+      aria-pressed={app.copilotOpen}
+      onclick={toggleCopilot}
+    >
+      <svg width="17" height="17" viewBox="-0.5 -0.5 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" style="transform:scaleX(-1)" aria-hidden="true"><path d="M5.625 2.1875v10.625M1.875 5.875c0 -1.4 0 -2.1 0.2725 -2.635a2.5 2.5 0 0 1 1.0925 -1.0925C3.775 1.875 4.475 1.875 5.875 1.875h3.25c1.4 0 2.1 0 2.635 0.2725a2.5 2.5 0 0 1 1.0925 1.0925C13.125 3.775 13.125 4.475 13.125 5.875v3.25c0 1.4 0 2.1 -0.2725 2.635a2.5 2.5 0 0 1 -1.0925 1.0925C11.225 13.125 10.525 13.125 9.125 13.125H5.875c-1.4 0 -2.1 0 -2.635 -0.2725a2.5 2.5 0 0 1 -1.0925 -1.0925C1.875 11.225 1.875 10.525 1.875 9.125z" /></svg>
+    </button>
+  </div>
+  {#if !app.copilotOpen}
+    <!-- Panneau copilote ouvert → ces contrôles migrent dans son en-tête (maquette w2). -->
+    <div class="win-controls">
       <button class="ctrl wide" use:tooltip={'Réduire'} aria-label="Réduire" onclick={minimizeWindow}>
         <svg class="icon" aria-hidden="true"><use href="#i-minus" /></svg>
       </button>
@@ -1059,77 +1144,111 @@
       <button class="ctrl wide close-win" use:tooltip={'Fermer'} aria-label="Fermer" onclick={closeWindow}>
         <svg class="icon" aria-hidden="true"><use href="#i-x" /></svg>
       </button>
-    {/if}
+    </div>
+  {/if}
   </div>
 </div>
 
 <style>
+  /* Posée sur le bureau, au-dessus des feuilles : elle couvre exactement leur largeur
+     (écarts portés par `.main`), l'onglet actif se soude au haut de la feuille. Les
+     commandes sont centrées sur toute la hauteur de la barre : même air au-dessus et sous la capsule. */
   .titlebar {
     --titlebar-control-height: var(--control-md);
+    --tab-height: 34px;
     --titlebar-right-safe: 292px;
     position: relative;
     z-index: var(--z-chrome);
     display: flex;
     align-items: stretch;
-    padding-left: 4px;
     height: var(--chrome-titlebar-height);
     flex-shrink: 0;
     background: transparent;
-    -webkit-backdrop-filter: blur(24px) saturate(145%);
-    backdrop-filter: blur(24px) saturate(145%);
-    box-shadow: inset 0 1px 0 var(--chrome-material-filet);
     font-size: var(--text-sm);
     user-select: none;
   }
-  .titlebar.copilot-open { --titlebar-right-safe: 156px; }
-  .titlebar.split .document-menu-root { margin-left: auto; }
-  .titlebar > .rail-zone,
-  .titlebar > .document-menu-root,
-  .titlebar > .win-controls { position: relative; z-index: 3; }
+  /* Un menu ouvert descend sur la feuille, où l'îlot (z-toast) masquait ses premières entrées. */
+  .titlebar:has(.app-menu) { z-index: var(--z-popover); }
+  .titlebar > .lead,
+  .titlebar > .tools { position: relative; z-index: 3; }
 
-  .rail-zone { display: flex; align-items: center; flex-shrink: 0; }
+  /* Marque + bouton « déplier » : la place s'ouvre et se referme au rythme du rideau de
+     la barre latérale, sans que les onglets ne sautent. */
+  .lead {
+    flex: 0 0 auto;
+    width: 0;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding-top: calc(var(--chrome-titlebar-height) - var(--tab-height));
+    overflow: hidden;
+    opacity: 0;
+    transition:
+      width var(--duration-curtain) var(--ease-curtain),
+      opacity var(--duration-basic) ease;
+  }
+  .titlebar.lead-shown .lead { width: 68px; padding-left: 10px; opacity: 1; }
+  .lead-mark { flex: none; display: inline-flex; color: var(--ink); }
   .rail-btn {
-    position: relative;
-    width: 40px;
-    height: var(--titlebar-control-height);
+    flex: none;
+    width: var(--control-md);
+    height: var(--control-md);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
     border: 0;
-    border-radius: var(--radius-lg);
+    border-radius: var(--radius-full);
     background: transparent;
     color: var(--ink-3);
     cursor: pointer;
     transition: color var(--duration-basic) ease, background-color var(--duration-basic) ease, transform var(--duration-basic) var(--ease-enter-snappy);
   }
+  .rail-btn:hover { background: var(--fill-hover); color: var(--ink); }
   .rail-btn:active { transform: scale(0.97); }
-  .rail-btn.lit { background: var(--fill-hover); color: var(--ink); }
   .rail-btn:focus-visible { outline-offset: -2px; }
-  /* Échange logo ↔ icône en place : simple fondu bref. Il joue au survol et aux raccourcis
-     Ctrl+Maj+E/P/H/F (gestes fréquents) : ni zoom ni flou, qui en feraient un spectacle. */
-  .rail-btn .layer {
-    position: absolute;
-    inset: 0;
+
+  /* Outils de droite : groupe en capsule (barre d'outils macOS 27) puis légende fenêtre. */
+  .tools {
+    flex: 0 0 auto;
+    margin-left: auto;
     display: flex;
     align-items: center;
-    justify-content: center;
-    opacity: 0;
-    transition: opacity var(--duration-basic) ease;
-    pointer-events: none;
+    gap: 8px;
   }
-  .rail-btn .layer.shown { opacity: 1; }
+  .capsule {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    height: 28px;
+    padding: 2px;
+    border-radius: var(--radius-full);
+    background: rgb(255 255 255 / 0.42);
+    box-shadow:
+      0 0 0 0.5px var(--elevation-ring),
+      0 1px 2px rgba(var(--shadow-rgb), 0.04),
+      inset 0 0.5px 0 rgb(255 255 255 / 0.6);
+  }
+  :global(:root[data-theme='dark']) .capsule {
+    background: rgb(255 255 255 / 0.05);
+    box-shadow: 0 0 0 0.5px var(--elevation-ring), inset 0 0.5px 0 rgb(255 255 255 / 0.06);
+  }
+  .cap-sep { flex: none; width: 1px; height: 14px; margin: 0 3px; background: var(--line-1); }
 
   .document-menu-root {
     position: relative;
     display: flex;
     align-items: center;
-    flex: 0 0 40px;
   }
+  .ctrl,
   .document-menu-trigger {
-    width: 40px;
-    height: var(--titlebar-control-height);
+    width: var(--control-sm);
+    height: var(--control-sm);
+    flex: none;
     display: inline-flex;
     align-items: center;
     justify-content: center;
     border: 0;
-    border-radius: var(--radius-lg);
+    border-radius: var(--radius-full);
     background: transparent;
     color: var(--ink-3);
     cursor: pointer;
@@ -1138,24 +1257,50 @@
       color var(--duration-basic) ease,
       transform var(--duration-basic) var(--ease-enter-snappy);
   }
+  .ctrl > .icon,
   .document-menu-trigger > .icon { font-size: 16px; }
+  .ctrl:hover,
   .document-menu-trigger:hover,
   .document-menu-trigger.open { background: var(--fill-hover); color: var(--ink); }
-  .document-menu-trigger:active { transform: scale(0.97); }
+  .ctrl[aria-pressed='true'] { background: var(--accent-soft); color: var(--ink); }
+  .ctrl.dictating { color: var(--danger-action-text); }
+  .ctrl:disabled { opacity: 0.5; cursor: progress; }
+  .ctrl:focus-visible,
   .document-menu-trigger:focus-visible { outline-offset: -2px; }
+  /* Pression sur les actions de Doku ; la légende Windows (.wide) garde le comportement système. */
+  .ctrl:not(.wide):active,
+  .document-menu-trigger:active { transform: scale(0.97); }
+  /* Capsule de 28 px dans la rangée d'onglets de 34 : 3 px d'air au-dessus de la feuille. Au doigt,
+     la capsule reste fine (30 px) et c'est la zone de saisie invisible qui grandit. */
+  .capsule .ctrl, .capsule .document-menu-trigger { width: 26px; height: 24px; position: relative; }
+  .capsule .icon { font-size: 15px; }
+  :global(:where(:root[data-input='touch'])) .capsule { height: 30px; }
+  :global(:where(:root[data-input='touch'])) :is(.capsule .ctrl, .document-menu-trigger) { width: 30px; height: 26px; }
+  @media (any-pointer: coarse) {
+    .capsule :is(.ctrl, .document-menu-trigger)::after { content: ''; position: absolute; inset: -4px -1px; }
+  }
+
+  .win-controls { display: flex; align-items: center; gap: 2px; flex-shrink: 0; }
+  /* Légende Windows (réduire, agrandir, fermer) : rectangles au rayon de rangée, plus
+     proches du système que les ronds de la capsule. */
+  .ctrl.wide { width: 40px; height: var(--control-md); border-radius: var(--radius-md); }
+  .close-win:hover { background: var(--window-close); color: #fff; }
+  .close-win:active { background: var(--window-close-active); color: #fff; }
 
   /* Menus flottants (menu document, liste repliée des onglets, menu contextuel d'onglet) :
      surface élevée, ouverture depuis le déclencheur à l'échelle .95 + fondu. Ouverts au
      clavier (.kbd) : aucune animation. */
   .app-menu {
     position: absolute;
-    top: 38px;
+    top: calc(100% + 8px);
     z-index: var(--z-popover);
     width: 244px;
     padding: 4px;
     border-radius: var(--radius-xl);
-    background: var(--composer-bg);
-    box-shadow: var(--shadow-xl);
+    background: var(--glass-bg);
+    -webkit-backdrop-filter: var(--glass-filter);
+    backdrop-filter: var(--glass-filter);
+    box-shadow: var(--glass-shadow);
     animation: doku-pop-in var(--duration-basic) var(--ease-enter-snappy);
   }
   .app-menu.kbd { animation: none; }
@@ -1168,8 +1313,10 @@
     z-index: var(--z-context);
     padding: 4px;
     border-radius: var(--radius-xl);
-    background: var(--composer-bg);
-    box-shadow: var(--shadow-xl);
+    background: var(--glass-bg);
+    -webkit-backdrop-filter: var(--glass-filter);
+    backdrop-filter: var(--glass-filter);
+    box-shadow: var(--glass-shadow);
     animation: doku-pop-in var(--duration-basic) var(--ease-enter-snappy);
   }
   .tab-rename {
@@ -1194,6 +1341,11 @@
     right: calc(100% + 8px);
     width: 236px;
     transform-origin: top right;
+    /* Posé DANS un menu en verre : un backdrop-filter imbriqué ne flouterait rien hors du
+       parent (backdrop root). Fond opaque. */
+    background: var(--surface);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
   }
   .width-menu { width: 220px; }
   /* Sous 600 px le sous-menu recouvre déjà le menu (règle suivante) : pas de retournement. */
@@ -1246,7 +1398,7 @@
     inset: 0;
     z-index: -1;
     border-radius: inherit;
-    background: var(--accent-soft);
+    background: var(--menu-row-hover);
     opacity: 0;
   }
   .app-menu-item:not(:disabled):is(:hover, :focus-visible, .open)::before { opacity: 1; }
@@ -1268,21 +1420,26 @@
   .menu-check {
     width: 15px;
     flex: 0 0 auto;
+    display: inline-flex;
+    justify-content: center;
     color: var(--ink);
-    font-size: var(--text-sm);
-    font-weight: var(--weight-strong);
-    text-align: center;
+    font-size: 14px;
   }
+  .menu-check > .icon { stroke-width: 2.25; }
   .app-menu-sep { height: 1px; margin: 4px 8px; background: var(--line-1); }
 
+  /* 24 px à gauche : la feuille a un coin de 14 px, le congé gauche de l'onglet actif
+     (11 px) doit tomber sur son bord droit, pas dans la courbe. */
   .tabs {
     flex: 1;
     display: flex;
-    align-items: center;
-    gap: 3px;
-    padding: 0 4px;
+    align-items: flex-end;
+    gap: 4px;
+    padding: 0 8px 0 24px;
     min-width: 0;
+    transition: padding-left var(--duration-curtain) var(--ease-curtain);
   }
+  .titlebar.lead-shown .tabs:not(.split) { padding-left: 8px; }
   .tabs.split {
     position: absolute;
     z-index: 1;
@@ -1297,12 +1454,12 @@
     position: relative;
     min-width: 0;
     display: flex;
-    align-items: center;
-    padding: 0 8px;
+    align-items: flex-end;
+    padding: 0 8px 0 24px;
   }
-  .split-slot.primary { padding-left: 48px; }
+  .split-slot.primary { transition: padding-left var(--duration-curtain) var(--ease-curtain); }
+  .titlebar.lead-shown .split-slot.primary { padding-left: 92px; }
   .split-slot.secondary {
-    padding-left: 0;
     padding-right: max(8px, min(var(--titlebar-right-safe), calc(100% - 112px)));
   }
   .tabs.split.stacked {
@@ -1311,8 +1468,9 @@
     inset: auto;
     flex: 1;
     display: flex;
-    padding: 0 4px;
+    padding: 0 8px 0 24px;
   }
+  .titlebar.lead-shown .tabs.split.stacked { padding-left: 8px; }
   .tabs.split.stacked .split-slot.primary {
     flex: 1;
     padding: 0;
@@ -1320,21 +1478,22 @@
 
   /* Mode replié : la rangée entière devient « onglet actif · n ▾ » + menu flottant
      (matériau .app-menu partagé avec le menu document). */
-  .tabs-overflow-root { position: relative; display: flex; align-items: center; min-width: 0; }
+  .tabs-overflow-root { position: relative; display: flex; align-items: flex-end; align-self: stretch; min-width: 0; }
   .tabs-overflow-trigger {
     position: relative;
     display: inline-flex;
     align-items: center;
-    gap: 6px;
-    height: var(--titlebar-control-height);
+    gap: 8px;
+    height: var(--tab-height);
     min-width: 0;
     max-width: 100%;
-    padding: 0 8px 0 12px;
-    border: 1px solid transparent;
-    border-bottom-width: 0;
+    padding: 0 10px 0 12px;
+    border: 0;
     border-radius: var(--radius-lg) var(--radius-lg) 0 0;
     background: var(--cream-content);
-    box-shadow: 0 4px 0 var(--cream-content);
+    /* Aucun débordement sous la barre : l'anneau de la feuille est peint AU-DESSUS de son bord,
+       donc sous l'onglet, qui le couvre. Déborder, même d'1 px, dessine un trait sombre sur une
+       page HTML ou un PDF (ils peignent leur propre fond). */
     color: var(--ink);
     font-size: var(--text-sm);
     font-weight: var(--weight-control);
@@ -1357,6 +1516,7 @@
   }
   .tabs-overflow-trigger.open .tabs-overflow-chev { transform: rotate(180deg); }
   .tabs-menu {
+    top: calc(100% + 4px);
     left: 0;
     transform-origin: top left;
     width: 264px;
@@ -1416,16 +1576,15 @@
     position: relative;
     display: inline-flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
     padding: 0 6px 0 12px;
-    height: var(--titlebar-control-height);
+    height: var(--tab-height);
     /* Un onglet ne s'écrase plus au point de ne laisser que la croix : en deçà,
-       le strip défile. */
-    min-width: 120px; /* = TAB_MIN du script */
+       la rangée se replie en menu. */
+    min-width: 132px; /* = TAB_MIN du script */
     max-width: 240px; /* = TAB_MAX du script */
     flex: 0 1 auto;
-    border: 1px solid transparent;
-    border-bottom-width: 0;
+    border: 0;
     border-radius: var(--radius-lg) var(--radius-lg) 0 0;
     background: transparent;
     color: var(--ink-3);
@@ -1438,6 +1597,9 @@
     transition: none;
   }
   .tab:focus-visible { outline-offset: -2px; }
+  .tab-icon { flex: none; font-size: 15px; color: var(--ink-4); }
+  .tab.active .tab-icon,
+  .tabs-overflow-trigger .tab-icon { color: var(--ink-3); }
   .tab.dragging {
     z-index: 5;
     cursor: grabbing;
@@ -1520,10 +1682,12 @@
   @keyframes tab-incoming {
     from { opacity: 0; transform: translateY(6px); }
   }
+  /* Survol d'un onglet inactif : pastille détachée du bas, elle ne se confond pas avec
+     l'onglet actif soudé à la feuille. */
   .tab:not(.active)::before {
     content: '';
     position: absolute;
-    inset: 0;
+    inset: 3px 0 5px;
     border-radius: var(--radius-md);
     background: var(--fill-hover);
     opacity: 0;
@@ -1533,33 +1697,37 @@
   .tab:not(.active):hover { color: var(--ink-2); }
   .tab:not(.active):hover::before { opacity: 1; }
   .tab:not(.active) > :global(:not(.sr-only)) { position: relative; z-index: 1; }
-  .tab.active {
+  .tab.active,
+  .tabs-overflow-trigger {
     background: var(--cream-content);
-    box-shadow: 0 4px 0 var(--cream-content);
     color: var(--ink);
     z-index: 2;
   }
   /* Congés inversés au pied de l'onglet actif : rayon = --radius-lg (10 px) + 0,5 px d'anticrénelage. */
   .tab.active::before,
-  .tab.active::after {
+  .tab.active::after,
+  .tabs-overflow-trigger::before,
+  .tabs-overflow-trigger::after {
     content: '';
     position: absolute;
-    bottom: -4px;
+    bottom: 0;
     width: 11px;
     height: 11px;
     pointer-events: none;
   }
-  .tab.active::before {
+  .tab.active::before,
+  .tabs-overflow-trigger::before {
     left: -11px;
     background: radial-gradient(circle at top left, transparent 10.5px, var(--cream-content) 10.5px);
   }
-  .tab.active::after {
+  .tab.active::after,
+  .tabs-overflow-trigger::after {
     right: -11px;
     background: radial-gradient(circle at top right, transparent 10.5px, var(--cream-content) 10.5px);
   }
 
-  /* « Non enregistré » : pastille CSS (pas le glyphe ●, dont la taille suit la police) ;
-     le libellé lisible vit dans un .sr-only ou dans l'aria-label du bouton. */
+  /* Pastille « non enregistré » de l'onglet replié : CSS (pas le glyphe ●, dont la taille
+     suit la police) ; le libellé lisible vit dans un .sr-only ou dans l'aria-label. */
   .dot { flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--ink); }
   .sr-only {
     position: absolute;
@@ -1572,7 +1740,7 @@
     white-space: nowrap;
     border: 0;
   }
-  .name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .name { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .parent {
     flex-shrink: 3;
     min-width: 0;
@@ -1585,7 +1753,8 @@
     color: var(--ink-4);
   }
   .parent::before { content: '·'; margin-right: 4px; opacity: 0.55; }
-  /* Croix révélée au survol, au focus et sur l'onglet actif ; sa place reste réservée. */
+  /* Case de la croix, poussée au bout de l'onglet : croix révélée au survol, au focus et sur
+     l'onglet actif ; un onglet non enregistré y montre sa pastille, que le survol remplace. */
   .close {
     position: relative;
     display: inline-flex;
@@ -1594,79 +1763,52 @@
     flex: none;
     width: 20px;
     height: 20px;
-    /* Concentrique : onglet 10 − retrait 6 = 4. */
-    border-radius: var(--radius-xs);
+    margin-left: auto;
+    border-radius: var(--radius-full);
     color: var(--ink-3);
-    opacity: 0;
-    transition:
-      opacity var(--duration-basic) ease,
-      background-color var(--duration-basic) ease,
-      color var(--duration-basic) ease;
+    transition: background-color var(--duration-basic) ease, color var(--duration-basic) ease;
   }
-  .close > .icon { font-size: 14px; }
-  .tab:is(:hover, :focus-visible, .active) .close { opacity: 1; }
+  .close-x { font-size: 14px; opacity: 0; transition: opacity var(--duration-basic) ease; }
+  .tab:is(:hover, :focus-visible) .close-x,
+  .tab.active .close:not(.dirty) .close-x { opacity: 1; }
+  .close-dot {
+    position: absolute;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--ink-3);
+    transition: opacity var(--duration-basic) ease;
+  }
+  .tab.active .close-dot { background: var(--ink); }
+  .tab:is(:hover, :focus-visible) .close-dot { opacity: 0; }
   .close:hover { background: var(--accent-soft); color: var(--ink); }
   /* 20 px au doigt : zone portée à la hauteur de l'onglet, rendu inchangé. Sur un onglet
      inactif, ce toucher active l'onglet au lieu de le fermer (voir le onclick). */
   @media (any-pointer: coarse) {
-    .close::after { content: ''; position: absolute; inset: -6px; }
+    .close::after { content: ''; position: absolute; inset: -7px; }
   }
 
+  /* « + » en pastille ronde, centrée sur la rangée d'onglets. */
   .new-tab {
     position: relative;
-    width: var(--control-md);
+    width: var(--control-sm);
+    height: var(--control-sm);
     flex: 0 0 auto;
-    height: var(--titlebar-control-height);
+    align-self: center;
+    margin: calc(var(--chrome-titlebar-height) - var(--tab-height)) 0 0 4px;
     display: inline-flex;
     align-items: center;
     justify-content: center;
     background: transparent;
     border: 0;
-    border-radius: var(--radius-lg);
-    color: var(--ink-3);
-    cursor: pointer;
-    transition: color var(--duration-basic) ease, transform var(--duration-basic) var(--ease-enter-snappy);
-  }
-  .new-tab::before {
-    content: '';
-    position: absolute;
-    inset: 0;
-    border-radius: inherit;
-    background: var(--fill-hover);
-    opacity: 0;
-    pointer-events: none;
-    transition: opacity var(--duration-basic) ease;
-  }
-  .new-tab:hover { color: var(--ink); }
-  .new-tab:active { transform: scale(0.97); }
-  .new-tab:hover::before { opacity: 1; }
-  .new-tab:focus-visible { outline-offset: -2px; }
-  .new-tab .icon { position: relative; z-index: 1; font-size: 16px; }
-
-  .win-controls { display: flex; align-items: center; gap: 2px; padding-right: 2px; flex-shrink: 0; }
-  .ctrl {
-    width: 36px;
-    height: var(--titlebar-control-height);
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    background: transparent;
-    border: 0;
-    border-radius: var(--radius-lg);
+    border-radius: var(--radius-full);
     color: var(--ink-3);
     cursor: pointer;
     transition: color var(--duration-basic) ease, background-color var(--duration-basic) ease, transform var(--duration-basic) var(--ease-enter-snappy);
   }
-  .ctrl > .icon { font-size: 16px; }
-  .ctrl:hover { background: var(--fill-hover); color: var(--ink); }
-  .ctrl:active,
-  .ctrl[aria-pressed='true'] { background: var(--accent-soft); color: var(--ink); }
-  .ctrl:focus-visible { outline-offset: -2px; }
-  /* Pression sur les actions de Doku ; la légende Windows (.wide) garde le comportement système. */
-  .ctrl:not(.wide):active { transform: scale(0.97); }
-  /* Légende Windows (réduire, agrandir, fermer) : rayon de rangée, plus proche du système. */
-  .ctrl.wide { width: 40px; border-radius: var(--radius-md); }
-  .close-win:hover { background: var(--window-close); color: #fff; }
-  .close-win:active { background: var(--window-close-active); color: #fff; }
-  .sep { width: 1px; height: 16px; background: var(--line-1); margin: 0 6px; }
+  .new-tab:hover { background: var(--fill-hover); color: var(--ink); }
+  .new-tab:active { transform: scale(0.97); }
+  .new-tab:focus-visible { outline-offset: -2px; }
+  .new-tab .icon { font-size: 16px; }
+  :global(:where(:root[data-input='touch'])) .new-tab { width: 36px; height: 36px; }
 </style>

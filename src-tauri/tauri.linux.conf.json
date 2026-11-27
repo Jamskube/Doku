@@ -5,9 +5,8 @@
       "appimage",
       "deb"
     ],
-    "externalBin": null,
     "resources": {
-      "binaries/lib/ollama/": null,
+      "binaries/llama/": "llama/",
       "resources/licenses/": "licenses/"
     }
   }

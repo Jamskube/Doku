@@ -8,8 +8,9 @@
 # Aucun réglage WEBKIT_* n'y change rien : la panne est SOUS WebKit. Voir ADR-0025.
 #
 # Ici, rien n'est transporté ni traduit : le binaire est compilé sur place et lié contre
-# le webkit2gtk-4.1 de la machine. C'est le même principe que pour Ollama — on ne
-# transporte pas ce que la distribution fournit mieux.
+# le webkit2gtk-4.1 de la machine — on ne transporte pas ce que la distribution fournit
+# mieux. Seule exception : le moteur IA llama.cpp (ADR-0032), livré tel que le publie
+# l'amont (build CPU Ubuntu x64), dans /usr/lib/doku/llama avec ses .so.
 #
 # Ce PKGBUILD attend le binaire DÉJÀ construit (workflow « Build Arch x64 », qui lance
 # `tauri build --no-bundle` avant `makepkg`). Il n'embarque donc pas d'étape build() :
@@ -23,8 +24,7 @@ arch=('x86_64')
 url="https://github.com/Jamskube/Doku"
 license=('AGPL-3.0-or-later')
 depends=('webkit2gtk-4.1' 'gtk3' 'libsoup3' 'openssl')
-optdepends=('ollama: copilote IA local'
-            'libayatana-appindicator: icône de veille dans la zone de notification')
+optdepends=('libayatana-appindicator: icône de veille dans la zone de notification')
 options=('!strip' '!debug')
 
 # Tout vient du dépôt lui-même : aucune source à télécharger.
@@ -45,6 +45,18 @@ package() {
 
   # Ressources attendues à côté du binaire par `resource_dir()` de Tauri.
   install -Dm644 "$repo/src-tauri/resources/licenses/"* -t "$pkgdir/usr/lib/doku/licenses"
+
+  # Moteur IA local : exécutable + bibliothèques partagées côte à côte (LD_LIBRARY_PATH
+  # posé par Doku au lancement). Préparé par `npm run prepare:llama:linux-x64`.
+  local engine="$repo/src-tauri/binaries/llama"
+  if [ ! -x "$engine/llama-server" ]; then
+    echo "Moteur introuvable : $engine/llama-server" >&2
+    echo "Lancer d'abord : npm run prepare:llama:linux-x64" >&2
+    return 1
+  fi
+  install -Dm755 "$engine/llama-server" "$pkgdir/usr/lib/doku/llama/llama-server"
+  find "$engine" -maxdepth 1 -type f -name '*.so*' -exec install -Dm755 {} -t "$pkgdir/usr/lib/doku/llama" \;
+  find "$engine" -maxdepth 1 -type f -name 'LICENSE*' -exec install -Dm644 {} -t "$pkgdir/usr/lib/doku/llama" \;
 
   for size in 32x32 128x128; do
     install -Dm644 "$repo/src-tauri/icons/${size}.png" \

@@ -9,6 +9,8 @@
   // collision.
   import { app, askSave, closePdfTextEdit } from '../lib/stores.svelte'
   import { baseName } from '../lib/paths'
+  import { closeDialog } from '../lib/dialog-close'
+  import { tooltip } from '../lib/tooltip'
   import { readFileBytes, savePdfDialog, SourceOverwriteError } from '../lib/tauri'
   import type { PdfEditableLine, PdfEditRequest } from '../lib/export/pdf-edit-text'
   import type { PdfDoc } from '../lib/pdf'
@@ -214,7 +216,7 @@
           message: `${ecrites} ligne${ecrites > 1 ? 's' : ''} réécrite${ecrites > 1 ? 's' : ''} dans le document, sans rien changer d’autre.${refus}`,
         }
         // La modale reste ouverte quand il y a des refus, pour qu'ils se lisent.
-        if (!rapport.refused.length) closePdfTextEdit()
+        if (!rapport.refused.length) closeDialog(dlg)
       } catch (error) {
         message = error instanceof PdfEditError ? error.message : 'Doku n’a pas pu écrire ce PDF.'
       }
@@ -230,7 +232,7 @@
 
   async function fermer() {
     if (!nonEnregistre) {
-      closePdfTextEdit()
+      closeDialog(dlg)
       return
     }
     const choix = await askSave('Enregistrer une copie ?', 'Des modifications sont en attente et n’ont pas été écrites.')
@@ -239,29 +241,27 @@
       await save()
       return
     }
-    closePdfTextEdit()
+    closeDialog(dlg)
   }
 
   // Échap : `onclose` arrive APRÈS la fermeture et n'est pas annulable — c'est `oncancel`
   // qu'il faut intercepter. On annule TOUJOURS l'événement natif quand il reste du travail,
   // puis on pose la question de façon asynchrone.
   function surEchap(event: Event) {
-    if (!nonEnregistre) return
     event.preventDefault()
     void fermer()
   }
 </script>
 
-<dialog class="pdftext" bind:this={dlg} onclose={closePdfTextEdit} oncancel={surEchap} aria-label="Modifier le texte du PDF">
-  <div class="window">
-    <header>
-      <span class="title-icon" aria-hidden="true"><svg class="icon" aria-hidden="true"><use href="#i-file-pen-line" /></svg></span>
-      <div class="title">
-        <h2>Modifier le texte</h2>
-        <p>{fileName}</p>
+<dialog class="doku-modal pdftext" bind:this={dlg} onclose={closePdfTextEdit} oncancel={surEchap} aria-label="Modifier le texte du PDF">
+  <div class="doku-window">
+    <header class="doku-window-head">
+      <span class="doku-tile tint-ochre" aria-hidden="true"><svg class="icon" aria-hidden="true"><use href="#i-file-pen-line" /></svg></span>
+      <div class="doku-window-heading">
+        <h2 class="doku-window-title">Modifier le texte</h2>
+        <p class="doku-window-sub">{fileName}</p>
       </div>
-      <span class="spacer"></span>
-      <button class="close" aria-label="Fermer" onclick={() => void fermer()}><svg class="icon" aria-hidden="true"><use href="#i-x" /></svg></button>
+      <button class="doku-window-close" aria-label="Fermer" use:tooltip={{ label: 'Fermer', kbd: 'Échap' }} onclick={() => void fermer()}><svg class="icon" aria-hidden="true"><use href="#i-x" /></svg></button>
     </header>
 
     <div class="tools">
@@ -288,7 +288,7 @@
       {:else if status === 'error'}
         <p class="hint error" role="status">{message}</p>
       {/if}
-      <div class="sheet">
+      <div class="sheet" hidden={status !== 'ready'}>
         <canvas bind:this={canvasEl}></canvas>
         {#each pageLines as line (key(line))}
           <input
@@ -313,11 +313,10 @@
       </div>
     </div>
 
-    <footer>
-      <small>Le document d’origine n’est jamais modifié.</small>
-      <span class="spacer"></span>
-      <button class="secondary" onclick={() => void fermer()}>Annuler</button>
-      <button class="primary" disabled={!pending.length || saving} onclick={() => void save()}>
+    <footer class="doku-window-foot">
+      <p class="doku-foot-note">Le document d’origine n’est jamais modifié.</p>
+      <button class="doku-btn" onclick={() => void fermer()}>Annuler</button>
+      <button class="doku-btn is-primary" disabled={!pending.length || saving} onclick={() => void save()}>
         {saving ? 'Écriture…' : 'Enregistrer une copie…'}
       </button>
     </footer>
@@ -325,50 +324,9 @@
 </dialog>
 
 <style>
-  .pdftext {
-    width: min(860px, calc(100vw - 32px));
-    max-width: none;
-    max-height: none;
-    margin: auto;
-    padding: 0;
-    border: 0;
-    background: transparent;
-    color: var(--ink);
-    overflow: visible;
-  }
-  /* Voile discret, partagé par toutes les modales de Doku. */
-  .pdftext::backdrop {
-    background: var(--scrim);
-    animation: doku-fade-in var(--duration-dialog) var(--ease-enter-snappy);
-  }
-  .window {
-    height: min(880px, calc(100vh - 40px));
-    display: flex;
-    flex-direction: column;
-    background: var(--surface);
-    border-radius: var(--radius-2xl);
-    box-shadow: var(--shadow-dialog);
-    overflow: hidden;
-    animation: doku-dialog-in var(--duration-dialog) var(--ease-enter-snappy);
-  }
-
-  /* En-tête et barre d'outils forment UN seul bloc de chrome : le changement de ton
-     vers la scène suffit à les en séparer. Un filet en plus serait une redite. */
-  header { min-height: 60px; flex: 0 0 auto; display: flex; align-items: center; gap: 12px; padding: 12px 12px 12px 16px; }
-  .title-icon {
-    width: 36px; height: 36px; display: inline-flex; align-items: center; justify-content: center;
-    border-radius: var(--radius-xl); background: var(--accent-soft); color: var(--ink); font-size: 18px;
-  }
-  .title { min-width: 0; }
-  .title h2 { margin: 0; font-size: var(--text-lg); line-height: var(--leading-tight); font-weight: var(--weight-strong); letter-spacing: var(--tracking-tight); }
-  .title p { margin: 2px 0 0; overflow: hidden; font-size: var(--text-xs); line-height: 1.3; color: var(--ink-3); text-overflow: ellipsis; white-space: nowrap; }
+  .pdftext { width: min(860px, calc(100vw - 32px)); }
+  .pdftext .doku-window { height: min(880px, calc(100vh - 40px)); }
   .spacer { flex: 1 1 auto; }
-  .close {
-    width: var(--control-md); height: var(--control-md); display: inline-flex; align-items: center; justify-content: center;
-    border: 0; border-radius: var(--radius-lg); background: transparent; color: var(--ink-4); font-size: 16px; cursor: pointer;
-    transition: background-color var(--duration-basic) ease, color var(--duration-basic) ease, transform var(--duration-basic) var(--ease-enter-snappy);
-  }
-  .close:hover { background: var(--fill-hover); color: var(--ink); }
 
   /* Gouttière partagée avec l'en-tête et le pied : la pastille de titre, le premier
      chevron et la mention du pied s'alignent sur une seule verticale. */
@@ -476,24 +434,13 @@
      tireté dit « pas modifiable », l'infobulle dit pourquoi. */
   .line.locked:hover { border-color: var(--sheet-line); border-style: dashed; background: transparent; }
 
-  footer { flex: 0 0 auto; display: flex; align-items: center; gap: 8px; padding: 12px 16px; }
-  footer small { font-size: var(--text-xs); color: var(--ink-3); }
-
-  /* Fantôme pour la barre d'outils (fond au survol seulement) ; au pied, la grammaire
-     commune des modales : secondaire en --accent-soft, primaire en encre. */
-  .icon-button, footer button {
-    display: inline-flex; align-items: center; justify-content: center;
-    border: 0; background: transparent; color: var(--ink-3);
-    font: inherit; font-size: var(--text-sm); font-weight: var(--weight-control); cursor: pointer;
+  /* Fantôme pour la barre d'outils : le fond n'apparaît qu'au survol. */
+  .icon-button {
+    width: var(--control-sm); height: var(--control-sm); display: inline-flex; align-items: center; justify-content: center;
+    border: 0; border-radius: var(--radius-md); background: transparent; color: var(--ink-4); font-size: 16px; cursor: pointer;
     transition: background-color var(--duration-basic) ease, color var(--duration-basic) ease, transform var(--duration-basic) var(--ease-enter-snappy);
   }
-  .icon-button { width: var(--control-sm); height: var(--control-sm); border-radius: var(--radius-md); color: var(--ink-4); font-size: 16px; }
-  footer button { height: var(--control-md); padding: 0 12px; border-radius: var(--radius-lg); }
-  .icon-button:hover:not(:disabled), footer button:hover:not(:disabled) { background: var(--fill-hover); color: var(--ink); }
-  .icon-button:disabled, footer button:disabled { opacity: var(--opacity-disabled); cursor: default; }
-  .close:active, .icon-button:not(:disabled):active, footer button:not(:disabled):active { transform: scale(0.97); }
-  footer .primary { background: var(--ink); color: var(--cream-content); }
-  footer .primary:hover:not(:disabled) { background: var(--ink-2); color: var(--cream-content); }
-  footer .secondary { background: var(--accent-soft); color: var(--ink); }
-  footer .secondary:hover:not(:disabled) { background: var(--fill-pressed); color: var(--ink); }
+  .icon-button:hover:not(:disabled) { background: var(--fill-hover); color: var(--ink); }
+  .icon-button:disabled { opacity: var(--opacity-disabled); cursor: default; }
+  .icon-button:not(:disabled):active { transform: scale(0.97); }
 </style>

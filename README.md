@@ -21,7 +21,7 @@ Also: split workspace, full-text search, wikilinks, snapshots/history, image pas
 
 | Provider | Auth | Notes |
 |---|---|---|
-| **Ollama** (default) | none | Runs locally. `qwen2.5:1.5b-instruct-q4_0` for chat, `granite-embedding:278m` for RAG. Nothing leaves the machine. |
+| **Local** (default) | none | Runs on the bundled llama.cpp engine. `LFM3-Omni-2B` (Q4_0) for chat, `granite-embedding-278m` for RAG, downloaded once and checked by SHA-256. Nothing else leaves the machine. |
 | **OpenAI** | account connection | Device-code flow — **never an API key** ([ADR-0014](docs/adr/0014-connexion-compte-openai-codex.md)). |
 | **MiniMax** | API key | Validated *before* being stored ([ADR-0018](docs/adr/0018-fournisseur-cloud-compatible-openai.md)). The only auth route they offer. |
 
@@ -44,7 +44,7 @@ npm test             # vitest
 
 ## Building
 
-**Windows** — NSIS installers, each bundling a native CPU-only Ollama sidecar:
+**Windows** — NSIS installers, each bundling a native CPU-only llama.cpp engine ([ADR-0032](docs/adr/0032-moteur-local-llamacpp-lfm3.md)):
 
 ```bash
 npm run build:installer:arm64
@@ -67,7 +67,7 @@ chmod +x Doku_3.6.1_amd64.AppImage && ./Doku_3.6.1_amd64.AppImage
 
 > The AppImage bundles the runner's GTK **and Mesa** stack, which cannot enumerate another distribution's drivers — on Arch, GDK aborts with `EGL_BAD_PARAMETER` before a window ever opens, and no `WEBKIT_*` variable helps because the failure sits below WebKit. See [`packaging/`](packaging/).
 
-Two deliberate differences on Linux ([ADR-0025](docs/adr/0025-distribution-linux-appimage.md)): Doku launches the **system** Ollama (`pacman -S ollama`, `apt install ollama`) instead of shipping a 1.4 GB sidecar to duplicate what your package manager already does better — and secrets go to the session Secret Service (GNOME Keyring, KWallet, KeePassXC) rather than the Windows vault.
+One deliberate difference on Linux ([ADR-0025](docs/adr/0025-distribution-linux-appimage.md)): secrets go to the session Secret Service (GNOME Keyring, KWallet, KeePassXC) rather than the Windows vault. The llama.cpp engine ships inside every package, as on Windows.
 
 A *Build Windows x64* workflow produces the x64 installer with its SHA-256 the same way.
 
@@ -76,7 +76,7 @@ A *Build Windows x64* workflow produces the x64 installer with its SHA-256 the s
 | Folder | Role |
 |---|---|
 | `src/` | Svelte 5 frontend — components, lib, CM6 editor, exporters |
-| `src-tauri/` | Minimal Rust host, Tauri config, NSIS template, Ollama sidecar |
+| `src-tauri/` | Minimal Rust host, Tauri config, NSIS template, llama.cpp engine |
 | `docs/` | Planning, ADRs, design, sprints, journal, plans |
 | `scripts/` | Hand-run build tooling (icon subsetting) — outputs are committed |
 | `spike/` | Preserved experiments (WYSIWYG S0, RAG 15.1, NPU 17.1) |

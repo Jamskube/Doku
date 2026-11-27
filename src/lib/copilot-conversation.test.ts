@@ -202,7 +202,7 @@ describe('copilot conversation', () => {
     const result = conversationHistoryWindow(messages, 22)
     expect(result.messages.map((message) => message.content)).toEqual(['new user', 'new assistant'])
     expect(result.omitted).toBe(2)
-    expect(historyBudget('ollama', 47_000)).toBe(0)
+    expect(historyBudget('local', 47_000)).toBe(0)
     expect(historyBudget('openai', 100_000)).toBeGreaterThan(0)
   })
 

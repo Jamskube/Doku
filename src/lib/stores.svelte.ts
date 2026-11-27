@@ -24,6 +24,8 @@ import { activateWorkspacePane, assignWorkspaceTab, closeWorkspaceTab, createWor
 export { isBinaryKind, kindFromName, type BinaryKind, type DocKind } from './doc-kind'
 import { isBinaryKind, kindFromName, type DocKind } from './doc-kind'
 import { nextDocZoom, parseDocZoom } from './doc-zoom'
+import { enqueueNotice, type QueuedNotice } from './notice-queue'
+import { revealTheme } from './theme-reveal'
 // Actions du document Word actif, publiées par `DocxView` au montage. Sans ce relais,
 // « Enregistrer » et « Exporter en PDF » ne pouvaient vivre que dans des boutons collés
 // à la vue : ni le menu, ni Ctrl+S ne les atteignaient. Un `.docx` n'était donc pas
@@ -32,6 +34,7 @@ export const docxActions = $state({
   tabId: null as number | null,
   save: null as null | (() => Promise<void>),
   exportPdf: null as null | (() => Promise<void>),
+  print: null as null | (() => Promise<void>),
   busy: '' as '' | 'save' | 'pdf',
   dirty: false,
 })
@@ -39,18 +42,21 @@ export const docxActions = $state({
 export type SidebarView = 'files' | 'plan' | 'history' | 'search' | 'discussions'
 // Vue interne du panneau copilote droit (14.0). Transitoire : boot toujours en
 // 'chat' (coquille statique, ne démarre PAS le moteur) ; 'models' déclenche
-// ensureReady à l'ouverture (intention explicite) — évite un spawn Ollama au boot.
+// ensureReady à l'ouverture (intention explicite) — évite un démarrage du moteur au boot.
 export type CopilotView = 'chat' | 'models' | 'memory'
-export type CopilotProvider = 'ollama' | 'openai' | 'minimax'
+export type CopilotProvider = 'local' | 'openai' | 'minimax'
 
 // LE prédicat cloud — badge, budget de contexte, refresh, personas et libellés d'erreur
 // lisent tous celui-ci : deux ternaires divergents = la régression badge/décision de S13.
 export function isCloudProvider(p: CopilotProvider): boolean {
-  return p !== 'ollama'
+  return p !== 'local'
 }
 export type ColumnWidth = 'narrow' | 'wide' | 'full'
 export type CopilotTextSize = 'small' | 'normal' | 'large' | 'xlarge'
 export type NoticeTone = 'error' | 'warning' | 'success'
+// Préférence de thème ; `app.theme` reste le thème EFFECTIF (clair ou sombre) que lisent
+// les vues, le Mica et main.ts.
+export type ThemeMode = 'light' | 'dark' | 'system'
 
 export interface AppNotice {
   tone: NoticeTone
@@ -112,8 +118,13 @@ export type WikiPrompt =
 
 let nextId = 1
 
+// File derrière `app.banner` (notice-queue.ts) : l'îlot (TitleIsland.svelte) affiche `notices[0]`.
+export const notices = $state<QueuedNotice<AppNotice>[]>([])
+let nextNoticeId = 1
+
 export const app = $state({
   theme: 'light' as 'light' | 'dark',
+  themeMode: 'light' as ThemeMode,
   // Toujours au-dessus (FR-11) : geste momentané, non persisté (comme focus/sourceMode).
   pinned: false,
   // Masquée par défaut (app « légère » — FR-6) ; l'état est persisté (settings).
@@ -132,11 +143,13 @@ export const app = $state({
   // Modèle d'EMBEDDING (index sémantique 15.2, ADR-0015) — réglage distinct du modèle
   // de chat ; persisté. '' = effacé (supprimé du disque) : l'UI repropose le défaut.
   embedModel: DEFAULT_EMBED_MODEL,
-  // Ollama reste le fournisseur local par défaut ; OpenAI et MiniMax sont des options
+  // Le moteur local (llama.cpp) reste le fournisseur par défaut ; OpenAI et MiniMax sont des options
   // cloud explicites (ADR-0014, ADR-0018).
-  copilotProvider: 'ollama' as CopilotProvider,
+  copilotProvider: 'local' as CopilotProvider,
   // Modèle MiniMax choisi (liste dynamique à la connexion) ; persisté. '' = défaut.
   minimaxModel: '',
+  // Modèle OpenAI choisi dans le catalogue du compte ; persisté. '' = défaut.
+  openaiModel: '',
   // Style des réponses du copilote (bref / équilibré / détaillé) — persisté.
   copilotVerbosity: 'balanced' as CopilotVerbosity,
   // Bouton « Réfléchir » du copilote cloud : laisse le modèle raisonner (plus lent, plus cher).
@@ -159,7 +172,9 @@ export const app = $state({
   // Modale Paramètres (19.2) : transitoire — elle ne doit jamais se rouvrir au démarrage.
   settingsOpen: false,
   // Section à mettre en avant à l'ouverture ('about' quand on vient du logo).
-  settingsFocus: null as 'about' | null,
+  settingsFocus: null as SettingsFocus | null,
+  // Palette de commandes (Ctrl+Maj+A) : transitoire. Ouvrir = `app.paletteOpen = true`.
+  paletteOpen: false,
   // Modale « Organiser les pages » (ADR-0022) : porte le chemin du PDF concerné, donc
   // null = fermée. Transitoire — elle ne doit jamais se rouvrir au démarrage.
   pdfPagesPath: null as string | null,
@@ -184,10 +199,20 @@ export const app = $state({
   // Dossiers dépliés de l'arborescence (chemins absolus, persistés). Les chemins
   // d'autres racines restent stockés : redevenir visible re-déplie tel quel.
   explorerExpanded: [] as string[],
-  // Notification flottante transitoire (ex. fichiers de session introuvables).
-  banner: null as AppNotice | null,
+  // Notification flottante transitoire (ex. fichiers de session introuvables). Accesseur
+  // sur la file : affecter un objet le met en attente derrière celui qu'on lit, affecter
+  // null ferme celui affiché (le suivant prend sa place).
+  get banner(): AppNotice | null {
+    return notices[0]?.notice ?? null
+  },
+  set banner(notice: AppNotice | null) {
+    if (notice) enqueueNotice(notices, notice, nextNoticeId++)
+    else notices.shift()
+  },
   // Proposition de rechargement (modif externe + modifs locales) — non modale.
   reloadPrompt: null as { tabId: number; name: string } | null,
+  // Compteur des enregistrements texte réussis : l'îlot de la barre de titre en fait un « Enregistré ».
+  savedPulse: 0,
   // Un fichier est glissé au-dessus de la fenêtre (overlay de dépôt, 2.4).
   dragging: false,
   // Historique (FR-12) : versions du fichier actif, chargées à l'ouverture du
@@ -396,7 +421,7 @@ export function loadSettings() {
     const raw = localStorage.getItem(SETTINGS_KEY)
     if (raw) {
       const s = JSON.parse(raw)
-      if (s.theme === 'dark' || s.theme === 'light') app.theme = s.theme
+      if (s.theme === 'dark' || s.theme === 'light' || s.theme === 'system') app.themeMode = s.theme
       if (typeof s.sidebarOpen === 'boolean') app.sidebarOpen = s.sidebarOpen
       if (s.sidebarView === 'files' || s.sidebarView === 'plan' || s.sidebarView === 'history' || s.sidebarView === 'search' || s.sidebarView === 'discussions') {
         app.sidebarView = s.sidebarView
@@ -404,11 +429,15 @@ export function loadSettings() {
       if (s.columnWidth === 'narrow' || s.columnWidth === 'wide' || s.columnWidth === 'full') {
         app.columnWidth = s.columnWidth
       }
-      if (typeof s.activeModel === 'string') app.activeModel = s.activeModel
-      if (typeof s.embedModel === 'string') app.embedModel = s.embedModel
-      if (s.copilotProvider === 'ollama' || s.copilotProvider === 'openai' || s.copilotProvider === 'minimax')
+      // Un nom à « : » est une étiquette Ollama (« qwen2.5:1.5b… ») : ce moteur-là n'existe plus
+      // (ADR-0032), ses modèles non plus — on repart du catalogue llama.cpp.
+      if (typeof s.activeModel === 'string' && !s.activeModel.includes(':')) app.activeModel = s.activeModel
+      if (typeof s.embedModel === 'string' && !s.embedModel.includes(':')) app.embedModel = s.embedModel
+      if (s.copilotProvider === 'ollama') app.copilotProvider = 'local'
+      else if (s.copilotProvider === 'local' || s.copilotProvider === 'openai' || s.copilotProvider === 'minimax')
         app.copilotProvider = s.copilotProvider
       if (typeof s.minimaxModel === 'string') app.minimaxModel = s.minimaxModel
+      if (typeof s.openaiModel === 'string') app.openaiModel = s.openaiModel
       if (s.copilotVerbosity === 'brief' || s.copilotVerbosity === 'balanced' || s.copilotVerbosity === 'detailed')
         app.copilotVerbosity = s.copilotVerbosity
       if (typeof s.copilotThinking === 'boolean') app.copilotThinking = s.copilotThinking
@@ -444,7 +473,7 @@ export function saveSettings() {
     localStorage.setItem(
       SETTINGS_KEY,
       JSON.stringify({
-        theme: app.theme,
+        theme: app.themeMode,
         sidebarOpen: app.sidebarOpen || app.sidebarAutoCollapsed,
         sidebarView: app.sidebarView,
         columnWidth: app.columnWidth,
@@ -454,6 +483,7 @@ export function saveSettings() {
         embedModel: app.embedModel,
         copilotProvider: app.copilotProvider,
         minimaxModel: app.minimaxModel,
+        openaiModel: app.openaiModel,
         copilotVerbosity: app.copilotVerbosity,
         copilotThinking: app.copilotThinking,
         cloudMemoryEnabled: app.cloudMemoryEnabled,
@@ -617,7 +647,14 @@ export function waitForAppReady(): Promise<void> {
   return appReadyPromise
 }
 
+let appInitialized = false
+
 export function initApp(): Promise<void> {
+  // Une seule fois par instance de ce module : un rechargement à chaud remonte App.svelte
+  // (onMount → initApp) sans réinitialiser `app.tabs`, et chaque restauration rejouée
+  // rajoutait toutes les notes de la session aux onglets déjà ouverts (766 doublons vus).
+  if (appInitialized) return appReadyPromise
+  appInitialized = true
   if (isTauri) {
     // Seule la fenêtre principale restaure et écrit la session : une fenêtre de plus démarre
     // vide (ou avec l'onglet qu'on y déplace) et `sessionReady` y reste faux, sinon deux
@@ -643,17 +680,33 @@ export function initApp(): Promise<void> {
   return appReadyPromise
 }
 
+const darkScheme = typeof matchMedia === 'function' ? matchMedia('(prefers-color-scheme: dark)') : null
+const resolveTheme = (mode: ThemeMode): 'light' | 'dark' => (mode === 'system' ? (darkScheme?.matches ? 'dark' : 'light') : mode)
+// « Système » suit le réglage de Windows en direct, sans révélation : personne n'a cliqué.
+darkScheme?.addEventListener('change', () => {
+  if (app.themeMode === 'system') applyTheme()
+})
+
 export function applyTheme() {
+  app.theme = resolveTheme(app.themeMode)
   document.documentElement.dataset.theme = app.theme
   // Mica est appliqué pendant que la fenêtre est encore cachée. main.ts attend cette
   // même promesse avant le premier show(), ce qui évite que le DWM fige le fond opaque.
   void syncSystemBackdrop(app.theme).catch((err) => console.error('Activation de Mica échouée', err))
 }
 
-// Réglage du thème (modale Paramètres) : un seul endroit l'applique réellement.
-export function setTheme(theme: 'light' | 'dark') {
-  app.theme = theme
-  applyTheme()
+// Réglage du thème (Paramètres, palette) : un seul endroit l'applique réellement. Un
+// changement VISIBLE se révèle en cercle depuis `origin` (theme-reveal.ts).
+export function setTheme(mode: ThemeMode, origin?: { x: number; y: number } | null) {
+  if (resolveTheme(mode) === app.theme) {
+    app.themeMode = mode
+    applyTheme()
+    return
+  }
+  revealTheme(() => {
+    app.themeMode = mode
+    applyTheme()
+  }, origin)
 }
 
 export function setColumnWidth(width: ColumnWidth) {
@@ -1197,7 +1250,9 @@ export function collapseExplorer(prefix: string) {
   app.explorerExpanded = app.explorerExpanded.filter((p) => !p.startsWith(root))
 }
 
-export function openSettings(focus: 'about' | null = null) {
+export type SettingsFocus = 'about' | 'shortcuts'
+
+export function openSettings(focus: SettingsFocus | null = null) {
   app.settingsFocus = focus
   app.settingsOpen = true
 }
@@ -1300,6 +1355,7 @@ function reportSaveFailure(name: string, error?: unknown) {
 }
 
 function runPostSaveEffects(snapshot: TextSaveSnapshot, path: string, now: number, firstSave: boolean) {
+  app.savedPulse++
   invalidateSearchDoc(path, baseName(path), snapshot.content)
   ragFileChanged(path)
   saveSession()
@@ -1330,6 +1386,7 @@ export async function saveTabOrSaveAs(tab: DocTab): Promise<boolean> {
     const current = app.tabs.find((item) => item.id === snapshot.tabId)
     if (!current) return false
     current.savedContent = snapshot.content
+    app.savedPulse++
     return true
   }
 

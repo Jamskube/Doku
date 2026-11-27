@@ -5,6 +5,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod compat;
+mod models;
 mod openai;
 mod secrets;
 mod sidecar;
@@ -13,7 +14,8 @@ mod web_search;
 
 use compat::CompatState;
 use openai::OpenAiState;
-use sidecar::OllamaState;
+use models::DownloadState;
+use sidecar::EngineState;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
@@ -343,7 +345,8 @@ fn main() {
                 .rotation_strategy(tauri_plugin_log::RotationStrategy::KeepOne)
                 .build(),
         )
-        .manage(OllamaState::new())
+        .manage(EngineState::new())
+        .manage(DownloadState::default())
         .manage(OpenAiState::default())
         .manage(CompatState::default())
         .manage(Handoffs::default())
@@ -361,7 +364,12 @@ fn main() {
             launched_at_startup,
             set_background_mode,
             background_mode,
-            sidecar::start_ollama,
+            sidecar::start_engine,
+            sidecar::stop_engine,
+            models::local_models,
+            models::download_model,
+            models::cancel_model_download,
+            models::delete_model,
             openai::openai_status,
             openai::openai_auth_start,
             openai::openai_auth_poll,
@@ -397,7 +405,7 @@ fn main() {
             // de Doku), la fermeture du handle du Job Object à la mort du process tue tout
             // l'arbre (KILL_ON_JOB_CLOSE, cf. sidecar.rs).
             if let RunEvent::Exit = event {
-                if let Some(state) = app.try_state::<OllamaState>() {
+                if let Some(state) = app.try_state::<EngineState>() {
                     state.shutdown();
                 }
             }

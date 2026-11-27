@@ -1,35 +1,30 @@
 # Binaires externes
 
-Ce dossier reçoit les sidecars Ollama embarqués par Tauri. Les exécutables, DLL et archives
-sont ignorés par Git ; seuls les scripts de préparation et leurs empreintes sont commités.
+Ce dossier reçoit le moteur IA local llama.cpp (ADR-0032), livré par Tauri comme ressource
+`llama/`. Les exécutables, bibliothèques et archives sont ignorés par Git ; seul le script de
+préparation (et ses empreintes) est commité.
 
-## Architectures Windows
+## Cibles
 
-| Cible | Triplet Tauri | Archive officielle Ollama 0.32.0 |
+| Cible | Script | Archive officielle llama.cpp b12810 |
 |---|---|---|
-| ARM64 | `aarch64-pc-windows-msvc` | `ollama-windows-arm64.zip` |
-| x64 Intel/AMD | `x86_64-pc-windows-msvc` | `ollama-windows-amd64.zip` |
+| Windows ARM64 | `npm run prepare:llama:arm64` | `llama-b12810-bin-win-cpu-arm64.zip` |
+| Windows x64 | `npm run prepare:llama:x64` | `llama-b12810-bin-win-cpu-x64.zip` |
+| Linux x64 | `npm run prepare:llama:linux-x64` | `llama-b12810-bin-ubuntu-x64.tar.gz` |
 
-Tauri sélectionne automatiquement `ollama-<triplet>.exe` pour la cible demandée. Les DLL
-vivent toutes sous `lib/ollama/` et ne peuvent pas mélanger deux architectures : le script
-`scripts/prepare-ollama-sidecar.mjs` remplace donc ce dossier avant chaque build.
+`scripts/prepare-llama-sidecar.mjs` vérifie le SHA-256 de l'archive (cache sous
+`.cache/llama-b12810/`), puis **remplace** `llama/` par `llama-server`, ses bibliothèques
+partagées (sans celles des autres outils de l'archive) et ses licences. Les DLL doivent rester à
+côté de l'exécutable : le chargeur Windows les cherche là. Une seule architecture à la fois —
+relancer le script avant de construire pour une autre cible.
 
 ## Commandes
 
 ```powershell
-npm run prepare:ollama:arm64
-npm run prepare:ollama:x64
+npm run prepare:llama:arm64
 npm run build:installer:arm64
-npm run build:installer:x64
+npm run build:installer:x64   # prépare x64 lui-même
 ```
 
-Les téléchargements officiels sont épinglés à Ollama 0.32.0 et vérifiés par SHA-256 avant
-extraction. Pour x64, le script extrait uniquement le payload CPU officiel : les bibliothèques
-CUDA/ROCm/MLX de l'archive de 1,5 Go ne sont pas embarquées dans Doku. L'installateur reste
-ainsi compact et fonctionne sur les PC Intel/AMD sans GPU compatible.
-
-La CI `.github/workflows/build-windows-x64.yml` construit l'installateur x64 sur un runner
-Windows x64, vérifie les architectures PE, effectue une installation silencieuse isolée,
-démarre le sidecar installé et publie l'installateur avec son SHA-256.
-
-La licence MIT d'Ollama est distribuée sous `resources/licenses/Ollama-LICENSE.txt`.
+Les licences distribuées vivent sous `resources/licenses/` (`llama.cpp-LICENSE.txt`,
+`LLVM-OpenMP-LICENSE.txt`).

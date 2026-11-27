@@ -11,6 +11,7 @@
 // doit le dire — jamais laisser croire à une reproduction fidèle.
 import { parseDocxDocument, type DocxStructuredDoc } from '../docx-structure'
 import type { PdfParagraph } from '../docx-structure'
+import { trackExport } from './progress'
 
 export class DocxToPdfError extends Error {}
 
@@ -225,5 +226,5 @@ export async function convertDocxToPdf(
   if (!structured.paragraphs.length) {
     throw new DocxToPdfError('Ce document ne contient aucun texte à exporter.')
   }
-  return renderDocxStructureToPdf(structured)
+  return trackExport('Conversion en PDF', () => renderDocxStructureToPdf(structured))
 }

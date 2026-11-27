@@ -52,16 +52,25 @@ jobs:
             build-essential \
             file
 
+      - name: Restaurer l'archive llama.cpp épinglée
+        uses: actions/cache@v6
+        with:
+          path: src-tauri/binaries/.cache/llama-b12810/llama-b12810-bin-ubuntu-x64.tar.gz
+          key: llama-ubuntu-x64-b12810-63b94be3
+
       - name: Installer les dépendances
         run: npm ci
+
+      - name: Préparer le moteur llama.cpp x64
+        run: npm run prepare:llama:linux-x64
 
       - name: Vérifier le projet
         run: |
           npm run check
           npm test
 
-      # Aucune préparation de sidecar : sous Linux, Doku lance l'Ollama du système
-      # (ADR-0025). `tauri.linux.conf.json` retire `externalBin` et la lib empaquetée.
+      # Le moteur llama.cpp est livré dans le paquet (ADR-0032, remplace le choix « Ollama du
+      # système » d'ADR-0025) : ressource `llama/`, lancée avec LD_LIBRARY_PATH sur ce dossier.
       # APPIMAGE_EXTRACT_AND_RUN : les runners GitHub n'ont pas FUSE, sans quoi
       # l'outil d'empaquetage échoue au montage de sa propre image.
       # DEUX formats, pour deux publics :
@@ -92,6 +101,23 @@ jobs:
           (cd "$workdir" && "$OLDPWD/$appimage" --appimage-extract >/dev/null)
           test -x "$workdir/squashfs-root/usr/bin/doku" \
             || { echo "L'AppImage ne contient pas l'exécutable attendu" >&2; exit 1; }
+
+          # Le moteur embarqué doit être exécutable (squashfs en lecture seule : impossible
+          # de corriger le bit au lancement) et trouver ses .so à côté de lui.
+          server=$(find "$workdir/squashfs-root" -path '*/llama/llama-server' -type f | head -n 1)
+          test -n "$server" && test -x "$server" \
+            || { echo "llama-server absent ou non exécutable dans l'AppImage" >&2; exit 1; }
+          printf 'version = 1\n\n[*]\nthreads = 4\n' > "$workdir/smoke.ini"
+          LD_LIBRARY_PATH="$(dirname "$server")" "$server" --host 127.0.0.1 --port 11589 \
+            --models-preset "$workdir/smoke.ini" --offline --no-ui > "$workdir/llama.log" 2>&1 &
+          llama_pid=$!
+          ready=0
+          for _ in $(seq 1 40); do
+            if curl -sf http://127.0.0.1:11589/models >/dev/null; then ready=1; break; fi
+            sleep 0.25
+          done
+          kill "$llama_pid" 2>/dev/null || true
+          if [ "$ready" != 1 ]; then cat "$workdir/llama.log" >&2; echo "Le moteur embarqué ne répond pas" >&2; exit 1; fi
 
           deb=$(find "$root/bundle/deb" -name '*.deb' | head -n 1)
           if [ -z "$deb" ]; then echo ".deb introuvable" >&2; exit 1; fi

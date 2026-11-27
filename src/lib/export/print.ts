@@ -18,8 +18,10 @@
 // pendant l'impression). Le timing exact du teardown est ce que l'essai NATIF valide.
 import { paperCss, injectHead } from '../html'
 import { escapeHtml } from '../html-escape'
+import { parentPath } from '../paths'
 import { sanitizeHtml } from '../sanitize'
 import { renderMarkdown } from './render-md'
+import { reportExportProgress, trackExport } from './progress'
 
 export interface Printable {
   kind: 'md' | 'html' | 'txt'
@@ -66,9 +68,98 @@ export function buildPrintHtml(tab: Printable): string {
   return injectHead(body, inject)
 }
 
+type PrintTab = { kind: string; name: string; content: string; path: string | null }
+
+// Imprime n'importe quel onglet (menu « Imprimer… », Ctrl+P). Un échec s'affiche en bandeau.
+export async function printDocument(tab: PrintTab): Promise<void> {
+  try {
+    await printTab(tab)
+  } catch (error) {
+    console.error('Impression échouée', error)
+    const { app } = await import('../stores.svelte')
+    app.banner = {
+      tone: 'error',
+      title: 'Impression impossible',
+      message: error instanceof Error && error.message ? error.message : 'Doku n’a pas pu préparer ce document.',
+    }
+  }
+}
+
+async function printTab(tab: PrintTab): Promise<void> {
+  if (tab.kind === 'md' || tab.kind === 'html' || tab.kind === 'txt') {
+    exportViaPrint({ kind: tab.kind, name: tab.name, content: tab.content, dir: parentPath(tab.path) ?? '' })
+  } else if (tab.kind === 'pdf') {
+    if (!tab.path) throw new Error('Ce PDF n’a pas de fichier à imprimer.')
+    await printPdfFile(tab.path)
+  } else if (tab.kind === 'docx') {
+    const { docxActions } = await import('../stores.svelte')
+    if (!docxActions.print) throw new Error('Le document Word n’est pas encore chargé.')
+    await docxActions.print()
+  }
+}
+
+// PDF sur disque, annotations actives gravées (ce que l'utilisateur voit à l'écran). Un carnet
+// périmé ou illisible ne correspond plus aux pages : on imprime alors le PDF seul.
+async function printPdfFile(path: string): Promise<void> {
+  const [{ readFileBytes, readPdfAnnotationManifest }, { pdfAnnotationIdentity, parsePdfAnnotationManifest }] =
+    await Promise.all([import('../tauri'), import('../pdf-annotations')])
+  const bytes = await readFileBytes(path)
+  if (!bytes) throw new Error('Le fichier PDF est introuvable.')
+  const identity = await pdfAnnotationIdentity(path, bytes)
+  const parsed = parsePdfAnnotationManifest(await readPdfAnnotationManifest(identity.key), identity)
+  const drawings = parsed.stale || parsed.unreadable ? [] : parsed.manifest.drawings.filter((d) => d.status === 'active')
+  const printable = drawings.length
+    ? (await (await import('../pdf-write')).burnPdfAnnotations(bytes, drawings)).bytes
+    : bytes
+  await printPdfBytes(printable)
+}
+
+// ponytail: rendu image à 144 ppp (échelle 2), pages en JPEG gardées en mémoire jusqu'à
+// l'impression ; passer par le PrintToPdf natif de WebView2 si des PDF de centaines de pages
+// ou une qualité d'impression vectorielle deviennent un besoin.
+const PDF_PRINT_SCALE = 2
+
+// Une image par page, une page par feuille. Les images passent par le DOM, pas par `srcdoc` :
+// des dizaines de Mo de data: dans un attribut ne tiennent pas.
+export async function printPdfBytes(bytes: Uint8Array): Promise<void> {
+  const { loadPdf, renderPage } = await import('../pdf')
+  const pages = await trackExport('Préparation de l’impression', async () => {
+    const loaded = await loadPdf(bytes)
+    const rendered: string[] = []
+    try {
+      for (let n = 1; n <= loaded.doc.numPages; n++) {
+        reportExportProgress(n - 1, loaded.doc.numPages)
+        const canvas = document.createElement('canvas')
+        await renderPage(loaded.doc, n, canvas, PDF_PRINT_SCALE)
+        rendered.push(canvas.toDataURL('image/jpeg', 0.92))
+        canvas.width = canvas.height = 0
+      }
+    } finally {
+      await loaded.destroy()
+    }
+    return rendered
+  })
+  const css = `@page { margin: 0 } html, body { margin: 0; background: #fff }
+    img { display: block; max-width: 100%; max-height: 100vh; margin: 0 auto; break-after: page }
+    img:last-child { break-after: auto }`
+  printHtml(`<!doctype html><html><head>${PRINT_CSP}<style>${css}</style></head><body></body></html>`, async (doc) => {
+    const imgs = pages.map((src) => {
+      const img = doc.createElement('img')
+      img.src = src
+      doc.body.appendChild(img)
+      return img
+    })
+    await Promise.all(imgs.map((img) => img.decode()))
+  })
+}
+
 // Ouvre le dialogue d'impression sur le document rendu, via un iframe isolé et caché.
 // Aucun effet en environnement sans DOM (no-op défensif pour les tests unitaires).
 export function exportViaPrint(tab: Printable): void {
+  printHtml(buildPrintHtml(tab))
+}
+
+function printHtml(html: string, prepare?: (doc: Document) => Promise<void>): void {
   if (typeof document === 'undefined') return
   const frame = document.createElement('iframe')
   frame.setAttribute('sandbox', 'allow-modals allow-same-origin')
@@ -76,7 +167,7 @@ export function exportViaPrint(tab: Printable): void {
   // Hors écran mais dimensionné (certains moteurs impriment mal un iframe 0×0).
   frame.style.cssText =
     'position:fixed; left:-10000px; top:0; width:794px; height:1123px; border:0; visibility:hidden'
-  frame.srcdoc = buildPrintHtml(tab)
+  frame.srcdoc = html
 
   let torn = false
   // Teardown DIFFÉRÉ (#5199) : jamais synchrone pendant l'impression/écriture async.
@@ -88,11 +179,20 @@ export function exportViaPrint(tab: Printable): void {
 
   frame.addEventListener(
     'load',
-    () => {
+    async () => {
       const win = frame.contentWindow
       if (!win) {
         frame.remove()
         return
+      }
+      if (prepare) {
+        try {
+          await prepare(win.document)
+        } catch (error) {
+          frame.remove()
+          console.error('Préparation de l’impression échouée', error)
+          return
+        }
       }
       // afterprint = fermeture du dialogue (pas fin d'écriture PDF) → on programme un
       // teardown paresseux, jamais un retrait immédiat.

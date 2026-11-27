@@ -1,13 +1,12 @@
 // Cœur pur de l'index d'embeddings (15.2, ADR-0015) : chunking, hachage, diff
 // incrémental, encodage vectors.bin/meta.json, cosinus top-k. Aucune dépendance
-// Tauri/Ollama ici — tout est testable en Node ; l'I/O vit dans tauri.ts et
+// Tauri/moteur ici — tout est testable en Node ; l'I/O vit dans tauri.ts et
 // l'orchestration dans rag-index.svelte.ts.
 import { omitEmbeddedImageData } from './images'
 
 // Modèle d'embedding par défaut + repli désigné (mesurés au spike 15.1, ADR-0015).
 // Pas de tag -q4_0 : les modèles d'embedding n'en publient pas (servis F16).
-export const DEFAULT_EMBED_MODEL = 'granite-embedding:278m'
-export const FALLBACK_EMBED_MODEL = 'bge-m3'
+export const DEFAULT_EMBED_MODEL = 'granite-embedding-278m'
 
 // ~900 caractères : taille de chunk mesurée équivalente à 500/1500 sur le corpus du
 // spike ; à re-mesurer sur longs documents en 15.3 (ADR-0015 « non couvert » n°2).

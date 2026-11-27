@@ -33,6 +33,11 @@
   const sourceCount = $derived(
     shownPassages.length + shownWeb.length + (message.contextSources?.length ?? 0) + (message.memorySources?.length ?? 0),
   )
+  // Quatre puces au plus sous la réponse, Web d'abord (ce qui a quitté l'appareil se voit).
+  const INLINE_MAX = 4
+  const inlineWeb = $derived(shownWeb.slice(0, INLINE_MAX))
+  const inlinePassages = $derived(shownPassages.slice(0, INLINE_MAX - inlineWeb.length))
+  const inlineCount = $derived(inlineWeb.length + inlinePassages.length)
   const runningActivity = $derived(message.activity?.find((activity) => activity.state === 'running'))
 
   // Même contrat que l'attribut `open` d'un <details> : ouvert pendant le flux, replié à
@@ -149,8 +154,59 @@
   </div>
 {/if}
 
+{#snippet webChip(source: (typeof shownWeb)[number])}
+  {@const cited = citedWeb.has(source.n)}
+  {@const host = webCitationHost(source.url)}
+  <button
+    type="button"
+    class="source"
+    class:cited
+    aria-label={`Source Web ${source.n}${cited ? ', citée' : ''} : ${source.title}`}
+    aria-describedby={describedBy(`w${source.n}`)}
+    onclick={() => { hidePreview(); onOpenWeb(source.url) }}
+    {...hoverCard(`w${source.n}`, () => ({ num: source.n, title: source.title, meta: cited ? `${host} · citée dans la réponse` : host, text: source.snippet }))}
+  >
+    <svg class="icon source-icon" aria-hidden="true"><use href="#i-globe" /></svg>
+    <span class="source-label">{middleTruncate(host || source.title, LABEL_MAX)}</span>
+    <span class="source-num">{source.n}</span>
+  </button>
+{/snippet}
+
+{#snippet passageChip(source: CitedPassage)}
+  {@const name = source.name ?? 'Document courant'}
+  <button
+    type="button"
+    class="source"
+    aria-label={`Passage ${source.n} : ${name}`}
+    aria-describedby={describedBy(`p${source.n}`)}
+    onclick={() => { hidePreview(); onReveal(source) }}
+    {...hoverCard(`p${source.n}`, () => ({ num: source.n, title: name, meta: source.path ?? undefined, text: source.text }))}
+  >
+    <svg class="icon source-icon" aria-hidden="true"><use href="#i-{source.name ? fileIcon(source.name) : 'file-text'}" /></svg>
+    <span class="source-label">{middleTruncate(name, LABEL_MAX)}</span>
+    <span class="source-num">{source.n}</span>
+  </button>
+{/snippet}
+
 {#if sourceCount > 0 && !message.streaming}
   <div class="steps" class:kbd data-expanded={sourcesOpen}>
+    {#if !collapsed && inlineCount > 0}
+      <div class="inline-sources">
+        {#each inlineWeb as source (source.n)}{@render webChip(source)}{/each}
+        {#each inlinePassages as source (source.n)}{@render passageChip(source)}{/each}
+        <button
+          type="button"
+          class="inline-more"
+          aria-expanded={sourcesOpen}
+          aria-controls="{uid}-sources"
+          aria-label={`Sources et contexte : ${sourceCount}`}
+          onclick={(event) => { kbd = event.detail === 0; sourcesOpen = !sourcesOpen }}
+        >
+          {sourceCount > inlineCount ? `+${sourceCount - inlineCount}` : 'Détail'}
+          <svg class="icon chevron" aria-hidden="true"><use href="#i-chevron-right" /></svg>
+        </button>
+      </div>
+    {:else}
     <button
       type="button"
       class="steps-head"
@@ -162,6 +218,7 @@
       <span class="source-count">{sourceCount}</span>
       <svg class="icon chevron" aria-hidden="true"><use href="#i-chevron-right" /></svg>
     </button>
+    {/if}
     <div class="steps-body" id="{uid}-sources" inert={!sourcesOpen}>
       <div class="steps-inner">
         <div class="evidence-list">
@@ -170,21 +227,7 @@
               <h4>{message.webCitedOnly ? 'Sources Web citées' : 'Sources Web consultées'}</h4>
               <div class="sources">
                 {#each shownWeb as source (source.n)}
-                  {@const cited = citedWeb.has(source.n)}
-                  {@const host = webCitationHost(source.url)}
-                  <button
-                    type="button"
-                    class="source"
-                    class:cited
-                    aria-label={`Source Web ${source.n}${cited ? ', citée' : ''} : ${source.title}`}
-                    aria-describedby={describedBy(`w${source.n}`)}
-                    onclick={() => { hidePreview(); onOpenWeb(source.url) }}
-                    {...hoverCard(`w${source.n}`, () => ({ num: source.n, title: source.title, meta: cited ? `${host} · citée dans la réponse` : host, text: source.snippet }))}
-                  >
-                    <svg class="icon source-icon" aria-hidden="true"><use href="#i-globe" /></svg>
-                    <span class="source-label">{middleTruncate(host || source.title, LABEL_MAX)}</span>
-                    <span class="source-num">{source.n}</span>
-                  </button>
+                  {@render webChip(source)}
                 {/each}
               </div>
             </section>
@@ -195,19 +238,7 @@
               <h4>{message.citedOnly ? 'Passages cités' : 'Passages consultés'}</h4>
               <div class="sources">
                 {#each shownPassages as source (source.n)}
-                  {@const name = source.name ?? 'Document courant'}
-                  <button
-                    type="button"
-                    class="source"
-                    aria-label={`Passage ${source.n} : ${name}`}
-                    aria-describedby={describedBy(`p${source.n}`)}
-                    onclick={() => { hidePreview(); onReveal(source) }}
-                    {...hoverCard(`p${source.n}`, () => ({ num: source.n, title: name, meta: source.path ?? undefined, text: source.text }))}
-                  >
-                    <svg class="icon source-icon" aria-hidden="true"><use href="#i-{source.name ? fileIcon(source.name) : 'file-text'}" /></svg>
-                    <span class="source-label">{middleTruncate(name, LABEL_MAX)}</span>
-                    <span class="source-num">{source.n}</span>
-                  </button>
+                  {@render passageChip(source)}
                 {/each}
               </div>
             </section>
@@ -371,6 +402,26 @@
     font-variant-numeric: tabular-nums;
   }
   .evidence-list { max-height: 280px; overflow-y: auto; padding: 6px 0 4px; }
+  /* Puces en ligne : même grammaire Kube Source, alignées sur le texte de la réponse. */
+  .inline-sources { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+  .inline-more {
+    height: var(--control-2xs);
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    padding: 0 4px 0 8px;
+    border: 0;
+    border-radius: var(--radius-full);
+    background: transparent;
+    color: var(--ink-3);
+    font: var(--weight-control) var(--text-xs)/1 var(--font-sans);
+    font-variant-numeric: tabular-nums;
+    cursor: pointer;
+    transition: background-color var(--duration-basic) ease, color var(--duration-basic) ease;
+  }
+  .inline-more:hover { background: var(--fill-hover); color: var(--ink); }
+  .inline-more:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 0; }
+  :global(:where(:root[data-input='touch'])) .inline-more { height: 40px; padding-inline: 12px 8px; }
   section + section { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--line-1); }
   /* Intitulé de section en casse normale, comme partout ailleurs dans Doku. */
   h4 { margin: 0 8px 6px; color: var(--ink-3); font: var(--weight-control) var(--text-xs)/var(--leading-snug) var(--font-sans); }
@@ -418,9 +469,11 @@
     overflow: hidden;
     border: 0;
     border-radius: var(--radius-xl);
-    background: var(--composer-bg);
+    background: var(--glass-bg);
+    -webkit-backdrop-filter: var(--glass-filter);
+    backdrop-filter: var(--glass-filter);
     color: var(--ink);
-    box-shadow: var(--shadow-xl);
+    box-shadow: var(--glass-shadow);
     pointer-events: none;
     animation: doku-pop-in var(--duration-moderate) var(--ease-enter-snappy);
   }

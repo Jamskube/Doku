@@ -2,17 +2,18 @@
   import { tick, untrack } from 'svelte'
   import { fly } from 'svelte/transition'
   import { cubicOut } from 'svelte/easing'
-  import { activeEditorSelection, activeTab, app, isCloudProvider, openPath, visibleTabs, type CopilotProvider, type DocKind, type DocTab } from '../lib/stores.svelte'
+  import { activeEditorSelection, activeTab, app, isCloudProvider, openPath, toggleSidebarView, visibleTabs, type CopilotProvider, type DocKind, type DocTab } from '../lib/stores.svelte'
   import { closeWindow, fileSizeAt, isTauri, minimizeWindow, openContextFilesDialog, openFolderDialog, readFileBytes, readTextFileAt, toggleMaximizeWindow } from '../lib/tauri'
-  import { formatBytes } from '../lib/ollama'
-  import { addCopilotContext, beginOpenAiAuth, cancelOpenAiConnection, cancelPull, clearGeneratedDocumentTarget, connectMinimax, copilot, disconnectMinimaxKey, disconnectOpenAiAccount, ensureCopilotReady, isEmbedModel, jumpToCitation, newChat as clearChat, pullModel, refreshMinimaxStatus, refreshModels, refreshOpenAiStatus, removeCopilotContext, removeModel, retryGeneration, reviseDiagram, reviseGeneratedDocument, saveMessageAsNote, scheduleConversationPersist, selectDiagramCandidate, sendChat, setActiveModel, setChatOutputMode, setCopilotContextFolder, setCopilotMemoryFolder, setCopilotProvider, setWebSearchEnabled, stopChat, summarizeDoc, type ChatMsg, type ChatOutputMode } from '../lib/copilot.svelte'
+  import { formatBytes, VOICE_MODULE } from '../lib/llama'
+  import { startVoice, stopVoice, voice } from '../lib/voice.svelte'
+  import { addCopilotContext, beginOpenAiAuth, cancelOpenAiConnection, cancelPull, clearGeneratedDocumentTarget, connectMinimax, copilot, disconnectMinimaxKey, disconnectOpenAiAccount, ensureCopilotReady, jumpToCitation, newChat as clearChat, pullModel, refreshMinimaxStatus, refreshModels, refreshOpenAiStatus, removeCopilotContext, removeModel, retryGeneration, reviseDiagram, reviseGeneratedDocument, saveMessageAsNote, scheduleConversationPersist, selectDiagramCandidate, sendChat, setActiveModel, setChatOutputMode, setCopilotContextFolder, setCopilotMemoryFolder, setCopilotProvider, setWebSearchEnabled, stopChat, summarizeDoc, type ChatMsg, type ChatOutputMode } from '../lib/copilot.svelte'
   import { conversations } from '../lib/copilot-conversations.svelte'
   import { MINIMAX_DEFAULT_MODEL, minimaxThinkingSwitchable } from '../lib/compat'
   import { markdownTextLength } from '../lib/images'
   import { cloudOnlyMode, matchSlashCommand, nextTrayIndex, OUTPUT_MODES, OUTPUT_ORDER, slashQuery, suggestSlashCommands, type SlashCommand, type SlashSuggestion } from '../lib/composer-commands'
   import { vaultLabel, vaultShortLabel } from '../lib/platform'
   import { clampCopilotWidth, copilotMaxWidthCss, copilotWidthCss, COPILOT_DEFAULT_WIDTH, COPILOT_MAX_WIDTH, COPILOT_MIN_WIDTH } from '../lib/copilot-width'
-  import { DEFAULT_EMBED_MODEL, FALLBACK_EMBED_MODEL, noteTitle } from '../lib/rag'
+  import { DEFAULT_EMBED_MODEL, noteTitle } from '../lib/rag'
   import { cancelRagIndexing, deleteRagIndex, ragState, refreshRagIndex } from '../lib/rag-index.svelte'
   import { baseName, parentPath } from '../lib/explorer'
   import { MAX_DOC_CHARS, MAX_DOC_CHARS_CLOUD, type SummaryMode } from '../lib/copilot-service'
@@ -28,7 +29,11 @@
   import { createStickToBottom } from '../lib/stick-to-bottom'
   import { placeHoverCard } from '../lib/hover-card'
   import { tooltip } from '../lib/tooltip'
+  import { streamReveal } from '../lib/copilot-stream-reveal'
+  import { shortModelName } from '../lib/copilot-model-label'
+  import { liquidThumb } from '../lib/liquid'
   import CopilotEvidence from './CopilotEvidence.svelte'
+  import CopilotDropletMenu, { type DropItem } from './CopilotDropletMenu.svelte'
   import CopilotDiagram from './CopilotDiagram.svelte'
   import CopilotDocument from './CopilotDocument.svelte'
   import type { DocumentBlockTarget, GeneratedDocumentArtifact } from '../lib/generated-document'
@@ -251,8 +256,11 @@
     if (citePreview) citePreview = null
   }
 
+  const openAiModel = $derived(app.openaiModel || OPENAI_MODEL)
+  const openAiChoices = $derived(copilot.openAiModels.length > 0 ? copilot.openAiModels : [openAiModel])
+
   // Bouton « Réfléchir » et son info-bulle (même carte de survol que l'aperçu de citation).
-  const thinkModel = $derived(app.copilotProvider === 'openai' ? OPENAI_MODEL : app.minimaxModel || MINIMAX_DEFAULT_MODEL)
+  const thinkModel = $derived(app.copilotProvider === 'openai' ? openAiModel : app.minimaxModel || MINIMAX_DEFAULT_MODEL)
   const thinkAlways = $derived(app.copilotProvider === 'minimax' && !minimaxThinkingSwitchable(thinkModel))
   const thinkTipText = $derived(
     thinkAlways
@@ -278,26 +286,22 @@
   // dernier « / » : « hf.co/LiquidAI/LFM2-2.6B-GGUF:Q4_0 » se tronquait sur « hf.co/Liq… »).
   const identityModel = $derived(
     app.copilotProvider === 'openai'
-      ? OPENAI_MODEL
+      ? openAiModel
       : app.copilotProvider === 'minimax'
         ? app.minimaxModel || MINIMAX_DEFAULT_MODEL
         : app.activeModel || 'Aucun modèle actif',
   )
 
-  // Modèle conseillé (carte d'onboarding) + suggestions. Toujours des tags -q4_0 explicites
-  // (repacking ARM). Dans l'onboarding, le conseillé est déjà en carte → chips sans lui.
-  const RECO_MODEL = 'qwen2.5:1.5b-instruct-q4_0'
-  const SUGGESTIONS = [RECO_MODEL, 'qwen2.5:3b-instruct-q4_0', 'hf.co/LiquidAI/LFM2-2.6B-GGUF:Q4_0']
-  const ALT_SUGGESTIONS = SUGGESTIONS.filter((s) => s !== RECO_MODEL)
+  // Modèle de chat du catalogue llama.cpp (models.rs, ADR-0032) : LFM3-Omni 2B en Q4_0. Plus de
+  // téléchargement libre par nom (pas de registre) : le catalogue est fermé.
+  const RECO_MODEL = 'lfm3-omni-2b'
+  const SUGGESTIONS = [RECO_MODEL]
   // Chips de la bibliothèque : masquer les modèles déjà installés (cliquer re-téléchargerait).
-  const installableSuggestions = $derived(
-    SUGGESTIONS.filter((s) => !copilot.models.some((m) => m.name === s || m.name === `${s}:latest`)),
-  )
+  const installableSuggestions = $derived(SUGGESTIONS.filter((s) => !copilot.models.some((m) => m.name === s)))
 
   // Vue Modèles : liste à l'ouverture (intention explicite). L'effet ne track QUE la vue —
   // `refreshModels` (lit ET écrit copilot.*) est `untrack`é pour ne pas s'auto-re-déclencher.
   // La vue « chat » ne démarre JAMAIS le moteur (coquille statique) → aucun spawn au boot.
-  let pullName = $state('')
   let authCodeCopied = $state(false)
   $effect(() => {
     if (app.copilotOpen && app.copilotView === 'models') {
@@ -330,16 +334,16 @@
 
   // Les modèles d'embedding restent gérables dans BIBLIOTHÈQUE mais ne sont jamais
   // proposés comme modèle de chat (même prédicat que l'auto-activation post-pull).
-  const chatModels = $derived(copilot.models.filter((m) => !isEmbedModel(m.name)))
+  const chatModels = $derived(copilot.models.filter((m) => m.kind === 'chat'))
 
   // « jamais de fonctionnalité qui ment » : le trigger et les en-têtes de groupe reprennent
-  // la MÊME machine d'états que les cartes fournisseur (checking / connecté / Luna
-  // indisponible / clé refusée / à connecter), jamais un binaire connecté-ou-pas.
+  // la MÊME machine d'états que les cartes fournisseur (checking / connecté / aucun
+  // modèle / clé refusée / à connecter), jamais un binaire connecté-ou-pas.
   type PickerState = { label: string; kind: 'ok' | 'warn' | 'off' | 'busy' }
   const openAiState = $derived.by((): PickerState => {
     if (copilot.openAiChecking) return { label: 'vérification…', kind: 'busy' }
     if (copilot.openAiAuthenticated && copilot.openAiPreferredAvailable === false)
-      return { label: 'Luna indisponible', kind: 'warn' }
+      return { label: 'aucun modèle', kind: 'warn' }
     if (copilot.openAiAuthenticated) return { label: 'connecté', kind: 'ok' }
     return { label: 'à connecter', kind: 'off' }
   })
@@ -349,7 +353,7 @@
     if (copilot.minimaxStatus?.connected) return { label: 'connecté', kind: 'ok' }
     return { label: 'à connecter', kind: 'off' }
   })
-  // Un modèle actif supprimé hors app (CLI ollama) laisserait le trigger afficher un
+  // Un modèle actif supprimé hors app (fichier effacé à la main) laisserait le trigger afficher un
   // fantôme — signalé seulement quand la liste a réellement été lue (modelsLoaded),
   // jamais sur une liste vide parce que le moteur n'a pas démarré.
   const localModelMissing = $derived(
@@ -357,6 +361,21 @@
   )
   // Repli identique à resolveRuntime : un statut connecté avec catalogue vide (erreur
   // partielle) propose quand même la valeur qui répondrait réellement aux questions.
+  const modelState = $derived.by((): PickerState['kind'] => {
+    if (app.copilotProvider === 'openai') return openAiState.kind
+    if (app.copilotProvider === 'minimax') return minimaxState.kind
+    if (copilot.loading) return 'busy'
+    return app.activeModel && !localModelMissing ? 'ok' : 'warn'
+  })
+  // Capsule modèle du composeur : ouvre le sélecteur existant, dans la vue Modèles.
+  async function openModelPicker() {
+    app.copilotView = 'models'
+    await tick()
+    if (!pickerOpen) togglePicker()
+    await tick()
+    const options = pickerOptions()
+    ;(options.find((o) => o.getAttribute('aria-checked') === 'true') ?? options[0])?.focus()
+  }
   const minimaxChoices = $derived(
     copilot.minimaxStatus?.connected && !copilot.minimaxStatus.keyRejected && copilot.minimaxStatus.models.length > 0
       ? copilot.minimaxStatus.models
@@ -391,7 +410,8 @@
     setActiveModel(name)
     closePicker(true)
   }
-  function pickOpenAi() {
+  function pickOpenAi(model: string) {
+    app.openaiModel = model
     setCopilotProvider('openai')
     closePicker(true)
   }
@@ -401,7 +421,7 @@
     closePicker(true)
   }
   function pickManageLocal() {
-    setCopilotProvider('ollama')
+    setCopilotProvider('local')
     closePicker(true)
   }
   function pickerOptions(): HTMLButtonElement[] {
@@ -459,11 +479,8 @@
     }
   }
 
-  function startPull(name?: string) {
-    const model = (name ?? pullName).trim()
-    if (!model) return
-    pullName = ''
-    void pullModel(model)
+  function startPull(name: string) {
+    void pullModel(name)
   }
 
   async function copyOpenAiCode() {
@@ -486,11 +503,11 @@
 
   // --- Index sémantique du dossier (15.2, ADR-0015) ---
   // Le service RAG n'importe ni stores ni copilot : la vue fournit dossier, modèle et port.
-  const EMBED_CHOICES = [DEFAULT_EMBED_MODEL, FALLBACK_EMBED_MODEL]
   const ragDir = $derived(copilot.contextFolder?.path ?? app.explorerDir ?? parentPath(activeTab()?.path ?? null))
   // '' = réglage effacé (modèle supprimé du disque) : on repropose le défaut.
   const embedModelName = $derived(app.embedModel || DEFAULT_EMBED_MODEL)
-  const embedInstalled = $derived(copilot.models.some((m) => m.name === embedModelName || m.name === `${embedModelName}:latest`))
+  const embedInstalled = $derived(copilot.models.some((m) => m.name === embedModelName))
+  const voiceInstalled = $derived(copilot.models.some((m) => m.name === VOICE_MODULE))
   const ragIndexing = $derived(ragState.phase === 'indexing' && ragState.dir === ragDir)
   const ragReadyHere = $derived(ragState.phase === 'ready' && ragState.dir === ragDir)
 
@@ -507,14 +524,14 @@
   // sinon le message d'erreur périmé resterait affiché jusqu'à un clic manuel.
   async function pullEmbedAndIndex(name: string) {
     await pullModel(name)
-    if (copilot.models.some((m) => m.name === name || m.name === `${name}:latest`)) await indexFolder()
+    if (copilot.models.some((m) => m.name === name)) await indexFolder()
   }
 
   // --- Portée des questions (15.3) : document courant ou dossier entier ---
   // Le mode « document entier (index) » n'existe qu'en local : un utilisateur OpenAI
   // garde la troncature 14.3 (pas de spawn du sidecar en douce) — badge et comportement
   // lisent le MÊME prédicat (copilot.models).
-  const docIndexAvailable = $derived(app.copilotProvider === 'ollama' && embedInstalled)
+  const docIndexAvailable = $derived(app.copilotProvider === 'local' && embedInstalled)
   const folderMeta = $derived.by(() => {
     if (!ragDir) return 'Aucun dossier — ouvrez un document enregistré'
     if (ragIndexing) return 'Indexation en cours…'
@@ -558,6 +575,7 @@
   })
 
   const numberFormatter = new Intl.NumberFormat('fr-FR')
+  const timeFormatter = new Intl.DateTimeFormat('fr-FR', { hour: '2-digit', minute: '2-digit' })
 
   // Budget de contexte du fournisseur COURANT (21.x) : 12k local (num_ctx), 240k cloud.
   // Badge et comportement (prepareDocMessages) lisent le MÊME prédicat isCloudProvider.
@@ -852,7 +870,8 @@
     if (!identityMenuOpen || !identityButtonEl || !panelEl) return
     const trigger = identityButtonEl.getBoundingClientRect()
     const panel = panelEl.getBoundingClientRect()
-    const left = Math.min(Math.max(Math.round(trigger.left - panel.left), 8), Math.round(panel.width - IDENTITY_MENU_W - 8))
+    // Aligné sur le bord DROIT du déclencheur (bouton « … » de la capsule d'actions).
+    const left = Math.min(Math.max(Math.round(trigger.right - panel.left - IDENTITY_MENU_W), 8), Math.round(panel.width - IDENTITY_MENU_W - 8))
     identityMenuPos = { left, top: Math.round(trigger.bottom - panel.top) + 6 }
     void tick().then(() => identityMenuEl?.querySelector<HTMLButtonElement>('[role="menuitem"]')?.focus())
   }
@@ -895,6 +914,16 @@
     draft = ''
     const t = activeTab()
     void sendChat(q, { name: t?.name ?? null, text: t?.content ?? '', kind: t?.kind ?? 'md', path: t?.path ?? null }, copilot.scope)
+  }
+
+  // « Relancer » la dernière réponse : la paire question/réponse est retirée puis la question
+  // repart avec le document et la portée COURANTS (comme un renvoi manuel).
+  function regenerate(i: number) {
+    const question = copilot.messages[i - 1]
+    if (question?.role !== 'user' || copilot.generating) return
+    copilot.messages.splice(i - 1, 2)
+    const t = activeTab()
+    void sendChat(question.content, { name: t?.name ?? null, text: t?.content ?? '', kind: t?.kind ?? 'md', path: t?.path ?? null }, copilot.scope)
   }
 
   async function editDiagram(artifact: DiagramArtifact) {
@@ -1051,6 +1080,7 @@
   let addMenuOpen = $state(false)
   let addMenuEl = $state<HTMLElement | null>(null)
   let addButtonEl = $state<HTMLButtonElement | null>(null)
+  let addContextButtonEl = $state<HTMLButtonElement | null>(null)
   let browserFilesEl = $state<HTMLInputElement | null>(null)
   let browserFolderEl = $state<HTMLInputElement | null>(null)
   let contextLoading = $state(false)
@@ -1083,8 +1113,11 @@
   }
 
   function closeAddMenu(restoreFocus = false) {
+    // Les actions de contexte passent aussi par ici depuis les gouttes et les commandes « / » :
+    // rendre le focus au bouton Outils n'a de sens que si SON menu était ouvert.
+    const wasOpen = addMenuOpen
     addMenuOpen = false
-    if (restoreFocus) addButtonEl?.focus()
+    if (restoreFocus && wasOpen) addButtonEl?.focus()
   }
 
   // Même règle que le menu de l'identité : `.kbd` posé à l'ouverture seulement.
@@ -1095,10 +1128,12 @@
     if (addMenuOpen) {
       menuSection = null
       addMenuKbd = keyboard
+      dropsOpen = false
     }
     copilot.contextError = ''
-    if (!addMenuOpen || !addButtonEl || !panelEl) return
-    const r = addButtonEl.getBoundingClientRect()
+    const trigger = addButtonEl
+    if (!addMenuOpen || !trigger || !panelEl) return
+    const r = trigger.getBoundingClientRect()
     const a = panelEl.getBoundingClientRect()
     const left = Math.min(Math.max(Math.round(r.left - a.left), 8), Math.round(a.width - ADD_MENU_W - 8))
     // L'échelle d'apparition part du « + », même quand le bord du panneau décale le menu.
@@ -1133,6 +1168,42 @@
       e.preventDefault()
       ;(e.key === 'Home' ? options[0] : options.at(-1))?.focus()
     }
+  }
+
+  // « + » de la rangée des puces : les actions de contexte en gouttes (CopilotDropletMenu).
+  // Le menu Outils garde les mêmes actions dans sa section Contexte.
+  let dropsOpen = $state(false)
+  let dropsKbd = $state(false)
+  let dropsEl = $state<HTMLElement | null>(null)
+  let dropsAnchor = $state<{ x: number; y: number; width: number } | null>(null)
+  const dropItems = $derived<DropItem[]>([
+    ...(selectionAvailable ? [{ id: 'selection', label: 'Sélection actuelle', icon: 'text-align-justify-start', run: () => runDrop(addSelection) }] : []),
+    { id: 'files', label: 'Fichiers…', icon: 'file-text', run: () => runDrop(addFiles) },
+    { id: 'folder', label: 'Dossier de notes…', icon: 'folder', run: () => runDrop(addFolder) },
+    { id: 'clipboard', label: 'Presse-papiers', icon: 'clipboard-paste', run: () => runDrop(addClipboard) },
+    { id: 'web', label: 'Recherche Web', icon: 'globe', checked: copilot.webSearchEnabled, run: () => runDrop(() => setWebSearchEnabled(!copilot.webSearchEnabled)) },
+  ])
+
+  function closeDrops(restoreFocus = false) {
+    dropsOpen = false
+    if (restoreFocus) addContextButtonEl?.focus()
+  }
+
+  function runDrop(action: () => unknown) {
+    closeDrops(true)
+    void action()
+  }
+
+  function toggleDrops(keyboard: boolean) {
+    if (dropsOpen) return closeDrops(keyboard)
+    if (!addContextButtonEl || !panelEl) return
+    addMenuOpen = false
+    copilot.contextError = ''
+    const r = addContextButtonEl.getBoundingClientRect()
+    const a = panelEl.getBoundingClientRect()
+    dropsAnchor = { x: r.left + r.width / 2 - a.left, y: r.top + r.height / 2 - a.top, width: a.width }
+    dropsKbd = keyboard
+    dropsOpen = true
   }
 
   function contextItem(kind: CopilotContextItem['kind'], label: string, text: string, path?: string | null, signature?: string): CopilotContextItem | null {
@@ -1327,6 +1398,7 @@
     if (pickerOpen && !pickerRootEl?.contains(t)) pickerOpen = false
     // Le menu vit hors du bouton (racine du panneau) : les deux comptent comme « dedans ».
     if (addMenuOpen && !addButtonEl?.contains(t) && !addMenuEl?.contains(t)) addMenuOpen = false
+    if (dropsOpen && !addContextButtonEl?.contains(t) && !dropsEl?.contains(t)) dropsOpen = false
     if (identityMenuOpen && !identityButtonEl?.contains(t) && !identityMenuEl?.contains(t)) identityMenuOpen = false
   }
 
@@ -1336,6 +1408,27 @@
   function quickAction(mode: SummaryMode) {
     const t = activeTab()
     void summarizeDoc({ name: t?.name ?? null, text: t?.content ?? '', kind: t?.kind ?? 'md', path: t?.path ?? null }, mode)
+  }
+
+  // Accueil : salutation selon l'heure (lue à l'affichage, une conversation vide ne dure pas
+  // assez pour qu'un minuteur vaille son coût).
+  const greeting = $derived.by(() => {
+    void copilot.messages.length
+    const h = new Date().getHours()
+    return h >= 18 || h < 5 ? 'Bonsoir' : 'Bonjour'
+  })
+  // Cartes de l'accueil : les trois livrables du résumé + la portée dossier (réponses citées
+  // depuis les notes), qui n'avait jusqu'ici qu'une entrée cachée dans le tiroir Contexte.
+  const SUGGESTION_CARDS = [
+    { id: 'summary', icon: 'scroll-text', label: 'Résumer', hint: 'L’essentiel en quelques lignes' },
+    { id: 'keypoints', icon: 'key-round', label: 'Points clés', hint: 'Idées et chiffres saillants' },
+    { id: 'todos', icon: 'list-checks', label: 'Actions à suivre', hint: 'Tâches et décisions à mener' },
+    { id: 'folder', icon: 'folder-open', label: 'Interroger le dossier', hint: 'Réponses citées depuis vos notes' },
+  ] as const
+  function runSuggestion(id: (typeof SUGGESTION_CARDS)[number]['id']) {
+    if (id !== 'folder') return quickAction(id)
+    copilot.scope = 'folder'
+    promptEl?.focus()
   }
 
   // Les transitions Svelte passent par WAAPI et échappent à la règle globale de mouvement
@@ -1483,23 +1576,10 @@
   })
 </script>
 
-<!-- Section « Ajouter un modèle » : rendue dans la bibliothèque ET dès l'onboarding
-     (l'utilisateur ne doit jamais être captif de la seule recommandation). -->
+<!-- Section « Ajouter un modèle » : les modèles du catalogue pas encore installés. -->
 {#snippet addSection(chips: string[])}
   <section>
     <div class="cop-label">Ajouter</div>
-    <div class="cop-add">
-      <svg class="icon" style="font-size:16px;color:var(--ink-4)" aria-hidden="true"><use href="#i-search" /></svg>
-      <input
-        class="cop-add-input"
-        type="text"
-        placeholder="nom du modèle…"
-        aria-label="Nom du modèle à télécharger"
-        bind:value={pullName}
-        onkeydown={(e) => { if (e.key === 'Enter') startPull() }}
-      />
-      <button class="cop-btn-sm" onclick={() => startPull()} disabled={!pullName.trim()}>Télécharger</button>
-    </div>
     {#if chips.length > 0}
       <div class="cop-chips">
         {#each chips as s (s)}
@@ -1698,7 +1778,7 @@
 
 <!-- Échap est géré sur les triggers/pops eux-mêmes (focus toujours dedans quand ouvert)
      avec stopPropagation ; ici seul le clic extérieur, partagé par les deux menus. -->
-<svelte:window onpointerdowncapture={pickerOpen || addMenuOpen || identityMenuOpen ? onGlobalPointerDown : undefined} />
+<svelte:window onpointerdowncapture={pickerOpen || addMenuOpen || dropsOpen || identityMenuOpen ? onGlobalPointerDown : undefined} />
 
 <aside
   class="cop-panel"
@@ -1738,75 +1818,89 @@
     onkeydown={resizeKey}
   ></div>
 
-  <!-- En-tête : contrôles panneau + contrôles fenêtre (draggable, motif TitleBar) -->
+  <!-- Carte flottante (refonte v2) : en-tête et corps vivent sur la même feuille, posée à
+       --canvas-gap du bord de la fenêtre. La marge est DANS la largeur du panneau : le
+       bornage (copilot-width.ts) et la réserve d'App.svelte n'ont rien à recompter. -->
+  <div class="cop-shell">
+  <!-- En-tête : identité, actions groupées, contrôles fenêtre (draggable, motif TitleBar) -->
   <header class="cop-head" data-tauri-drag-region>
-    <button
-      class="cop-identity"
-      bind:this={identityButtonEl}
-      aria-haspopup="menu"
-      aria-expanded={identityMenuOpen}
-      aria-label="Ouvrir le menu Doku-San"
-      onclick={(e) => toggleIdentityMenu(e.detail === 0)}
-      onkeydown={(event) => { if (event.key === 'Escape') closeIdentityMenu(true) }}
-    >
-      <span class="cop-mark">
-        <svg class="icon" aria-hidden="true"><use href="#i-leaf" /></svg>
-      </span>
-      <span class="cop-title">Doku-San</span>
-      <span class="cop-local" class:cloud={isCloudProvider(app.copilotProvider)}>
-        {isCloudProvider(app.copilotProvider) ? 'cloud' : 'local'}
-      </span>
-      <svg class="icon cop-identity-chevron" aria-hidden="true"><use href="#i-chevron-down" /></svg>
-    </button>
+    <span class="cop-mark" aria-hidden="true">
+      <svg class="icon" aria-hidden="true"><use href="#i-leaf" /></svg>
+    </span>
+    <span class="cop-title" data-tauri-drag-region>Doku-San</span>
     <div class="cop-head-spacer" data-tauri-drag-region></div>
-    <button
-      class="cop-ic"
-      class:active={app.copilotExpanded}
-      use:tooltip={app.copilotExpanded ? { label: 'Réduire le chat', kbd: 'Échap' } : 'Agrandir le chat'}
-      aria-label={app.copilotExpanded ? 'Réduire le chat' : 'Agrandir le chat'}
-      aria-pressed={app.copilotExpanded}
-      onclick={() => (app.copilotExpanded = !app.copilotExpanded)}
-    >
-      <svg class="icon" aria-hidden="true"><use href="#i-{app.copilotExpanded ? 'minimize-2' : 'maximize-2'}" /></svg>
-    </button>
-    {#if app.copilotView === 'models' || app.copilotView === 'memory'}
-      <button class="cop-ic" use:tooltip={'Retour au chat'} aria-label="Retour au chat" onclick={() => (app.copilotView = 'chat')}>
-        <svg class="icon" aria-hidden="true"><use href="#i-arrow-left" /></svg>
-      </button>
-    {:else}
-      {#if copilot.messages.length > 0}
-        <button class="cop-ic" use:tooltip={'Nouvelle conversation'} aria-label="Nouvelle conversation" onclick={() => startNewChat()}>
+    <div class="cop-cap" role="group" aria-label="Actions du copilote">
+      {#if app.copilotView === 'models' || app.copilotView === 'memory'}
+        <button class="cop-ic" use:tooltip={'Retour au chat'} aria-label="Retour au chat" onclick={() => (app.copilotView = 'chat')}>
+          <svg class="icon" aria-hidden="true"><use href="#i-arrow-left" /></svg>
+        </button>
+      {:else}
+        <button class="cop-ic" use:tooltip={'Nouvelle conversation'} aria-label="Nouvelle conversation" disabled={copilot.messages.length === 0} onclick={() => startNewChat()}>
           <svg class="icon" aria-hidden="true"><use href="#i-square-pen" /></svg>
         </button>
       {/if}
-    {/if}
-    <div class="cop-sep" aria-hidden="true"></div>
-    <button class="cop-win" use:tooltip={'Réduire'} aria-label="Réduire" onclick={minimizeWindow}>
-      <svg class="icon" aria-hidden="true"><use href="#i-minus" /></svg>
-    </button>
-    <button class="cop-win" use:tooltip={'Agrandir'} aria-label="Agrandir" onclick={toggleMaximizeWindow}>
-      <svg class="icon cop-win-square" aria-hidden="true"><use href="#i-square" /></svg>
-    </button>
-    <button class="cop-win close" use:tooltip={'Fermer'} aria-label="Fermer" onclick={closeWindow}>
-      <svg class="icon" aria-hidden="true"><use href="#i-x" /></svg>
-    </button>
+      <button
+        class="cop-ic cop-cap-history"
+        class:active={app.sidebarOpen && app.sidebarView === 'discussions'}
+        use:tooltip={'Discussions'}
+        aria-label="Discussions Doku-San"
+        aria-pressed={app.sidebarOpen && app.sidebarView === 'discussions'}
+        onclick={() => toggleSidebarView('discussions')}
+      >
+        <svg class="icon" aria-hidden="true"><use href="#i-rotate-ccw-clock" /></svg>
+      </button>
+      <button
+        class="cop-ic"
+        class:active={app.copilotExpanded}
+        use:tooltip={app.copilotExpanded ? { label: 'Réduire le chat', kbd: 'Échap' } : 'Agrandir le chat'}
+        aria-label={app.copilotExpanded ? 'Réduire le chat' : 'Agrandir le chat'}
+        aria-pressed={app.copilotExpanded}
+        onclick={() => (app.copilotExpanded = !app.copilotExpanded)}
+      >
+        <svg class="icon" aria-hidden="true"><use href="#i-{app.copilotExpanded ? 'minimize-2' : 'maximize-2'}" /></svg>
+      </button>
+      {#if app.copilotView === 'chat' && evidenceTurns.length > 0}
+        <button
+          bind:this={activityButtonEl}
+          class="cop-ic"
+          class:active={activityDrawerOpen}
+          use:tooltip={'Sources et activité'}
+          aria-label="Afficher les sources et l’activité"
+          aria-expanded={activityDrawerOpen}
+          onclick={() => void toggleActivityDrawer()}
+        >
+          <svg class="icon" aria-hidden="true"><use href="#i-list" /></svg>
+        </button>
+      {/if}
+      <button
+        class="cop-ic"
+        class:active={identityMenuOpen}
+        bind:this={identityButtonEl}
+        use:tooltip={'Modèles et mémoire'}
+        aria-haspopup="menu"
+        aria-expanded={identityMenuOpen}
+        aria-label="Plus d’options Doku-San"
+        onclick={(e) => toggleIdentityMenu(e.detail === 0)}
+        onkeydown={(event) => { if (event.key === 'Escape') closeIdentityMenu(true) }}
+      >
+        <svg class="icon" aria-hidden="true"><use href="#i-ellipsis" /></svg>
+      </button>
+    </div>
+    <div class="cop-winctl">
+      <button class="cop-win" use:tooltip={'Réduire'} aria-label="Réduire" onclick={minimizeWindow}>
+        <svg class="icon" aria-hidden="true"><use href="#i-minus" /></svg>
+      </button>
+      <button class="cop-win" use:tooltip={'Agrandir'} aria-label="Agrandir" onclick={toggleMaximizeWindow}>
+        <svg class="icon cop-win-square" aria-hidden="true"><use href="#i-square" /></svg>
+      </button>
+      <button class="cop-win close" use:tooltip={'Fermer'} aria-label="Fermer" onclick={closeWindow}>
+        <svg class="icon" aria-hidden="true"><use href="#i-x" /></svg>
+      </button>
+    </div>
   </header>
 
-  <!-- Corps : carte arrondie qui démarre sous l'en-tête -->
+  <!-- Corps : sous l'en-tête, sur la même feuille -->
   <div class="cop-card">
-    {#if app.copilotView === 'chat' && evidenceTurns.length > 0}
-      <button
-        bind:this={activityButtonEl}
-        class="cop-activity-fab"
-        class:active={activityDrawerOpen}
-        use:tooltip={'Sources et activité'}
-        aria-label="Afficher les sources et l’activité"
-        aria-expanded={activityDrawerOpen}
-        onclick={() => void toggleActivityDrawer()}
-      >
-        <svg class="icon" aria-hidden="true"><use href="#i-list" /></svg>
-      </button>
-    {/if}
     <div class="cop-scroll" bind:this={scroller} onscroll={onScroll}>
       {#if app.copilotView === 'chat' && cloudMemory.lastBatch}
         <!-- L'auto-effacement referme aussi la fenêtre d'annulation : c'est voulu et
@@ -1855,6 +1949,10 @@
         </div>
       {/if}
       {#if app.copilotView === 'models'}
+        <header class="cop-view-head">
+          <h2>Modèles</h2>
+          <p>Le moteur qui fait tourner Doku-San : sur cet appareil par défaut, dans le cloud si vous le choisissez.</p>
+        </header>
         <div class="cop-picker" bind:this={pickerRootEl}>
           <div class="cop-label" id="cop-picker-label">Modèle actif</div>
           <div class="cop-picker-shell" class:open={pickerOpen}>
@@ -1868,10 +1966,10 @@
               onclick={togglePicker}
               onkeydown={onTriggerKeydown}
             >
-              <svg class="icon" aria-hidden="true"><use href="#i-{app.copilotProvider === 'ollama' ? 'cpu' : 'cloud'}" /></svg>
+              <span class="cop-tile" data-tint={app.copilotProvider === 'local' ? 'sage' : 'slate'} aria-hidden="true"><svg class="icon" aria-hidden="true"><use href="#i-{app.copilotProvider === 'local' ? 'cpu' : 'cloud'}" /></svg></span>
               <span class="cop-picker-name">
                 {#if app.copilotProvider === 'openai'}
-                  <strong class="sans">{OPENAI_MODEL}</strong>
+                  <strong class="sans">{openAiModel}</strong>
                   <small class:warn={openAiState.kind === 'warn'}>OpenAI · {openAiState.label}</small>
                 {:else if app.copilotProvider === 'minimax'}
                   <strong class="sans">{app.minimaxModel || MINIMAX_DEFAULT_MODEL}</strong>
@@ -1899,11 +1997,11 @@
               >
               <button
                 class="cop-picker-sec"
-                class:open={pickerSection === 'ollama'}
+                class:open={pickerSection === 'local'}
                 role="menuitem"
                 aria-haspopup="true"
-                aria-expanded={pickerSection === 'ollama'}
-                onclick={() => toggleSection('ollama')}
+                aria-expanded={pickerSection === 'local'}
+                onclick={() => toggleSection('local')}
               >
                 <svg class="icon" aria-hidden="true"><use href="#i-cpu" /></svg>
                 <span class="cop-picker-sec-name">Sur cet appareil</span>
@@ -1912,21 +2010,21 @@
               </button>
               <div
                 class="cop-picker-fold"
-                class:open={pickerSection === 'ollama'}
+                class:open={pickerSection === 'local'}
                 role="group"
                 aria-label="Modèles locaux"
-                aria-hidden={pickerSection !== 'ollama'}
-                inert={pickerSection !== 'ollama'}
+                aria-hidden={pickerSection !== 'local'}
+                inert={pickerSection !== 'local'}
               >
                 <div class="cop-picker-fold-inner">
                   {#if copilot.loading}
                     <div class="cop-picker-empty">Démarrage du moteur IA…</div>
                   {:else if chatModels.length > 0}
                     {#each chatModels as m (m.name)}
-                      {@const selected = app.copilotProvider === 'ollama' && m.name === app.activeModel}
+                      {@const selected = app.copilotProvider === 'local' && m.name === app.activeModel}
                       <button class="cop-picker-opt" role="menuitemradio" aria-checked={selected} onclick={() => pickLocal(m.name)}>
                         <span class="cop-dot" class:on={selected}></span>
-                        <span class="cop-mono grow">{m.name}</span>
+                        <span class="cop-model-tag grow">{m.name}</span>
                         <span class="cop-size">{formatBytes(m.size)}</span>
                       </button>
                     {/each}
@@ -1974,20 +2072,18 @@
                 class="cop-picker-fold"
                 class:open={pickerSection === 'openai'}
                 role="group"
-                aria-label="Modèle OpenAI"
+                aria-label="Modèles OpenAI"
                 aria-hidden={pickerSection !== 'openai'}
                 inert={pickerSection !== 'openai'}
               >
                 <div class="cop-picker-fold-inner">
-                  <button
-                    class="cop-picker-opt"
-                    role="menuitemradio"
-                    aria-checked={app.copilotProvider === 'openai'}
-                    onclick={pickOpenAi}
-                  >
-                    <span class="cop-dot" class:on={app.copilotProvider === 'openai'}></span>
-                    <span class="cop-cloud-model grow">{OPENAI_MODEL}</span>
-                  </button>
+                  {#each openAiChoices as m (m)}
+                    {@const selected = app.copilotProvider === 'openai' && m === openAiModel}
+                    <button class="cop-picker-opt" role="menuitemradio" aria-checked={selected} onclick={() => pickOpenAi(m)}>
+                      <span class="cop-dot" class:on={selected}></span>
+                      <span class="cop-cloud-model grow">{m}</span>
+                    </button>
+                  {/each}
                 </div>
               </div>
               <div class="cop-picker-sep"></div>
@@ -2033,15 +2129,15 @@
           <div class="cop-openai-view">
             <div class="cop-cloud-hero">
               <div class="cop-cloud-head">
-                <span class="cop-cloud-icon"><svg class="icon" aria-hidden="true"><use href="#i-cloud" /></svg></span>
+                <span class="cop-tile" data-tint="slate" aria-hidden="true"><svg class="icon" aria-hidden="true"><use href="#i-cloud" /></svg></span>
                 <span class="cop-cloud-name">
-                  <strong>{OPENAI_MODEL}</strong>
-                  <small>GPT‑5.6 Luna · raisonnement faible</small>
+                  <strong>{openAiModel}</strong>
+                  <small>Raisonnement faible · « Réfléchir » pour approfondir</small>
                 </span>
                 {#if copilot.openAiChecking}
                   <span class="cop-cloud-status checking">Vérification…</span>
                 {:else if copilot.openAiAuthenticated && copilot.openAiPreferredAvailable === false}
-                  <span class="cop-cloud-status unavailable">Luna indisponible</span>
+                  <span class="cop-cloud-status unavailable">Aucun modèle</span>
                 {:else if copilot.openAiAuthenticated}
                   <span class="cop-cloud-status ready"><span class="cop-dot breathe"></span>Connecté</span>
                 {:else if copilot.openAiAuthPhase === 'waiting'}
@@ -2050,21 +2146,16 @@
                   <span class="cop-cloud-status">À connecter</span>
                 {/if}
               </div>
-              <div class="cop-cloud-foot">
-                <span><b>GPT‑5.6</b><small>LUNA</small></span>
-                <i></i>
-                <span><b>OpenAI</b><small>FOURNISSEUR</small></span>
-              </div>
             </div>
 
             {#if copilot.openAiAuthenticated}
               <div class:warn={copilot.openAiPreferredAvailable === false} class="cop-cloud-note ok" role="status">
                 <svg class="icon" aria-hidden="true"><use href="#i-{copilot.openAiPreferredAvailable === false ? 'triangle-alert' : 'shield-check'}" /></svg>
                 <span>
-                  <strong>{copilot.openAiPreferredAvailable === false ? 'GPT‑5.6 Luna n’est pas disponible' : 'Compte OpenAI connecté'}</strong>
+                  <strong>{copilot.openAiPreferredAvailable === false ? 'Aucun modèle disponible' : 'Compte OpenAI connecté'}</strong>
                   <small>
                     {copilot.openAiPreferredAvailable === false
-                      ? 'Cet abonnement ne propose pas Luna dans Codex. Doku ne lancera aucune génération avec un autre modèle à votre insu.'
+                      ? 'Cet abonnement ne propose aucun modèle dans Codex. Doku ne lancera aucune génération.'
                       : `La session est protégée par ${vaultLabel()}. Aucune clé API n’est demandée ni enregistrée.`}
                   </small>
                 </span>
@@ -2098,9 +2189,9 @@
                 <h3>Connecter votre compte OpenAI</h3>
                 <p>Utilisez votre abonnement ChatGPT/Codex comme moteur de Doku-San. La connexion se fait sur la page officielle OpenAI.</p>
                 <ol>
-                  <li><svg class="icon" aria-hidden="true"><use href="#i-lock-open" /></svg><p><strong>Aucune clé API</strong><small>Doku ne vous demandera jamais d’en créer une.</small></p></li>
-                  <li><svg class="icon" aria-hidden="true"><use href="#i-shield-check" /></svg><p><strong>Validation par OpenAI</strong><small>Votre mot de passe ne transite jamais par Doku.</small></p></li>
-                  <li><svg class="icon" aria-hidden="true"><use href="#i-lock" /></svg><p><strong>Session protégée</strong><small>Les jetons restent dans {vaultLabel()}.</small></p></li>
+                  <li><span class="cop-tile" data-tint="slate" aria-hidden="true"><svg class="icon" aria-hidden="true"><use href="#i-lock-open" /></svg></span><p><strong>Aucune clé API</strong><small>Doku ne vous demandera jamais d’en créer une.</small></p></li>
+                  <li><span class="cop-tile" data-tint="sage" aria-hidden="true"><svg class="icon" aria-hidden="true"><use href="#i-shield-check" /></svg></span><p><strong>Validation par OpenAI</strong><small>Votre mot de passe ne transite jamais par Doku.</small></p></li>
+                  <li><span class="cop-tile" data-tint="ochre" aria-hidden="true"><svg class="icon" aria-hidden="true"><use href="#i-lock" /></svg></span><p><strong>Session protégée</strong><small>Les jetons restent dans {vaultLabel()}.</small></p></li>
                 </ol>
                 <button class="cop-btn-fill" onclick={() => void beginOpenAiAuth()} disabled={copilot.openAiAuthPhase === 'starting'}>
                   <svg class="icon" aria-hidden="true"><use href="#i-log-in" /></svg>{copilot.openAiAuthPhase === 'starting' ? 'Connexion…' : 'Se connecter avec OpenAI'}
@@ -2111,14 +2202,14 @@
 
             <div class="cop-cloud-privacy">
               <svg class="icon" aria-hidden="true"><use href="#i-info" /></svg>
-              <p><strong>Envoi volontaire vers le cloud.</strong> Quand OpenAI est actif, la question et le contexte affiché sont transmis au service Codex. Le mode Ollama reste entièrement local.</p>
+              <p><strong>Envoi volontaire vers le cloud.</strong> Quand OpenAI est actif, la question et le contexte affiché sont transmis au service Codex. Le mode local reste entièrement sur votre machine.</p>
             </div>
           </div>
         {:else if app.copilotProvider === 'minimax'}
           <div class="cop-openai-view">
             <div class="cop-cloud-hero">
               <div class="cop-cloud-head">
-                <span class="cop-cloud-icon"><svg class="icon" aria-hidden="true"><use href="#i-cloud" /></svg></span>
+                <span class="cop-tile" data-tint="slate" aria-hidden="true"><svg class="icon" aria-hidden="true"><use href="#i-cloud" /></svg></span>
                 <span class="cop-cloud-name">
                   <strong>{app.minimaxModel || MINIMAX_DEFAULT_MODEL}</strong>
                   <small>MiniMax · compatible OpenAI</small>
@@ -2132,11 +2223,6 @@
                 {:else}
                   <span class="cop-cloud-status">À connecter</span>
                 {/if}
-              </div>
-              <div class="cop-cloud-foot">
-                <span><b>M-series</b><small>MODÈLES</small></span>
-                <i></i>
-                <span><b>MiniMax</b><small>FOURNISSEUR</small></span>
               </div>
             </div>
 
@@ -2163,8 +2249,8 @@
                     : 'Créez une clé API sur platform.minimax.io, puis collez-la ici. Elle est vérifiée avant d’être enregistrée.'}
                 </p>
                 <ol>
-                  <li><svg class="icon" aria-hidden="true"><use href="#i-shield-check" /></svg><p><strong>Vérifiée avant stockage</strong><small>Clé invalide ou réseau en panne : rien n’est enregistré.</small></p></li>
-                  <li><svg class="icon" aria-hidden="true"><use href="#i-lock" /></svg><p><strong>Protégée par {vaultShortLabel()}</strong><small>La clé vit dans {vaultLabel()}, jamais dans les fichiers de Doku.</small></p></li>
+                  <li><span class="cop-tile" data-tint="sage" aria-hidden="true"><svg class="icon" aria-hidden="true"><use href="#i-shield-check" /></svg></span><p><strong>Vérifiée avant stockage</strong><small>Clé invalide ou réseau en panne : rien n’est enregistré.</small></p></li>
+                  <li><span class="cop-tile" data-tint="ochre" aria-hidden="true"><svg class="icon" aria-hidden="true"><use href="#i-lock" /></svg></span><p><strong>Protégée par {vaultShortLabel()}</strong><small>La clé vit dans {vaultLabel()}, jamais dans les fichiers de Doku.</small></p></li>
                 </ol>
                 <form
                   class="cop-mm-connect"
@@ -2190,7 +2276,7 @@
 
             <div class="cop-cloud-privacy">
               <svg class="icon" aria-hidden="true"><use href="#i-info" /></svg>
-              <p><strong>Envoi volontaire vers le cloud.</strong> Quand MiniMax est actif, la question et le contexte affiché sont transmis à api.minimax.io. Le mode Ollama reste entièrement local.</p>
+              <p><strong>Envoi volontaire vers le cloud.</strong> Quand MiniMax est actif, la question et le contexte affiché sont transmis à api.minimax.io. Le mode local reste entièrement sur votre machine.</p>
             </div>
           </div>
         {:else}
@@ -2217,30 +2303,15 @@
             </div>
             <div class="cop-reco">
               <div class="cop-reco-head">
-                <span class="cop-mono">qwen2.5:1.5b · Q4_0</span>
+                <span class="cop-model-tag">LFM3-Omni · 2B · Q4_0</span>
                 <span class="cop-badge">conseillé</span>
               </div>
-              <div class="cop-reco-sub">935 Mo · ultra-léger, discret, optimisé ARM</div>
+              <div class="cop-reco-sub">1,0 Go · français solide, sources citées, optimisé ARM</div>
               <button class="cop-btn-fill" onclick={() => startPull(RECO_MODEL)}>
                 <svg class="icon" aria-hidden="true"><use href="#i-download" /></svg>Télécharger ce modèle
               </button>
             </div>
           </div>
-          <!-- L'alternative reste disponible sans concurrencer le modèle conseillé :
-               progressive disclosure, pas de voie unique cachée. -->
-          <details class="cop-advanced cop-onboard-more">
-            <summary onkeydown={onAdvancedSummaryKey}>
-              <span class="cop-advanced-icon"><svg class="icon" aria-hidden="true"><use href="#i-sliders-horizontal" /></svg></span>
-              <span class="cop-advanced-copy">
-                <strong>Voir d’autres modèles</strong>
-                <small>Autres tailles ou modèle personnalisé</small>
-              </span>
-              <svg class="icon cop-advanced-chev" aria-hidden="true"><use href="#i-chevron-down" /></svg>
-            </summary>
-            <div class="cop-sections cop-advanced-body">
-              {@render addSection(ALT_SUGGESTIONS)}
-            </div>
-          </details>
         {:else}
           <!-- Une progression est un état système, jamais un réglage avancé : elle reste
                visible même lorsque la gestion locale est repliée. -->
@@ -2250,7 +2321,7 @@
               <div class="cop-dl">
                 <div class="cop-dl-head">
                   <svg class="icon orbit" style="font-size:16px" aria-hidden="true"><use href="#i-loader-circle" /></svg>
-                  <span class="cop-mono grow" title={copilot.pulling.name}>{copilot.pulling.name}</span>
+                  <span class="cop-model-tag grow" title={copilot.pulling.name}>{copilot.pulling.name}</span>
                   <span class="cop-size">
                     {copilot.pulling.total > 0 ? `${formatBytes(copilot.pulling.done)} / ${formatBytes(copilot.pulling.total)}` : '…'}
                   </span>
@@ -2298,24 +2369,24 @@
                       </div>
                     </div>
                   {:else}
-                    {@const embed = isEmbedModel(m.name)}
+                    {@const embed = m.kind !== 'chat'}
                     <div class="cop-row" class:active={isActive}>
                       <!-- Un modèle d'embedding ne sait pas générer : pick désactivé (même
                            prédicat que le dropdown), icône database au lieu de la pastille. -->
                       <button
                         class="cop-row-pick"
                         use:tooltip={embed ? '' : 'Choisir comme modèle actif'}
-                        title={embed ? "Modèle d'embedding — réservé à l'index du dossier" : undefined}
+                        title={m.kind === 'voice' ? 'Module audio de LFM3 — réservé au mode vocal' : embed ? "Modèle d'embedding — réservé à l'index du dossier" : undefined}
                         aria-pressed={isActive}
                         disabled={embed}
                         onclick={() => setActiveModel(m.name)}
                       >
                         {#if embed}
-                          <svg class="icon" style="font-size:14px;color:var(--ink-4)" aria-hidden="true"><use href="#i-database" /></svg>
+                          <svg class="icon" style="font-size:14px;color:var(--ink-4)" aria-hidden="true"><use href="#i-{m.kind === 'voice' ? 'mic' : 'database'}" /></svg>
                         {:else}
                           <span class="cop-dot" class:on={isActive}></span>
                         {/if}
-                        <span class="cop-mono grow">{m.name}</span>
+                        <span class="cop-model-tag grow">{m.name}</span>
                         <span class="cop-size">{formatBytes(m.size)}</span>
                       </button>
                       <button class="cop-del" use:tooltip={'Supprimer'} aria-label={'Supprimer ' + m.name} onclick={() => (confirmDelete = m.name)}>
@@ -2339,7 +2410,7 @@
               <div class="cop-rag">
                 <div class="cop-rag-row">
                   <svg class="icon" style="font-size:16px;color:var(--ink-4)" aria-hidden="true"><use href="#i-database" /></svg>
-                  <span class="cop-mono grow" title="Modèle d'embedding — réglage distinct du modèle de chat">{embedModelName}</span>
+                  <span class="cop-model-tag grow" title="Modèle d'embedding — réglage distinct du modèle de chat">{embedModelName}</span>
                   {#if !embedInstalled}
                     <button class="cop-btn-sm" onclick={() => startPull(embedModelName)} disabled={!!copilot.pulling}>Télécharger</button>
                   {:else if ragIndexing}
@@ -2350,13 +2421,6 @@
                     <!-- Désactivé aussi quand un AUTRE dossier s'indexe (une seule indexation à la fois). -->
                     <button class="cop-btn-sm" onclick={indexFolder} disabled={!ragDir || ragState.phase === 'indexing'} title={ragDir ?? 'Ouvrir un document ou un dossier d’abord'}>Indexer</button>
                   {/if}
-                </div>
-                <div class="cop-chips" style="margin-top:8px">
-                  {#each EMBED_CHOICES as c (c)}
-                    <button class="cop-chip" class:sel={embedModelName === c} title="Choisir ce modèle d'embedding" aria-pressed={embedModelName === c} onclick={() => (app.embedModel = c)}>
-                      {c}<span class="cop-chip-tag">{c === DEFAULT_EMBED_MODEL ? 'défaut' : 'repli'}</span>
-                    </button>
-                  {/each}
                 </div>
                 {#if ragIndexing}
                   <div class="cop-rag-progress">
@@ -2391,8 +2455,27 @@
               </div>
             </section>
 
+            <!-- Mode vocal (ADR-0033) : module audio de LFM3, téléchargé une fois. -->
+            <section>
+              <div class="cop-label row"><span>Voix</span></div>
+              <div class="cop-rag">
+                <div class="cop-rag-row">
+                  <svg class="icon" style="font-size:16px;color:var(--ink-4)" aria-hidden="true"><use href="#i-mic" /></svg>
+                  <span class="cop-model-tag grow">Module audio LFM3</span>
+                  {#if !voiceInstalled}
+                    <button class="cop-btn-sm" onclick={() => startPull(VOICE_MODULE)} disabled={!!copilot.pulling}>Télécharger</button>
+                  {/if}
+                </div>
+                <div class="cop-rag-note">
+                  {voiceInstalled
+                    ? 'Installé — parlez à Doku-San avec le micro du composeur. Tout reste sur votre machine.'
+                    : 'Conversation parlée 100 % locale : 507 Mo, une seule fois (environ 0,5 Go de mémoire en plus).'}
+                </div>
+              </div>
+            </section>
+
             <!-- Ajouter -->
-            {@render addSection(installableSuggestions)}
+            {#if installableSuggestions.length}{@render addSection(installableSuggestions)}{/if}
             </div>
           </details>
         {/if}
@@ -2434,7 +2517,8 @@
                     : 'Enregistrez la note pour lui attacher une mémoire durable.'}
               </small>
             </span>
-            <div class="cop-memory-scope-options">
+            <div class="cop-memory-scope-options" use:liquidThumb>
+              <span class="cop-memory-scope-thumb" data-liquid-thumb aria-hidden="true"></span>
               <button
                 class:active={!effectiveMemoryFolder}
                 disabled={!memoryDocument}
@@ -2537,25 +2621,21 @@
              départ, pas une liste de commandes. Les trois livrables documentaires restent ;
              aucune entrée échelonnée (on ne chorégraphie pas l'arrivée d'une vue). -->
         <div class="cop-chat-empty">
-          <div class="cop-empty-art" aria-hidden="true"><svg class="icon" aria-hidden="true"><use href="#i-leaf" /></svg></div>
-          <h2 class="cop-empty-title">Comment puis-je aider&nbsp;?</h2>
-          <p class="cop-empty-desc">Posez une question ci-dessous, ou partez d’une suggestion.</p>
-          <div class="cop-actions">
-            <button class="cop-action" onclick={() => quickAction('summary')}>
-              <svg class="icon cop-action-icon" aria-hidden="true"><use href="#i-scroll-text" /></svg>
-              <span>Résume le document</span>
-              <svg class="icon cop-action-arrow" aria-hidden="true"><use href="#i-arrow-right" /></svg>
-            </button>
-            <button class="cop-action" onclick={() => quickAction('todos')}>
-              <svg class="icon cop-action-icon" aria-hidden="true"><use href="#i-list-checks" /></svg>
-              <span>Repère les actions à suivre</span>
-              <svg class="icon cop-action-arrow" aria-hidden="true"><use href="#i-arrow-right" /></svg>
-            </button>
-            <button class="cop-action" onclick={() => quickAction('keypoints')}>
-              <svg class="icon cop-action-icon" aria-hidden="true"><use href="#i-key-round" /></svg>
-              <span>Extrais les points clés</span>
-              <svg class="icon cop-action-arrow" aria-hidden="true"><use href="#i-arrow-right" /></svg>
-            </button>
+          <h2 class="cop-greet">{greeting}.</h2>
+          <p class="cop-greet-sub">
+            {#if activeTab()}
+              Que voulez-vous faire avec <em>{activeTab()?.name}</em>&nbsp;?
+            {:else}
+              Ouvrez un document, ou posez une question à vos notes.
+            {/if}
+          </p>
+          <div class="cop-suggest">
+            {#each SUGGESTION_CARDS as card (card.id)}
+              <button class="cop-suggest-card" onclick={() => runSuggestion(card.id)}>
+                <span class="cop-suggest-tile" aria-hidden="true"><svg class="icon" aria-hidden="true"><use href="#i-{card.icon}" /></svg></span>
+                <span class="cop-suggest-copy"><strong>{card.label}</strong><small>{card.hint}</small></span>
+              </button>
+            {/each}
           </div>
         </div>
       {:else}
@@ -2617,23 +2697,27 @@
               {@const waiting = m.streaming && m.content === ''}
               {@const canSave = isTauri && !m.notice && !!m.content && !m.diagram && !m.generatedDocument}
               {@const canCopy = !m.diagram && !m.generatedDocument}
-              <div class="cop-asst" class:enter={i >= enterFrom}>
-                {#if waiting}
-                  <!-- role=status : la ligne (statut réel ou « réfléchit ») est annoncée au
-                       lecteur d'écran. Points et shimmer sont décoratifs. -->
-                  <div class="cop-status" role="status">
-                    <span class="cop-typing" aria-hidden="true"><i></i><i></i><i></i></span>
-                    <span class="cop-shimmer">{m.status ?? 'Doku-San réfléchit'}</span>
+              {@const canRetry = i === copilot.messages.length - 1 && !copilot.generating && !m.notice && !m.diagram && !m.generatedDocument && copilot.messages[i - 1]?.role === 'user'}
+              <div class="cop-asst" class:enter={i >= enterFrom} class:last={i === copilot.messages.length - 1}>
+                <!-- Signature au premier tour d'une suite : marque, nom, heure. -->
+                {#if copilot.messages[i - 1]?.role !== 'assistant'}
+                  <div class="cop-asst-head">
+                    <span class="cop-asst-mark" aria-hidden="true"><svg class="icon" aria-hidden="true"><use href="#i-leaf" /></svg></span>
+                    <span class="cop-asst-name">Doku-San</span>
+                    {#if m.at}<time class="cop-asst-time" datetime={new Date(m.at).toISOString()}>{timeFormatter.format(m.at)}</time>{/if}
                   </div>
-                {:else}
-                <div class="cop-asst-head">
-                  <svg class="icon" aria-hidden="true"><use href="#i-leaf" /></svg>
-                  <span class="cop-asst-name">Doku-San</span>
-                </div>
-                {#if m.streaming}
+                {/if}
+                {#if waiting}
+                  <!-- Étape en cours (draft-agent) : spinner fin + libellé balayé. role=status :
+                       la ligne (statut réel ou « réfléchit ») est annoncée au lecteur d'écran. -->
+                  <div class="cop-status" role="status">
+                    <span class="cop-spinner" aria-hidden="true"></span>
+                    <span class="cop-shimmer"><span class="cop-shimmer-mask"><span class="cop-shimmer-text">{m.status ?? 'Doku-San réfléchit'}</span></span></span>
+                  </div>
+                {:else if m.streaming}
                   <!-- Streaming : texte brut (aucun parse par token) — rendu Markdown à la fin.
                        ::after = caret qui pulse au bout du texte qui s'écrit. -->
-                  <div class="cop-md-plain streaming">{m.content}</div>
+                  <div class="cop-md-plain streaming" use:streamReveal={m.content}></div>
                 {:else if m.diagram}
                   <CopilotDiagram
                     artifact={m.diagram}
@@ -2658,14 +2742,13 @@
                     onkeydown={onAnswerKey}
                   >{@html renderAnswer(m)}</div>
                 {/if}
-                {/if}
                 <CopilotEvidence
                   message={m}
                   onReveal={(source) => void revealCitation(source)}
                   onOpenWeb={(url) => void openWebSource(url)}
                   onOpenMemory={openMemoryView}
                 />
-                {#if !m.streaming && (canSave || canCopy)}
+                {#if !m.streaming && (canSave || canCopy || canRetry)}
                   <!-- Rangée d'actions (Kube Message) : révélée au survol du tour ou au focus,
                        toujours visible au doigt. -->
                   <div class="cop-msg-actions">
@@ -2687,6 +2770,11 @@
                     {#if canCopy}
                       <button class="cop-copy" class:done={copiedIdx === i} use:tooltip={copiedIdx === i ? 'Copié' : 'Copier'} aria-label="Copier la réponse" onclick={() => copyMessage(i, m.content)}>
                         <span class="cop-swap" class:on={copiedIdx === i} aria-hidden="true"><svg class="icon"><use href="#i-copy" /></svg><svg class="icon"><use href="#i-check" /></svg></span>
+                      </button>
+                    {/if}
+                    {#if canRetry}
+                      <button class="cop-copy" use:tooltip={'Relancer'} aria-label="Relancer la réponse" onclick={() => regenerate(i)}>
+                        <svg class="icon" aria-hidden="true"><use href="#i-refresh-cw" /></svg>
                       </button>
                     {/if}
                   </div>
@@ -2720,285 +2808,348 @@
     <!-- Zone de saisie « imbriquée » (chat réel, 14.1) -->
     {#if app.copilotView === 'chat'}
       <div class="cop-input-wrap">
-        <!-- Pile Kube (ComposerDrawer) : le tiroir Contexte OU le tray des commandes, jamais
-             les deux, puis la saisie qui les recouvre. Ils se révèlent en hauteur : la saisie
-             reste ancrée en bas pendant que le tiroir pousse vers le haut. -->
-        <div class="cop-composer-stack" class:kbd={drawerKbd}>
-          <div class="cop-drawer" class:open={!trayOpen}>
-            <div class="cop-drawer-item" class:open={!trayOpen} inert={trayOpen} aria-hidden={trayOpen || undefined}>
-              <div class="cop-drawer-content">
-                <button
-                  class="cop-drawer-row cop-context-toggle"
-                  bind:this={contextToggleEl}
-                  aria-expanded={contextShown}
-                  aria-controls="cop-context-panel"
-                  onclick={(e) => toggleContext(e.detail === 0)}
-                >
-                  <svg class="icon cop-drawer-icon" aria-hidden="true"><use href="#i-layers" /></svg>
-                  <span class="cop-drawer-text"><strong>Contexte</strong> <small>{contextSummary}{cloudDestination ? ` · envoyé à ${cloudDestination}` : ''}</small></span>
-                  <span class="cop-drawer-action" aria-hidden="true"><svg class="icon cop-context-chevron" aria-hidden="true"><use href="#i-chevron-up" /></svg></span>
-                </button>
-              </div>
-            </div>
-            <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-            <div
-              id="cop-context-panel"
-              class="cop-drawer-item"
-              class:open={contextShown}
-              role="region"
-              aria-label="Sources du contexte"
-              inert={!contextShown}
-              aria-hidden={!contextShown || undefined}
-              onkeydown={onContextKey}
-            >
-              <div class="cop-drawer-content">
-                <div class="cop-context-list">
-                  <!-- Portée des questions (15.3) : document courant OU dossier entier
-                       (réponses citant les notes). Une ligne par source, texte ellipsé ;
-                       le libellé complet reste dans le nom accessible et l'info-bulle. -->
-                  <button
-                    class="cop-context-row"
-                    class:sel={copilot.scope === 'doc'}
-                    aria-pressed={copilot.scope === 'doc'}
-                    title={`${contextDetails.name} · ${contextDetails.meta}`}
-                    onclick={() => (copilot.scope = 'doc')}
-                  >
-                    <svg class="icon cop-drawer-icon" aria-hidden="true"><use href="#i-file-text" /></svg>
-                    <span class="cop-drawer-text"><strong>{contextDetails.name}</strong> <small>{contextDetails.meta}</small></span>
-                    <span
-                      class="cop-context-state"
-                      class:warn={docTruncated && !docIndexAvailable}
-                      role={docTruncated && !docIndexAvailable ? 'note' : undefined}
-                      title={docTruncated
-                        ? docIndexAvailable
-                          ? 'Recherche sémantique sur tout le document — les réponses citent les extraits retrouvés.'
-                          : 'Document trop long : seul son début est transmis au copilote.'
-                        : contextDetails.state}
+        <!-- Composeur unifié (refonte v2) : UNE carte. De haut en bas : tray des commandes « / »
+             OU sources du contexte (révélés en hauteur, jamais les deux), puces de contexte,
+             saisie, barre d'outils. L'ancien tiroir « Contexte » vit désormais dans la carte. -->
+        <section class="cop-composer" class:kbd={drawerKbd}>
+          <div class="cop-reveal cop-tray" class:open={trayOpen} inert={!trayOpen} aria-hidden={!trayOpen || undefined}>
+            <div class="cop-reveal-content">
+              {#if trayView.list.length}
+                <div id="cop-slash-list" class="cop-tray-list" role="listbox" aria-label="Commandes" bind:this={trayListEl}>
+                  {#each trayView.list as suggestion, index (suggestion.token)}
+                    {@const action = suggestion.command.action}
+                    {@const blocked = action.kind === 'mode' && cloudOnlyMode(action.mode) && !isCloudProvider(app.copilotProvider)}
+                    <!-- Le focus reste dans la saisie : l'option n'est pas focalisable et son
+                         mousedown est empêché (seul geste qui focalise hors Chromium) ; le
+                         clavier passe par la saisie et aria-activedescendant. -->
+                    <!-- svelte-ignore a11y_click_events_have_key_events, a11y_interactive_supports_focus -->
+                    <div
+                      id="cop-slash-opt-{index}"
+                      class="cop-tray-option"
+                      role="option"
+                      aria-selected={index === slashIndex}
+                      onpointerdown={(e) => e.preventDefault()}
+                      onmousedown={(e) => e.preventDefault()}
+                      onpointermove={() => { if (slashIndex !== index) slashIndex = index }}
+                      onclick={() => applySlash(suggestion, false)}
                     >
-                      {#if docTruncated && !docIndexAvailable}<svg class="icon" aria-hidden="true"><use href="#i-triangle-alert" /></svg>{/if}
-                      {contextDetails.state}
-                    </span>
-                  </button>
-                  {#each automaticContextTabs as tab (tab.id)}
-                    <div class="cop-context-row" role="note" aria-label={`${tab.name}, ajouté automatiquement au contexte`} title={`${tab.name} · ${automaticContextMeta(tab)}`}>
-                      <svg class="icon cop-drawer-icon" aria-hidden="true"><use href="#i-file-text" /></svg>
-                      <span class="cop-drawer-text"><strong>{tab.name}</strong> <small>{automaticContextMeta(tab)}</small></span>
-                      <span class="cop-context-state">Automatique</span>
+                      <svg class="icon" aria-hidden="true"><use href="#i-{suggestion.command.icon}" /></svg>
+                      <!-- Le préfixe déjà tapé en gras, la fin en clair : on voit ce qu'il reste à écrire. -->
+                      <span class="cop-tray-name"><b>/{suggestion.token.slice(0, trayView.query.length)}</b>{suggestion.token.slice(trayView.query.length)}</span>
+                      <span class="cop-tray-hint">{blocked ? 'Modèle cloud requis' : suggestion.command.hint}</span>
                     </div>
                   {/each}
-                  <button
-                    class="cop-context-row"
-                    class:sel={copilot.scope === 'folder'}
-                    aria-pressed={copilot.scope === 'folder'}
-                    title={folderMeta}
-                    onclick={() => (copilot.scope = 'folder')}
-                  >
-                    <svg class="icon cop-drawer-icon" aria-hidden="true"><use href="#i-folder" /></svg>
-                    <span class="cop-drawer-text"><strong>Dossier{ragDir ? ` « ${baseName(ragDir)} »` : ''}</strong> <small>{folderMeta}</small></span>
-                    <span class="cop-context-state">{copilot.scope === 'folder' ? 'Actif' : 'Choisir'}</span>
-                  </button>
-                  {#if copilot.contextFolder}
-                    <div class="cop-context-row">
-                      <svg class="icon cop-drawer-icon" aria-hidden="true"><use href="#i-folder" /></svg>
-                      <span class="cop-drawer-text"><strong>{copilot.contextFolder.label}</strong> <small>Dossier choisi pour les questions et l’index</small></span>
-                      <button class="cop-drawer-btn" use:tooltip={'Retirer ce dossier'} aria-label={`Retirer le dossier ${copilot.contextFolder.label}`} onclick={() => setCopilotContextFolder(null)}>
-                        <svg class="icon" aria-hidden="true"><use href="#i-x" /></svg>
-                      </button>
-                    </div>
-                  {/if}
-                  {#each copilot.contextItems as item (item.id)}
-                    <div class="cop-context-row" title={item.label}>
-                      <svg class="icon cop-drawer-icon" aria-hidden="true"><use href="#i-{item.kind === 'clipboard' ? 'clipboard-paste' : item.kind === 'selection' ? 'text-align-justify-start' : 'file-text'}" /></svg>
-                      <span class="cop-drawer-text"><strong>{item.label}</strong> <small>{numberFormatter.format(item.charCount)} caractères{item.truncatedAtLoad ? ' · partiel à l’ajout' : ''}</small></span>
-                      <!-- title="" : sans lui, le survol du bouton afficherait aussi le title natif de la rangée. -->
-                      <button class="cop-drawer-btn" title="" use:tooltip={'Retirer cette source'} aria-label={`Retirer ${item.label}`} onclick={() => removeCopilotContext(item.id)}>
-                        <svg class="icon" aria-hidden="true"><use href="#i-x" /></svg>
-                      </button>
-                    </div>
-                  {/each}
-                  {#if copilot.webSearchEnabled}
-                    <div class="cop-context-row">
-                      <svg class="icon cop-drawer-icon" aria-hidden="true"><use href="#i-search" /></svg>
-                      <span class="cop-drawer-text"><strong>Recherche Web</strong></span>
-                      <button class="cop-drawer-btn" use:tooltip={'Désactiver la recherche Web'} aria-label="Désactiver la recherche Web" onclick={() => setWebSearchEnabled(false)}>
-                        <svg class="icon" aria-hidden="true"><use href="#i-x" /></svg>
-                      </button>
-                    </div>
-                    <!-- Le document alimente la requête quand la question ne se suffit pas : le
-                         dire ici, en entier (pas d'ellipse sur ce qui quitte l'appareil), et le
-                         rendre vérifiable dans l'activité du tour, qui affiche la requête exacte. -->
-                    <p class="cop-context-note">Interroge un moteur de recherche · la question et, si elle est vague, quelques termes clés du document</p>
-                  {/if}
-                  {#if cloudDestination}
-                    <button class="cop-context-row" onclick={openMemoryView}>
-                      <svg class="icon cop-drawer-icon" aria-hidden="true"><use href="#i-database" /></svg>
-                      <span class="cop-drawer-text"><strong>Mémoire du travail</strong> <small>{app.cloudMemoryEnabled ? (effectiveMemoryFolder ? `Automatique · dossier ${effectiveMemoryFolder.label}` : 'Automatique · cette note seulement') : 'Désactivée'}</small></span>
-                      <span class="cop-drawer-action" aria-hidden="true"><svg class="icon" aria-hidden="true"><use href="#i-chevron-right" /></svg></span>
-                    </button>
-                  {/if}
-                  {#if cloudDestination && hasSupplementalContext}
-                    <p class="cop-context-note cop-context-destination"><svg class="icon" aria-hidden="true"><use href="#i-cloud" /></svg> Sera envoyé à {cloudDestination} avec votre question.</p>
-                  {/if}
-                  {#if copilot.contextError}<p class="cop-context-note cop-context-error" role="alert">{copilot.contextError}</p>{/if}
-                  {#if copilot.messages.length && hasSupplementalContext}
-                    <p class="cop-context-note">
-                      {automaticContextTabs.length
-                        ? 'Les documents visibles sont recapturés à chaque envoi. Les sources ajoutées restent modifiables séparément.'
-                        : 'Retirer une source agit sur les prochains envois. Nouvelle conversation purge aussi l’historique.'}
-                    </p>
-                  {/if}
                 </div>
-              </div>
+              {:else}
+                <p class="cop-tray-empty">Aucune commande ne correspond</p>
+              {/if}
             </div>
           </div>
-
-          <div class="cop-drawer cop-tray" class:open={trayOpen}>
-            <div class="cop-drawer-item" class:open={trayOpen} inert={!trayOpen} aria-hidden={!trayOpen || undefined}>
-              <div class="cop-drawer-content">
-                {#if trayView.list.length}
-                  <div id="cop-slash-list" class="cop-tray-list" role="listbox" aria-label="Commandes" bind:this={trayListEl}>
-                    {#each trayView.list as suggestion, index (suggestion.token)}
-                      {@const action = suggestion.command.action}
-                      {@const blocked = action.kind === 'mode' && cloudOnlyMode(action.mode) && !isCloudProvider(app.copilotProvider)}
-                      <!-- Le focus reste dans la saisie : l'option n'est pas focalisable et son
-                           mousedown est empêché (seul geste qui focalise hors Chromium) ; le
-                           clavier passe par la saisie et aria-activedescendant. -->
-                      <!-- svelte-ignore a11y_click_events_have_key_events, a11y_interactive_supports_focus -->
-                      <div
-                        id="cop-slash-opt-{index}"
-                        class="cop-tray-option"
-                        role="option"
-                        aria-selected={index === slashIndex}
-                        onpointerdown={(e) => e.preventDefault()}
-                        onmousedown={(e) => e.preventDefault()}
-                        onpointermove={() => { if (slashIndex !== index) slashIndex = index }}
-                        onclick={() => applySlash(suggestion, false)}
-                      >
-                        <svg class="icon" aria-hidden="true"><use href="#i-{suggestion.command.icon}" /></svg>
-                        <!-- Le préfixe déjà tapé en gras, la fin en clair : on voit ce qu'il reste à écrire. -->
-                        <span class="cop-tray-name"><b>/{suggestion.token.slice(0, trayView.query.length)}</b>{suggestion.token.slice(trayView.query.length)}</span>
-                        <span class="cop-tray-hint">{blocked ? 'Modèle cloud requis' : suggestion.command.hint}</span>
-                      </div>
-                    {/each}
+          <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+          <div
+            id="cop-context-panel"
+            class="cop-reveal"
+            class:open={contextShown}
+            role="region"
+            aria-label="Sources du contexte"
+            inert={!contextShown}
+            aria-hidden={!contextShown || undefined}
+            onkeydown={onContextKey}
+          >
+            <div class="cop-reveal-content">
+              <div class="cop-context-list">
+                <!-- Portée des questions (15.3) : document courant OU dossier entier
+                     (réponses citant les notes). Une ligne par source, texte ellipsé ;
+                     le libellé complet reste dans le nom accessible et l'info-bulle. -->
+                <button
+                  class="cop-context-row"
+                  class:sel={copilot.scope === 'doc'}
+                  aria-pressed={copilot.scope === 'doc'}
+                  title={`${contextDetails.name} · ${contextDetails.meta}`}
+                  onclick={() => (copilot.scope = 'doc')}
+                >
+                  <svg class="icon cop-drawer-icon" aria-hidden="true"><use href="#i-file-text" /></svg>
+                  <span class="cop-drawer-text"><strong>{contextDetails.name}</strong> <small>{contextDetails.meta}</small></span>
+                  <span
+                    class="cop-context-state"
+                    class:warn={docTruncated && !docIndexAvailable}
+                    role={docTruncated && !docIndexAvailable ? 'note' : undefined}
+                    title={docTruncated
+                      ? docIndexAvailable
+                        ? 'Recherche sémantique sur tout le document — les réponses citent les extraits retrouvés.'
+                        : 'Document trop long : seul son début est transmis au copilote.'
+                      : contextDetails.state}
+                  >
+                    {#if docTruncated && !docIndexAvailable}<svg class="icon" aria-hidden="true"><use href="#i-triangle-alert" /></svg>{/if}
+                    {contextDetails.state}
+                  </span>
+                </button>
+                {#each automaticContextTabs as tab (tab.id)}
+                  <div class="cop-context-row" role="note" aria-label={`${tab.name}, ajouté automatiquement au contexte`} title={`${tab.name} · ${automaticContextMeta(tab)}`}>
+                    <svg class="icon cop-drawer-icon" aria-hidden="true"><use href="#i-file-text" /></svg>
+                    <span class="cop-drawer-text"><strong>{tab.name}</strong> <small>{automaticContextMeta(tab)}</small></span>
+                    <span class="cop-context-state">Automatique</span>
                   </div>
-                {:else}
-                  <p class="cop-tray-empty">Aucune commande ne correspond</p>
+                {/each}
+                <button
+                  class="cop-context-row"
+                  class:sel={copilot.scope === 'folder'}
+                  aria-pressed={copilot.scope === 'folder'}
+                  title={folderMeta}
+                  onclick={() => (copilot.scope = 'folder')}
+                >
+                  <svg class="icon cop-drawer-icon" aria-hidden="true"><use href="#i-folder" /></svg>
+                  <span class="cop-drawer-text"><strong>Dossier{ragDir ? ` « ${baseName(ragDir)} »` : ''}</strong> <small>{folderMeta}</small></span>
+                  <span class="cop-context-state">{copilot.scope === 'folder' ? 'Actif' : 'Choisir'}</span>
+                </button>
+                {#if copilot.contextFolder}
+                  <div class="cop-context-row">
+                    <svg class="icon cop-drawer-icon" aria-hidden="true"><use href="#i-folder" /></svg>
+                    <span class="cop-drawer-text"><strong>{copilot.contextFolder.label}</strong> <small>Dossier choisi pour les questions et l’index</small></span>
+                    <button class="cop-drawer-btn" use:tooltip={'Retirer ce dossier'} aria-label={`Retirer le dossier ${copilot.contextFolder.label}`} onclick={() => setCopilotContextFolder(null)}>
+                      <svg class="icon" aria-hidden="true"><use href="#i-x" /></svg>
+                    </button>
+                  </div>
+                {/if}
+                {#each copilot.contextItems as item (item.id)}
+                  <div class="cop-context-row" title={item.label}>
+                    <svg class="icon cop-drawer-icon" aria-hidden="true"><use href="#i-{item.kind === 'clipboard' ? 'clipboard-paste' : item.kind === 'selection' ? 'text-align-justify-start' : 'file-text'}" /></svg>
+                    <span class="cop-drawer-text"><strong>{item.label}</strong> <small>{numberFormatter.format(item.charCount)} caractères{item.truncatedAtLoad ? ' · partiel à l’ajout' : ''}</small></span>
+                    <!-- title="" : sans lui, le survol du bouton afficherait aussi le title natif de la rangée. -->
+                    <button class="cop-drawer-btn" title="" use:tooltip={'Retirer cette source'} aria-label={`Retirer ${item.label}`} onclick={() => removeCopilotContext(item.id)}>
+                      <svg class="icon" aria-hidden="true"><use href="#i-x" /></svg>
+                    </button>
+                  </div>
+                {/each}
+                {#if copilot.webSearchEnabled}
+                  <div class="cop-context-row">
+                    <svg class="icon cop-drawer-icon" aria-hidden="true"><use href="#i-search" /></svg>
+                    <span class="cop-drawer-text"><strong>Recherche Web</strong></span>
+                    <button class="cop-drawer-btn" use:tooltip={'Désactiver la recherche Web'} aria-label="Désactiver la recherche Web" onclick={() => setWebSearchEnabled(false)}>
+                      <svg class="icon" aria-hidden="true"><use href="#i-x" /></svg>
+                    </button>
+                  </div>
+                  <!-- Le document alimente la requête quand la question ne se suffit pas : le
+                       dire ici, en entier (pas d'ellipse sur ce qui quitte l'appareil), et le
+                       rendre vérifiable dans l'activité du tour, qui affiche la requête exacte. -->
+                  <p class="cop-context-note">Interroge un moteur de recherche · la question et, si elle est vague, quelques termes clés du document</p>
+                {/if}
+                {#if cloudDestination}
+                  <button class="cop-context-row" onclick={openMemoryView}>
+                    <svg class="icon cop-drawer-icon" aria-hidden="true"><use href="#i-database" /></svg>
+                    <span class="cop-drawer-text"><strong>Mémoire du travail</strong> <small>{app.cloudMemoryEnabled ? (effectiveMemoryFolder ? `Automatique · dossier ${effectiveMemoryFolder.label}` : 'Automatique · cette note seulement') : 'Désactivée'}</small></span>
+                    <span class="cop-drawer-action" aria-hidden="true"><svg class="icon" aria-hidden="true"><use href="#i-chevron-right" /></svg></span>
+                  </button>
+                {/if}
+                {#if cloudDestination && hasSupplementalContext}
+                  <p class="cop-context-note cop-context-destination"><svg class="icon" aria-hidden="true"><use href="#i-cloud" /></svg> Sera envoyé à {cloudDestination} avec votre question.</p>
+                {/if}
+                {#if copilot.contextError}<p class="cop-context-note cop-context-error" role="alert">{copilot.contextError}</p>{/if}
+                {#if copilot.messages.length && hasSupplementalContext}
+                  <p class="cop-context-note">
+                    {automaticContextTabs.length
+                      ? 'Les documents visibles sont recapturés à chaque envoi. Les sources ajoutées restent modifiables séparément.'
+                      : 'Retirer une source agit sur les prochains envois. Nouvelle conversation purge aussi l’historique.'}
+                  </p>
                 {/if}
               </div>
             </div>
           </div>
 
-          <section class="cop-composer-front">
-            <div class="cop-composer-grid">
-              <button
-                class="cop-input-attach"
-                class:open={addMenuOpen}
-                bind:this={addButtonEl}
-                disabled={contextLoading}
-                use:tooltip={'Créer un livrable, ajouter du contexte, régler le style'}
-                aria-label="Créer, contexte et style"
-                aria-haspopup="menu"
-                aria-expanded={addMenuOpen}
-                onclick={(e) => toggleAddMenu(e.detail === 0)}
-              ><svg class="icon" aria-hidden="true"><use href="#i-plus" /></svg></button>
-              <textarea
-                class="cop-input-ta"
-                bind:this={promptEl}
-                bind:value={draft}
-                rows="1"
-                placeholder={copilot.outputMode === 'diagram'
-                  ? 'Décrivez le diagramme à créer…'
-                  : copilot.outputMode === 'html'
-                    ? 'Décrivez la page HTML à créer…'
-                    : copilot.outputMode === 'pdf'
-                      ? 'Décrivez le document PDF à créer…'
-                      : copilot.scope === 'folder' ? 'Demandez à vos notes…' : 'Demandez à Doku-San…'}
-                aria-label={copilot.scope === 'folder' ? 'Poser une question sur le dossier de notes' : 'Poser une question sur ce document'}
-                aria-autocomplete="list"
-                aria-controls={trayOpen && trayView.list.length ? 'cop-slash-list' : undefined}
-                aria-activedescendant={trayOpen && slashSuggestions.length ? `cop-slash-opt-${slashIndex}` : undefined}
-                onkeydown={onPromptKey}
-                oninput={onPromptInput}
-                onfocus={() => (promptFocused = true)}
-                onblur={() => (promptFocused = false)}
-              ></textarea>
-              <div class="cop-compose-options">
-                <!-- Réflexion des modèles cloud : un bouton à bascule, visible en permanence
-                     parce qu'il change le coût et la durée de chaque réponse. -->
-                {#if isCloudProvider(app.copilotProvider)}
-                  <!-- aria-disabled et non disabled : un bouton désactivé ne reçoit aucun
-                       survol, et l'info-bulle doit justement expliquer pourquoi. Le nom
-                       accessible survit au libellé masqué en pied étroit. -->
-                  <button
-                    class="cop-think-toggle"
-                    class:on={app.copilotThinking || thinkAlways}
-                    aria-label="Réfléchir"
-                    aria-pressed={app.copilotThinking || thinkAlways}
-                    aria-disabled={thinkAlways}
-                    onclick={() => { if (!thinkAlways) app.copilotThinking = !app.copilotThinking }}
-                    onpointerenter={(event) => { if (event.pointerType !== 'touch') showThinkTip(event.currentTarget, 200) }}
-                    onpointerleave={hideThinkTip}
-                    onfocus={(event) => { if (event.currentTarget.matches(':focus-visible')) showThinkTip(event.currentTarget, 0) }}
-                    onblur={hideThinkTip}
-                  ><svg class="icon" aria-hidden="true"><use href="#i-brain" /></svg><span class="cop-think-label">Réfléchir</span></button>
-                {/if}
-                <!-- Un livrable armé se voit ici, et nulle part ailleurs : le menu du
-                     « + » porte le choix, cette pastille porte l'état. -->
-                {#if copilot.outputMode !== 'answer'}
-                  {@const current = OUTPUT_MODES[copilot.outputMode]}
-                  <span class="cop-mode-pill" class:kbd={modePillKbd} title={current.label}>
-                    <svg class="icon" aria-hidden="true"><use href="#i-{current.icon}" /></svg><span class="cop-mode-label">{current.short}</span>
-                    <!-- title="" : bloque le title natif de la pastille, la bulle suffit. -->
-                    <button
-                      title=""
-                      use:tooltip={'Revenir à une réponse'}
-                      aria-label={`Retirer le livrable ${current.label}`}
-                      onclick={() => setChatOutputMode('answer')}
-                    ><svg class="icon" aria-hidden="true"><use href="#i-x" /></svg></button>
-                  </span>
-                {/if}
-                {#if copilot.generatedDocumentSeed?.target}
-                  {@const target = copilot.generatedDocumentSeed.target}
-                  <span class="cop-mode-pill cop-target-pill" title={`Partie désignée : ${target.excerpt}`}>
-                    <svg class="icon" aria-hidden="true"><use href="#i-mouse-pointer-click" /></svg><span class="cop-target-text">{target.excerpt}</span>
-                    <button
-                      title=""
-                      use:tooltip={'Viser tout le document'}
-                      aria-label="Retirer la partie désignée"
-                      onclick={clearGeneratedDocumentTarget}
-                    ><svg class="icon" aria-hidden="true"><use href="#i-x" /></svg></button>
-                  </span>
-                {/if}
-              </div>
-              <!-- Un seul disque : Envoyer devient Arrêter pendant la génération (Kube send). -->
-              <button
-                class="cop-input-send"
-                use:tooltip={copilot.generating ? 'Arrêter la génération' : { label: 'Envoyer', kbd: 'Entrée' }}
-                aria-label={copilot.generating ? 'Arrêter la génération' : 'Envoyer'}
-                aria-busy={copilot.generating}
-                disabled={!copilot.generating && !draft.trim()}
-                onclick={() => { if (copilot.generating) stopChat(); else send() }}
-              >
-                {#if copilot.generating}
-                  <svg class="icon cop-stop-glyph" aria-hidden="true"><use href="#i-square" /></svg>
-                {:else}
-                  <svg class="icon cop-send-arrow" aria-hidden="true"><use href="#i-arrow-up" /></svg>
-                {/if}
-              </button>
-            </div>
-            <!-- Une commande « / » de contexte qui échoue (presse-papiers vide, fichier
-                 illisible) écrit ici quand le tiroir est replié : le message doit se lire
-                 sans rien déplier. -->
-            {#if copilot.contextError && !contextShown}
-              <p class="cop-context-error cop-context-error-inline" role="alert">{copilot.contextError}</p>
+          <!-- Puces de contexte : la première résume la portée (document ou dossier) et déplie
+               la liste détaillée ; les sources ajoutées se retirent d'un clic ; « + » ajoute. -->
+          <div class="cop-ctx-row">
+            <button
+              class="cop-ctx-chip lead"
+              bind:this={contextToggleEl}
+              aria-expanded={contextShown}
+              aria-controls="cop-context-panel"
+              aria-label={`Contexte : ${contextSummary}${cloudDestination ? `, envoyé à ${cloudDestination}` : ''}. Afficher le détail`}
+              title={copilot.scope === 'folder' ? folderMeta : `${contextDetails.name} · ${contextDetails.state}`}
+              onclick={(e) => toggleContext(e.detail === 0)}
+            >
+              <svg class="icon" aria-hidden="true"><use href="#i-{copilot.scope === 'folder' ? 'folder' : 'file-text'}" /></svg>
+              <span class="cop-ctx-name">{copilot.scope === 'folder' ? `Dossier${ragDir ? ` ${baseName(ragDir)}` : ''}` : contextDetails.name}</span>
+              {#if copilot.scope === 'doc' && docTruncated && !docIndexAvailable}
+                <svg class="icon cop-ctx-warn" aria-hidden="true"><use href="#i-triangle-alert" /></svg>
+              {/if}
+              {#if copilot.scope === 'doc' && automaticContextTabs.length}<span class="cop-ctx-more">+{automaticContextTabs.length}</span>{/if}
+              <svg class="icon cop-ctx-chev" aria-hidden="true"><use href="#i-chevron-up" /></svg>
+            </button>
+            {#each copilot.contextItems as item (item.id)}
+              <span class="cop-ctx-chip" title={item.label}>
+                <svg class="icon" aria-hidden="true"><use href="#i-{item.kind === 'clipboard' ? 'clipboard-paste' : item.kind === 'selection' ? 'text-align-justify-start' : 'file-text'}" /></svg>
+                <span class="cop-ctx-name">{item.label}</span>
+                <button title="" use:tooltip={'Retirer cette source'} aria-label={`Retirer ${item.label}`} onclick={() => removeCopilotContext(item.id)}>
+                  <svg class="icon" aria-hidden="true"><use href="#i-x" /></svg>
+                </button>
+              </span>
+            {/each}
+            {#if copilot.webSearchEnabled}
+              <span class="cop-ctx-chip">
+                <svg class="icon" aria-hidden="true"><use href="#i-globe" /></svg>
+                <span class="cop-ctx-name">Web</span>
+                <button title="" use:tooltip={'Désactiver la recherche Web'} aria-label="Désactiver la recherche Web" onclick={() => setWebSearchEnabled(false)}>
+                  <svg class="icon" aria-hidden="true"><use href="#i-x" /></svg>
+                </button>
+              </span>
             {/if}
-          </section>
-        </div>
+            <button
+              class="cop-ctx-add"
+              class:open={dropsOpen}
+              bind:this={addContextButtonEl}
+              disabled={contextLoading}
+              use:tooltip={'Ajouter du contexte'}
+              aria-label="Ajouter du contexte"
+              aria-haspopup="menu"
+              aria-expanded={dropsOpen}
+              onclick={(e) => toggleDrops(e.detail === 0)}
+            ><svg class="icon" aria-hidden="true"><use href="#i-plus" /></svg></button>
+          </div>
+
+            <textarea
+              class="cop-input-ta"
+              bind:this={promptEl}
+              bind:value={draft}
+              rows="1"
+              placeholder={copilot.outputMode === 'diagram'
+                ? 'Décrivez le diagramme à créer…'
+                : copilot.outputMode === 'html'
+                  ? 'Décrivez la page HTML à créer…'
+                  : copilot.outputMode === 'pdf'
+                    ? 'Décrivez le document PDF à créer…'
+                    : copilot.scope === 'folder' ? 'Demandez à vos notes…' : 'Demandez à Doku-San…'}
+              aria-label={copilot.scope === 'folder' ? 'Poser une question sur le dossier de notes' : 'Poser une question sur ce document'}
+              aria-autocomplete="list"
+              aria-controls={trayOpen && trayView.list.length ? 'cop-slash-list' : undefined}
+              aria-activedescendant={trayOpen && slashSuggestions.length ? `cop-slash-opt-${slashIndex}` : undefined}
+              onkeydown={onPromptKey}
+              oninput={onPromptInput}
+              onfocus={() => (promptFocused = true)}
+              onblur={() => (promptFocused = false)}
+            ></textarea>
+
+          <div class="cop-toolbar">
+            <button
+              class="cop-input-attach"
+              class:open={addMenuOpen}
+              bind:this={addButtonEl}
+              disabled={contextLoading}
+              use:tooltip={'Outils : créer un livrable, contexte, style'}
+              aria-label="Outils : créer, contexte et style"
+              aria-haspopup="menu"
+              aria-expanded={addMenuOpen}
+              onclick={(e) => toggleAddMenu(e.detail === 0)}
+            ><svg class="icon" aria-hidden="true"><use href="#i-sliders-horizontal" /></svg></button>
+            <div class="cop-compose-options">
+              <!-- Réflexion des modèles cloud : un bouton à bascule, visible en permanence
+                   parce qu'il change le coût et la durée de chaque réponse. -->
+              {#if isCloudProvider(app.copilotProvider)}
+                <!-- aria-disabled et non disabled : un bouton désactivé ne reçoit aucun
+                     survol, et l'info-bulle doit justement expliquer pourquoi. Le nom
+                     accessible survit au libellé masqué en pied étroit. -->
+                <button
+                  class="cop-think-toggle"
+                  class:on={app.copilotThinking || thinkAlways}
+                  aria-label="Réfléchir"
+                  aria-pressed={app.copilotThinking || thinkAlways}
+                  aria-disabled={thinkAlways}
+                  onclick={() => { if (!thinkAlways) app.copilotThinking = !app.copilotThinking }}
+                  onpointerenter={(event) => { if (event.pointerType !== 'touch') showThinkTip(event.currentTarget, 200) }}
+                  onpointerleave={hideThinkTip}
+                  onfocus={(event) => { if (event.currentTarget.matches(':focus-visible')) showThinkTip(event.currentTarget, 0) }}
+                  onblur={hideThinkTip}
+                ><svg class="icon" aria-hidden="true"><use href="#i-brain" /></svg><span class="cop-think-label">Réfléchir</span></button>
+              {/if}
+              <!-- Un livrable armé se voit ici, et nulle part ailleurs : le menu du
+                   « + » porte le choix, cette pastille porte l'état. -->
+              {#if copilot.outputMode !== 'answer'}
+                {@const current = OUTPUT_MODES[copilot.outputMode]}
+                <span class="cop-mode-pill" class:kbd={modePillKbd} title={current.label}>
+                  <svg class="icon" aria-hidden="true"><use href="#i-{current.icon}" /></svg><span class="cop-mode-label">{current.short}</span>
+                  <!-- title="" : bloque le title natif de la pastille, la bulle suffit. -->
+                  <button
+                    title=""
+                    use:tooltip={'Revenir à une réponse'}
+                    aria-label={`Retirer le livrable ${current.label}`}
+                    onclick={() => setChatOutputMode('answer')}
+                  ><svg class="icon" aria-hidden="true"><use href="#i-x" /></svg></button>
+                </span>
+              {/if}
+              {#if copilot.generatedDocumentSeed?.target}
+                {@const target = copilot.generatedDocumentSeed.target}
+                <span class="cop-mode-pill cop-target-pill" title={`Partie désignée : ${target.excerpt}`}>
+                  <svg class="icon" aria-hidden="true"><use href="#i-mouse-pointer-click" /></svg><span class="cop-target-text">{target.excerpt}</span>
+                  <button
+                    title=""
+                    use:tooltip={'Viser tout le document'}
+                    aria-label="Retirer la partie désignée"
+                    onclick={clearGeneratedDocumentTarget}
+                  ><svg class="icon" aria-hidden="true"><use href="#i-x" /></svg></button>
+                </span>
+              {/if}
+            </div>
+            <!-- Capsule modèle : point d'état et nom court ; ouvre le sélecteur de la vue Modèles. -->
+            <button
+              class="cop-model-cap"
+              use:tooltip={`Modèle : ${identityModel}`}
+              aria-label={`Modèle : ${identityModel}. Changer de modèle`}
+              onclick={() => void openModelPicker()}
+            >
+              <span class="cop-state-dot" data-state={modelState} aria-hidden="true"></span>
+              <span class="cop-model-name">{shortModelName(identityModel)}</span>
+              <svg class="icon" aria-hidden="true"><use href="#i-chevron-down" /></svg>
+            </button>
+            <!-- Mode vocal (ADR-0033) : l'état fin (écoute, réflexion, parole) vit dans l'îlot. -->
+            <button
+              class="cop-mic"
+              class:on={voice.phase !== 'off'}
+              use:tooltip={voice.phase === 'off' ? 'Parler à Doku-San' : 'Terminer la conversation vocale'}
+              aria-label={voice.phase === 'off' ? 'Parler à Doku-San' : 'Terminer la conversation vocale'}
+              aria-pressed={voice.phase !== 'off'}
+              onclick={() => (voice.phase === 'off' ? void startVoice() : stopVoice())}
+            >
+              <svg class="icon" aria-hidden="true"><use href="#i-{voice.phase === 'off' ? 'mic' : 'audio-lines'}" /></svg>
+            </button>
+            <!-- Un seul bouton : le disque Envoyer s'étire en pilule « Arrêter » pendant la
+                 génération, puis refond en disque (largeur sur ressort, icônes en fondu). -->
+            <button
+              class="cop-input-send"
+              use:tooltip={copilot.generating ? 'Arrêter la génération' : { label: 'Envoyer', kbd: 'Entrée' }}
+              aria-label={copilot.generating ? 'Arrêter la génération' : 'Envoyer'}
+              aria-busy={copilot.generating}
+              disabled={!copilot.generating && !draft.trim()}
+              onclick={() => { if (copilot.generating) stopChat(); else send() }}
+            >
+              <svg class="icon cop-send-arrow" aria-hidden="true"><use href="#i-arrow-up" /></svg>
+              <span class="cop-send-stop" aria-hidden="true"><svg class="icon cop-stop-glyph"><use href="#i-square" /></svg><span class="cop-send-stop-label">Arrêter</span></span>
+            </button>
+          </div>
+          <!-- Une commande « / » de contexte qui échoue (presse-papiers vide, fichier
+               illisible) écrit ici quand la liste est repliée : le message doit se lire
+               sans rien déplier. -->
+          {#if voice.error}
+            <p class="cop-context-error cop-context-error-inline cop-voice-error" role="alert">
+              <span>{voice.error}</span>
+              {#if voice.needsModule}
+                {#if voiceInstalled || !copilot.models.some((m) => m.name === RECO_MODEL)}
+                  <button class="cop-err-btn" onclick={() => { voice.error = ''; app.copilotView = 'models' }}>Ouvrir les modèles</button>
+                {:else}
+                  <button class="cop-err-btn" disabled={!!copilot.pulling} onclick={() => { voice.error = ''; startPull(VOICE_MODULE) }}>Télécharger (507 Mo)</button>
+                {/if}
+              {/if}
+              <button class="cop-err-btn" aria-label="Masquer" onclick={() => (voice.error = '')}><svg class="icon" aria-hidden="true"><use href="#i-x" /></svg></button>
+            </p>
+          {/if}
+          {#if copilot.contextError && !contextShown}
+            <p class="cop-context-error cop-context-error-inline" role="alert">{copilot.contextError}</p>
+          {/if}
+        </section>
         <div class="cop-disclaimer">
           <!-- La recherche Web est un SECOND canal de sortie, indépendant du fournisseur :
                un utilisateur MiniMax lisait « contexte envoyé au cloud » sans savoir qu'un
                moteur de recherche était aussi interrogé. Les deux destinations, toujours. -->
-          {app.copilotProvider === 'ollama'
+          {app.copilotProvider === 'local'
             ? (copilot.webSearchEnabled ? 'Local · la requête de recherche quitte cet appareil' : 'Local · rien ne quitte cet appareil')
             : app.copilotProvider === 'openai'
             ? (copilot.webSearchEnabled ? 'OpenAI · contexte envoyé au cloud, recherche Web incluse' : 'OpenAI · contexte envoyé au cloud')
@@ -3046,6 +3197,7 @@
       </div>
     {/if}
   </div>
+  </div>
   <input
     class="cop-hidden-file"
     bind:this={browserFilesEl}
@@ -3077,6 +3229,9 @@
     </div>
   {/if}
   {@render addContextMenu()}
+  {#if dropsOpen && dropsAnchor}
+    <CopilotDropletMenu anchor={dropsAnchor} items={dropItems} keyboard={dropsKbd} onclose={closeDrops} bind:menuEl={dropsEl} />
+  {/if}
   {@render identityMenu()}
 </aside>
 
@@ -3159,10 +3314,11 @@
   .cop-resize::after {
     content: '';
     position: absolute;
-    top: var(--chrome-titlebar-height);
-    bottom: 0;
+    top: calc(var(--canvas-gap) + var(--sheet-radius));
+    bottom: calc(var(--canvas-gap) + var(--sheet-radius));
     left: 0;
     width: 2px;
+    border-radius: var(--radius-full);
     background: transparent;
     transition: background-color var(--duration-basic) ease;
   }
@@ -3171,72 +3327,70 @@
   .cop-resize:focus-visible { outline: none; }
   .cop-panel.resizing .cop-resize::after { background: var(--line-3); }
   .cop-panel.expanded .cop-resize { display: none; }
-  .cop-panel > .cop-head,
-  .cop-panel > .cop-card {
-    width: 100%;
-    /* Suit la largeur EFFECTIVE (bornée par max-width) : sinon la carte déborderait du
-       panneau sur fenêtre étroite et serait rognée par son overflow. */
-    min-width: min(var(--copilot-width), var(--copilot-max));
-    align-self: flex-end;
-  }
-  /* Conteneur des unités `cqi` (vue mémoire) porté par la carte et non par le
-     panneau animé : pendant le rideau, la carte garde sa largeur minimale, donc rien ne se
-     recalcule image par image. Le composeur a ses conteneurs nommés (`cop-input`, `cop-composer`). */
-  .cop-panel > .cop-card { container-type: inline-size; }
-  /* Au glisser, `--copilot-width` reste figée (voir dragWidthCss) : le contenu suit la
-     flex-basis du panneau au lieu de garder l'ancienne largeur minimale. */
-  .cop-panel.resizing > .cop-head,
-  .cop-panel.resizing > .cop-card { min-width: 0; }
 
-  /* En-tête */
+  /* Carte flottante (refonte v2 §1) : marge --canvas-gap en haut, à droite et en bas, la
+     gauche est l'écart laissé par la feuille du document. La carte suit la largeur EFFECTIVE
+     du panneau (bornée par max-width) moins sa marge, et la garde pendant le rideau : elle
+     reste ancrée à droite, le panneau la révèle. */
+  .cop-shell {
+    position: relative;
+    flex: 1;
+    min-height: 0;
+    width: calc(100% - var(--canvas-gap));
+    min-width: calc(min(var(--copilot-width), var(--copilot-max)) - var(--canvas-gap));
+    align-self: flex-end;
+    margin: var(--canvas-gap) var(--canvas-gap) var(--canvas-gap) 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    border-radius: var(--sheet-radius);
+    background: var(--cream-content);
+    box-shadow: var(--panel-shadow);
+    container: cop-shell / inline-size;
+    transition: margin var(--duration-relaxed) var(--ease-curtain);
+  }
+  /* Agrandi : la carte prend la place du document, avec la même marge des deux côtés. */
+  .cop-panel.expanded .cop-shell { width: calc(100% - 2 * var(--canvas-gap)); margin-left: var(--canvas-gap); }
+  .cop-panel.resizing > .cop-shell { min-width: 0; }
+  .cop-head, .cop-card { width: 100%; }
+  /* Conteneur des unités `cqi` (vue mémoire) porté par la carte et non par le panneau animé. */
+  .cop-card { container-type: inline-size; }
+
+  /* En-tête : 48 px, tuile de marque 28 px, titre 13/600 ; actions groupées en capsule
+     (Apple 27 toolbar group), contrôles fenêtre à part. */
   .cop-head {
-    height: var(--chrome-titlebar-height);
+    height: 48px;
     flex-shrink: 0;
     display: flex;
     align-items: center;
-    gap: 4px;
-    padding: 0 2px 0 6px;
-    background: transparent;
-    -webkit-backdrop-filter: blur(24px) saturate(145%);
-    backdrop-filter: blur(24px) saturate(145%);
-    box-shadow: inset 0 1px 0 var(--chrome-material-filet);
+    gap: 8px;
+    padding: 0 6px 0 10px;
     user-select: none;
   }
-  .cop-identity {
-    min-width: 0; height: var(--control-md); display: flex; align-items: center; gap: 8px; padding: 0 8px 0 4px;
-    border: 0; border-radius: var(--radius-lg); background: transparent; color: inherit; cursor: pointer; overflow: hidden;
-    text-align: left; transition: background-color var(--duration-basic) ease, color var(--duration-basic) ease;
-  }
-  .cop-identity:hover, .cop-identity[aria-expanded='true'] { background: var(--surface-hover); }
-  .cop-identity:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
   .cop-mark {
     flex: 0 0 auto;
-    width: var(--control-2xs); height: var(--control-2xs); display: inline-flex; align-items: center; justify-content: center;
-    border-radius: var(--radius-md); background: var(--cream-content); color: var(--ink-3);
-    font-size: 14px;
+    width: var(--control-sm); height: var(--control-sm); display: inline-flex; align-items: center; justify-content: center;
+    border-radius: var(--radius-md); background: var(--ink); color: var(--cream-content);
+    font-size: 15px;
   }
-  /* C'est le TITRE qui cède quand l'en-tête manque de place. Sans `min-width: 0`, sa
-     taille minimale automatique vaut son texte entier : l'identité refusait de se
-     comprimer et poussait la pastille d'état PAR-DESSUS le premier bouton — visible dès
-     que le panneau descend sous ~330 px, ce que le séparateur rend désormais atteignable. */
-  .cop-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; font-size: var(--text-sm); font-weight: var(--weight-strong); letter-spacing: var(--tracking-snug); color: var(--ink-2); white-space: nowrap; }
-  .cop-local {
+  .cop-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; font-size: var(--text-sm); font-weight: var(--weight-strong); letter-spacing: var(--tracking-snug); color: var(--ink); white-space: nowrap; }
+  .cop-head-spacer { flex: 1; align-self: stretch; min-width: 4px; }
+  .cop-cap {
     flex: 0 0 auto;
-    height: 18px; display: inline-flex; align-items: center; padding: 0 6px;
-    border-radius: var(--radius-xs); background: var(--accent-soft); color: var(--ink-3);
-    font-size: var(--text-2xs); font-weight: var(--weight-strong); letter-spacing: var(--tracking-badge);
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    padding: 2px;
+    border-radius: var(--radius-full);
+    background: rgba(var(--ink-rgb), 0.045);
   }
-  .cop-local.cloud { background: var(--accent-soft); color: var(--ink-3); }
-  .cop-identity-chevron { flex: 0 0 auto; color: var(--ink-4); font-size: 14px; transition: transform var(--duration-basic) var(--ease-enter-snappy); }
-  .cop-identity[aria-expanded='true'] .cop-identity-chevron { transform: rotate(180deg); }
-  .cop-head-spacer { flex: 1; align-self: stretch; }
-  .cop-sep { width: 1px; height: 16px; background: var(--line-1); margin: 0 4px; }
+  .cop-winctl { flex: 0 0 auto; display: flex; align-items: center; gap: 2px; }
   .cop-ic,
   .cop-win {
+    flex-shrink: 0;
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    height: var(--control-md);
     border: 0;
     background: transparent;
     color: var(--ink-3);
@@ -3244,33 +3398,40 @@
     cursor: pointer;
     transition: color var(--duration-basic) ease, background-color var(--duration-basic) ease, transform var(--duration-basic) var(--ease-enter-snappy);
   }
-  .cop-ic { width: var(--control-sm); height: var(--control-sm); border-radius: var(--radius-md); color: var(--ink-3); }
-  .cop-win { width: 38px; border-radius: var(--radius-md); }
-  /* Panneau étroit (plancher 240 px) : c'est l'identité qui cède (elle se rogne), jamais
-     Réduire/Agrandir/Fermer ni les actions du panneau. */
-  .cop-ic, .cop-win, .cop-sep { flex-shrink: 0; }
-  .cop-win.close { width: 40px; }
+  .cop-ic { width: var(--control-sm); height: var(--control-sm); border-radius: var(--radius-full); }
+  .cop-ic .icon { font-size: 15px; }
+  .cop-win { width: var(--control-md); height: var(--control-md); border-radius: var(--radius-md); }
   .cop-win-square { font-size: 13px; }
-  .cop-ic:hover,
+  .cop-ic:hover:not(:disabled),
   .cop-win:hover { background: var(--fill-hover); color: var(--ink); }
-  .cop-ic:active,
+  .cop-ic:hover:not(:disabled) { background: var(--track-thumb); box-shadow: var(--shadow-sm), 0 0 0 0.5px var(--elevation-ring); }
+  .cop-ic:active:not(:disabled) { transform: scale(0.97); }
   .cop-win:active { background: var(--accent-soft); }
-  /* Légende Windows (Réduire/Agrandir/Fermer) exemptée de l'échelle, comme dans TitleBar. */
-  .cop-ic:active { transform: scale(0.97); }
+  .cop-ic:disabled { opacity: var(--opacity-disabled); cursor: default; }
   .cop-ic:focus-visible,
-  .cop-win:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; background: var(--surface-hover); }
-  .cop-ic.active { background: var(--accent-soft); color: var(--ink); }
+  .cop-win:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
+  .cop-ic.active { background: var(--track-thumb); color: var(--ink); box-shadow: var(--shadow-sm), 0 0 0 0.5px var(--elevation-ring); }
   .cop-win.close:hover { background: var(--window-close); color: #fff; }
   .cop-win.close:active { background: var(--window-close-active); color: #fff; }
+  /* Carte étroite : le titre part d'abord (la tuile garde l'identité), jamais une action. */
+  @container cop-shell (max-width: 370px) {
+    .cop-title { display: none; }
+  }
+  /* Plancher (300 px) : l'historique, aussi dans la barre latérale, cède sa place. */
+  @container cop-shell (max-width: 320px) {
+    .cop-head { gap: 4px; }
+    .cop-cap-history { display: none; }
+  }
 
   /* Menus flottants (identité, « + ») : grammaire Kube Menu — surface élevée, rayon 12,
      marge 4, items de rayon 8 ; ouverture au pointeur en échelle 0.95 depuis le
      déclencheur. Largeurs posées en ligne depuis les constantes JS du bornage. */
   .cop-identity-menu {
     position: absolute; z-index: var(--z-popover); padding: 4px;
-    border-radius: var(--radius-xl); background: var(--composer-bg);
-    box-shadow: var(--shadow-xl);
-    transform-origin: top left;
+    border-radius: var(--radius-xl); background: var(--glass-bg);
+    -webkit-backdrop-filter: var(--glass-filter); backdrop-filter: var(--glass-filter);
+    box-shadow: var(--glass-shadow);
+    transform-origin: top right;
     animation: doku-pop-in var(--duration-basic) var(--ease-enter-snappy);
   }
   /* Ouverts au clavier : pas d'entrée animée (voir identityMenuKbd / addMenuKbd). */
@@ -3282,7 +3443,7 @@
     transition: background-color var(--duration-basic) ease, color var(--duration-basic) ease;
   }
   .cop-identity-menu > button:hover,
-  .cop-identity-menu > button:focus-visible { background: var(--accent-soft); color: var(--ink); }
+  .cop-identity-menu > button:focus-visible { background: var(--menu-row-hover); color: var(--ink); }
   .cop-identity-menu > button.active { background: var(--accent-soft); color: var(--ink); }
   .cop-identity-menu > button:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
   .cop-identity-menu-icon {
@@ -3298,20 +3459,13 @@
   /* Corps */
   .cop-card {
     position: relative;
+    isolation: isolate;
     flex: 1;
     min-height: 0;
     display: flex;
     flex-direction: column;
-    background: var(--cream-content);
-    border-left: 1px solid var(--line-1);
-    /* La largeur réglable ne décrit pas un changement de mode : quelle que soit sa
-       valeur, un panneau voisin du document garde une couture droite. Les coins ne
-       s'arrondissent que lorsque l'état plein écran est réellement actif. */
-    border-radius: 0;
     overflow: hidden;
-    transition: border-radius var(--duration-relaxed) var(--ease-curtain);
   }
-  .cop-panel.expanded .cop-card { border-radius: var(--radius-2xl) var(--radius-2xl) 0 0; }
   .cop-scroll {
     flex: 1; min-height: 0; overflow-y: auto;
     padding: 0 max(18px, calc((100% - 760px) / 2));
@@ -3322,8 +3476,22 @@
 
   /* Sélecteur unifié « Modèle actif » : le menu flotte au-dessus de la page, mais sa
      silhouette reste soudée au trigger — même largeur, même matière, aucun interstice. */
+  /* Vues de gestion (Modèles, Mémoire) : grammaire des Réglages (refonte v2 §5) — grand
+     titre, puis des GROUPES encastrés (rayon 12, fond du composeur, filet), rangées ≥ 44 px
+     à tuile d'icône teintée, séparateurs en retrait. */
+  .cop-view-head { padding: 20px 4px 16px; }
+  .cop-view-head h2 { margin: 0; color: var(--ink); font: var(--weight-strong) var(--text-xl)/1.3 var(--font-sans); letter-spacing: var(--tracking-tight); }
+  .cop-view-head p { max-width: 44ch; margin: 4px 0 0; color: var(--ink-3); font: var(--weight-regular) var(--text-sm)/1.45 var(--font-sans); text-wrap: pretty; }
+  .cop-tile {
+    width: var(--control-sm); height: var(--control-sm); flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center;
+    border-radius: var(--radius-md); background: var(--tint-ink-bg); color: var(--tint-ink-fg);
+  }
+  .cop-tile .icon { font-size: 15px; }
+  .cop-tile[data-tint='sage'] { background: var(--tint-sage-bg); color: var(--tint-sage-fg); }
+  .cop-tile[data-tint='slate'] { background: var(--tint-slate-bg); color: var(--tint-slate-fg); }
+  .cop-tile[data-tint='ochre'] { background: var(--tint-ochre-bg); color: var(--tint-ochre-fg); }
   .cop-picker {
-    margin: 14px 2px 16px;
+    margin: 0 2px 20px;
   }
   .cop-picker-shell {
     position: relative;
@@ -3333,27 +3501,27 @@
   .cop-picker-shell.open {
     z-index: var(--z-popover);
     border-radius: var(--radius-xl) var(--radius-xl) 0 0;
-    background: var(--surface-2);
+    background: var(--composer-bg);
     filter: drop-shadow(0 8px 16px rgba(var(--shadow-rgb), 0.12));
   }
   .cop-picker-trigger {
-    width: 100%; min-height: 48px; display: flex; align-items: center; gap: 10px; padding: 8px 12px;
-    border: 0; border-radius: var(--radius-xl); background: var(--surface-2); color: var(--ink);
+    width: 100%; min-height: 52px; display: flex; align-items: center; gap: 12px; padding: 8px 12px 8px 10px;
+    border: 0; border-radius: var(--radius-xl); background: var(--composer-bg); box-shadow: 0 0 0 1px var(--line-1); color: var(--ink);
     font-family: var(--font-sans); text-align: left; cursor: pointer;
     transition: background-color var(--duration-basic) ease;
   }
-  .cop-picker-trigger:hover { background: var(--surface-hover); }
-  .cop-picker-trigger:active { background: var(--accent-soft); }
+  .cop-picker-trigger:hover { background: color-mix(in srgb, var(--composer-bg), var(--ink) 3%); }
+  .cop-picker-trigger:active { background: color-mix(in srgb, var(--composer-bg), var(--ink) 6%); }
   .cop-picker-trigger:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
   .cop-picker-shell.open .cop-picker-trigger {
     border-radius: var(--radius-xl) var(--radius-xl) 0 0;
     background: transparent;
+    box-shadow: none;
   }
   .cop-picker-shell.open .cop-picker-trigger:hover { background: var(--surface-hover); }
-  .cop-picker-trigger > .icon { flex: 0 0 auto; font-size: 16px; color: var(--ink-3); }
   .cop-picker-name { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
   .cop-picker-name strong {
-    overflow: hidden; font-family: var(--font-mono); font-size: var(--text-sm); font-weight: var(--weight-control);
+    overflow: hidden; font-family: var(--font-sans); font-size: var(--text-sm); font-weight: var(--weight-control);
     white-space: nowrap; text-overflow: ellipsis;
   }
   /* La mono est réservée aux TAGS techniques locaux (qwen2.5:1.5b-q4_0) : un nom de
@@ -3369,7 +3537,7 @@
   .cop-picker-pop {
     position: absolute; top: 100%; left: 0; right: 0;
     max-height: 360px; overflow-x: hidden; overflow-y: auto; padding: 4px;
-    border-radius: 0 0 var(--radius-xl) var(--radius-xl); background: var(--surface-2);
+    border-radius: 0 0 var(--radius-xl) var(--radius-xl); background: var(--composer-bg);
     box-shadow: inset 0 1px 0 var(--line-1);
     animation: cop-picker-expand var(--duration-moderate) var(--ease-enter);
   }
@@ -3384,7 +3552,7 @@
     transition: background-color var(--duration-basic) ease, color var(--duration-basic) ease;
   }
   .cop-picker-sec > .icon { flex: 0 0 auto; font-size: 16px; color: var(--ink-4); }
-  .cop-picker-sec:hover { background: var(--surface-hover); color: var(--ink); }
+  .cop-picker-sec:hover { background: var(--menu-row-hover); color: var(--ink); }
   .cop-picker-sec:hover > .icon { color: var(--ink-2); }
   .cop-picker-sec:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
   .cop-picker-sec-name { flex: 1; min-width: 0; white-space: nowrap; font-weight: var(--weight-control); }
@@ -3407,7 +3575,7 @@
     font-family: var(--font-sans); font-size: var(--text-sm); font-weight: var(--weight-control); text-align: left; cursor: pointer;
     transition: background-color var(--duration-basic) ease, color var(--duration-basic) ease;
   }
-  .cop-picker-opt:hover, .cop-picker-opt:focus-visible { background: var(--surface-hover); color: var(--ink); }
+  .cop-picker-opt:hover, .cop-picker-opt:focus-visible { background: var(--menu-row-hover); color: var(--ink); }
   .cop-picker-opt:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
   .cop-picker-opt[aria-checked='true'] { background: var(--accent-soft); color: var(--ink); }
   .cop-picker-opt > .icon { flex: 0 0 auto; font-size: 14px; color: var(--ink-3); }
@@ -3460,14 +3628,14 @@
     padding: clamp(8px, calc(4px + 1cqi), 24px) 16px 28px; color: var(--ink-2);
   }
   .cop-memory-heading { min-height: 56px; display: flex; align-items: center; gap: 12px; margin-bottom: 14px; }
-  .cop-memory-mark { width: var(--control-lg); height: var(--control-lg); flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; border-radius: var(--radius-lg); background: var(--surface-2); color: var(--ink-3); }
+  .cop-memory-mark { width: var(--control-lg); height: var(--control-lg); flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; border-radius: var(--radius-lg); background: var(--tint-plum-bg); color: var(--tint-plum-fg); }
   .cop-memory-mark .icon { font-size: 18px; }
   .cop-memory-heading > span:nth-child(2) { min-width: 0; flex: 1; }
-  .cop-memory-heading h2 { margin: 0; color: var(--ink); font: var(--weight-strong) var(--text-lg)/1.3 var(--font-sans); letter-spacing: -0.015em; }
+  .cop-memory-heading h2 { margin: 0; color: var(--ink); font: var(--weight-strong) var(--text-xl)/1.3 var(--font-sans); letter-spacing: var(--tracking-tight); }
   .cop-memory-heading p { margin: 2px 0 0; overflow: hidden; color: var(--ink-3); font: var(--weight-regular) var(--text-xs)/1.4 var(--font-sans); text-overflow: ellipsis; white-space: nowrap; }
   .cop-memory-sync { display: inline-flex; align-items: center; gap: 6px; color: var(--ink-3); font-size: var(--text-xs); white-space: nowrap; }
   .cop-memory-sync span { width: 6px; height: 6px; border-radius: 50%; background: var(--ok); animation: doku-breathe 1.6s ease-in-out infinite; }
-  .cop-memory-control { min-height: 64px; padding: 10px 12px; display: flex; align-items: center; gap: 12px; border-radius: var(--radius-xl); background: var(--surface-2); }
+  .cop-memory-control { min-height: 64px; padding: 10px 12px; display: flex; align-items: center; gap: 12px; border-radius: var(--radius-xl); background: var(--composer-bg); box-shadow: 0 0 0 1px var(--line-1); }
   .cop-memory-control > span { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 2px; }
   .cop-memory-control strong { color: var(--ink); font-size: var(--text-sm); font-weight: var(--weight-control); }
   .cop-memory-control small { color: var(--ink-3); font-size: var(--text-xs); line-height: 1.4; }
@@ -3476,10 +3644,17 @@
   .cop-memory-scope-copy strong { color: var(--ink); font-size: var(--text-sm); font-weight: var(--weight-control); }
   .cop-memory-scope-copy small { color: var(--ink-3); font-size: var(--text-xs); line-height: 1.45; }
   /* Contrôle segmenté Kube : piste --track, cran actif --track-thumb. */
-  .cop-memory-scope-options { align-self: flex-start; display: flex; gap: 2px; min-width: 0; max-width: 100%; padding: 2px; border-radius: var(--radius-md); background: var(--track); }
-  .cop-memory-scope-options button { min-width: 0; height: calc(var(--control-md) - 4px); padding: 0 12px; display: inline-flex; align-items: center; gap: 6px; border: 0; border-radius: calc(var(--radius-md) - 2px); background: transparent; color: var(--ink-3); font: var(--weight-control) var(--text-sm) var(--font-sans); cursor: pointer; transition: background-color var(--duration-basic) ease, color var(--duration-basic) ease, box-shadow var(--duration-basic) ease; }
+  .cop-memory-scope-options { position: relative; align-self: flex-start; display: flex; gap: 2px; min-width: 0; max-width: 100%; padding: 2px; border-radius: var(--radius-md); background: var(--track); }
+  /* Le cran passe d'une option à l'autre en goutte (liquidThumb, src/lib/liquid.ts) : pas de
+     transition CSS, l'action pose translate/width et les anime en WAAPI. */
+  .cop-memory-scope-thumb {
+    position: absolute; top: 2px; bottom: 2px; left: 0; width: 0;
+    border-radius: calc(var(--radius-md) - 2px);
+    background: var(--track-thumb); box-shadow: var(--shadow-sm), 0 0 0 0.5px var(--elevation-ring);
+  }
+  .cop-memory-scope-options button { position: relative; min-width: 0; height: calc(var(--control-md) - 4px); padding: 0 12px; display: inline-flex; align-items: center; gap: 6px; border: 0; border-radius: calc(var(--radius-md) - 2px); background: transparent; color: var(--ink-3); font: var(--weight-control) var(--text-sm) var(--font-sans); cursor: pointer; transition: background-color var(--duration-basic) ease, color var(--duration-basic) ease, box-shadow var(--duration-basic) ease; }
   .cop-memory-scope-options button:not(.active):hover:not(:disabled) { background: var(--fill-hover); color: var(--ink); }
-  .cop-memory-scope-options button.active { background: var(--track-thumb); color: var(--ink); box-shadow: var(--shadow-sm), 0 0 0 0.5px var(--elevation-ring); }
+  .cop-memory-scope-options button.active { color: var(--ink); }
   .cop-memory-scope-options button:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
   .cop-memory-scope-options button:disabled { opacity: var(--opacity-disabled); cursor: default; }
   .cop-memory-scope-options .icon { flex: 0 0 auto; font-size: 14px; }
@@ -3552,45 +3727,36 @@
   .cop-memory-confirm button.danger:hover { background: color-mix(in srgb, var(--danger-action-text) 88%, transparent); color: var(--cream-content); }
   .cop-memory-privacy { margin: 14px 0 0; display: flex; align-items: flex-start; gap: 6px; color: var(--ink-3); font-size: var(--text-xs); line-height: 1.45; }
   .cop-memory-privacy .icon { flex: 0 0 auto; margin-top: 1px; font-size: 14px; }
-  /* Deux tons pleins (tête surface-2, pied accent-soft par-dessus) : la carte se
-     découpe du fond sans aucun contour. */
-  .cop-cloud-hero { overflow: hidden; border-radius: var(--radius-2xl); background: var(--surface-2); }
-  .cop-cloud-head { display: flex; align-items: center; gap: 12px; padding: 16px 16px 28px; }
-  .cop-cloud-icon {
-    width: 40px; height: 40px; flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center;
-    border-radius: var(--radius-lg); background: var(--accent-soft); color: var(--ink-2);
-  }
-  .cop-cloud-icon .icon { font-size: 18px; }
+  .cop-cloud-hero { overflow: hidden; border-radius: var(--radius-xl); background: var(--composer-bg); box-shadow: 0 0 0 1px var(--line-1); }
+  .cop-cloud-head { min-height: 56px; display: flex; align-items: center; gap: 12px; padding: 10px 12px 10px 10px; }
   .cop-cloud-name { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
-  .cop-cloud-name strong { overflow: hidden; font-size: var(--text-md); font-weight: var(--weight-strong); letter-spacing: -0.01em; color: var(--ink); white-space: nowrap; text-overflow: ellipsis; }
+  .cop-cloud-name strong { overflow: hidden; font-size: var(--text-sm); font-weight: var(--weight-control); color: var(--ink); white-space: nowrap; text-overflow: ellipsis; }
   .cop-cloud-name small { font-size: var(--text-xs); color: var(--ink-3); }
   .cop-cloud-status {
     height: var(--control-2xs); flex: 0 0 auto; display: inline-flex; align-items: center; gap: 6px; padding: 0 10px;
-    border-radius: var(--radius-full); background: var(--surface-2); color: var(--ink-3); font-size: var(--text-xs); font-weight: var(--weight-control);
+    border-radius: var(--radius-full); background: var(--accent-soft); color: var(--ink-3); font-size: var(--text-xs); font-weight: var(--weight-control);
   }
   .cop-cloud-status.ready { background: color-mix(in srgb, var(--ok) 16%, transparent); color: var(--ok-text); }
   .cop-cloud-status.unavailable { background: color-mix(in srgb, var(--warn) 16%, transparent); color: var(--warn-text); }
   .cop-cloud-status.checking { font-weight: var(--weight-regular); }
   .cop-cloud-status .cop-dot { width: 6px; height: 6px; border: 0; background: var(--ok); }
-  .cop-cloud-foot { margin-top: -16px; display: flex; align-items: stretch; padding: 14px; border-radius: var(--radius-2xl) var(--radius-2xl) 0 0; background: var(--accent-soft); }
-  .cop-cloud-foot > span { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 2px; }
-  .cop-cloud-foot b { font-size: var(--text-md); font-weight: var(--weight-strong); color: var(--ink); }
-  .cop-cloud-foot small { font-size: var(--text-xs); color: var(--ink-3); }
-  .cop-cloud-foot i { width: 1px; background: var(--line-2); }
 
-  .cop-cloud-note, .cop-cloud-privacy { display: flex; align-items: flex-start; gap: 10px; padding: 12px; border-radius: var(--radius-xl); background: var(--surface-2); }
-  .cop-cloud-note > .icon, .cop-cloud-privacy > .icon { flex: 0 0 auto; margin-top: 1px; font-size: 16px; color: var(--ink-3); }
+  .cop-cloud-note { display: flex; align-items: flex-start; gap: 10px; padding: 12px; border-radius: var(--radius-xl); background: var(--composer-bg); box-shadow: 0 0 0 1px var(--line-1); }
+  .cop-cloud-privacy { display: flex; align-items: flex-start; gap: 8px; padding: 0 4px; }
+  .cop-cloud-note > .icon { flex: 0 0 auto; margin-top: 1px; font-size: 16px; color: var(--ink-3); }
+  .cop-cloud-privacy > .icon { flex: 0 0 auto; margin-top: 2px; font-size: 14px; color: var(--ink-4); }
   .cop-cloud-note > span:last-child { display: flex; flex-direction: column; gap: 2px; }
   .cop-cloud-note strong { font-size: var(--text-sm); font-weight: var(--weight-control); color: var(--ink); }
   .cop-cloud-note small { font-size: var(--text-xs); line-height: 1.45; color: var(--ink-3); }
   .cop-cloud-note.ok > .icon { color: var(--ok-text); }
   .cop-cloud-note.warn > .icon { color: var(--warn-text); }
-  .cop-cloud-setup { padding: 2px 4px 0; }
+  .cop-cloud-setup { padding: 0; }
+  .cop-cloud-setup > h3, .cop-cloud-setup > p { padding-inline: 4px; }
   .cop-cloud-setup h3 { margin: 0 0 6px; font-size: var(--text-md); font-weight: var(--weight-strong); text-wrap: balance; letter-spacing: -0.01em; color: var(--ink); }
   .cop-cloud-setup > p { margin: 0 0 16px; font-size: var(--text-sm); line-height: 1.55; color: var(--ink-3); text-wrap: pretty; }
-  .cop-cloud-setup ol { margin: 0 0 14px; padding: 0; list-style: none; display: flex; flex-direction: column; }
-  .cop-cloud-setup li { display: flex; gap: 10px; padding: 10px 0; border-top: 1px solid var(--line-1); }
-  .cop-cloud-setup li > svg.icon { flex: 0 0 auto; margin-top: 1px; font-size: 16px; color: var(--ink-3); }
+  .cop-cloud-setup ol { margin: 0 0 16px; padding: 0; list-style: none; display: flex; flex-direction: column; border-radius: var(--radius-xl); background: var(--composer-bg); box-shadow: 0 0 0 1px var(--line-1); }
+  .cop-cloud-setup li { position: relative; min-height: 52px; display: flex; align-items: center; gap: 12px; padding: 8px 12px 8px 10px; }
+  .cop-cloud-setup li + li::before { content: ''; position: absolute; top: 0; left: 50px; right: 0; height: 1px; background: var(--line-1); }
   .cop-cloud-setup li p { margin: 0; display: flex; flex-direction: column; gap: 2px; }
   .cop-cloud-setup li strong { font-size: var(--text-sm); font-weight: var(--weight-control); color: var(--ink-2); }
   .cop-cloud-setup li small { font-size: var(--text-xs); line-height: 1.4; color: var(--ink-3); }
@@ -3629,7 +3795,7 @@
   .cop-cloud-privacy p { margin: 0; font-size: var(--text-xs); line-height: 1.5; color: var(--ink-3); }
   .cop-cloud-privacy strong { color: var(--ink-2); font-weight: var(--weight-strong); }
 
-  .cop-mono { font-family: var(--font-mono); font-size: var(--text-sm); color: var(--ink); font-weight: var(--weight-control); }
+  .cop-model-tag { font-family: var(--font-sans); font-size: var(--text-sm); color: var(--ink); font-weight: var(--weight-control); }
   .grow { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
   /* Onboarding */
@@ -3641,7 +3807,7 @@
   .cop-onboard-title { font-size: var(--text-lg); font-weight: var(--weight-strong); letter-spacing: -0.015em; color: var(--ink); margin-bottom: 6px; text-wrap: balance; }
   .cop-onboard-sub { font-size: var(--text-sm); line-height: 1.6; color: var(--ink-3); text-wrap: pretty; }
   .cop-onboard-sub b { color: var(--ink-2); font-weight: var(--weight-strong); }
-  .cop-reco { width: 100%; border-radius: var(--radius-xl); padding: 12px; background: var(--surface-2); text-align: left; }
+  .cop-reco { width: 100%; border-radius: var(--radius-xl); padding: 12px; background: var(--composer-bg); box-shadow: 0 0 0 1px var(--line-1); text-align: left; }
   .cop-reco-head { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
   .cop-badge { height: 18px; display: inline-flex; align-items: center; padding: 0 6px; font-size: var(--text-2xs); font-weight: var(--weight-strong); letter-spacing: var(--tracking-badge); color: var(--ink-3); background: var(--accent-soft); border-radius: var(--radius-xs); }
   .cop-reco-sub { font-size: var(--text-xs); color: var(--ink-3); margin-bottom: 12px; }
@@ -3671,21 +3837,20 @@
   /* Gestion locale : une seule entrée au repos, toutes les fonctions conservées derrière
      un <details> natif. Le sélecteur « Modèle actif » reste le chemin quotidien. */
   .cop-advanced { margin: 10px 2px 24px; }
-  .cop-onboard-more { width: 100%; margin-top: -4px; }
   .cop-advanced > summary {
-    min-height: 48px; display: flex; align-items: center; gap: 10px; padding: 6px 10px 6px 8px;
-    list-style: none; border-radius: var(--radius-lg); color: var(--ink-2); cursor: pointer;
+    min-height: 52px; display: flex; align-items: center; gap: 12px; padding: 8px 12px 8px 10px;
+    list-style: none; border-radius: var(--radius-xl); background: var(--composer-bg); box-shadow: 0 0 0 1px var(--line-1); color: var(--ink-2); cursor: pointer;
     transition: background-color var(--duration-basic) ease, color var(--duration-basic) ease;
   }
   .cop-advanced > summary::-webkit-details-marker { display: none; }
-  .cop-advanced > summary:hover { background: var(--surface-hover); color: var(--ink); }
-  .cop-advanced > summary:active { background: var(--accent-soft); }
+  .cop-advanced > summary:hover { background: color-mix(in srgb, var(--composer-bg), var(--ink) 3%); color: var(--ink); }
+  .cop-advanced > summary:active { background: color-mix(in srgb, var(--composer-bg), var(--ink) 6%); }
   .cop-advanced > summary:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
   .cop-advanced-icon {
-    width: var(--control-md); height: var(--control-md); flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center;
-    border-radius: var(--radius-lg); background: var(--surface-2); color: var(--ink-3);
+    width: var(--control-sm); height: var(--control-sm); flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center;
+    border-radius: var(--radius-md); background: var(--tint-ink-bg); color: var(--tint-ink-fg);
   }
-  .cop-advanced-icon .icon { font-size: 16px; }
+  .cop-advanced-icon .icon { font-size: 15px; }
   .cop-advanced-copy { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 2px; text-align: left; }
   .cop-advanced-copy strong { font-size: var(--text-sm); font-weight: var(--weight-control); color: var(--ink-2); }
   .cop-advanced-copy small { overflow: hidden; font-size: var(--text-xs); color: var(--ink-3); white-space: nowrap; text-overflow: ellipsis; }
@@ -3705,7 +3870,7 @@
     clip-path: inset(50%);
     white-space: nowrap;
   }
-  .cop-label { font-size: var(--text-xs); color: var(--ink-3); font-weight: var(--weight-control); margin-bottom: 8px; }
+  .cop-label { margin: 0 4px 8px; font-size: var(--text-2xs); color: var(--section-label); font-weight: var(--weight-strong); letter-spacing: var(--tracking-badge); }
   .cop-label.row { display: flex; align-items: baseline; justify-content: space-between; }
   .cop-count { font-size: var(--text-xs); font-weight: var(--weight-regular); color: var(--ink-3); white-space: nowrap; font-variant-numeric: tabular-nums; }
 
@@ -3714,10 +3879,10 @@
   .cop-dot.on { background: var(--ok); border: 0; box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 16%, transparent); }
 
   /* Bibliothèque */
-  .cop-lib { display: flex; flex-direction: column; gap: 2px; }
+  .cop-lib { display: flex; flex-direction: column; gap: 2px; padding: 4px; border-radius: var(--radius-xl); background: var(--composer-bg); box-shadow: 0 0 0 1px var(--line-1); }
   .cop-row { display: flex; align-items: center; border-radius: var(--radius-lg); transition: background-color var(--duration-basic) ease; }
   .cop-row:hover { background: var(--surface-hover); }
-  .cop-row.active { background: var(--accent-soft); }
+  .cop-row.active { background: var(--row-selected); }
   .cop-row-pick {
     flex: 1; display: flex; align-items: center; gap: 10px; min-width: 0;
     padding: 8px 4px 8px 12px; border: 0; background: none; color: var(--ink); font-size: var(--text-sm); text-align: left; cursor: pointer;
@@ -3736,7 +3901,7 @@
   .cop-del:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; color: var(--err-text); }
 
   /* Téléchargement */
-  .cop-dl { padding: 12px; border-radius: var(--radius-xl); background: var(--surface-2); }
+  .cop-dl { padding: 12px; border-radius: var(--radius-xl); background: var(--composer-bg); box-shadow: 0 0 0 1px var(--line-1); }
   .cop-dl-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
   .cop-track { height: 4px; background: var(--accent-soft); border-radius: var(--radius-full); overflow: hidden; }
   .orbit { color: var(--ink-4); animation: doku-orbit 1.1s linear infinite; }
@@ -3760,27 +3925,12 @@
     50% { opacity: 1; }
   }
 
-  /* Ajouter : champ Kube (filet, survol, anneau de focus). */
-  .cop-add {
-    display: flex; align-items: center; gap: 8px; height: var(--control-lg); padding: 0 4px 0 10px;
-    border-radius: var(--radius-lg); background: var(--cream-content); box-shadow: inset 0 0 0 1px var(--line-1);
-    transition: box-shadow var(--duration-basic) ease;
-  }
-  .cop-add:hover { box-shadow: inset 0 0 0 1px var(--line-3); }
-  .cop-add-input {
-    flex: 1; min-width: 0; border: 0; background: transparent; outline: none;
-    font-family: var(--font-mono); font-size: var(--text-sm); color: var(--ink);
-  }
-  .cop-add-input::placeholder { color: var(--ink-4); }
-  .cop-add:focus-within { outline: 2px solid var(--focus-ring); outline-offset: -1px; }
   .cop-btn-sm {
     height: var(--control-sm); padding: 0 12px; background: var(--ink); color: var(--cream-content); border: 0; border-radius: var(--radius-md);
     font-family: var(--font-sans); font-size: var(--text-sm); font-weight: var(--weight-control); cursor: pointer;
     transition: background-color var(--duration-basic) ease, transform var(--duration-basic) var(--ease-enter);
   }
   .cop-btn-sm:disabled { opacity: var(--opacity-disabled); cursor: default; }
-  /* Concentrique dans le champ « Ajouter » : rayon 10 − retrait 4. */
-  .cop-add .cop-btn-sm { border-radius: var(--radius-sm); }
   .cop-btn-sm:not(:disabled):hover { background: var(--ink-2); }
   .cop-btn-sm:not(:disabled):active { transform: scale(0.97); }
   .cop-btn-sm:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
@@ -3788,26 +3938,21 @@
   .cop-chip {
     display: inline-flex; align-items: center; gap: 4px; height: var(--control-2xs); padding: 0 10px;
     border: 0; border-radius: var(--radius-full); background: var(--surface-2);
-    color: var(--ink-3); font-family: var(--font-mono); font-size: var(--text-xs); cursor: pointer;
+    color: var(--ink-3); font-family: var(--font-sans); font-size: var(--text-xs); font-weight: var(--weight-control); cursor: pointer;
     transition: background-color var(--duration-basic) ease, color var(--duration-basic) ease, transform var(--duration-basic) var(--ease-enter-snappy);
   }
   /* Alignement optique : côté icône = côté texte − 2 px. */
   .cop-chip:has(> .icon:first-child) { padding: 0 10px 0 8px; }
   .cop-chip:hover { background: var(--accent-soft); color: var(--ink); }
   .cop-chip:active { transform: scale(0.97); }
-  /* Dans une carte déjà surface-2 (index du dossier), les chips passent en clair. */
-  .cop-rag .cop-chip { background: var(--cream-content); }
-  .cop-rag .cop-chip.sel { background: var(--accent-soft); }
 
   /* Index du dossier (15.2) */
-  .cop-rag { padding: 12px; border-radius: var(--radius-xl); background: var(--surface-2); }
+  .cop-rag { padding: 12px; border-radius: var(--radius-xl); background: var(--composer-bg); box-shadow: 0 0 0 1px var(--line-1); }
   .cop-rag-row { display: flex; align-items: center; gap: 8px; font-size: var(--text-sm); }
   .cop-rag-progress { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
   .cop-rag-progress .cop-rag-note { font-variant-numeric: tabular-nums; }
   .cop-rag-note { font-size: var(--text-xs); line-height: 1.55; color: var(--ink-3); margin-top: 8px; }
   .cop-rag-note.err { color: var(--err-text); display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-  .cop-chip.sel { background: var(--accent-soft); color: var(--ink); }
-  .cop-chip-tag { margin-left: 4px; font-family: var(--font-sans); font-size: var(--text-2xs); font-weight: var(--weight-strong); color: var(--ink-3); }
   .cop-rag-del {
     border: 0; background: none; padding: 0; margin-left: 4px; cursor: pointer;
     font-family: var(--font-sans); font-size: var(--text-xs); color: var(--ink-3); text-decoration: underline;
@@ -3815,60 +3960,62 @@
   }
   .cop-rag-del:hover { color: var(--err-text); }
 
-  /* Chat — accueil (Kube EmptyState + SuggestionCard en rangées) : une colonne qui suit la
-     largeur du panneau, au lieu de trois cartes de 70 px côte à côte à 240 px. */
+  /* Chat — accueil (refonte v2) : salutation éditoriale en Source Serif, ligne sur le
+     document courant, puis une grille 2 colonnes de cartes (tuile teintée + libellé +
+     sous-libellé). Calé en bas, près du composeur : l'œil n'a qu'un trajet à faire. */
   .cop-chat-empty {
     min-height: 100%;
-    padding: 32px 0 48px;
+    padding: 32px 4px 20px;
     display: flex; flex-direction: column;
-    justify-content: center; align-items: center; text-align: center;
+    justify-content: flex-end;
   }
-  .cop-empty-art {
-    width: 48px; height: 48px;
-    display: flex; align-items: center; justify-content: center;
-    margin-bottom: 12px;
-    border-radius: var(--radius-xl); background: var(--fill-hover); color: var(--ink);
+  .cop-greet {
+    margin: 0;
+    color: var(--ink);
+    font: 500 26px/1.2 var(--font-serif);
+    letter-spacing: -0.01em;
   }
-  .cop-empty-art .icon { font-size: 24px; }
-  .cop-empty-title {
-    max-width: 30ch; margin: 0; color: var(--ink);
-    font: var(--weight-strong) var(--text-lg)/1.5 var(--font-sans);
-    letter-spacing: var(--tracking-tight); text-wrap: balance;
+  .cop-greet-sub {
+    max-width: 34ch; margin: 6px 0 20px; color: var(--ink-3);
+    font: var(--weight-regular) var(--text-md)/1.45 var(--font-sans); text-wrap: pretty;
   }
-  .cop-empty-desc {
-    max-width: 36ch; margin: 8px 0 24px; color: var(--ink-3);
-    font: var(--weight-regular) var(--text-sm)/1.43 var(--font-sans); text-wrap: balance;
+  .cop-greet-sub em { font-style: normal; color: var(--ink); font-weight: var(--weight-control); overflow-wrap: anywhere; }
+  .cop-suggest { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+  .cop-suggest-card {
+    min-width: 0;
+    padding: 12px;
+    display: flex; flex-direction: column; align-items: flex-start; gap: 10px;
+    border: 0; border-radius: var(--radius-2xl);
+    background: var(--surface-2);
+    color: var(--ink);
+    text-align: left; cursor: pointer;
+    transition: background-color var(--duration-basic) ease, box-shadow var(--duration-basic) ease, transform var(--duration-basic) var(--ease-enter-snappy);
   }
-  .cop-actions { width: 100%; max-width: 30rem; display: flex; flex-direction: column; gap: 8px; text-align: left; }
-  .cop-action {
-    min-width: 0; min-height: 44px; padding: 10px 12px 10px 14px;
-    display: flex; align-items: center; gap: 10px;
-    border: 1px solid var(--line-1); border-radius: var(--radius-xl);
-    background: transparent; color: var(--ink-2);
-    font: var(--weight-control) var(--text-sm)/1.4 var(--font-sans); text-align: left; cursor: pointer;
-    transition: background-color var(--duration-basic) ease, border-color var(--duration-basic) ease, color var(--duration-basic) ease, transform var(--duration-basic) var(--ease-enter-snappy);
+  .cop-suggest-tile {
+    width: var(--control-sm); height: var(--control-sm); flex: 0 0 auto;
+    display: inline-flex; align-items: center; justify-content: center;
+    /* Neutre : icône claire sur tuile d'encre, sans teinte par carte. */
+    border-radius: var(--radius-md); background: var(--tint-ink-bg); color: var(--tint-ink-fg);
+    font-size: 15px;
   }
-  .cop-action > span { flex: 1; min-width: 0; text-wrap: pretty; }
-  .cop-action-icon,
-  .cop-action-arrow { flex: 0 0 auto; font-size: 16px; transition: color var(--duration-basic) ease, translate var(--duration-basic) var(--ease-enter-snappy); }
-  .cop-action-icon { color: var(--ink-3); }
-  .cop-action-arrow { color: var(--ink-4); }
-  /* Kube InlinePrompt : la flèche avance de 2 px au survol (jamais au focus clavier). */
+  .cop-suggest-copy { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+  .cop-suggest-copy strong { font: var(--weight-control) var(--text-sm)/18px var(--font-sans); }
+  .cop-suggest-copy small { color: var(--ink-3); font: var(--weight-regular) var(--text-xs)/16px var(--font-sans); text-wrap: pretty; }
   @media (hover: hover) and (pointer: fine) {
-    .cop-action:hover { background: var(--surface-hover); border-color: var(--line-3); color: var(--ink); }
-    .cop-action:hover .cop-action-icon,
-    .cop-action:hover .cop-action-arrow { color: var(--ink); }
-    .cop-action:hover .cop-action-arrow { translate: 2px 0; }
+    .cop-suggest-card:hover { background: var(--composer-bg); box-shadow: var(--shadow-lg); }
   }
-  .cop-action:active { background: var(--surface-2); transform: scale(0.97); }
-  .cop-action:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
-  .cop-action:focus-visible .cop-action-arrow { color: var(--ink); }
-  :global(:where(:root[data-input='touch'])) .cop-action { min-height: 48px; }
+  .cop-suggest-card:active { transform: scale(0.97); }
+  .cop-suggest-card:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+  /* Carte étroite : une colonne, tuile à gauche du texte. */
+  @container (max-width: 300px) {
+    .cop-suggest { grid-template-columns: minmax(0, 1fr); }
+    .cop-suggest-card { flex-direction: row; align-items: center; }
+  }
 
-  /* Chat — conversation (Kube Thread) : 12 px entre tours, 32 px quand le locuteur change. */
-  .cop-conv { padding: 24px 0; display: flex; flex-direction: column; gap: 12px; }
+  /* Chat — conversation (Kube Thread) : 12 px entre tours, 28 px quand le locuteur change. */
+  .cop-conv { padding: 16px 0 24px; display: flex; flex-direction: column; gap: 12px; }
   .cop-conv > * + .cop-user,
-  .cop-conv > .cop-user + * { margin-top: 20px; }
+  .cop-conv > .cop-user + * { margin-top: 16px; }
   /* Entrée d'un tour ajouté (Kube Message) ; jamais à l'ouverture d'une conversation, ni pour
      le tour de l'utilisateur (il vient de l'envoyer, souvent par Entrée). */
   .cop-conv > .enter { animation: cop-turn-enter var(--duration-relaxed) var(--ease-enter-snappy) both; }
@@ -3876,35 +4023,30 @@
   .cop-history-window { display: flex; align-items: center; gap: 6px; margin: 0 8px; color: var(--ink-4); font-size: var(--text-xs); line-height: 1.4; }
   .cop-history-window .icon { flex: 0 0 auto; font-size: 14px; }
   .cop-user { display: flex; justify-content: flex-end; }
-  /* Bulle utilisateur (Kube Message) : rayon composer, padding en `em` pour suivre --cop-text
-     (10 / 16 px à 14 px). */
+  /* Bulle utilisateur : rayon 18, 6 en bas à droite (la « queue » côté locuteur), ≤ 85 %. */
   .cop-user-bubble {
-    max-width: 70%; background: var(--surface-2); border: 0; border-radius: var(--radius-composer);
-    padding: 0.71em 1.14em; font-size: calc(var(--cop-text) - 0.5px); line-height: 1.55; color: var(--ink); white-space: pre-wrap; overflow-wrap: anywhere;
-  }
-  /* Panneau étroit : variante compacte (rayon 2xl, 8 / 12 px, 456 px au plus) qui garde le
-     retrait de 44 px côté réponse. */
-  @container (max-width: 560px) {
-    .cop-user-bubble { max-width: min(456px, calc(100% - 44px)); border-radius: var(--radius-2xl); padding: 0.57em 0.86em; }
+    max-width: 85%; background: var(--surface-2); border: 0; border-radius: 18px 18px 6px 18px;
+    padding: 0.6em 1em; font-size: var(--cop-text); line-height: 1.5; color: var(--ink); white-space: pre-wrap; overflow-wrap: anywhere;
   }
   /* Le contenu de la conversation doit être COPIABLE (le body global est en user-select:none) :
      sans ça, une question échouée ne peut même pas être re-copiée pour la retaper. */
   .cop-user-bubble, .cop-md, .cop-md-plain, .cop-err-msg { user-select: text; }
   .cop-asst { padding-right: 4px; }
-  .cop-asst-head { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
-  /* Tuile sans wrapper : le padding d'un <svg> réduit sa zone de dessin, le tracé Lucide
-     reste à 14 px au centre d'une tuile de 24 px (width: 1em la collait à la tuile). */
-  .cop-asst-head > .icon {
-    width: var(--control-2xs); height: var(--control-2xs); padding: 5px;
-    border-radius: var(--radius-md); background: var(--surface-2); color: var(--ink-4);
+  /* Signature : marque 18 px, nom, heure — une ligne de 20 px au-dessus de la prose. */
+  .cop-asst-head { height: 20px; display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+  .cop-asst-mark {
+    width: 18px; height: 18px; flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center;
+    border-radius: 5px; background: var(--ink); color: var(--cream-content); font-size: 11px;
   }
-  .cop-asst-name { font-size: var(--text-xs); color: var(--ink-3); font-weight: var(--weight-control); }
+  .cop-asst-name { font-size: var(--text-xs); color: var(--ink); font-weight: var(--weight-strong); }
+  .cop-asst-time { font-size: var(--text-xs); color: var(--ink-4); font-variant-numeric: tabular-nums; }
   /* Rangée d'actions (Kube Message) : toujours dans le DOM (atteignable au clavier),
      révélée au survol du tour, au focus, pendant une confirmation, et toujours au doigt.
      Retrait de 6 px : la première icône s'aligne sur le texte. */
   .cop-msg-actions { display: flex; gap: 2px; margin: 6px 0 0 -6px; opacity: 0; transition: opacity var(--duration-basic) ease; }
   .cop-msg-actions:focus-within,
-  .cop-msg-actions:has(.done) { opacity: 1; }
+  .cop-msg-actions:has(.done),
+  .cop-asst.last > .cop-msg-actions { opacity: 1; }
   @media (hover: hover) and (pointer: fine) {
     .cop-asst:hover > .cop-msg-actions { opacity: 1; }
   }
@@ -3928,50 +4070,56 @@
   .cop-swap.on > .icon:first-child { opacity: 0; transform: scale(0.25); filter: blur(4px); }
   .cop-swap.on > .icon:last-child { opacity: 1; transform: none; filter: none; }
   .cop-copy:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
-  .cop-status { display: flex; align-items: center; gap: 8px; font-size: calc(var(--cop-text) - 0.5px); color: var(--ink-3); padding-top: 2px; min-height: 20px; }
-  /* Attente (Kube TypingIndicator + Shimmer) : trois points en vague saccadée et libellé
-     balayé. Les deux sont des ENRICHISSEMENTS posés sous `no-preference` — jamais un
-     override à défaire : le texte transparent (clip) ne peut pas survivre à un cas où la
-     règle de repli ne s'appliquerait pas. */
-  .cop-typing { display: inline-flex; flex: none; align-items: center; gap: 4px; min-height: 20px; }
-  .cop-typing i { width: 4px; height: 4px; border-radius: var(--radius-full); background: color-mix(in srgb, currentColor 70%, transparent); }
+  /* Étape en cours (draft-agent) : spinner fin de 14 px + libellé balayé, sur la ligne qui
+     suit la signature — aucune bulle vide. */
+  .cop-status { display: flex; align-items: center; gap: 10px; font-size: calc(var(--cop-text) - 0.5px); color: var(--ink-3); min-height: 22px; }
+  .cop-spinner {
+    width: 14px; height: 14px; flex: none; border-radius: 50%;
+    border: 1.5px solid var(--line-2); border-top-color: var(--ink-2);
+    animation: doku-orbit 0.9s linear infinite;
+  }
   @media (prefers-reduced-motion: no-preference) {
-    .cop-typing i { animation: cop-typing-wave 1s steps(3, end) infinite; }
-    .cop-typing i:nth-child(2) { animation-delay: 0.1s; }
-    .cop-typing i:nth-child(3) { animation-delay: 0.2s; }
     /* Variante forte de Kube : le libellé porte l'information (statut réel de l'outil). */
-    .cop-shimmer {
-      background-color: var(--ink-3);
-      background-image: linear-gradient(to right, transparent 0%, var(--ink) 40%, var(--ink) 60%, transparent 100%);
-      background-position: -100% 0;
-      background-repeat: no-repeat;
-      background-size: 50% 200%;
-      -webkit-background-clip: text;
-      background-clip: text;
-      -webkit-text-fill-color: transparent;
-      animation: cop-shimmer 2s steps(48, end) infinite;
+    /* Composité seul : un masque trois fois plus large que le libellé glisse en transform,
+       le texte glisse en sens inverse et reste immobile à l'écran. Le masque atténue
+       l'encre hors de la bande (≈ --ink-3) ; aucun texte transparent. */
+    .cop-shimmer { display: inline-block; min-width: 0; max-width: 100%; overflow: clip; color: var(--ink); }
+    .cop-shimmer-mask {
+      display: block;
+      width: 300%;
+      -webkit-mask-image: linear-gradient(90deg, rgb(0 0 0 / 0.5) 0%, rgb(0 0 0 / 0.5) 38%, #000 50%, rgb(0 0 0 / 0.5) 62%, rgb(0 0 0 / 0.5) 100%);
+      mask-image: linear-gradient(90deg, rgb(0 0 0 / 0.5) 0%, rgb(0 0 0 / 0.5) 38%, #000 50%, rgb(0 0 0 / 0.5) 62%, rgb(0 0 0 / 0.5) 100%);
+      animation: cop-shimmer-mask 2s linear infinite;
+      will-change: transform;
+    }
+    .cop-shimmer-text {
+      display: inline-block;
+      max-width: calc(100% / 3);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      vertical-align: top;
+      animation: cop-shimmer-text 2s linear infinite;
+      will-change: transform;
     }
   }
   /* Mouvement réduit : la pulsation d'opacité commune du panneau, décalée d'un point à
      l'autre — l'attente se distingue du repos sans aucun déplacement. La règle globale
      (app.css) force une itération de 0,01 ms en !important. */
+  /* Mouvement réduit : pulsation d'opacité (la règle globale force une itération de
+     0,01 ms en !important) — l'attente se distingue du repos sans rotation. */
   @media (prefers-reduced-motion: reduce) {
-    .cop-typing i {
+    .cop-spinner {
+      border-top-color: var(--line-2);
+      background: var(--line-2);
       animation-name: cop-wait-pulse;
       animation-timing-function: ease-in-out;
       animation-duration: 1.6s !important;
       animation-iteration-count: infinite !important;
     }
-    .cop-typing i:nth-child(2) { animation-delay: 0.25s; }
-    .cop-typing i:nth-child(3) { animation-delay: 0.5s; }
   }
-  @keyframes cop-typing-wave {
-    0%, 10%, 100% { transform: translateY(0); }
-    25% { animation-timing-function: steps(6, end); transform: translateY(1.2px); }
-    55% { transform: translateY(-2px); }
-    70% { transform: translateY(0); }
-  }
-  @keyframes cop-shimmer { to { background-position: 250% 0; } }
+  @keyframes cop-shimmer-mask { from { transform: translateX(calc(-200% / 3)); } 70%, to { transform: translateX(0); } }
+  @keyframes cop-shimmer-text { from { transform: translateX(200%); } 70%, to { transform: translateX(0); } }
   .cop-md-plain { font-size: var(--cop-text); line-height: 1.625; color: var(--ink-2); white-space: pre-wrap; overflow-wrap: anywhere; }
   /* Caret de flux (Kube Message) : point de 7 px à 13,5 px, en `em` pour suivre --cop-text.
      Mouvement réduit : la règle globale le fige (point plein, le texte qui s'écrit suffit). */
@@ -3987,6 +4135,15 @@
     animation: cop-caret 1s ease-in-out infinite;
   }
   @keyframes cop-caret { 50% { opacity: 0.3; transform: scale(0.8); } }
+  /* Lettres nouvelles du flux (copilot-stream-reveal.ts, quelques-unes par image) : elles sortent
+     d'un léger flou. En ligne (un paquet peut contenir un blanc) : opacité et flou seulement.
+     Mouvement réduit : fondu seul. */
+  .cop-md-plain.streaming :global(.cop-reveal) { animation: cop-reveal 200ms ease-out both; }
+  @keyframes cop-reveal { from { opacity: 0; filter: blur(2px); } }
+  @keyframes cop-reveal-fade { from { opacity: 0; } }
+  @media (prefers-reduced-motion: reduce) {
+    .cop-md-plain.streaming :global(.cop-reveal) { animation-name: cop-reveal-fade; animation-duration: 180ms !important; }
+  }
 
   /* Rendu Markdown assaini (Kube Prose ; contenu injecté via {@html} → styles :global).
      Tout dérive de --cop-text : interligne × 1,625, unité --u = taille / 4, petit texte
@@ -4189,33 +4346,6 @@
     pointer-events: none;
   }
 
-  .cop-activity-fab {
-    position: absolute;
-    z-index: var(--z-popover);
-    top: 12px;
-    right: 12px;
-    width: var(--control-md);
-    height: var(--control-md);
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    border: 0;
-    border-radius: var(--radius-lg);
-    background: var(--composer-bg);
-    box-shadow: var(--shadow-lg);
-    color: var(--ink-3);
-    font-size: 16px;
-    cursor: pointer;
-    transition: background-color var(--duration-basic) ease, color var(--duration-basic) ease, box-shadow var(--duration-basic) ease, transform var(--duration-basic) var(--ease-enter-snappy);
-  }
-  .cop-activity-fab:hover,
-  .cop-activity-fab.active {
-    box-shadow: var(--shadow-xl);
-    color: var(--ink);
-  }
-  .cop-activity-fab.active { background: var(--surface-2); }
-  .cop-activity-fab:active { transform: scale(0.97); }
-  .cop-activity-fab:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
 
   /* Voile juste sous la couche des popovers : le tiroir et son bouton restent au-dessus. */
   .cop-activity-backdrop {
@@ -4229,7 +4359,7 @@
   .cop-activity-drawer {
     position: absolute;
     z-index: var(--z-popover);
-    top: 52px;
+    top: 4px;
     right: 12px;
     width: min(380px, calc(100% - 24px));
     max-height: min(72%, 620px);
@@ -4268,95 +4398,49 @@
     white-space: nowrap;
   }
 
-  /* Pile du composeur (Kube ComposerDrawer) : le tiroir (z 0) est rentré de 13 px de chaque
-     côté et glisse ses 20 px du bas (rayon 16 + repli 4) sous la saisie (z 1), dont les
-     coins de 22 px le recouvrent. Ni ombre ni `transform` : il pousse vers le haut. */
-  .cop-composer-stack {
-    --drawer-radius: var(--radius-2xl);
-    --drawer-tuck: 4px;
-    --drawer-inset: 13px;
+  /* Composeur unifié (refonte v2 §4) : une seule carte, rayon 22, ombre composer. Ses
+     couches se révèlent EN HAUTEUR au-dessus des puces (grille 0fr → 1fr, 150 ms) : la
+     saisie reste ancrée en bas pendant que la carte grandit vers le haut. */
+  .cop-composer {
     position: relative;
+    min-width: 0;
     display: flex;
     flex-direction: column;
-    min-width: 0;
+    border-radius: var(--radius-composer);
+    background: var(--composer-bg);
+    box-shadow: var(--shadow-composer);
+    container: cop-composer / inline-size;
+    transition: box-shadow var(--duration-basic) ease;
   }
-  .cop-drawer {
-    position: relative;
-    z-index: 0;
-    display: flex;
-    flex-direction: column;
-    min-width: 0;
-    margin-inline: var(--drawer-inset);
-    border-start-start-radius: var(--drawer-radius);
-    border-start-end-radius: var(--drawer-radius);
-    background: color-mix(in srgb, var(--cream-tint) 78%, var(--cream-content));
-    color: var(--ink);
-    overflow: clip;
-    /* Masqué une fois replié (après les 150 ms), pour ne jamais couvrir l'ombre de la saisie. */
-    visibility: hidden;
-    transition:
-      margin-bottom var(--duration-basic) var(--ease-enter-snappy),
-      padding-bottom var(--duration-basic) var(--ease-enter-snappy),
-      visibility 0s linear var(--duration-basic);
-  }
-  :global([data-theme='dark']) .cop-drawer { background: var(--cream-soft); }
-  .cop-drawer.open {
-    margin-bottom: calc((var(--drawer-tuck) + var(--drawer-radius)) * -1);
-    padding-bottom: var(--drawer-radius);
-    /* `inherit` et non `visible` : le panneau fermé (visibility: hidden) garde la main. */
-    visibility: inherit;
-    transition-delay: 0s;
-  }
-  /* Filet sur trois côtés ; la zone repliée sous la saisie en est coupée. */
-  .cop-drawer::after {
-    content: '';
-    position: absolute;
-    inset: 0;
-    border: 1px solid var(--line-1);
-    border-bottom-width: 0;
-    border-radius: inherit;
-    clip-path: inset(0 0 var(--drawer-radius));
-    pointer-events: none;
-  }
-  /* Chaque élément se révèle en hauteur (rangées 0fr → 1fr) pendant que son contenu
-     apparaît en fondu ; filet de séparation et marges du tiroir suivent, même tempo. */
-  .cop-drawer-item {
-    position: relative;
+  .cop-composer:focus-within { box-shadow: var(--shadow-composer), 0 0 0 1px var(--line-2); }
+  .cop-reveal {
     display: grid;
     grid-template-rows: 0fr;
     min-width: 0;
-    border-top: 0 solid var(--line-1);
-    transition:
-      grid-template-rows var(--duration-basic) var(--ease-enter-snappy),
-      border-top-width var(--duration-basic) var(--ease-enter-snappy);
+    transition: grid-template-rows var(--duration-basic) var(--ease-enter-snappy);
   }
-  .cop-drawer-item.open { grid-template-rows: 1fr; }
-  .cop-drawer-item.open ~ .cop-drawer-item.open { border-top-width: 1px; }
-  .cop-drawer-item:not(.open) { pointer-events: none; }
-  .cop-drawer-content {
-    display: flex;
-    flex-direction: column;
+  .cop-reveal.open { grid-template-rows: 1fr; }
+  .cop-reveal:not(.open) { pointer-events: none; }
+  .cop-reveal-content {
     min-width: 0;
     min-height: 0;
     overflow: hidden;
     opacity: 0;
     transition: opacity var(--duration-basic) var(--ease-enter-snappy);
   }
-  .cop-drawer-item.open .cop-drawer-content { opacity: 1; }
-  /* Le dernier élément ouvert ajoute le repli : son texte dégage le bord de la saisie. */
-  .cop-drawer-item.open:not(:has(~ .cop-drawer-item.open)) .cop-drawer-content { padding-bottom: var(--drawer-tuck); }
-  .cop-composer-stack.kbd .cop-drawer,
-  .cop-composer-stack.kbd .cop-drawer-item,
-  .cop-composer-stack.kbd .cop-drawer-content,
-  .cop-composer-stack.kbd .cop-context-chevron { transition: none; }
+  .cop-reveal.open .cop-reveal-content { opacity: 1; }
+  /* Filet sous la couche ouverte : elle se lit comme un étage de la carte, pas un menu. */
+  .cop-reveal.open + .cop-reveal:not(.open) ~ .cop-ctx-row,
+  .cop-reveal.open ~ .cop-ctx-row { border-top: 1px solid var(--line-1); }
+  .cop-composer.kbd .cop-reveal,
+  .cop-composer.kbd .cop-reveal-content,
+  .cop-composer.kbd .cop-ctx-chev { transition: none; }
   @media (prefers-reduced-motion: reduce) {
-    .cop-drawer,
-    .cop-drawer-item,
-    .cop-drawer-content { transition: none; }
+    .cop-reveal,
+    .cop-reveal-content { transition: none; }
   }
 
-  /* Rangée Kube : tête de 28 px (icône 16 px, texte ellipsé sur 20 px), actions de 20 px. */
-  .cop-drawer-row,
+  /* Rangées de la liste du contexte : 32 px, icône 16, texte ellipsé, actions de 20 px. */
   .cop-context-row {
     min-width: 0;
     min-height: var(--control-md);
@@ -4365,24 +4449,19 @@
     gap: 8px;
     padding: 2px 6px 2px 8px;
     border: 0;
+    border-radius: var(--radius-lg);
     background: transparent;
     color: var(--ink-3);
     font: var(--weight-regular) var(--text-sm)/20px var(--font-sans);
     text-align: left;
     transition: background-color var(--duration-basic) ease, color var(--duration-basic) ease;
   }
-  /* Rayon concentrique : 16 px de tiroir moins 4 px de marge. */
-  .cop-drawer-row { margin: 4px 4px 0; border-radius: var(--radius-xl); cursor: pointer; }
-  .cop-context-row { border-radius: var(--radius-lg); }
   button.cop-context-row { cursor: pointer; }
-  .cop-context-row.sel { background: var(--fill-pressed); color: var(--ink); }
+  .cop-context-row.sel { background: var(--row-selected); color: var(--ink); }
   @media (hover: hover) and (pointer: fine) {
-    .cop-drawer-row:hover,
-    button.cop-context-row:not(.sel):hover { background: var(--fill-hover); color: var(--ink); }
+    button.cop-context-row:not(.sel):hover { background: var(--surface-hover); color: var(--ink); }
   }
-  .cop-drawer-row:active,
   button.cop-context-row:active { background: var(--fill-pressed); }
-  .cop-drawer-row:focus-visible,
   button.cop-context-row:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
   .cop-drawer-icon { flex: 0 0 auto; font-size: 16px; color: var(--ink-3); }
   .cop-drawer-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -4392,8 +4471,6 @@
     width: 20px; height: 20px; flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center;
     color: var(--ink-4); font-size: 16px;
   }
-  .cop-context-chevron { transition: rotate var(--duration-basic) var(--ease-move); }
-  .cop-context-toggle[aria-expanded='true'] .cop-context-chevron { rotate: 180deg; }
   .cop-drawer-btn {
     width: 20px; height: 20px; flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center;
     border: 0; border-radius: var(--radius-full); background: transparent; color: var(--ink-4); font-size: 14px; cursor: pointer;
@@ -4404,10 +4481,11 @@
   }
   .cop-drawer-btn:active { transform: scale(0.97); }
   .cop-drawer-btn:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 0; }
-  /* La liste des sources défile au-delà de huit rangées environ ; le tiroir reste court. */
+  /* La liste défile au-delà de huit rangées environ : la carte reste courte. Rayon
+     concentrique : 22 px de carte moins 6 px de retrait = 16, rangées à 10. */
   .cop-context-list {
     max-height: min(40vh, 264px);
-    padding: 4px;
+    padding: 6px 6px 4px;
     display: flex;
     flex-direction: column;
     gap: 2px;
@@ -4425,35 +4503,27 @@
   .cop-context-destination { display: flex; align-items: center; gap: 6px; }
   .cop-context-destination .icon { flex: 0 0 auto; font-size: 14px; }
   .cop-context-error { color: var(--err-text); }
-  .cop-context-error-inline { margin: 0 14px 8px; font: var(--weight-regular) var(--text-xs)/1.35 var(--font-sans); }
+  .cop-context-error-inline { margin: 0 14px 10px; font: var(--weight-regular) var(--text-xs)/1.35 var(--font-sans); }
 
-  /* Tray des commandes « / » : plus haut, défilant, il déborde de 3 px chaque bord de la
-     saisie. Aucune transition sur la sélection : elle suit le clavier sans traîner. */
-  .cop-tray {
-    --drawer-radius: calc(var(--radius-2xl) + 4px);
-    margin-inline: calc(var(--drawer-inset) - 16px);
-  }
-  /* Retraits portés par la liste et non par `.cop-drawer-content` : un padding sur l'élément
-     qui se replie compte dans la rangée 0fr et laisserait 12 px de tray fermé. 177 px de
-     tray Kube, marges comprises. */
+  /* Tray des commandes « / » : premier étage de la carte. Aucune transition sur la
+     sélection : elle suit le clavier sans traîner. */
   .cop-tray-list,
-  .cop-tray-empty { margin: 12px 0 0 8px; }
+  .cop-tray-empty { margin: 6px 6px 4px; }
   .cop-tray-list { position: relative; max-height: 161px; overflow-y: auto; overscroll-behavior: contain; }
   .cop-tray-option {
-    width: calc(100% - 8px);
-    min-height: var(--control-sm);
+    min-height: var(--control-md);
     display: flex;
     align-items: center;
     gap: 8px;
-    padding: 6px 8px;
-    border-radius: var(--radius-md);
+    padding: 6px 10px;
+    border-radius: 16px;
     color: var(--ink);
     font: var(--weight-regular) var(--text-sm)/18px var(--font-sans);
     cursor: pointer;
     user-select: none;
   }
   .cop-tray-option .icon { flex: 0 0 auto; font-size: 16px; color: var(--ink-3); }
-  .cop-tray-option[aria-selected='true'] { background: var(--fill-pressed); }
+  .cop-tray-option[aria-selected='true'] { background: var(--menu-row-hover); }
   .cop-tray-option[aria-selected='true'] .icon { color: var(--ink-2); }
   .cop-tray-name { flex: 0 0 auto; color: var(--ink-3); }
   .cop-tray-name b { color: var(--ink); font-weight: var(--weight-strong); }
@@ -4461,58 +4531,160 @@
     min-width: 0; margin-left: auto; padding-left: 8px; overflow: hidden;
     color: var(--ink-3); font-size: var(--text-xs); text-overflow: ellipsis; white-space: nowrap;
   }
-  .cop-tray-empty { padding: 6px 8px; color: var(--ink-3); font: var(--weight-regular) var(--text-sm)/18px var(--font-sans); }
+  .cop-tray-empty { padding: 6px 10px; color: var(--ink-3); font: var(--weight-regular) var(--text-sm)/18px var(--font-sans); }
 
-  /* La saisie : surface élevée qui recouvre le tiroir. Conteneur du pied responsive. */
-  .cop-composer-front {
-    position: relative;
-    z-index: 1;
+  /* Puces de contexte : 24 px, rayon plein, lavis neutre ; la première porte la portée et
+     déplie le détail (chevron), les autres se retirent par leur croix. */
+  .cop-ctx-row {
     min-width: 0;
-    overflow: hidden;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    padding: 10px 10px 0;
+  }
+  .cop-ctx-chip {
+    min-width: 0;
+    max-width: 100%;
+    height: var(--control-2xs);
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 0 8px;
     border: 0;
-    border-radius: var(--radius-composer);
-    background: var(--composer-bg);
-    box-shadow: var(--shadow-composer);
-    container: cop-composer / inline-size;
+    border-radius: var(--radius-full);
+    background: var(--accent-soft);
+    color: var(--ink-2);
+    font: var(--weight-control) var(--text-xs)/1 var(--font-sans);
+    white-space: nowrap;
   }
-  /* Composeur Kube : saisie en haut (gouttière 12 px), pied de boutons ronds de 28 px
-     à 8 px des bords. */
-  .cop-composer-grid {
-    min-height: 88px;
-    padding: 10px 8px 8px;
-    display: grid;
-    grid-template-columns: var(--control-sm) minmax(0, 1fr) var(--control-sm);
-    grid-template-rows: minmax(34px, auto) var(--control-sm);
-    column-gap: 4px;
+  .cop-ctx-chip > .icon { flex: 0 0 auto; font-size: 13px; color: var(--ink-3); }
+  .cop-ctx-name { min-width: 0; max-width: 168px; overflow: hidden; text-overflow: ellipsis; }
+  .cop-ctx-chip.lead { cursor: pointer; transition: background-color var(--duration-basic) ease, color var(--duration-basic) ease; }
+  @media (hover: hover) and (pointer: fine) {
+    .cop-ctx-chip.lead:hover { background: var(--fill-pressed); color: var(--ink); }
   }
-  .cop-input-attach {
-    grid-column: 1; grid-row: 2;
-    width: var(--control-sm); height: var(--control-sm); display: inline-flex; align-items: center; justify-content: center;
-    background: transparent; border: 0; border-radius: var(--radius-full); color: var(--ink-3); font-size: 16px; cursor: pointer;
-    transition: background-color var(--duration-basic) ease, color var(--duration-basic) ease, transform var(--duration-basic) var(--ease-enter), scale var(--duration-basic) var(--ease-enter-snappy);
+  .cop-ctx-chip.lead[aria-expanded='true'] { background: var(--ink); color: var(--cream-content); }
+  .cop-ctx-chip.lead[aria-expanded='true'] > .icon { color: inherit; }
+  .cop-ctx-chip.lead:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
+  .cop-ctx-warn { color: var(--warn-text) !important; }
+  .cop-ctx-more { color: var(--ink-4); font-variant-numeric: tabular-nums; }
+  .cop-ctx-chip.lead[aria-expanded='true'] .cop-ctx-more { color: inherit; opacity: 0.7; }
+  .cop-ctx-chev { flex: 0 0 auto; margin-right: -2px; font-size: 12px; color: var(--ink-4); transition: rotate var(--duration-basic) var(--ease-move); }
+  .cop-ctx-chip.lead[aria-expanded='true'] .cop-ctx-chev { rotate: 180deg; color: inherit; }
+  .cop-ctx-chip > button {
+    width: 18px; height: 18px; margin-right: -4px; flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center;
+    border: 0; border-radius: var(--radius-full); background: transparent; color: var(--ink-4); font-size: 12px; cursor: pointer;
+    transition: background-color var(--duration-basic) ease, color var(--duration-basic) ease;
   }
-  .cop-input-attach:hover, .cop-input-attach.open { background: var(--fill-hover); color: var(--ink); }
-  .cop-input-attach.open { transform: rotate(45deg); }
-  /* `scale` individuel : se compose avec la rotation du « + » ouvert au lieu de l'annuler. */
-  .cop-input-attach:not(:disabled):active { scale: 0.97; }
-  .cop-input-attach:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 0; }
-  .cop-input-attach:disabled { opacity: var(--opacity-disabled); cursor: wait; }
+  .cop-ctx-chip > button:hover { background: var(--fill-hover); color: var(--ink); }
+  .cop-ctx-chip > button:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 0; }
+  .cop-ctx-add {
+    width: var(--control-2xs); height: var(--control-2xs); flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center;
+    border: 0; border-radius: var(--radius-full); background: transparent; color: var(--ink-3); font-size: 14px; cursor: pointer;
+    box-shadow: inset 0 0 0 1px var(--line-2);
+    transition: background-color var(--duration-basic) ease, color var(--duration-basic) ease, box-shadow var(--duration-basic) ease;
+  }
+  .cop-ctx-add:hover, .cop-ctx-add.open { background: var(--fill-hover); color: var(--ink); box-shadow: inset 0 0 0 1px var(--line-3); }
+  .cop-ctx-add:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
+  .cop-ctx-add:disabled { opacity: var(--opacity-disabled); cursor: wait; }
+
   .cop-input-ta {
-    grid-column: 1 / -1; grid-row: 1; align-self: start;
-    width: 100%; min-width: 0; border: 0; background: transparent; outline: none; resize: none;
-    font-family: var(--font-sans); font-size: var(--cop-text); line-height: 1.45; letter-spacing: -0.15px; color: var(--ink); padding: 2px 4px 8px; max-height: 120px;
+    display: block;
+    width: 100%; min-width: 0; min-height: 44px; border: 0; background: transparent; outline: none; resize: none;
+    font-family: var(--font-sans); font-size: var(--cop-text); line-height: 1.45; letter-spacing: -0.15px; color: var(--ink);
+    padding: 10px 14px 4px; max-height: 160px;
     scroll-padding-block: 6px;
     field-sizing: content; /* auto-grow : les lignes Shift+Entrée restent visibles (WebView2 OK) */
   }
   .cop-input-ta::placeholder { color: var(--ink-4); }
-  /* Envoyer / arrêter : disque d'encre de 28 px, comme le bouton d'envoi Kube. */
-  .cop-input-send { grid-column: 3; grid-row: 2; width: var(--control-sm); height: var(--control-sm); display: inline-flex; align-items: center; justify-content: center; background: var(--ink); border: 0; border-radius: var(--radius-full); color: var(--cream-content); font-size: 16px; cursor: pointer; transition: background-color var(--duration-basic) ease, opacity var(--duration-basic) ease, transform var(--duration-basic) var(--ease-enter-snappy); }
+
+  /* Barre d'outils : boutons de 28 px à 8 px des bords (rayon 22 − 8 = 14 ≈ plein). */
+  .cop-toolbar {
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 8px 8px;
+  }
+  .cop-input-attach {
+    flex: 0 0 auto;
+    width: var(--control-sm); height: var(--control-sm); display: inline-flex; align-items: center; justify-content: center;
+    background: transparent; border: 0; border-radius: var(--radius-full); color: var(--ink-3); font-size: 16px; cursor: pointer;
+    transition: background-color var(--duration-basic) ease, color var(--duration-basic) ease, scale var(--duration-basic) var(--ease-enter-snappy);
+  }
+  .cop-input-attach:hover, .cop-input-attach.open { background: var(--fill-hover); color: var(--ink); }
+  .cop-input-attach:not(:disabled):active { scale: 0.97; }
+  .cop-input-attach:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 0; }
+  .cop-input-attach:disabled { opacity: var(--opacity-disabled); cursor: wait; }
+  /* Capsule modèle compacte : point d'état, nom court, chevron. Elle cède en premier. */
+  .cop-model-cap {
+    min-width: 0;
+    flex: 0 1 auto;
+    height: var(--control-sm);
+    margin-left: auto;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 0 8px 0 10px;
+    border: 0;
+    border-radius: var(--radius-full);
+    background: transparent;
+    color: var(--ink-3);
+    font: var(--weight-control) var(--text-xs)/1 var(--font-sans);
+    white-space: nowrap;
+    cursor: pointer;
+    transition: background-color var(--duration-basic) ease, color var(--duration-basic) ease;
+  }
+  .cop-model-cap:hover { background: var(--fill-hover); color: var(--ink); }
+  .cop-model-cap:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
+  .cop-model-cap > .icon { flex: 0 0 auto; font-size: 12px; color: var(--ink-4); }
+  .cop-model-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .cop-state-dot { width: 6px; height: 6px; flex: 0 0 auto; border-radius: 50%; background: var(--line-3); }
+  .cop-state-dot[data-state='ok'] { background: var(--ok); }
+  .cop-state-dot[data-state='warn'] { background: var(--warn); }
+  .cop-state-dot[data-state='busy'] { background: var(--ink-4); animation: doku-breathe 1.6s ease-in-out infinite; }
+
+  /* Micro : bouton fantôme rond ; allumé (accent) tant que la conversation vocale tourne. */
+  .cop-mic {
+    flex: 0 0 auto; width: var(--control-md); height: var(--control-md); display: inline-flex; align-items: center; justify-content: center;
+    padding: 0; border: 0; border-radius: var(--radius-full); background: transparent; color: var(--ink-3); font-size: 16px; cursor: pointer;
+    transition: background-color var(--duration-basic) ease, color var(--duration-basic) ease, transform var(--duration-basic) var(--ease-enter-snappy);
+  }
+  .cop-mic:hover { background: var(--fill-hover); color: var(--ink); }
+  .cop-mic:active { transform: scale(0.94); }
+  .cop-mic:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
+  .cop-mic.on { background: var(--accent-soft); color: var(--ink); }
+  .cop-voice-error { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .cop-voice-error > span { flex: 1 1 auto; min-width: 0; }
+
+  /* Envoyer / arrêter : disque d'encre de 32 px (le seul primaire de la vue). Pendant la
+     génération il s'étire en pilule « Arrêter » sur le ressort liquide (la largeur dépasse un
+     peu puis se pose) et refond en disque à la fin ; les deux contenus se croisent en fondu. */
+  .cop-input-send {
+    position: relative; overflow: hidden; flex: 0 0 auto; width: var(--control-md); height: var(--control-md);
+    display: inline-flex; align-items: center; justify-content: center; padding: 0;
+    background: var(--ink); border: 0; border-radius: var(--radius-full); color: var(--cream-content); font-size: 16px; cursor: pointer;
+    transition: width var(--duration-liquid) var(--ease-spring-liquid), background-color var(--duration-basic) ease, opacity var(--duration-basic) ease, transform var(--duration-basic) var(--ease-enter-snappy);
+  }
+  .cop-input-send[aria-busy='true'] { width: 88px; }
   .cop-input-send:hover { background: var(--ink-2); }
-  .cop-send-arrow { translate: 0 0.5px; }
-  .cop-stop-glyph { font-size: 12px; fill: currentColor; }
+  .cop-send-arrow { translate: 0 0.5px; transition: opacity 160ms ease 120ms, scale 220ms var(--ease-enter-snappy) 120ms; }
+  .cop-send-stop {
+    position: absolute; inset: 0; display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+    font: var(--weight-control) var(--text-xs)/1 var(--font-sans); white-space: nowrap;
+    opacity: 0; scale: 0.8; transition: opacity 140ms ease, scale 220ms var(--ease-enter-snappy);
+  }
+  .cop-input-send[aria-busy='true'] .cop-send-arrow { opacity: 0; scale: 0.6; transition-delay: 0ms; }
+  .cop-input-send[aria-busy='true'] .cop-send-stop { opacity: 1; scale: 1; transition-delay: 90ms; }
+  .cop-stop-glyph { font-size: 10px; fill: currentColor; }
   .cop-input-send:not(:disabled):active { transform: scale(0.97); }
   .cop-input-send:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
-  .cop-input-send:disabled { opacity: var(--opacity-disabled); cursor: default; }
+  .cop-input-send:disabled { opacity: 0.25; cursor: default; }
+  @media (prefers-reduced-motion: reduce) {
+    .cop-input-send { transition: background-color var(--duration-basic) ease, opacity var(--duration-basic) ease; }
+    .cop-send-arrow, .cop-send-stop { scale: 1; }
+  }
 
   /* Sections dépliables du menu du « + » : en-tête cliquable, corps indenté. */
   .cop-sec {
@@ -4521,7 +4693,7 @@
     font-family: var(--font-sans); text-align: left; cursor: pointer;
     transition: background-color var(--duration-basic) ease;
   }
-  .cop-sec:hover, .cop-sec:focus-visible { background: var(--accent-soft); }
+  .cop-sec:hover, .cop-sec:focus-visible { background: var(--menu-row-hover); }
   .cop-sec:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
   .cop-sec-ic {
     width: var(--control-sm); height: var(--control-sm); flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center;
@@ -4542,7 +4714,7 @@
   }
   .cop-sec.open .cop-sec-chev { transform: rotate(180deg); }
   .cop-sec-body { padding: 0 0 4px 8px; }
-  /* Pastille du livrable armé, dans la rangée de saisie : bouton de composeur Kube (28 px,
+  /* Pastille du livrable armé, dans la barre d'outils : bouton de composeur Kube (28 px,
      croix de 20 px). */
   .cop-mode-pill {
     display: inline-flex; align-items: center; gap: 4px; height: var(--control-sm); padding: 0 4px 0 10px;
@@ -4551,7 +4723,7 @@
     transform-origin: left center;
     animation: doku-pop-in var(--duration-basic) var(--ease-enter-snappy);
   }
-  /* Choix au clavier (menu « / », Entrée dans le menu du « + ») : pas d'entrée animée. */
+  /* Choix au clavier (menu « / », Entrée dans le menu Outils) : pas d'entrée animée. */
   .cop-mode-pill.kbd { animation: none; }
   .cop-mode-pill > .icon { font-size: 14px; }
   .cop-mode-pill button {
@@ -4567,7 +4739,7 @@
     flex: 0 0 auto; display: inline-flex; align-items: center; gap: 4px; height: var(--control-sm); padding: 0 10px 0 8px;
     border: 0; border-radius: var(--radius-full); background: transparent; color: var(--ink-3);
     box-shadow: inset 0 0 0 1px var(--line-2);
-    font: var(--weight-control) var(--text-sm) var(--font-sans); white-space: nowrap; cursor: pointer;
+    font: var(--weight-control) var(--text-xs) var(--font-sans); white-space: nowrap; cursor: pointer;
     transition: background-color var(--duration-basic) ease, color var(--duration-basic) ease, box-shadow var(--duration-basic) ease, transform var(--duration-basic) var(--ease-enter-snappy);
   }
   .cop-think-toggle:not([aria-disabled='true']):active { transform: scale(0.97); }
@@ -4581,36 +4753,31 @@
   .cop-target-pill { min-width: 0; }
   .cop-target-text { min-width: 0; max-width: 160px; overflow: hidden; text-overflow: ellipsis; }
   .cop-compose-options {
-    grid-column: 2;
-    grid-row: 2;
+    flex: 0 1 auto;
     min-width: 0;
-    align-self: center;
     display: flex;
     align-items: center;
     gap: 4px;
     overflow: hidden;
   }
-  /* Pied responsive (Kube Composer, libellés `data-collapse`) : seuils 440 / 300 rapportés à
-     nos pastilles — l'extrait de la cible part d'abord, puis les libellés courts. Les noms
+  .cop-compose-options:empty { display: none; }
+  /* Barre responsive (Kube Composer, libellés `data-collapse`) : l'extrait de la cible part
+     d'abord, puis les libellés courts, puis le nom du modèle (le point d'état reste). Les noms
      accessibles restent (aria-label, title). */
   @container cop-composer (max-width: 440px) {
     .cop-target-text { display: none; }
     .cop-target-pill { padding-left: 8px; }
   }
-  @container cop-composer (max-width: 300px) {
+  @container cop-composer (max-width: 330px) {
     .cop-think-label,
     .cop-mode-label { display: none; }
     .cop-think-toggle { padding: 0 7px; }
     .cop-mode-pill { padding-left: 8px; }
   }
-  /* Panneau étroit (Kube Composer --compact) : rayon lg, filet au lieu d'ombre, marges
-     resserrées. Souris seulement : au doigt, les boutons de 40 px gardent le rayon de 28. */
-  @container cop-input (max-width: 300px) {
-    :global(:where(:root:not([data-input='touch']))) .cop-composer-front {
-      border-radius: var(--radius-lg);
-      box-shadow: 0 0 0 1px var(--line-2);
-    }
-    .cop-composer-grid { min-height: 76px; padding: 8px 6px 6px; }
+  @container cop-composer (max-width: 230px) {
+    .cop-model-name { display: none; }
+    .cop-input-send[aria-busy='true'] { width: var(--control-md); }
+    .cop-send-stop-label { display: none; }
   }
   /* Curseur à 3 crans (essai façon « effort ») : piste pleine jusqu'au pouce, ticks.
      Pas d'en-tête : le libellé courant sous le curseur dit déjà tout. */
@@ -4641,14 +4808,15 @@
     background: var(--track-thumb);
     box-shadow: var(--shadow-lg);
   }
-  .cop-disclaimer { text-align: center; font-size: var(--text-xs); line-height: 1.35; color: var(--ink-4); margin-top: 8px; }
+  .cop-disclaimer { text-align: center; font-size: var(--text-2xs); line-height: 1.35; color: var(--ink-4); margin-top: 8px; text-wrap: balance; }
 
   /* Largeur posée en ligne depuis ADD_MENU_W (source unique avec le bornage), origine de
      l'échelle posée sur le « + ». */
   .cop-add-context-menu {
     position: absolute; z-index: var(--z-popover); padding: 4px;
-    border-radius: var(--radius-xl); background: var(--composer-bg);
-    box-shadow: var(--shadow-xl);
+    border-radius: var(--radius-xl); background: var(--glass-bg);
+    -webkit-backdrop-filter: var(--glass-filter); backdrop-filter: var(--glass-filter);
+    box-shadow: var(--glass-shadow);
     transform-origin: bottom left;
     animation: doku-pop-in var(--duration-basic) var(--ease-enter-snappy);
   }
@@ -4657,7 +4825,7 @@
     border: 0; border-radius: var(--radius-md); background: transparent; color: var(--ink); text-align: left; cursor: pointer;
     transition: background-color var(--duration-basic) ease;
   }
-  .cop-add-context-action:hover, .cop-add-context-action:focus-visible { background: var(--accent-soft); }
+  .cop-add-context-action:hover, .cop-add-context-action:focus-visible { background: var(--menu-row-hover); }
   .cop-add-context-action:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
   .cop-add-context-action.active { background: var(--accent-soft); }
   .cop-add-context-action:disabled { opacity: var(--opacity-disabled); cursor: default; background: transparent; }
@@ -4713,9 +4881,11 @@
     overflow: hidden;
     border: 0;
     border-radius: var(--radius-xl);
-    background: var(--composer-bg);
+    background: var(--glass-bg);
+    -webkit-backdrop-filter: var(--glass-filter);
+    backdrop-filter: var(--glass-filter);
     color: var(--ink);
-    box-shadow: var(--shadow-xl);
+    box-shadow: var(--glass-shadow);
     pointer-events: none;
     animation: doku-pop-in var(--duration-basic) var(--ease-enter-snappy);
   }
@@ -4766,17 +4936,15 @@
   :global(:root[data-input='touch']) .cop-memory-item-head button,
   :global(:root[data-input='touch']) .cop-memory-toast button.icon { width: 40px; height: 40px; }
   /* Composeur, tiroir, tray et menus au doigt (`:where` : la cascade reste celle du fichier). */
-  :global(:where(:root[data-input='touch'])) .cop-composer-grid {
-    grid-template-columns: 40px minmax(0, 1fr) 40px;
-    grid-template-rows: minmax(34px, auto) 40px;
-  }
   :global(:where(:root[data-input='touch'])) .cop-input-attach,
   :global(:where(:root[data-input='touch'])) .cop-input-send,
-  :global(:where(:root[data-input='touch'])) .cop-drawer-btn,
-  :global(:where(:root[data-input='touch'])) .cop-activity-fab { width: 40px; height: 40px; }
+  :global(:where(:root[data-input='touch'])) .cop-drawer-btn { width: 40px; height: 40px; }
   /* Boutons de 40 + retrait de 8 : rayon du composeur concentrique (40 / 2 + 8). */
-  :global(:where(:root[data-input='touch'])) .cop-composer-stack { --radius-composer: 28px; }
-  :global(:where(:root[data-input='touch'])) .cop-drawer-row,
+  :global(:where(:root[data-input='touch'])) .cop-composer { --radius-composer: 28px; }
+  :global(:where(:root[data-input='touch'])) .cop-model-cap,
+  :global(:where(:root[data-input='touch'])) .cop-ctx-chip,
+  :global(:where(:root[data-input='touch'])) .cop-ctx-add { height: 32px; }
+  :global(:where(:root[data-input='touch'])) .cop-ctx-add { width: 32px; }
   :global(:where(:root[data-input='touch'])) .cop-context-row,
   :global(:where(:root[data-input='touch'])) .cop-tray-option,
   :global(:where(:root[data-input='touch'])) .cop-sec,
@@ -4790,12 +4958,12 @@
   @container cop-composer (max-width: 440px) {
     :global(:where(:root[data-input='touch'])) .cop-target-pill { padding-left: 10px; }
   }
-  @container cop-composer (max-width: 300px) {
+  @container cop-composer (max-width: 330px) {
     :global(:where(:root[data-input='touch'])) .cop-mode-pill { padding-left: 10px; }
     :global(:where(:root[data-input='touch'])) .cop-think-toggle { padding: 0 12px; }
   }
   /* Poignée plus large au doigt, mais sous la barre de titre : l'identité reste touchable. */
-  :global(:root[data-input='touch']) .cop-resize { width: 20px; top: var(--chrome-titlebar-height); }
+  :global(:root[data-input='touch']) .cop-resize { width: 20px; top: 56px; }
   :global(:root[data-input='touch']) .cop-resize::after { top: 0; }
 
   @media (any-pointer: coarse) {
@@ -4815,8 +4983,10 @@
   /* Panneau fermé (visibility: hidden) : les boucles tournaient encore et recalculaient
      le style à chaque image. Le filet de vie du toast n'en fait pas partie : il mesure
      un vrai compte à rebours. */
-  .cop-panel:not(.open) .cop-typing i,
-  .cop-panel:not(.open) .cop-shimmer,
+  .cop-panel:not(.open) .cop-spinner,
+  .cop-panel:not(.open) .cop-state-dot,
+  .cop-panel:not(.open) .cop-shimmer-mask,
+  .cop-panel:not(.open) .cop-shimmer-text,
   .cop-panel:not(.open) .cop-md-plain.streaming::after,
   .cop-panel:not(.open) .doku-skel::after,
   .cop-panel:not(.open) .cop-dot.breathe,

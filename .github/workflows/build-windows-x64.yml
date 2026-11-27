@@ -35,17 +35,17 @@ jobs:
         with:
           workspaces: src-tauri
 
-      - name: Restaurer l'archive Ollama épinglée
+      - name: Restaurer l'archive llama.cpp épinglée
         uses: actions/cache@v6
         with:
-          path: src-tauri/binaries/.cache/ollama-v0.32.0/ollama-windows-amd64.zip
-          key: ollama-windows-amd64-v0.32.0-56561a8f
+          path: src-tauri/binaries/.cache/llama-b12810/llama-b12810-bin-win-cpu-x64.zip
+          key: llama-win-cpu-x64-b12810-845e2515
 
       - name: Installer les dépendances
         run: npm ci
 
-      - name: Préparer le sidecar Ollama CPU x64
-        run: npm run prepare:ollama:x64
+      - name: Préparer le moteur llama.cpp CPU x64
+        run: npm run prepare:llama:x64
 
       - name: Vérifier le projet
         run: |
@@ -70,42 +70,36 @@ jobs:
           }
 
           Assert-X64 "$root/doku.exe"
-          Assert-X64 "src-tauri/binaries/ollama-x86_64-pc-windows-msvc.exe"
-          Assert-X64 "src-tauri/binaries/lib/ollama/llama-server.exe"
+          Assert-X64 "src-tauri/binaries/llama/llama-server.exe"
 
           $installDir = "$env:LOCALAPPDATA/Doku"
           $install = Start-Process $installer.FullName -ArgumentList "/S" -Wait -PassThru
           if ($install.ExitCode -ne 0) { throw "Installation silencieuse échouée ($($install.ExitCode))" }
 
           $doku = "$installDir/doku.exe"
-          $ollama = "$installDir/ollama.exe"
-          $llamaServer = "$installDir/lib/ollama/llama-server.exe"
-          $license = "$installDir/licenses/Ollama-LICENSE.txt"
-          foreach ($required in @($doku, $ollama, $llamaServer, $license)) {
+          $llamaServer = "$installDir/llama/llama-server.exe"
+          $license = "$installDir/licenses/llama.cpp-LICENSE.txt"
+          foreach ($required in @($doku, $llamaServer, $license)) {
             if (-not (Test-Path $required)) { throw "Fichier installé manquant : $required" }
           }
           Assert-X64 $doku
-          Assert-X64 $ollama
           Assert-X64 $llamaServer
 
-          & $ollama --version
-          if ($LASTEXITCODE -ne 0) { throw "Le sidecar Ollama x64 ne démarre pas" }
-
-          $env:OLLAMA_HOST = "127.0.0.1:11589"
-          $env:OLLAMA_MODELS = "$env:RUNNER_TEMP/Doku-models-smoke"
-          $env:OLLAMA_NO_CLOUD = "1"
-          $env:OLLAMA_REMOTES = "127.0.0.1"
-          $server = Start-Process $ollama -ArgumentList "serve" -WindowStyle Hidden -PassThru
+          # Le routeur installé doit charger ses DLL et répondre — preset vide, comme au
+          # premier lancement de Doku avant tout téléchargement de modèle.
+          $preset = "$env:RUNNER_TEMP/doku-smoke.ini"
+          "version = 1`n`n[*]`nthreads = 4" | Set-Content $preset -Encoding ascii
+          $server = Start-Process $llamaServer -ArgumentList "--host","127.0.0.1","--port","11589","--models-preset",$preset,"--offline","--no-ui" -WorkingDirectory "$installDir/llama" -WindowStyle Hidden -PassThru
           try {
             $ready = $false
             for ($attempt = 0; $attempt -lt 40; $attempt++) {
               try {
-                $version = Invoke-RestMethod "http://127.0.0.1:11589/api/version" -TimeoutSec 2
-                if ($version.version -eq "0.32.0") { $ready = $true; break }
+                $models = Invoke-RestMethod "http://127.0.0.1:11589/models" -TimeoutSec 2
+                if ($null -ne $models.data) { $ready = $true; break }
               } catch {}
               Start-Sleep -Milliseconds 250
             }
-            if (-not $ready) { throw "Le serveur Ollama installé n'est pas devenu prêt" }
+            if (-not $ready) { throw "Le moteur llama.cpp installé n'est pas devenu prêt" }
           } finally {
             Stop-Process -Id $server.Id -Force -ErrorAction SilentlyContinue
           }

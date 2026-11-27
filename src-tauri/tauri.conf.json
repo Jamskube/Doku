@@ -34,9 +34,8 @@
   },
   "bundle": {
     "active": true,
-    "externalBin": ["binaries/ollama"],
     "resources": {
-      "binaries/lib/ollama/": "lib/ollama/",
+      "binaries/llama/": "llama/",
       "resources/licenses/": "licenses/"
     },
     "icon": [

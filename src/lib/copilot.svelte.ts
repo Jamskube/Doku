@@ -1,5 +1,5 @@
 // État runtime du copilote (13.4, réutilisé par 14.1) — éphémère, `$state` module-level
-// (même motif que `app` dans stores.svelte.ts). Le port du sidecar est stable (start_ollama
+// (même motif que `app` dans stores.svelte.ts). Le port du sidecar est stable (start_engine
 // idempotent côté Rust) → on le cache ; `ensureReady` déduplique les appels concurrents
 // (motif indexBuild de la recherche). Le modèle ACTIF (persisté) vit dans `app.activeModel`.
 import {
@@ -43,7 +43,7 @@ import { noteContent, noteFileName } from './notes'
 import { createFileWithContent, fileSizeAt, isTauri, readFileBytes, readTextFileAt } from './tauri'
 import { chunkText, DEFAULT_EMBED_MODEL, noteTitle, RAG_TOP_K } from './rag'
 import { cancelRagIndexing, ragState, searchDocEphemeral, searchRag, type RagHit } from './rag-index.svelte'
-import { chat, deleteModel, generate, listModels, pull, startOllama, waitReady, type OllamaModel } from './ollama'
+import { cancelDownload, chat, deleteModel, downloadModel, generate, listModels, startEngine, stopEngine, waitReady, type LocalModel } from './llama'
 import {
   cancelOpenAiAuth,
   disconnectOpenAi,
@@ -81,7 +81,7 @@ import {
   segmentDoc,
   SUMMARY_MAP_MAX_TOKENS,
   type ChatTurn,
-  type OllamaMessage,
+  type LlmMessage,
   type PersonaProfile,
   type RephraseMode,
   type SummaryMode,
@@ -197,6 +197,8 @@ export type ChatOutputMode = 'answer' | 'diagram' | 'html' | 'pdf'
 export interface ChatMsg {
   role: 'user' | 'assistant'
   content: string
+  // Heure du tour (ms epoch), affichée dans la signature de la réponse.
+  at?: number
   streaming?: boolean
   failed?: boolean
   // État de CONFIGURATION (pas un échec de génération) : aucun modèle actif / compte
@@ -263,7 +265,7 @@ export const copilot = $state({
   port: null as number | null,
   ready: false,
   loading: false,
-  models: [] as OllamaModel[],
+  models: [] as LocalModel[],
   // true après une PREMIÈRE liste réussie : « aucun modèle » / « introuvable » ne
   // s'affirment jamais sur une liste simplement jamais lue (moteur pas démarré).
   modelsLoaded: false,
@@ -440,6 +442,7 @@ function persistChatMessage(message: ChatMsg): PersistedChatMessage {
   return {
     role: message.role,
     content: message.content,
+    at: message.at,
     terminal: terminalState(message),
     sourceLabel: message.sourceLabel,
     evidence: persistedEvidence(message),
@@ -467,6 +470,7 @@ function hydrateChatMessage(message: PersistedChatMessage): ChatMsg {
   return {
     role: message.role,
     content: message.content,
+    at: message.at,
     failed: message.terminal === 'failed' || undefined,
     notice: message.terminal === 'notice' || undefined,
     sourceLabel: message.sourceLabel,
@@ -685,7 +689,6 @@ export async function resumeConversation(id: string): Promise<void> {
 }
 
 let readyPromise: Promise<number | null> | null = null
-let pullController: AbortController | null = null
 let genController: AbortController | null = null
 let refreshToken = 0
 let openAiAuthAttempt = 0
@@ -698,7 +701,7 @@ async function ensureReady(): Promise<number | null> {
   readyPromise = (async () => {
     copilot.loading = true
     try {
-      const p = await startOllama()
+      const p = await startEngine()
       if (p === null) {
         copilot.error = 'Copilote indisponible (mode navigateur — lancer en natif).'
         return null
@@ -712,7 +715,7 @@ async function ensureReady(): Promise<number | null> {
       copilot.error = ''
       return p
     } catch (e) {
-      // start_ollama (Rust) peut rejeter (binaire absent, spawn échoué) : ne pas laisser
+      // start_engine (Rust) peut rejeter (binaire absent, spawn échoué) : ne pas laisser
       // remonter un rejet non géré, afficher une erreur claire (sinon la vue montre à tort
       // « aucun modèle » alors que le moteur n'a jamais démarré).
       console.error('[copilot] ensureReady', e)
@@ -732,13 +735,12 @@ export function ensureCopilotReady(): Promise<number | null> {
   return ensureReady()
 }
 
-// Rafraîchit la liste des modèles installés. Garde anti-périmé (le dernier appel gagne).
+// Rafraîchit la liste des modèles installés (fichiers du catalogue sur le disque : le moteur n'a
+// pas besoin de tourner). Garde anti-périmé (le dernier appel gagne).
 export async function refreshModels(): Promise<void> {
-  const p = await ensureReady()
-  if (p === null) return
   const token = ++refreshToken
   try {
-    const models = await listModels(p)
+    const models = await listModels()
     if (token === refreshToken) {
       copilot.models = models
       copilot.modelsLoaded = true
@@ -749,61 +751,64 @@ export async function refreshModels(): Promise<void> {
   }
 }
 
-// Télécharge un modèle — ACTION RÉSEAU EXPLICITE, avec progression et annulation. Refuse un
-// nom vide ou un 2e téléchargement concurrent.
+// Télécharge un modèle du catalogue (llama.cpp, models.rs) — ACTION RÉSEAU EXPLICITE, avec
+// progression, vérification d'empreinte et annulation. Refuse un 2e téléchargement concurrent.
 export async function pullModel(name: string): Promise<void> {
   const model = name.trim()
   if (!model || copilot.pulling) return
-  const p = await ensureReady()
-  if (p === null) return
-  pullController = new AbortController()
   copilot.pulling = { name: model, pct: 0, done: 0, total: 0 }
   copilot.error = ''
   try {
-    await pull(
-      p,
-      model,
-      (pct, done, total) => {
-        if (copilot.pulling) {
-          copilot.pulling.pct = pct
-          copilot.pulling.done = done
-          copilot.pulling.total = total
-        }
-      },
-      pullController.signal,
-    )
+    const complete = await downloadModel(model, (pct, done, total) => {
+      if (copilot.pulling) {
+        copilot.pulling.pct = pct
+        copilot.pulling.done = done
+        copilot.pulling.total = total
+      }
+    })
+    // Le moteur a été arrêté côté Rust (son preset ne connaissait pas ce modèle) : oublier son
+    // port, le prochain usage le relance.
+    if (complete) forgetEngine()
     await refreshModels()
     // Premier modèle installé → on l'ACTIVE automatiquement (sinon le parcours d'onboarding se
     // termine sur une bibliothèque au point éteint, et la première question échoue « sans
     // raison »). Conditions : ne jamais voler la place d'un modèle déjà actif, et n'activer que
     // si le modèle EST dans la liste rafraîchie (un pull annulé sort silencieusement d'ici —
     // sans ce contrôle on activerait un modèle à moitié téléchargé).
-    const installed = copilot.models.find((m) => m.name === model || m.name === `${model}:latest`)
-    if (!app.activeModel && installed && !isEmbedModel(installed.name)) app.activeModel = installed.name
+    const installed = copilot.models.find((m) => m.name === model)
+    if (!app.activeModel && installed?.kind === 'chat') app.activeModel = installed.name
   } catch (e) {
     console.error('[copilot] pull', e)
-    copilot.error = `Échec du téléchargement de ${model}.`
+    copilot.error = `Échec du téléchargement de ${model} : ${e instanceof Error ? e.message : String(e)}`
   } finally {
     copilot.pulling = null
-    pullController = null
   }
 }
 
 export function cancelPull(): void {
-  pullController?.abort()
+  void cancelDownload()
+}
+
+function forgetEngine(): void {
+  copilot.port = null
+  copilot.ready = false
+}
+
+// Arrête le moteur (réglage, dépannage) ; il redémarre au prochain usage.
+export async function restartEngine(): Promise<void> {
+  await stopEngine()
+  forgetEngine()
 }
 
 // Supprime un modèle local (purge disque). Efface le modèle actif s'il disparaît.
 export async function removeModel(name: string): Promise<void> {
-  const p = await ensureReady()
-  if (p === null) return
   try {
-    await deleteModel(p, name)
+    await deleteModel(name)
+    forgetEngine()
     if (app.activeModel === name) app.activeModel = ''
     // Modèle d'embedding supprimé : effacer le réglage (sinon le prochain index part
-    // en 404) — l'UI de l'index repropose alors le défaut à télécharger. Alias :latest
-    // couvert (pull de « bge-m3 » → installé « bge-m3:latest »).
-    if (name === app.embedModel || name === `${app.embedModel}:latest`) app.embedModel = ''
+    // en 404) — l'UI de l'index repropose alors le défaut à télécharger.
+    if (name === app.embedModel) app.embedModel = ''
     await refreshModels()
   } catch (e) {
     console.error('[copilot] delete', e)
@@ -813,14 +818,7 @@ export async function removeModel(name: string): Promise<void> {
 
 export function setActiveModel(name: string): void {
   app.activeModel = name
-  app.copilotProvider = 'ollama'
-}
-
-// Prédicat UNIQUE « modèle d'embedding » (auto-activation post-pull + dropdown Modèle
-// actif) : un embedding ne sait pas générer — l'activer casserait chat/résumé
-// (« does not support generate ») sans cause visible pour l'utilisateur.
-export function isEmbedModel(name: string): boolean {
-  return name === app.embedModel || /embed|bge-m3/i.test(name)
+  app.copilotProvider = 'local'
 }
 
 // Coalescence des checks concurrents (picker + $effect de vue) : la promesse en vol est
@@ -835,8 +833,17 @@ export function refreshOpenAiStatus(): Promise<void> {
     try {
       const status = await getOpenAiStatus()
       copilot.openAiAuthenticated = status.authenticated
-      copilot.openAiPreferredAvailable = status.preferredModelAvailable
       copilot.openAiModels = status.models
+      // Même alignement que normalizeMinimaxModel : un modèle retiré du catalogue ne
+      // reste pas sélectionné. null = catalogue non lu, rien à conclure.
+      if (status.preferredModelAvailable === null) {
+        copilot.openAiPreferredAvailable = null
+      } else {
+        if (!status.models.includes(app.openaiModel)) {
+          app.openaiModel = status.models.includes(OPENAI_MODEL) ? OPENAI_MODEL : (status.models[0] ?? '')
+        }
+        copilot.openAiPreferredAvailable = status.models.length > 0
+      }
       copilot.openAiStatusError = status.error ?? ''
     } catch (error) {
       console.error('[copilot] openai status', error)
@@ -999,8 +1006,8 @@ export function setCopilotProvider(provider: CopilotProvider): void {
 }
 
 type ProviderRuntime =
-  | { provider: 'ollama'; port: number; model: string }
-  | { provider: 'openai'; model: typeof OPENAI_MODEL }
+  | { provider: 'local'; port: number; model: string }
+  | { provider: 'openai'; model: string }
   | { provider: 'minimax'; model: string }
 
 function personaFor(runtime: ProviderRuntime): PersonaProfile {
@@ -1011,7 +1018,7 @@ async function resolveRuntime(provider: CopilotProvider, localModel: string): Pr
   if (provider === 'openai') {
     if (copilot.openAiAuthenticated === null) await refreshOpenAiStatus()
     return copilot.openAiAuthenticated && copilot.openAiPreferredAvailable !== false
-      ? { provider: 'openai', model: OPENAI_MODEL }
+      ? { provider: 'openai', model: app.openaiModel || OPENAI_MODEL }
       : null
   }
   if (provider === 'minimax') {
@@ -1021,12 +1028,12 @@ async function resolveRuntime(provider: CopilotProvider, localModel: string): Pr
   }
   if (!localModel) return null
   const port = await ensureReady()
-  return port === null ? null : { provider: 'ollama', port, model: localModel }
+  return port === null ? null : { provider: 'local', port, model: localModel }
 }
 
 // `onThinking` (cloud) : appelé au premier delta de raisonnement — les modèles cloud
 // pensent parfois des dizaines de secondes avant le premier token visible ; le statut
-// doit le dire (« jamais muet »). Jamais émis par Ollama (modèle local non pensant).
+// doit le dire (« jamais muet »). Jamais émis par le moteur local (raisonnement coupé dans le preset).
 // Les fournisseurs sans entrée image ne reçoivent que le texte des messages multimodaux.
 function textOnly(messages: OpenAiMessage[]): CompatMessage[] {
   return messages.map((message) => ({
@@ -1056,7 +1063,7 @@ function streamChat(
   } = {},
 ): Promise<string> {
   if (runtime.provider === 'openai') {
-    return openAiChat(messages, onToken, signal, options.onThinking, {
+    return openAiChat(runtime.model, messages, onToken, signal, options.onThinking, {
       reasoningEffort: options.thinking ? 'high' : undefined,
       webSearch: options.webSearch,
       onSearching: options.onSearching,
@@ -1071,7 +1078,6 @@ function streamChat(
     })
   }
   return chat(runtime.port, runtime.model, textOnly(messages), onToken, signal, {
-    num_ctx: COPILOT_NUM_CTX,
     temperature: COPILOT_TEMPERATURE,
   })
 }
@@ -1085,7 +1091,7 @@ function streamGenerate(
 ): Promise<string> {
   // `map` = appel INTERNE court (sélection mémoire, map d'un résumé) : la sortie utile
   // tient en quelques lignes, et ces appels-là ne sont jamais lus par l'utilisateur.
-  // Le plafond part à Ollama et à MiniMax ; OpenAI en est exclu pour la raison donnée
+  // Le plafond part au moteur local et à MiniMax ; OpenAI en est exclu pour la raison donnée
   // sur sa branche (budget de raisonnement), pas par oubli.
   const cap = options.map ? SUMMARY_MAP_MAX_TOKENS : undefined
   if (runtime.provider === 'openai') {
@@ -1093,7 +1099,7 @@ function streamGenerate(
     // court peut interrompre ou refuser la sortie JSON des mutations mémoire.
     // Les appels internes OpenAI restent peu nombreux (le rappel Web est local),
     // donc on privilégie ici une réponse complète plutôt qu'une borne artificielle.
-    return openAiGenerate(prompt, onToken, signal, options.onThinking)
+    return openAiGenerate(runtime.model, prompt, onToken, signal, options.onThinking)
   }
   if (runtime.provider === 'minimax') {
     return compatGenerate('minimax', runtime.model, prompt, onToken, signal, options.onThinking, {
@@ -1101,9 +1107,8 @@ function streamGenerate(
     })
   }
   return generate(runtime.port, runtime.model, prompt, onToken, signal, {
-    num_ctx: COPILOT_NUM_CTX,
     temperature: COPILOT_TEMPERATURE,
-    ...(cap ? { num_predict: cap } : {}),
+    ...(cap ? { max_tokens: cap } : {}),
   })
 }
 
@@ -1403,7 +1408,7 @@ function cloudConfigKind(provider: CopilotProvider): 'openai' | 'minimax' {
 function providerSetupMessage(provider: CopilotProvider): string {
   if (provider === 'openai') {
     return copilot.openAiPreferredAvailable === false
-      ? 'Votre compte OpenAI est connecté, mais GPT‑5.6 Luna n’est pas disponible pour cet abonnement.'
+      ? 'Votre compte OpenAI est connecté, mais aucun modèle n’est proposé pour cet abonnement.'
       : 'Connectez votre compte OpenAI dans Modèles. La connexion OpenAI se fait sans clé API.'
   }
   if (provider === 'minimax') {
@@ -1415,7 +1420,7 @@ function providerSetupMessage(provider: CopilotProvider): string {
 }
 
 const PROVIDER_LABELS: Record<CopilotProvider, string> = {
-  ollama: 'Ollama',
+  local: 'Local',
   openai: 'OpenAI',
   minimax: 'MiniMax',
 }
@@ -1547,6 +1552,8 @@ export async function sendChat(
   question: string,
   doc: { name: string | null; text: string; kind: DocKind; path?: string | null },
   scope: ChatScope = 'doc',
+  // `voice` : tour du mode vocal (ADR-0033) — style oral court, au lieu de la verbosité réglée.
+  options: { voice?: boolean } = {},
 ): Promise<void> {
   const q = question.trim()
   if (!q || copilot.generating) return
@@ -1569,7 +1576,7 @@ export async function sendChat(
   const workspaceContextKey = scope === 'doc' ? visibleContextKey() : undefined
 
   // Garde modèle : carte de CONFIG sans démarrer le sidecar (préserve le boot-safety 14.0).
-  if (provider === 'ollama' && !localModel) {
+  if (provider === 'local' && !localModel) {
     copilot.messages.push({ role: 'user', content: q })
     copilot.messages.push({
       role: 'assistant',
@@ -1602,13 +1609,14 @@ export async function sendChat(
   ensureConversationIdentity()
   copilot.conversationWorkspace = captureWorkspacePathSnapshot()
 
-  copilot.messages.push({ role: 'user', content: q })
+  copilot.messages.push({ role: 'user', content: q, at: Date.now() })
   // `status` couvre le démarrage moteur + le PREFILL (ingestion du doc, longue sur CPU) : sans
   // lui, le skeleton muet se lit comme un blocage. Effacé au 1er token (voir stream ci-dessous).
   copilot.messages.push({
     role: 'assistant',
     content: '',
     streaming: true,
+    at: Date.now(),
     activity: [{
       id: 'context',
       kind: 'context',
@@ -1732,10 +1740,10 @@ export async function sendChat(
         }
       }
     }
-    let messages: OllamaMessage[]
+    let messages: LlmMessage[]
     let sources: CitedPassage[] | null = null
     let webCitations: WebCitation[] = []
-    // Partagés par les deux chemins (boucle d'outil MiniMax et tuyau scripté Ollama) :
+    // Partagés par les deux chemins (boucle d'outil MiniMax et tuyau scripté local) :
     // les sources cumulées du tour et le nombre de recherches réellement lancées.
     let results: WebSearchResult[] = []
     let searchCount = 0
@@ -1785,9 +1793,9 @@ export async function sendChat(
     })
     // MiniMax mène ses recherches lui-même (boucle d'outil plus bas) : le tuyau scripté
     // — planifier une requête, chercher, juger, puis forcer une réponse — ne vaut plus
-    // que pour Ollama, dont le petit modèle ne tient pas une boucle d'appels d'outils.
+    // que pour le moteur local, dont le petit modèle ne tient pas une boucle d'appels d'outils.
     const agenticSearch = webSearchEnabled && runtime.provider === 'minimax'
-    if (webSearchEnabled && runtime.provider === 'ollama') {
+    if (webSearchEnabled && runtime.provider === 'local') {
       const message = copilot.messages[idx]
       setActivity({ id: 'web-plan', kind: 'web-plan', label: 'Préparation de la recherche Web', state: 'running' })
       if (message && !message.content) message.status = 'Doku-San prépare la recherche…'
@@ -1838,7 +1846,7 @@ export async function sendChat(
         // Une recherche qui ne rapporte rien est une ISSUE NORMALE de la recherche, pas
         // une panne de la génération : la faire remonter au catch général tuait la
         // réponse que le document permettait, et `generationFailure` remplaçait ensuite
-        // la cause par « vérifiez que le moteur est prêt » (Ollama) ou la préfixait du
+        // la cause par « vérifiez que le moteur est prêt » (local) ou la préfixait du
         // nom du fournisseur (« MiniMax : … »), accusant un composant hors de cause.
         let searchError: string | null = null
         const tried: string[] = []
@@ -1901,7 +1909,7 @@ export async function sendChat(
       }
     }
     // num_ctx fixé (14.3) : le doc + la consigne d'ancrage doivent rester en contexte sur plusieurs
-    // tours ; au défaut Ollama (4096) l'historique les évincerait par troncature gauche silencieuse.
+    // tours ; à une fenêtre courte l'historique les évincerait par troncature gauche silencieuse.
     // Mutation via l'index (élément proxifié du $state array) → réactif ; muter la ref locale
     // poussée ne le serait PAS (piège $state profond de Svelte 5).
     setActivity({
@@ -1912,7 +1920,7 @@ export async function sendChat(
     })
     // Conversation de travail de la boucle d'outil : elle grossit d'un tour d'assistant
     // (la demande de recherche) et d'un message `tool` par recherche exécutée.
-    let turn: CompatMessage[] = applyVerbosity(messages, app.copilotVerbosity) as CompatMessage[]
+    let turn: CompatMessage[] = applyVerbosity(messages, options.voice ? 'voice' : app.copilotVerbosity) as CompatMessage[]
     const diagramBaseSystem = turn[0]?.role === 'system' ? turn[0].content : null
     const cloudDiagramStudio = outputMode === 'diagram' && isCloudProvider(runtime.provider)
     if (outputMode === 'diagram') {
@@ -2377,7 +2385,7 @@ async function prepareFolderMessages(
   dir: string | null,
   contextRevision: number,
   memories: readonly MemoryPromptSource[],
-): Promise<{ messages: OllamaMessage[]; sources: CitedPassage[]; bundle: ContextBundle } | null> {
+): Promise<{ messages: LlmMessage[]; sources: CitedPassage[]; bundle: ContextBundle } | null> {
   const answer = (content: string, config?: ChatMsg['config']): null => {
     const m = copilot.messages[idx]
     m.content = content
@@ -2392,7 +2400,7 @@ async function prepareFolderMessages(
     m.retry = { kind: 'chat', question: q, scope: 'folder', contextRevision }
     return null
   }
-  const additionsOnly = (): { messages: OllamaMessage[]; sources: CitedPassage[]; bundle: ContextBundle } | null => {
+  const additionsOnly = (): { messages: LlmMessage[]; sources: CitedPassage[]; bundle: ContextBundle } | null => {
     if (additions.length === 0) return null
     const maxChars = isCloudProvider(runtime.provider) ? MAX_DOC_CHARS_CLOUD : MAX_DOC_CHARS
     const bundle = buildContextBundle({ primary: [], additions, maxChars })
@@ -2414,7 +2422,7 @@ async function prepareFolderMessages(
   }
   if (!dir) return additionsOnly() ?? answer("Ouvrez un document enregistré ou fixez un dossier dans l'explorateur pour interroger vos notes.")
   // Les embeddings sont TOUJOURS locaux (0 réseau), même quand le chat est OpenAI.
-  const port = runtime.provider === 'ollama' ? runtime.port : await ensureReady()
+  const port = runtime.provider === 'local' ? runtime.port : await ensureReady()
   if (port === null) return additionsOnly() ?? fail(copilot.error || 'Le moteur IA est indisponible.')
   // Liste des modèles pas encore chargée (vue Modèles jamais ouverte) : la rafraîchir AVANT
   // de conclure « modèle absent ». MÊME prédicat que le badge du panneau (repli sur le
@@ -2487,11 +2495,11 @@ async function prepareDocMessages(
   idx: number,
   additions: readonly CopilotContextItem[],
   memories: readonly MemoryPromptSource[],
-): Promise<{ messages: OllamaMessage[]; sources: CitedPassage[] | null; wholeDoc?: boolean; bundle: ContextBundle }> {
+): Promise<{ messages: LlmMessage[]; sources: CitedPassage[] | null; wholeDoc?: boolean; bundle: ContextBundle }> {
   const docBudget = isCloudProvider(runtime.provider) ? MAX_DOC_CHARS_CLOUD : MAX_DOC_CHARS
   // Le texte d'un PDF est désormais résolu en amont (18.2) → un gros PDF passe AUSSI par
   // l'index éphémère (plus de garde `kind !== 'pdf'`).
-  if (runtime.provider === 'ollama' && doc.text.length > MAX_DOC_CHARS) {
+  if (runtime.provider === 'local' && doc.text.length > MAX_DOC_CHARS) {
     if (copilot.models.length === 0) await refreshModels()
     const em = app.embedModel || DEFAULT_EMBED_MODEL // même repli que le badge du panneau
     const installed = copilot.models.some((m) => m.name === em || m.name === `${em}:latest`)
@@ -2598,7 +2606,7 @@ const MAX_REDUCE_PASSES = 3
 
 // Résume le document courant (14.2). Contrairement au chat, on n'envoie PAS le doc en un bloc
 // (troncature interdite par FR-4) : on SEGMENTE (map-reduce) via generate() single-shot, avec
-// num_ctx fixé pour qu'Ollama ne tronque pas non plus. La phase « map » affiche une progression
+// fenêtre fixée (preset du moteur) pour qu'il ne tronque pas non plus. La phase « map » affiche une progression
 // (`status`) ; la synthèse finale est streamée. `doc` = SNAPSHOT (changement d'onglet sans effet).
 // Anti-TOCTOU et boot-safety identiques à sendChat.
 export async function summarizeDoc(
@@ -2616,12 +2624,12 @@ export async function summarizeDoc(
         ? 'Quelles sont les actions à faire selon ce document ?'
         : 'Résume ce document.'
   const reply = (content: string, flags: { failed?: boolean; config?: ChatMsg['config'] } = {}) => {
-    copilot.messages.push({ role: 'user', content: userLabel })
-    copilot.messages.push({ role: 'assistant', content, ...flags })
+    copilot.messages.push({ role: 'user', content: userLabel, at: Date.now() })
+    copilot.messages.push({ role: 'assistant', content, at: Date.now(), ...flags })
   }
 
   // Garde modèle : carte de CONFIG sans démarrer le sidecar (préserve le boot-safety 14.0).
-  if (provider === 'ollama' && !localModel) {
+  if (provider === 'local' && !localModel) {
     reply(providerSetupMessage(provider), { config: 'model' })
     return
   }
@@ -2644,8 +2652,8 @@ export async function summarizeDoc(
   // run, comme les sources du chat.
   let citedSources: CitedPassage[] | null = null
 
-  copilot.messages.push({ role: 'user', content: userLabel })
-  copilot.messages.push({ role: 'assistant', content: '', streaming: true, status: 'Lecture du document…' })
+  copilot.messages.push({ role: 'user', content: userLabel, at: Date.now() })
+  copilot.messages.push({ role: 'assistant', content: '', streaming: true, at: Date.now(), status: 'Lecture du document…' })
   const idx = copilot.messages.length - 1
   // `opts` = synthèse finale (sortie libre pour un résumé complet). `mapOpts` = phases
   // intermédiaires (map + réductions non finales) : sortie bornée → plus rapide et pas de débordement.
@@ -2698,7 +2706,7 @@ export async function summarizeDoc(
 
     // Fenêtre de segmentation au budget du FOURNISSEUR (même logique que le chat) : le
     // cloud avale un document entier en une passe — segmenter à la taille locale (14k,
-    // calibrée num_ctx Ollama) déclenchait un map-reduce séquentiel (« partie 1/5 ») de
+    // calibrée sur la fenêtre du modèle local) déclenchait un map-reduce séquentiel (« partie 1/5 ») de
     // plusieurs appels réseau pour un simple PDF de 5 pages.
     const segMax = isCloudProvider(runtime.provider) ? MAX_DOC_CHARS_CLOUD : SEGMENT_CHARS
     const segments = segmentDoc(doc.text, segMax)
@@ -2874,7 +2882,7 @@ async function runRephrase(params: {
 
   try {
     // Garde modèle : note de config en place, sans démarrer le sidecar (boot-safety 14.0).
-    if (provider === 'ollama' && !localModel) {
+    if (provider === 'local' && !localModel) {
       const cur = rephrase.current
       if (cur?.id === id) {
         cur.phase = 'config'

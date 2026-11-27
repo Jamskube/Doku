@@ -94,53 +94,52 @@
 </div>
 
 <style>
+  /* Le séparateur occupe l'écart du bureau entre les deux feuilles : rien n'y est dessiné
+     au repos (l'écart sépare déjà), une poignée en pilule apparaît au survol et s'affirme
+     pendant le glisser ; au clavier, la pilule à la couleur du focus tient lieu d'anneau. */
   .divider {
     position: relative;
     z-index: 4;
-    flex: 0 0 9px;
-    width: 9px;
-    margin: 0 -4px;
+    flex: 0 0 var(--canvas-gap);
+    width: var(--canvas-gap);
     cursor: col-resize;
     touch-action: none;
     padding: 0;
     border: 0;
     background: transparent;
   }
-  /* Filet de 1 px au repos (deux volets de même fond), --line-3 au survol et pendant le
-     glisser ; au clavier, une barre de 3 px à la couleur du focus tient lieu d'anneau. */
-  .divider span {
+  .divider span { position: absolute; inset: 0; }
+  .divider span::after {
+    content: '';
     position: absolute;
-    inset: 0 4px;
-    background: var(--line-1);
-    transition: background-color var(--duration-basic) ease;
+    top: 50%;
+    left: 50%;
+    width: 4px;
+    height: 32px;
+    translate: -50% -50%;
+    border-radius: var(--radius-full);
+    background: var(--ink-4);
+    opacity: 0;
+    scale: 1 0.7;
+    transition: opacity var(--duration-basic) ease, scale var(--duration-moderate) var(--ease-enter-snappy), background-color var(--duration-basic) ease;
   }
-  .divider:is(:hover, :active) span { background: var(--line-3); }
+  .divider.vertical span::after { width: 32px; height: 4px; scale: 0.7 1; }
+  .divider:is(:hover, :active, :focus-visible) span::after { opacity: 1; scale: 1; }
+  .divider:active span::after { background: var(--ink-2); }
   .divider:focus-visible { outline: none; }
-  .divider:focus-visible span { inset: 0 3px; background: var(--focus-ring); }
+  .divider:focus-visible span::after { background: var(--focus-ring); }
   .divider.vertical {
-    flex-basis: 9px;
+    flex-basis: var(--canvas-gap);
     width: auto;
-    height: 9px;
-    margin: -4px 0;
+    height: var(--canvas-gap);
     cursor: row-resize;
   }
-  .divider.vertical span { inset: 4px 0; }
-  .divider.vertical:focus-visible span { inset: 3px 0; }
-  /* Au doigt, 9 px ne se saisissent pas : 24 px, le filet reste sur la couture et l'encombrement
-     net reste 1 px. La zone déborde surtout sur le volet de DROITE : à gauche, elle
-     recouvrirait la barre de défilement du premier volet, que la souris doit garder.
-     Empilé, le bas est pris par le sélecteur du volet (.selector.local) et le haut peut porter
-     la barre de défilement horizontale d'un PDF zoomé : 4 px de chaque côté, comme à la souris.
-     Seulement après un geste au doigt (qui fait défiler sans la barre), la zone monte de 19 px. */
+  /* Au doigt, 8 px ne se saisissent pas : la zone déborde sur la feuille de DROITE (à gauche,
+     elle recouvrirait la barre de défilement du premier volet, que la souris doit garder).
+     Empilé, le bas est pris par le sélecteur du volet et le haut peut porter la barre de
+     défilement horizontale d'un PDF zoomé : la zone ne grandit qu'après un geste au doigt. */
   @media (any-pointer: coarse) {
-    .divider { flex-basis: 24px; width: 24px; margin: 0 -19px 0 -4px; }
-    .divider span { inset: 0 19px 0 4px; }
-    .divider:focus-visible span { inset: 0 18px 0 3px; }
-    .divider.vertical { flex-basis: 9px; width: auto; height: 9px; margin: -4px 0; }
-    .divider.vertical span { inset: 4px 0; }
-    .divider.vertical:focus-visible span { inset: 3px 0; }
-    :global(:root[data-input='touch']) .divider.vertical { flex-basis: 24px; height: 24px; margin: -19px 0 -4px; }
-    :global(:root[data-input='touch']) .divider.vertical span { inset: 19px 0 4px; }
-    :global(:root[data-input='touch']) .divider.vertical:focus-visible span { inset: 18px 0 3px; }
+    .divider:not(.vertical)::before { content: ''; position: absolute; inset: 0 -12px 0 0; }
+    :global(:root[data-input='touch']) .divider.vertical::before { content: ''; position: absolute; inset: -12px 0 0; }
   }
 </style>

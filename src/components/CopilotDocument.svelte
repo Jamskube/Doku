@@ -12,6 +12,7 @@
   import { app, openGeneratedTab } from '../lib/stores.svelte'
   import { isTauri, saveHtmlDialog } from '../lib/tauri'
   import { tooltip } from '../lib/tooltip'
+  import { closeDialog, reopenDialog } from '../lib/dialog-close'
 
   let { artifact, onModify }: {
     artifact: GeneratedDocumentArtifact
@@ -28,12 +29,12 @@
   async function openExpanded() {
     expanded = true
     await tick()
-    previewDialog?.showModal()
+    if (!reopenDialog(previewDialog)) previewDialog?.showModal()
   }
 
+  // `onclose` démonte la modale une fois la sortie jouée.
   function closeExpanded() {
-    previewDialog?.close()
-    expanded = false
+    closeDialog(previewDialog)
   }
 
   // --- Désigner une partie : dans l'aperçu agrandi, un clic choisit un bloc (repère
@@ -153,7 +154,7 @@
 </section>
 
 {#if expanded}
-  <dialog bind:this={previewDialog} class="dialog document-dialog" aria-label={`Aperçu agrandi : ${artifact.title}`} onclose={() => (expanded = false)} onclick={(event) => { if (event.target === previewDialog) closeExpanded() }}>
+  <dialog bind:this={previewDialog} class="dialog document-dialog" aria-label={`Aperçu agrandi : ${artifact.title}`} onclose={() => (expanded = false)} oncancel={(event) => { event.preventDefault(); closeExpanded() }} onclick={(event) => { if (event.target === previewDialog) closeExpanded() }}>
     <header class="dialog-head">
       <div class="card-heading"><strong class="dialog-title">{artifact.title}</strong><small class="card-meta">{formatLabel}</small></div>
       <div class="dialog-actions">

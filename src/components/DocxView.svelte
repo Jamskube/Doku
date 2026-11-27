@@ -47,6 +47,8 @@
   let message = $state('')
   let busy = $state<'' | 'save' | 'pdf'>('')
   let dirty = $state(false)
+  // « Réessayer » relance l'ouverture : l'effet ci-dessous en dépend.
+  let attempt = $state(0)
 
   // L'instance SuperDoc n'est pas un état réactif : c'est un objet impératif lourd qui
   // gère son propre DOM. Un proxy Svelte autour ne servirait qu'à le casser.
@@ -58,7 +60,10 @@
   $effect(() => {
     const target = host
     const source = path
+    void attempt
     if (!target || !source) return
+    // Un échec en plein montage peut laisser des restes de SuperDoc dans l'hôte.
+    target.replaceChildren()
     let cancelled = false
     void (async () => {
       status = 'loading'
@@ -213,6 +218,25 @@
     }
   }
 
+  // Impression : même conversion que l'export PDF (texte, styles, titres ; ni images ni
+  // tableaux), puis le chemin d'impression des PDF.
+  async function print() {
+    if (!editor || busy) return
+    busy = 'pdf'
+    try {
+      const [{ convertDocxToPdf }, { printPdfBytes }] = await Promise.all([
+        import('../lib/export/docx-to-pdf'),
+        import('../lib/export/print'),
+      ])
+      const docx = await exportBlob('docx')
+      if (!docx) return
+      const report = await convertDocxToPdf(docx, (xml) => new DOMParser().parseFromString(xml, 'application/xml'))
+      await printPdfBytes(report.bytes)
+    } finally {
+      busy = ''
+    }
+  }
+
   // Publication des actions vers le menu et le clavier. Le `tabId` sert de garde : si un
   // autre onglet devient actif, le menu ne doit pas appeler l'enregistrement d'un
   // document qui n'est plus à l'écran.
@@ -220,11 +244,13 @@
     docxActions.tabId = tabId
     docxActions.save = () => save()
     docxActions.exportPdf = () => exportPdf()
+    docxActions.print = () => print()
     return () => {
       if (docxActions.tabId !== tabId) return
       docxActions.tabId = null
       docxActions.save = null
       docxActions.exportPdf = null
+      docxActions.print = null
       docxActions.busy = ''
       docxActions.dirty = false
     }
@@ -271,6 +297,9 @@
       <div class="feuille-vide vide">
         <svg class="icon" aria-hidden="true"><use href="#i-file-text" /></svg>
         <p>{message}</p>
+        <button type="button" onclick={() => { attempt++ }}>
+          <svg class="icon" aria-hidden="true"><use href="#i-rotate-ccw" /></svg>Réessayer
+        </button>
       </div>
     </div>
   {/if}
@@ -326,6 +355,27 @@
   }
   /* Grande icône d'état vide : trait affiné, comme le kit pour les icônes de 32px. */
   .feuille-vide.vide .icon { font-size: 32px; stroke-width: 1.5; color: rgba(28, 26, 22, 0.28); }
+  .feuille-vide.vide button {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: var(--control-md);
+    margin-top: 4px;
+    padding: 0 12px 0 10px;
+    border: 0;
+    border-radius: var(--radius-lg);
+    /* Encre de PAPIER : la feuille reste blanche dans les deux thèmes. */
+    background: rgba(28, 26, 22, 0.07);
+    color: #1c1a16;
+    font: var(--weight-control) var(--text-sm) / 1 var(--font-sans);
+    cursor: pointer;
+    transition: background-color var(--duration-basic) ease, transform var(--duration-basic) var(--ease-enter-snappy);
+  }
+  .feuille-vide.vide button:hover { background: rgba(28, 26, 22, 0.12); }
+  .feuille-vide.vide button:active { transform: scale(0.97); }
+  .feuille-vide.vide button:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+  .feuille-vide.vide button .icon { font-size: 15px; stroke-width: 2; color: currentColor; }
+  :global(:where(:root[data-input='touch'])) .feuille-vide.vide button { height: 40px; }
   .feuille-vide.vide p { margin: 0; max-width: 40ch; text-align: center; font-size: 13px; line-height: 1.5; text-wrap: balance; }
 
   .trame { padding: 84px 92px; display: flex; flex-direction: column; gap: 11px; }

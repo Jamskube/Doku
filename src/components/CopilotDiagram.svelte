@@ -5,6 +5,7 @@
   import { openGeneratedTab } from '../lib/stores.svelte'
   import { escapeHtml } from '../lib/export/print'
   import { tooltip } from '../lib/tooltip'
+  import { closeDialog, reopenDialog } from '../lib/dialog-close'
 
   let {
     artifact,
@@ -89,23 +90,22 @@
   async function openExpanded() {
     expanded = true
     await tick()
-    previewDialog?.showModal()
+    if (!reopenDialog(previewDialog)) previewDialog?.showModal()
   }
 
+  // `onclose` démonte la modale une fois la sortie jouée.
   function closeExpanded() {
-    previewDialog?.close()
-    expanded = false
+    closeDialog(previewDialog)
   }
 
   async function openAlternatives() {
     alternativesOpen = true
     await tick()
-    alternativesDialog?.showModal()
+    if (!reopenDialog(alternativesDialog)) alternativesDialog?.showModal()
   }
 
   function closeAlternatives() {
-    alternativesDialog?.close()
-    alternativesOpen = false
+    closeDialog(alternativesDialog)
   }
 
   function chooseCandidate(candidateId: string) {
@@ -178,7 +178,7 @@
 </section>
 
 {#if expanded}
-  <dialog bind:this={previewDialog} class="dialog diagram-dialog" aria-label={`Aperçu agrandi : ${artifact.title}`} onclose={() => (expanded = false)} onclick={(event) => { if (event.target === previewDialog) closeExpanded() }}>
+  <dialog bind:this={previewDialog} class="dialog diagram-dialog" aria-label={`Aperçu agrandi : ${artifact.title}`} onclose={() => (expanded = false)} oncancel={(event) => { event.preventDefault(); closeExpanded() }} onclick={(event) => { if (event.target === previewDialog) closeExpanded() }}>
     <header class="dialog-head">
       <strong class="dialog-title">{artifact.title}</strong>
       <button class="btn lg icon-btn" use:tooltip={{ label: 'Fermer', kbd: 'Échap' }} aria-label="Fermer l’aperçu" onclick={closeExpanded}><svg class="icon" aria-hidden="true"><use href="#i-x" /></svg></button>
@@ -193,6 +193,7 @@
     class="dialog alternatives-dialog"
     aria-label="Autres vues du diagramme"
     onclose={() => (alternativesOpen = false)}
+    oncancel={(event) => { event.preventDefault(); closeAlternatives() }}
     onclick={(event) => { if (event.target === alternativesDialog) closeAlternatives() }}
   >
     <header class="dialog-head">

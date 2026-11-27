@@ -1,6 +1,6 @@
-// SidecarManager (13.2, ADR-0012) — cycle de vie du sidecar Ollama : port éphémère, spawn
-// paresseux, et surtout un KILL FIABLE de tout l'arbre de process — `ollama.exe` + son
-// grand-enfant `llama-server.exe` — même si Doku CRASHE, via un Job Object Windows
+// SidecarManager (13.2, ADR-0012 ; moteur llama.cpp depuis ADR-0032) — cycle de vie du moteur IA
+// local : port éphémère, spawn paresseux, et surtout un KILL FIABLE de tout l'arbre de process —
+// le routeur `llama-server` + un enfant par modèle chargé — même si Doku CRASHE, via un Job Object Windows
 // KILL_ON_JOB_CLOSE : le noyau termine les process du job dès que le dernier handle se ferme,
 // ce qui arrive à la mort du process Doku (fermeture propre OU crash). Cela SUPERSÈDE le
 // pidfile+sweep d'ADR-0012 (pas de hasard de réutilisation de PID, nettoyage garanti noyau).
@@ -82,7 +82,7 @@ fn free_loopback_port() -> Result<u16, String> {
         .map_err(|e| e.to_string())
 }
 
-pub struct OllamaState {
+pub struct EngineState {
     child: Mutex<Option<(CommandChild, u16)>>,
     // Le Job Object, ou la RAISON de son absence. Garder l'erreur plutôt qu'un simple `None`
     // permet de la rendre à l'utilisateur au moment où elle compte — quand il essaie de
@@ -91,7 +91,7 @@ pub struct OllamaState {
     job: Result<Job, String>,
 }
 
-impl OllamaState {
+impl EngineState {
     // INFAILLIBLE, volontairement. Auparavant cette fonction rendait un `Result` que `main.rs`
     // dépliait avec `.expect(...)` : si la création du Job Object échouait, Doku PANIQUAIT AU
     // DÉMARRAGE — un éditeur Markdown refusant de s'ouvrir parce que le bac à sable d'un
@@ -106,9 +106,9 @@ impl OllamaState {
         }
     }
 
-    // Arrêt propre : tue l'arbre (ollama + llama-server) et oublie l'enfant. Le job reste
+    // Arrêt propre : tue l'arbre (routeur llama-server + enfants) et oublie l'enfant. Le job reste
     // réutilisable pour un prochain start. Idempotent. Le verrou est TENU pendant le terminate
-    // pour sérialiser avec l'assign+store de `start_ollama` (sinon on pourrait tuer un sidecar
+    // pour sérialiser avec l'assign+store de `start_engine` (sinon on pourrait tuer un sidecar
     // qui vient d'être démarré et rapporté vivant).
     // `unwrap_or_else(|e| e.into_inner())` plutôt que `.unwrap()` sur les quatre prises de ce
     // verrou : si un thread panique en le tenant, le mutex est EMPOISONNÉ et tout `.unwrap()`
@@ -134,80 +134,91 @@ fn spawn_error<E: std::fmt::Display>(error: E) -> String {
     error.to_string()
 }
 
-// Hors Windows, Doku ne transporte pas Ollama : il lance celui du système. L'échec le
-// plus probable n'y est donc pas un bug mais une ABSENCE, et « No such file or
-// directory » ne dit ni laquelle ni quoi faire.
 #[cfg(not(windows))]
-fn spawn_error<E: std::fmt::Display>(_error: E) -> String {
-    "Ollama est introuvable sur le système. Installez-le avec le gestionnaire de paquets de votre distribution (Arch : « sudo pacman -S ollama »), puis relancez le moteur."
-        .to_string()
+fn spawn_error<E: std::fmt::Display>(error: E) -> String {
+    format!("Le moteur IA n’a pas pu démarrer : {error}")
 }
 
-// Démarre `ollama serve` en sidecar (idempotent). Port éphémère, modèles isolés, cloud coupé
-// (8.3), et l'enfant est rattaché au Job Object pour un kill d'arbre garanti.
+// Le moteur llama.cpp livré avec Doku (scripts/prepare-llama-sidecar.mjs) : en DEV, le dossier
+// préparé sous src-tauri/binaries ; en RELEASE, la ressource `llama/` à côté de l'exécutable.
+fn engine_dir(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
+    if cfg!(debug_assertions) {
+        Ok(std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("binaries").join("llama"))
+    } else {
+        Ok(app.path().resource_dir().map_err(|e| e.to_string())?.join("llama"))
+    }
+}
+
+// Origine autorisée à interroger le moteur (CORS, défaut `*` chez llama.cpp) : la webview de
+// Doku seulement. UNE origine : llama.cpp recopie la valeur telle quelle dans
+// `Access-Control-Allow-Origin`, et une liste y est rejetée par le navigateur (moteur muet).
+fn cors_origins() -> &'static str {
+    if cfg!(debug_assertions) {
+        "http://localhost:1420"
+    } else if cfg!(windows) {
+        "http://tauri.localhost"
+    } else {
+        "tauri://localhost"
+    }
+}
+
+// Démarre `llama-server` en mode routeur (idempotent) : un point d'entrée, un process enfant par
+// modèle chargé (hérite du Job Object), modèles = ceux installés (preset INI régénéré à chaque
+// démarrage). Hors ligne forcé, interface web coupée, CORS restreint (ADR-0032).
 #[tauri::command]
-pub async fn start_ollama(
+pub async fn start_engine(
     app: tauri::AppHandle,
-    state: tauri::State<'_, OllamaState>,
+    state: tauri::State<'_, EngineState>,
 ) -> Result<u16, String> {
     if let Some((_, port)) = state.child.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
         return Ok(*port);
     }
     let port = free_loopback_port()?;
-    let models = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| e.to_string())?
-        .join("models");
-    std::fs::create_dir_all(&models).map_err(|e| e.to_string())?;
+    let preset = crate::models::write_preset(&app)?;
+    let dir = engine_dir(&app)?;
+    let exe = dir.join(if cfg!(windows) { "llama-server.exe" } else { "llama-server" });
+    if !exe.exists() {
+        return Err(format!(
+            "Le moteur IA est absent ({}). Lancez « npm run prepare:llama:arm64 » (ou x64).",
+            exe.display()
+        ));
+    }
 
-    // Où Ollama trouve lib/ollama (llama-server.exe + DLLs ggml), chargé relativement à ce
-    // chemin. DEV : le sidecar tourne depuis target/debug → on pointe vers src-tauri/binaries
-    // (la lib réelle y est extraite). RELEASE : bundle.resources copie lib/ollama sous
-    // resource_dir() (à côté de l'exe empaqueté). Windows seulement : ailleurs, c'est
-    // l'Ollama de la distribution qui connaît ses propres bibliothèques.
-    #[cfg(windows)]
-    let lib_base = if cfg!(debug_assertions) {
-        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("binaries")
-    } else {
-        app.path().resource_dir().map_err(|e| e.to_string())?
-    };
-
-    // Windows : le sidecar empaqueté — Ollama n'y est pas installable en une commande, et
-    // Doku doit fonctionner sans que l'utilisateur ait rien à installer.
-    // Ailleurs : l'Ollama du système, sur le PATH (`pacman -S ollama`, `apt install
-    // ollama`…). Empaqueter 1,4 Go d'archive pour dupliquer ce que le gestionnaire de
-    // paquets fait mieux, et met à jour tout seul, n'aurait aucun sens.
-    #[cfg(windows)]
-    let command = app.shell().sidecar("ollama").map_err(|e| e.to_string())?;
+    let command = app
+        .shell()
+        .command(exe.to_string_lossy().to_string())
+        .current_dir(&dir)
+        .args([
+            "--host",
+            "127.0.0.1",
+            "--port",
+            &port.to_string(),
+            "--models-preset",
+            &preset.to_string_lossy(),
+            "--models-max",
+            "2",
+            "--offline",
+            "--no-ui",
+            "--cors-origins",
+            cors_origins(),
+        ]);
+    // Les .so du build Ubuntu vivent à côté du binaire.
     #[cfg(not(windows))]
-    let command = app.shell().command("ollama");
-
-    let command = command
-        .args(["serve"])
-        .env("OLLAMA_HOST", format!("127.0.0.1:{port}"))
-        .env("OLLAMA_MODELS", models.to_string_lossy().to_string())
-        .env("OLLAMA_NO_CLOUD", "1") // coupe le poll model_recommendations -> ollama.com (8.3)
-        .env("OLLAMA_REMOTES", "127.0.0.1") // ceinture : neutralise l'allow-list distante
-        .env("OLLAMA_ORIGINS", "http://tauri.localhost");
-    #[cfg(windows)]
-    let command = command.env("OLLAMA_LIBRARY_PATH", lib_base.to_string_lossy().to_string());
+    let command = command.env("LD_LIBRARY_PATH", dir.to_string_lossy().to_string());
 
     let (mut rx, child) = command.spawn().map_err(spawn_error)?;
 
-    // Draine les événements : stderr = diagnostic n°1 (binaire ARM64 invalide, port pris) ;
-    // Terminated distingue « sorti » de « lent à répondre » ET auto-répare l'état : si le
-    // sidecar meurt, on vide le slot (seulement si c'est encore CE port) → un prochain
-    // start_ollama re-spawn au lieu de renvoyer un port mort à vie.
+    // Draine les événements : stderr = diagnostic n°1 ; Terminated auto-répare l'état (le slot
+    // est vidé si c'est encore CE port) → un prochain start relance au lieu de rendre un port mort.
     let drain_app = app.clone();
     tauri::async_runtime::spawn(async move {
         while let Some(ev) = rx.recv().await {
             match ev {
-                CommandEvent::Stderr(b) => eprintln!("[ollama] {}", String::from_utf8_lossy(&b)),
-                CommandEvent::Stdout(b) => println!("[ollama] {}", String::from_utf8_lossy(&b)),
+                CommandEvent::Stderr(b) => eprintln!("[llama] {}", String::from_utf8_lossy(&b)),
+                CommandEvent::Stdout(b) => println!("[llama] {}", String::from_utf8_lossy(&b)),
                 CommandEvent::Terminated(p) => {
-                    eprintln!("[ollama] terminé (code {:?})", p.code);
-                    if let Some(state) = drain_app.try_state::<OllamaState>() {
+                    eprintln!("[llama] terminé (code {:?})", p.code);
+                    if let Some(state) = drain_app.try_state::<EngineState>() {
                         let mut g = state.child.lock().unwrap_or_else(|e| e.into_inner());
                         if matches!(g.as_ref(), Some((_, stored)) if *stored == port) {
                             *g = None;
@@ -221,19 +232,13 @@ pub async fn start_ollama(
     });
 
     // Re-vérifie SOUS verrou (deux starts concurrents) puis rattache au job avant de stocker.
-    // NB : cette fonction async ne contient AUCUN `.await` (spawn shell synchrone) → les gardes
-    // du `std::sync::Mutex` ne traversent jamais un point de suspension. Ne pas ajouter d'await
-    // entre les prises de verrou sans repasser en Mutex async.
+    // Aucun `.await` entre les prises du `std::sync::Mutex` (spawn synchrone) : ne pas en ajouter.
     let mut guard = state.child.lock().unwrap_or_else(|e| e.into_inner());
     if let Some((_, existing)) = guard.as_ref() {
-        // Course perdue : ce process n'a pas encore d'enfant llama-server (spawné paresseusement
-        // au 1er modèle), donc child.kill() suffit — dépendant du timing, pas une garantie.
         let _ = child.kill();
         return Ok(*existing);
     }
-    // Sans Job Object, on REFUSE de démarrer : un sidecar qu'on ne peut pas garantir de tuer
-    // laisserait `ollama.exe` et `llama-server.exe` orphelins à la fermeture de Doku. Mieux
-    // vaut une IA indisponible, avec sa raison, que des process fantômes.
+    // Sans Job Object, on REFUSE de démarrer : les enfants du routeur resteraient orphelins.
     #[cfg(windows)]
     match &state.job {
         Ok(job) => {
@@ -253,3 +258,9 @@ pub async fn start_ollama(
     Ok(port)
 }
 
+// Arrête le moteur (téléchargement ou suppression d'un modèle : le preset change, et Windows
+// refuse d'effacer un fichier qu'un process garde ouvert). Le prochain usage le relance.
+#[tauri::command]
+pub fn stop_engine(state: tauri::State<'_, EngineState>) {
+    state.shutdown();
+}

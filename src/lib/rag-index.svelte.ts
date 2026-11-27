@@ -1,10 +1,10 @@
 // Service de l'index d'embeddings du dossier (15.2, ADR-0015). Orchestration seule :
-// la logique est pure (rag.ts), l'I/O vit dans tauri.ts, l'embed dans ollama.ts.
+// la logique est pure (rag.ts), l'I/O vit dans tauri.ts, l'embed dans llama.ts.
 // AUCUN import de stores/copilot (pas de cycle) : l'appelant fournit port, modèle et
 // dossier. Un seul refresh à la fois (chaîne de promesses, pattern enqueueSnapshot) ;
 // le rescan complet n'a lieu QUE si nécessaire (index absent, dossier/modèle changé,
 // flag dirty posé par une sauvegarde) — jamais systématiquement à chaque question.
-import { embed } from './ollama'
+import { embed } from './llama'
 import {
   bytesToMatrix,
   checksumBytes,

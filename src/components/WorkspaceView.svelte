@@ -7,6 +7,7 @@
     resizeWorkspace,
     workspace,
     workspaceLayout,
+    app,
   } from '../lib/stores.svelte'
   import { clampWorkspaceRatioForSize, type PaneId } from '../lib/workspace'
 
@@ -38,6 +39,7 @@
   class="workspace"
   class:split={workspace.split}
   class:vertical
+  class:bare={app.focus}
   bind:this={root}
 >
   <!-- flex-basis posé sur chaque volet, pas en variable sur .workspace : pendant le glisser,
@@ -61,14 +63,21 @@
     min-width: 0;
     min-height: 0;
     display: flex;
-    overflow: hidden;
-    background: var(--cream-content);
+    overflow: clip;
+    overflow-clip-margin: var(--canvas-gap);
   }
+  /* Chaque volet est une feuille posée sur le bureau ; en vue scindée, deux feuilles
+     séparées par l'écart du bureau, où vit le séparateur. */
   .workspace-pane {
     min-width: 0;
     min-height: 0;
     display: flex;
+    border-radius: var(--sheet-radius);
+    background: var(--cream-content);
+    box-shadow: var(--sheet-shadow);
+    overflow: hidden;
   }
+  .workspace.bare .workspace-pane { border-radius: 0; box-shadow: none; }
   .workspace-pane > :global(*) { flex: 1; min-width: 0; min-height: 0; }
   .workspace-pane.primary { flex-grow: 0; flex-shrink: 1; }
   .workspace-pane.secondary { flex-grow: 1; flex-shrink: 1; }

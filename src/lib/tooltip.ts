@@ -37,10 +37,12 @@ export function placeTooltip(
 
 const STYLE = `
 .doku-tooltip {
-  position: fixed; inset: auto; margin: 0; z-index: 90;
+  position: fixed; inset: auto; margin: 0; z-index: var(--z-tooltip);
   box-sizing: border-box; width: max-content; max-width: min(320px, 100vw - 16px);
   padding: 4px 8px; border: 0; border-radius: var(--radius-md);
-  background: var(--tooltip-bg); color: var(--on-tooltip); box-shadow: var(--shadow-lg);
+  background: var(--tooltip-glass); color: var(--on-tooltip);
+  -webkit-backdrop-filter: var(--glass-filter-sm); backdrop-filter: var(--glass-filter-sm);
+  box-shadow: var(--shadow-lg), inset 0 0.5px 0 rgb(255 255 255 / 0.14);
   font: var(--weight-control) var(--text-xs)/16px var(--font-sans);
   text-align: center; overflow-wrap: break-word; overflow: visible; pointer-events: none;
 }

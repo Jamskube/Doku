@@ -48,6 +48,7 @@ jobs:
           sudo -u builder bash -eo pipefail -c '
             cd "'"$GITHUB_WORKSPACE"'"
             npm ci
+            npm run prepare:llama:linux-x64
             npm run check
             npm test
             npm run tauri build -- --target x86_64-unknown-linux-gnu --no-bundle
@@ -73,6 +74,10 @@ jobs:
             echo "Des bibliothèques manquent au binaire installé" >&2; exit 1
           fi
           ldd "$(command -v doku)" | grep -cE 'webkit|gtk-3|soup'
+          # Le moteur embarqué vient d'un build Ubuntu : prouver qu'il se lie sur Arch.
+          if LD_LIBRARY_PATH=/usr/lib/doku/llama ldd /usr/lib/doku/llama/llama-server | grep 'not found'; then
+            echo "Des bibliothèques manquent au moteur llama.cpp" >&2; exit 1
+          fi
           pacman -Qi doku
 
       - name: Produire le SHA-256

@@ -59,6 +59,8 @@ pub struct OpenAiState {
     auth_session: Mutex<Option<DeviceAuthSession>>,
     session_counter: AtomicU64,
     refresh_lock: AsyncMutex<()>,
+    // Dernier catalogue servi au compte : seule liste de modèles que la webview peut demander.
+    models: Mutex<Vec<String>>,
 }
 
 impl Default for OpenAiState {
@@ -68,6 +70,7 @@ impl Default for OpenAiState {
             auth_session: Mutex::new(None),
             session_counter: AtomicU64::new(1),
             refresh_lock: AsyncMutex::new(()),
+            models: Mutex::new(Vec::new()),
         }
     }
 }
@@ -246,6 +249,37 @@ async fn fetch_models(token: &str) -> Result<Vec<String>, String> {
     Ok(models.into_iter().map(|(_, slug)| slug).collect())
 }
 
+fn remember_models(state: &OpenAiState, models: &[String]) {
+    *state.models.lock().unwrap_or_else(|e| e.into_inner()) = models.to_vec();
+}
+
+fn model_known(state: &OpenAiState, model: &str) -> bool {
+    state
+        .models
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .iter()
+        .any(|known| known == model)
+}
+
+// Le modèle vient de la webview : il n'est accepté que s'il figure au catalogue du
+// compte. Cache vide (première génération avant tout openai_status) : une relecture
+// du catalogue, puis refus franc.
+async fn ensure_model_allowed(state: &OpenAiState, model: &str) -> Result<(), String> {
+    if model_known(state, model) {
+        return Ok(());
+    }
+    let token = access_token(state, false).await?;
+    remember_models(state, &fetch_models(&token).await?);
+    if model_known(state, model) {
+        Ok(())
+    } else {
+        Err(format!(
+            "Le modèle OpenAI « {model} » n’est pas proposé par cet abonnement."
+        ))
+    }
+}
+
 #[tauri::command]
 pub async fn openai_status(state: State<'_, OpenAiState>) -> Result<OpenAiStatus, String> {
     let stored = read_secret(ACCESS_TOKEN_TARGET, SECRET_WHAT)
@@ -268,15 +302,18 @@ pub async fn openai_status(state: State<'_, OpenAiState>) -> Result<OpenAiStatus
 
     Ok(match access_token(&state, false).await {
         Ok(token) => match fetch_models(&token).await {
-            Ok(models) => OpenAiStatus {
-                authenticated: true,
-                preferred_model: PREFERRED_MODEL,
-                preferred_model_available: Some(
-                    models.iter().any(|model| model == PREFERRED_MODEL),
-                ),
-                models,
-                error: None,
-            },
+            Ok(models) => {
+                remember_models(&state, &models);
+                OpenAiStatus {
+                    authenticated: true,
+                    preferred_model: PREFERRED_MODEL,
+                    preferred_model_available: Some(
+                        models.iter().any(|model| model == PREFERRED_MODEL),
+                    ),
+                    models,
+                    error: None,
+                }
+            }
             Err(error) => OpenAiStatus {
                 authenticated: true,
                 preferred_model: PREFERRED_MODEL,
@@ -450,6 +487,7 @@ pub fn openai_auth_cancel(session_id: String, state: State<'_, OpenAiState>) {
 #[tauri::command]
 pub fn openai_disconnect(state: State<'_, OpenAiState>) -> Result<(), String> {
     *state.auth_session.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    remember_models(&state, &[]);
     delete_secret(ACCESS_TOKEN_TARGET, SECRET_WHAT)?;
     delete_secret(REFRESH_TOKEN_TARGET, SECRET_WHAT)
 }
@@ -598,9 +636,7 @@ pub async fn stream_openai(
     on_event: Channel<OpenAiStreamEvent>,
     state: State<'_, OpenAiState>,
 ) -> Result<(), String> {
-    if request.model != PREFERRED_MODEL {
-        return Err("Le modèle OpenAI demandé n’est pas autorisé par Doku.".to_string());
-    }
+    ensure_model_allowed(&state, &request.model).await?;
     let request_id = request.request_id.clone();
     let (cancel_tx, mut cancel_rx) = oneshot::channel();
     if let Some(previous) = state

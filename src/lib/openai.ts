@@ -1,5 +1,6 @@
 import { isTauri } from './tauri'
 
+// Modèle par défaut tant que l'utilisateur n'a rien choisi (app.openaiModel).
 export const OPENAI_MODEL = 'gpt-5.6-luna'
 
 export interface OpenAiStatus {
@@ -96,6 +97,7 @@ export async function openOpenAiAuthPage(url: string): Promise<void> {
 }
 
 async function streamOpenAi(
+  model: string,
   input: OpenAiMessage[],
   onToken: (token: string) => void,
   signal?: AbortSignal,
@@ -135,7 +137,7 @@ async function streamOpenAi(
     await invoke('stream_openai', {
       request: {
         requestId,
-        model: OPENAI_MODEL,
+        model,
         input,
         reasoningEffort: options.reasoningEffort ?? 'low',
         maxOutputTokens: options.maxOutputTokens,
@@ -154,23 +156,25 @@ async function streamOpenAi(
 }
 
 export function openAiChat(
+  model: string,
   messages: OpenAiMessage[],
   onToken: (token: string) => void,
   signal?: AbortSignal,
   onThinking?: () => void,
   options: Pick<OpenAiStreamOptions, 'webSearch' | 'onSearching' | 'onCitations' | 'reasoningEffort'> = {},
 ): Promise<string> {
-  return streamOpenAi(messages, onToken, signal, { onThinking, ...options, reasoningEffort: options.reasoningEffort ?? 'low' })
+  return streamOpenAi(model, messages, onToken, signal, { onThinking, ...options, reasoningEffort: options.reasoningEffort ?? 'low' })
 }
 
 export function openAiGenerate(
+  model: string,
   prompt: string,
   onToken: (token: string) => void,
   signal?: AbortSignal,
   onThinking?: () => void,
   maxOutputTokens?: number,
 ): Promise<string> {
-  return streamOpenAi([{ role: 'user', content: prompt }], onToken, signal, {
+  return streamOpenAi(model, [{ role: 'user', content: prompt }], onToken, signal, {
     reasoningEffort: 'low',
     onThinking,
     maxOutputTokens,

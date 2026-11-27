@@ -5,6 +5,8 @@
   import { parseSavedSignature, signatureTargetBox, stampSignature, type SavedSignature } from '../lib/pdf-signature-stamp'
   import { pdfResizeFactor, pdfRotationAngle, rotatePdfStrokeDrawing, scalePdfStrokeDrawing } from '../lib/pdf-drawing-transform'
   import SignaturePad from './SignaturePad.svelte'
+  import HoldButton from './HoldButton.svelte'
+  import NumberRoll from './NumberRoll.svelte'
   import {
     clusterPdfNotePins,
     parsePdfAnnotationManifest,
@@ -83,6 +85,19 @@
   let presenting = $state(false)
   let presentPage = $state(1)
   let pageTotal = $state(0)
+  // Repère de lecture : la page en cours n'apparaît que pendant le défilement.
+  let scrollPage = $state(1)
+  let pageHintVisible = $state(false)
+  let retryLoad = $state<(() => void) | null>(null)
+  let contextMenu = $state<{
+    left: number
+    top: number
+    originX: number
+    originY: number
+    kbd: boolean
+    selection: { text: string; page: number; rects: PdfDrawingRect[]; quote: string } | null
+  } | null>(null)
+  let contextMenuEl: HTMLElement | undefined = $state()
   // Carnet présent mais incompréhensible : il faudra le mettre à l'abri avant d'écrire.
   let unreadableManifest = false
   let activeNoteIds = $state<string[]>([])
@@ -907,6 +922,30 @@
       : { tone: 'warning', title: 'Signature non conservée', message: 'Doku n’a pas pu l’écrire sur cet appareil : elle reste utilisable tant que ce document est ouvert.' }
   }
 
+  // Aperçu de la signature enregistrée, retracée passe après passe à chaque ouverture du
+  // menu : chaque passe reçoit une part des 900 ms proportionnelle à sa longueur, comme
+  // une main qui signe.
+  const SIGNATURE_PREVIEW_MS = 900
+  const signaturePreview = $derived.by(() => {
+    if (!activeSignature) return null
+    const height = 100
+    const width = Math.max(activeSignature.aspect, 0.2) * height
+    const lengths = activeSignature.strokes.map((stroke) => stroke.reduce(
+      (sum, point, i) => i ? sum + Math.hypot((point.x - stroke[i - 1].x) * width, (point.y - stroke[i - 1].y) * height) : 0,
+      0,
+    ))
+    const total = lengths.reduce((sum, length) => sum + length, 0) || 1
+    let elapsed = 0
+    const paths = activeSignature.strokes.map((stroke, i) => {
+      const duration = SIGNATURE_PREVIEW_MS * lengths[i] / total
+      const path = { d: pdfStrokePathData([stroke], width, height), delay: elapsed, duration }
+      elapsed += duration
+      return path
+    })
+    // ~0,4 px par unité à 40 px de haut : l'épaisseur choisie au pavé reste lisible.
+    return { width, height, paths, strokeWidth: activeSignature.strokeWidth * 2.5 }
+  })
+
   async function forgetSignature() {
     signatureMenuOpen = false
     try {
@@ -1303,10 +1342,10 @@
    * ligne, même fusion en bloc, même carnet. Le surlignage n'est donc pas un objet d'un
    * second type qu'il faudrait ensuite gérer partout ailleurs.
    */
-  async function highlightArea() {
-    if (!areaResult || !annotationManifest || savingAnnotation) return
-    const { page, rects, text } = areaResult
-    if (rects.length === 0) return
+  // Partagés par la zone encadrée et par le menu contextuel d'une sélection : même
+  // surlignage, même presse-papiers, même envoi au copilote.
+  async function highlightText({ page, rects, text }: { page: number; rects: PdfDrawingRect[]; text: string }): Promise<boolean> {
+    if (!annotationManifest || savingAnnotation || rects.length === 0) return false
     try {
       const block = mergeableHighlight(page, 'text')
       const next = block?.kind === 'text'
@@ -1316,51 +1355,166 @@
         // surlignage noir, donc, alors qu'on demandait un surlignage. `toolStyles.text`
         // porte en plus le choix de couleur déjà fait par l'utilisateur.
         : createPdfTextHighlightDrawing(page, rects, { quote: text, color: toolStyles.text.color })
-      if (await commitAnnotationManifest(upsertPdfDrawing(annotationManifest, next))) {
-        rememberHighlightBlock(next.id, page)
-        areaResult = null
-        app.banner = { tone: 'success', title: 'Zone surlignée', message: `Page ${page}.` }
-      }
+      if (!await commitAnnotationManifest(upsertPdfDrawing(annotationManifest, next))) return false
+      rememberHighlightBlock(next.id, page)
+      return true
     } catch {
       app.banner = {
         tone: 'warning',
         title: 'Carnet d’annotations rempli',
         message: 'Supprimez une annotation avant d’en ajouter une nouvelle.',
       }
+      return false
     }
   }
 
-  async function copyArea() {
-    if (!areaResult) return
+  async function copyText(text: string): Promise<boolean> {
     try {
-      await navigator.clipboard.writeText(areaResult.text)
+      await navigator.clipboard.writeText(text)
+      return true
     } catch (err) {
-      // La zone reste ouverte : on peut réessayer, ou l'envoyer au copilote.
       app.banner = {
         tone: 'warning',
         title: 'Copie impossible',
         message: `Le presse-papiers a refusé le texte (${err instanceof Error ? err.message : String(err)}).`,
       }
-      return
+      return false
     }
+  }
+
+  async function sendTextToCopilot(kind: 'area' | 'selection', page: number, text: string) {
+    const { addCopilotContext } = await import('../lib/copilot.svelte')
+    addCopilotContext([{
+      id: `pdf-${kind}:${path}:${page}:${text.length}`,
+      kind: 'selection',
+      label: `${baseName(path)} — page ${page}`,
+      text,
+      charCount: text.length,
+      path,
+      truncatedAtLoad: false,
+    }])
+  }
+
+  async function highlightArea() {
+    if (!areaResult) return
+    const { page } = areaResult
+    if (await highlightText(areaResult)) {
+      areaResult = null
+      app.banner = { tone: 'success', title: 'Zone surlignée', message: `Page ${page}.` }
+    }
+  }
+
+  async function copyArea() {
+    // En cas d'échec, la zone reste ouverte : on peut réessayer, ou l'envoyer au copilote.
+    if (!areaResult || !await copyText(areaResult.text)) return
     areaResult = null
     app.banner = { tone: 'success', title: 'Zone copiée', message: 'Le texte est dans le presse-papiers.' }
   }
 
   async function sendAreaToCopilot() {
     if (!areaResult) return
-    const { addCopilotContext } = await import('../lib/copilot.svelte')
-    addCopilotContext([{
-      id: `pdf-area:${path}:${areaResult.page}:${areaResult.text.length}`,
-      kind: 'selection',
-      label: `${baseName(path)} — page ${areaResult.page}`,
-      text: areaResult.text,
-      charCount: areaResult.text.length,
-      path,
-      truncatedAtLoad: false,
-    }])
+    await sendTextToCopilot('area', areaResult.page, areaResult.text)
     areaResult = null
     app.banner = { tone: 'success', title: 'Zone envoyée', message: 'Doku-San a la zone en contexte.' }
+  }
+
+  // --- Menu contextuel -------------------------------------------------------------
+  // Remplace celui de WebView2 (Précédent, Actualiser, Inspecter…), étranger à un lecteur.
+  // La sélection est FIGÉE à l'ouverture : cliquer une entrée peut la défaire avant que
+  // l'action ne la lise.
+  const CONTEXT_MENU_WIDTH = 228
+  const CONTEXT_MENU_HEIGHT = 120
+  // Touche Menu / Maj+F10 : le keydown précède le contextmenu qu'il déclenche (motif de
+  // Sidebar) ; ouvert au clavier, le menu n'est pas animé et prend le focus.
+  let contextMenuFromKey = false
+
+  function openContextMenu(event: MouseEvent) {
+    const kbd = contextMenuFromKey
+    contextMenuFromKey = false
+    const target = event.target instanceof Element ? event.target : null
+    if (status !== 'ready' || presenting || !shell || target?.closest('.note-bubble')) return
+    const found = selectionHighlight(null)
+    // Au clavier, la cible est l'élément focalisé (souvent <body>) : seule une sélection
+    // posée dans CE lecteur, volet actif, lui donne le menu.
+    const inView = Boolean(target && container?.contains(target))
+    if (!inView && !(kbd && found && ownsGlobalKeys())) return
+    event.preventDefault()
+    closeToolMenus()
+    const range = window.getSelection()?.rangeCount ? window.getSelection()!.getRangeAt(0) : null
+    const text = found ? window.getSelection()?.toString().trim() ?? '' : ''
+    const box = shell.getBoundingClientRect()
+    let x = event.clientX
+    let y = event.clientY
+    if (kbd) {
+      const anchor = found && range ? range.getBoundingClientRect() : null
+      x = anchor ? anchor.left : box.left + box.width / 2 - CONTEXT_MENU_WIDTH / 2
+      y = anchor ? anchor.bottom + 4 : box.top + box.height / 3
+    }
+    const left = Math.max(4, Math.min(x - box.left, box.width - CONTEXT_MENU_WIDTH - 4))
+    const top = Math.max(4, Math.min(y - box.top, box.height - CONTEXT_MENU_HEIGHT - 4))
+    contextMenu = {
+      left,
+      top,
+      originX: x - box.left - left,
+      originY: y - box.top - top,
+      kbd,
+      selection: found && text
+        ? {
+            text,
+            page: found.page,
+            rects: found.rects,
+            quote: joinPdfHighlightQuote(found.rects.map((rect) => rectQuote(found.wrap, found.pageRect, rect))),
+          }
+        : null,
+    }
+    void tick().then(() => {
+      if (kbd) contextMenuItems()[0]?.focus()
+      else contextMenuEl?.focus({ preventScroll: true })
+    })
+  }
+
+  function closeContextMenu(restoreFocus = false) {
+    contextMenu = null
+    if (restoreFocus) shell?.focus({ preventScroll: true })
+  }
+
+  const contextMenuItems = () =>
+    Array.from(contextMenuEl?.querySelectorAll<HTMLButtonElement>(':scope > button:not(:disabled)') ?? [])
+
+  function handleContextMenuKey(event: KeyboardEvent) {
+    const items = contextMenuItems()
+    const index = items.indexOf(document.activeElement as HTMLButtonElement)
+    let next: number | null = null
+    if (event.key === 'ArrowDown') next = index < 0 ? 0 : (index + 1) % items.length
+    else if (event.key === 'ArrowUp') next = index < 0 ? items.length - 1 : (index - 1 + items.length) % items.length
+    else if (event.key === 'Home') next = 0
+    else if (event.key === 'End') next = items.length - 1
+    else if (event.key === 'Escape' || event.key === 'Tab') {
+      event.preventDefault()
+      event.stopPropagation()
+      closeContextMenu(true)
+      return
+    }
+    if (next === null || !items.length) return
+    event.preventDefault()
+    event.stopPropagation()
+    items[next].focus()
+  }
+
+  async function runContextAction(action: 'copy' | 'highlight' | 'copilot') {
+    const selection = contextMenu?.selection
+    closeContextMenu(true)
+    if (!selection) return
+    if (action === 'copy') {
+      await copyText(selection.text)
+    } else if (action === 'highlight') {
+      if (await highlightText({ page: selection.page, rects: selection.rects, text: selection.quote })) {
+        window.getSelection()?.removeAllRanges()
+      }
+    } else {
+      await sendTextToCopilot('selection', selection.page, selection.text)
+      app.banner = { tone: 'success', title: 'Passage envoyé', message: 'Doku-San a la sélection en contexte.' }
+    }
   }
 
   // --- Mode présentation ---------------------------------------------------------
@@ -1801,6 +1955,7 @@
       if (signatureMenuOpen && !target?.closest('.drawing-signature-menu') && !target?.closest('.drawing-signature-toggle')) {
         signatureMenuOpen = false
       }
+      if (contextMenu && !target?.closest('.pdf-context-menu')) contextMenu = null
     }
     // Échap épluche UNE couche à la fois, de la plus éphémère à la plus durable :
     // sans cette cascade, fermer un menu d'outil faisait AUSSI sortir du mode Annoter
@@ -1837,6 +1992,7 @@
     }
     const handleShortcuts = (event: KeyboardEvent) => {
       if (!ownsGlobalKeys() || isTypingTarget(event.target)) return
+      if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) contextMenuFromKey = true
       if ((event.ctrlKey || event.metaKey) && !event.altKey) {
         if (event.key === '0') {
           event.preventDefault()
@@ -1916,6 +2072,24 @@
       clearTextHighlightPreview()
       void captureTextHighlight(from === null ? null : sweepBand(from, event.clientY))
     }
+    // Repère « 12 / 48 » : visible pendant le défilement, effacé 1,2 s après. Le menu
+    // contextuel se referme, comme un menu natif : il ne suivrait pas sa cible.
+    let pageHintFrame = 0
+    let pageHintTimer: ReturnType<typeof setTimeout> | undefined
+    const trackScrollPage = () => {
+      if (contextMenu) contextMenu = null
+      if (status !== 'ready' || pageTotal < 2) return
+      if (!pageHintFrame) {
+        pageHintFrame = requestAnimationFrame(() => {
+          pageHintFrame = 0
+          scrollPage = pageAtScroll()
+        })
+      }
+      pageHintVisible = true
+      clearTimeout(pageHintTimer)
+      pageHintTimer = setTimeout(() => { pageHintVisible = false }, 1200)
+    }
+    host.addEventListener('scroll', trackScrollPage, { passive: true })
     host.addEventListener('wheel', handleWheelZoom, { passive: false })
     host.addEventListener('mousedown', startSweep)
     host.addEventListener('mousemove', trackSweep)
@@ -1926,8 +2100,13 @@
     document.addEventListener('mouseup', finishTextHighlight, true)
     // En phase de BULLE, après le surligneur : celui-ci lit la sélection en capture,
     // et la recadrer avant lui changerait ce qu'il enregistre.
-    const tightenOnRelease = (event: MouseEvent) => tightenReadSelection(event.clientX, event.clientY)
+    // Bouton principal seulement : un clic droit DANS la sélection la rognait au point
+    // cliqué, juste avant que le menu contextuel ne la lise.
+    const tightenOnRelease = (event: MouseEvent) => {
+      if (event.button === 0) tightenReadSelection(event.clientX, event.clientY)
+    }
     document.addEventListener('mouseup', tightenOnRelease)
+    document.addEventListener('contextmenu', openContextMenu)
     document.addEventListener('pointerdown', closeTransientUi)
     document.addEventListener('keydown', closeOnEscape)
     document.addEventListener('keydown', handleShortcuts)
@@ -2196,7 +2375,7 @@
     document.addEventListener('transitionend', onChromeTransitionDone)
     document.addEventListener('transitioncancel', onChromeTransitionDone)
 
-    ;(async () => {
+    const load = async () => {
       const bytes = sourceBytes ?? await readFileBytes(path)
       if (cancelled) return
       if (!bytes) {
@@ -2314,10 +2493,35 @@
           message = String(err)
         }
       }
-    })()
+    }
+    // « Réessayer » rejoue le MÊME chemin d'ouverture, après avoir défait ce qu'un échec
+    // en cours de route a pu laisser (pages déjà posées, document pdf.js ouvert).
+    retryLoad = () => {
+      observer?.disconnect()
+      observer = null
+      for (const page of pages.values()) {
+        page.textLayerInstance?.cancel()
+        page.wrap.remove()
+      }
+      pages.clear()
+      pageWraps.clear()
+      visiblePages.clear()
+      visibleAnnotationPages.clear()
+      renderedScales.clear()
+      renderJobs.clear()
+      textJobs.clear()
+      pdf = null
+      void destroyPdf?.()
+      destroyPdf = null
+      status = 'loading'
+      message = ''
+      void load()
+    }
+    void load()
 
     return () => {
       cancelled = true
+      retryLoad = null
       observer?.disconnect()
       resizeObserver?.disconnect()
       window.removeEventListener('resize', scheduleFit)
@@ -2330,6 +2534,9 @@
       clearTimeout(rerenderTimer)
       if (requestFit === scheduleFit) requestFit = () => {}
       if (previewFrame) cancelAnimationFrame(previewFrame)
+      host.removeEventListener('scroll', trackScrollPage)
+      if (pageHintFrame) cancelAnimationFrame(pageHintFrame)
+      clearTimeout(pageHintTimer)
       host.removeEventListener('wheel', handleWheelZoom)
       host.removeEventListener('mousedown', startSweep)
       host.removeEventListener('mousemove', trackSweep)
@@ -2338,6 +2545,7 @@
       // texte à chaque clic, partout dans l'application.
       document.removeEventListener('mouseup', finishTextHighlight, true)
       document.removeEventListener('mouseup', tightenOnRelease)
+      document.removeEventListener('contextmenu', openContextMenu)
       document.removeEventListener('pointerdown', closeTransientUi)
       document.removeEventListener('keydown', closeOnEscape)
       document.removeEventListener('keydown', handleShortcuts)
@@ -2379,7 +2587,16 @@
         {/each}
       </div>
     {:else if status === 'error'}
-      <div class="pdf-state pdf-error">Impossible d'afficher ce PDF. {message}</div>
+      <div class="pdf-state pdf-error" role="alert">
+        <svg class="icon" aria-hidden="true"><use href="#i-file-text" /></svg>
+        <p class="pdf-error-title">Impossible d’afficher ce PDF</p>
+        {#if message}<p class="pdf-error-detail">{message}</p>{/if}
+        {#if retryLoad}
+          <button type="button" onclick={() => retryLoad?.()}>
+            <svg class="icon" aria-hidden="true"><use href="#i-rotate-ccw" /></svg>Réessayer
+          </button>
+        {/if}
+      </div>
     {/if}
 
     {#if noteBubble}
@@ -2447,7 +2664,7 @@
            c'est exactement là qu'il devient le bouton « revenir à la normale ». -->
       {#if zoom !== 1}
         <button class="zoom-level" use:tooltip={{ label: 'Revenir à 100 %', kbd: 'Ctrl+0' }} onclick={resetZoom}>
-          {Math.round(zoom * 100)} %
+          <NumberRoll value={`${Math.round(zoom * 100)} %`} />
         </button>
       {/if}
       <button
@@ -2567,10 +2784,53 @@
         </button>
         <button onclick={() => void copyArea()}><svg class="icon" aria-hidden="true"><use href="#i-copy" /></svg>Copier</button>
         <button onclick={() => void sendAreaToCopilot()}><svg class="icon" aria-hidden="true"><use href="#i-sparkles" /></svg>Doku-San</button>
-        <button class="pdf-area-close" aria-label="Fermer" onclick={() => { areaResult = null }}>
+        <button class="pdf-area-close" aria-label="Fermer" use:tooltip={{ label: 'Fermer', kbd: 'Échap' }} onclick={() => { areaResult = null }}>
           <svg class="icon" aria-hidden="true"><use href="#i-x" /></svg>
         </button>
       </div>
+    </div>
+  {/if}
+
+  <!-- Repère de lecture : décoratif (le défilement l'émettrait en rafale aux lecteurs
+       d'écran). Monté pendant toute la lecture : son effacement est un fondu, pas un
+       démontage. -->
+  {#if status === 'ready' && pageTotal > 1 && !presenting && !annotationMode && !areaResult}
+    <div class="pdf-page-hint" class:visible={pageHintVisible} aria-hidden="true">
+      <NumberRoll value={scrollPage} /><span class="pdf-page-hint-total">/ {pageTotal}</span>
+    </div>
+  {/if}
+
+  {#if contextMenu}
+    <div
+      class="pdf-context-menu"
+      class:kbd={contextMenu.kbd}
+      role="menu"
+      tabindex="-1"
+      aria-label={contextMenu.selection ? 'Actions sur la sélection' : 'Actions du document'}
+      style={`left:${contextMenu.left}px;top:${contextMenu.top}px;transform-origin:${contextMenu.originX}px ${contextMenu.originY}px`}
+      bind:this={contextMenuEl}
+      onkeydown={handleContextMenuKey}
+      onfocusout={(event) => { if (!contextMenuEl?.contains(event.relatedTarget as Node | null)) closeContextMenu() }}
+      onmousedown={(event) => event.preventDefault()}
+    >
+      {#if contextMenu.selection}
+        <button role="menuitem" onclick={() => void runContextAction('copy')}>
+          <svg class="icon" aria-hidden="true"><use href="#i-copy" /></svg>Copier<kbd>Ctrl+C</kbd>
+        </button>
+        <button role="menuitem" disabled={!annotationManifest || savingAnnotation} onclick={() => void runContextAction('highlight')}>
+          <svg class="icon" aria-hidden="true"><use href="#i-highlighter" /></svg>Surligner
+        </button>
+        <button role="menuitem" onclick={() => void runContextAction('copilot')}>
+          <svg class="icon" aria-hidden="true"><use href="#i-sparkles" /></svg>Envoyer à Doku-San
+        </button>
+      {:else}
+        <button role="menuitem" onclick={() => { closeContextMenu(true); areaMode = true; areaResult = null; areaRect = null }}>
+          <svg class="icon" aria-hidden="true"><use href="#i-square-dashed-mouse-pointer" /></svg>Sélectionner une zone
+        </button>
+        <button role="menuitem" onclick={() => { closeContextMenu(true); toggleAnnotationMode() }}>
+          <svg class="icon" aria-hidden="true"><use href="#i-pen" /></svg>{annotationMode ? 'Terminer l’annotation' : 'Annoter le PDF'}
+        </button>
+      {/if}
     </div>
   {/if}
 
@@ -2682,14 +2942,29 @@
           </button>
           {#if signatureMenuOpen}
             <div class="drawing-signature-menu drawing-popover" role="menu" aria-label="Ma signature">
+              {#if signaturePreview}
+                <svg
+                  class="signature-preview"
+                  viewBox="-8 -8 {signaturePreview.width + 16} {signaturePreview.height + 16}"
+                  aria-hidden="true"
+                >
+                  {#each signaturePreview.paths as stroke, index (index)}
+                    <path d={stroke.d} pathLength="1" stroke-width={signaturePreview.strokeWidth} style:--draw-delay="{stroke.delay}ms" style:--draw-ms="{stroke.duration}ms" />
+                  {/each}
+                </svg>
+              {/if}
               <button role="menuitem" onclick={() => { signatureMenuOpen = false; signaturePadOpen = true }}>
                 <svg class="icon" aria-hidden="true"><use href="#i-pencil-line" /></svg>
                 <span>Refaire ma signature</span>
               </button>
-              <button role="menuitem" onclick={() => void forgetSignature()}>
-                <svg class="icon" aria-hidden="true"><use href="#i-trash" /></svg>
-                <span>Oublier ma signature</span>
-              </button>
+              <HoldButton
+                role="menuitem"
+                icon="trash"
+                label="Maintenir pour oublier"
+                holdLabel="Oubli de la signature…"
+                actionName="Oublier ma signature"
+                onconfirm={() => void forgetSignature()}
+              />
             </div>
           {/if}
         </div>
@@ -2793,7 +3068,7 @@
             {notes.length} au total{hiddenOrphanDrawings ? ` · ${hiddenOrphanDrawings} tracé${hiddenOrphanDrawings > 1 ? 's' : ''} orphelin${hiddenOrphanDrawings > 1 ? 's' : ''}` : ''}
           </span>
         </div>
-        <button class="icon-button" aria-label="Fermer" onclick={() => annotationListOpen = false}><svg class="icon" aria-hidden="true"><use href="#i-x" /></svg></button>
+        <button class="icon-button" aria-label="Fermer" use:tooltip={{ label: 'Fermer', kbd: 'Échap' }} onclick={() => annotationListOpen = false}><svg class="icon" aria-hidden="true"><use href="#i-x" /></svg></button>
       </header>
       {#if staleAnnotations}
         <div class="annotation-warning">
@@ -3319,11 +3594,42 @@
   .pdf-ghost .titre { height: 15px; width: 46%; margin-bottom: 7px; background: rgba(28, 26, 22, 0.14); }
   .pdf-ghost .doku-skel:nth-child(3) { width: 94%; }
   .pdf-ghost .doku-skel:nth-child(4) { width: 72%; }
+  /* Même vocabulaire que la feuille d'erreur DOCX : grande icône au trait affiné, le ton
+     sémantique porté par le texte, une seule action. */
   .pdf-error {
     max-width: 420px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
     text-align: center;
-    color: var(--err-text);
   }
+  .pdf-error > .icon { font-size: 32px; stroke-width: 1.5; color: var(--ink-4); }
+  .pdf-error p { margin: 0; text-wrap: balance; }
+  .pdf-error-title { color: var(--err-text); font-weight: var(--weight-control); }
+  .pdf-error-detail { color: var(--ink-3); font-size: var(--text-xs); overflow-wrap: anywhere; }
+  .pdf-error button {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: var(--control-md);
+    margin-top: 4px;
+    padding: 0 12px 0 10px;
+    border: 0;
+    border-radius: var(--radius-lg);
+    background: var(--accent-soft);
+    color: var(--ink);
+    font: var(--weight-control) var(--text-sm) / 1 var(--font-sans);
+    cursor: pointer;
+    transition:
+      background-color var(--duration-basic) ease,
+      transform var(--duration-basic) var(--ease-enter-snappy);
+  }
+  .pdf-error button:hover { background: var(--fill-pressed); }
+  .pdf-error button:active { transform: scale(0.97); }
+  .pdf-error button:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+  .pdf-error button .icon { font-size: 15px; }
+  :global(:where(:root[data-input='touch'])) .pdf-error button { height: 40px; }
   .annotation-toggle,
   .annotate-toggle,
   .area-toggle,
@@ -3350,22 +3656,21 @@
     align-items: center;
     gap: 6px;
   }
-  /* Là où le bouton du copilote surplombe ce lecteur, on lui laisse sa place. */
-  :global(.workspace:not(.split)) .pdf-actions,
-  :global(.workspace.split:not(.vertical) .workspace-pane.secondary) .pdf-actions {
-    right: 56px;
-  }
-  /* Capsules flottantes (ButtonGroup compact de Kube) : 32 px, opaques, posées sur le
-     document par un filet et une ombre de carte plutôt qu'une ombre portée lourde. */
+  /* Capsules flottantes (ButtonGroup compact de Kube) : 32 px, en verre léger, posées
+     sur le document par un filet, un reflet et une ombre de carte plutôt qu'une ombre
+     portée lourde. Hiérarchie conservée : capsule < barre d'outils < menu. */
   .zoom-control,
   .annotate-toggle,
   .area-toggle,
   .annotation-toggle,
-  .pdf-signature-notice {
+  .pdf-signature-notice,
+  .pdf-page-hint {
     height: var(--control-md);
     border-radius: var(--radius-full);
-    background: var(--surface);
-    box-shadow: var(--shadow-card);
+    background: var(--glass-bg);
+    -webkit-backdrop-filter: var(--glass-filter-sm);
+    backdrop-filter: var(--glass-filter-sm);
+    box-shadow: inset 0 0.5px 0 var(--glass-highlight), var(--shadow-card);
   }
   .zoom-control {
     display: inline-flex;
@@ -3443,6 +3748,70 @@
     display: inline-grid;
     place-items: center;
   }
+
+  /* Repère de page : en bas au centre, loin de la capsule de zoom (coin haut-droit) ;
+     absent quand la barre d'annotation ou le résultat de zone occupent cette place. */
+  .pdf-page-hint {
+    position: absolute;
+    z-index: 6;
+    left: 50%;
+    bottom: 18px;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 0 12px;
+    translate: -50% 0;
+    color: var(--ink-2);
+    font: var(--weight-control) var(--text-xs) / 1.2 var(--font-sans);
+    font-variant-numeric: tabular-nums;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 400ms ease;
+  }
+  .pdf-page-hint.visible {
+    opacity: 1;
+    transition-duration: var(--duration-basic);
+  }
+  .pdf-page-hint-total { color: var(--ink-3); }
+
+  /* Menu contextuel : matériau des menus (verre épais), rangées Kube de 32 px. */
+  .pdf-context-menu {
+    position: absolute;
+    z-index: var(--z-context);
+    min-width: 200px;
+    padding: 4px;
+    border-radius: var(--radius-xl);
+    background: var(--glass-bg);
+    -webkit-backdrop-filter: var(--glass-filter);
+    backdrop-filter: var(--glass-filter);
+    box-shadow: var(--glass-shadow);
+    animation: doku-pop-in var(--duration-basic) var(--ease-enter-snappy);
+  }
+  .pdf-context-menu.kbd { animation: none; }
+  .pdf-context-menu:focus { outline: none; }
+  .pdf-context-menu button {
+    width: 100%;
+    height: var(--control-md);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 0 8px;
+    border: 0;
+    border-radius: var(--radius-md);
+    background: transparent;
+    color: var(--ink-2);
+    font: var(--weight-control) var(--text-sm) / 1 var(--font-sans);
+    text-align: left;
+    white-space: nowrap;
+    cursor: pointer;
+  }
+  .pdf-context-menu button:is(:hover, :focus-visible):not(:disabled) { background: var(--menu-row-hover); color: var(--ink); }
+  .pdf-context-menu button:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
+  .pdf-context-menu button:disabled { opacity: var(--opacity-disabled); cursor: default; }
+  .pdf-context-menu .icon { font-size: 15px; opacity: 0.75; }
+  .pdf-context-menu button:is(:hover, :focus-visible) .icon { opacity: 1; }
+  .pdf-context-menu kbd { margin-left: auto; font: 400 var(--text-xs) var(--font-sans); color: var(--ink-4); }
+  :global(:where(:root[data-input='touch'])) .pdf-context-menu button { height: 40px; }
 
   /* Sélection de zone. Le calque couvre le lecteur et prend le pointeur — c'est
      précisément son rôle : encadrer une région plutôt que viser des caractères. */
@@ -3567,7 +3936,7 @@
     --toggle-wash: transparent;
     padding: 0;
     color: var(--ink-3);
-    box-shadow: inset 0 0 0 var(--control-md) var(--toggle-wash), var(--shadow-card);
+    box-shadow: inset 0 0.5px 0 var(--glass-highlight), inset 0 0 0 var(--control-md) var(--toggle-wash), var(--shadow-card);
     transition:
       box-shadow var(--duration-basic) ease,
       color var(--duration-basic) ease,
@@ -3611,8 +3980,20 @@
     padding: 4px;
     transform: translateX(-50%);
     border-radius: var(--radius-full);
-    background: var(--surface);
-    box-shadow: var(--shadow-xl);
+  }
+  /* Le verre vit sur un pseudo-élément : posé sur la barre, son backdrop-filter en ferait
+     la « racine de fond » de ses menus, dont le propre verre ne flouterait plus rien. */
+  .drawing-toolbar::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    border-radius: inherit;
+    background: var(--glass-bg);
+    -webkit-backdrop-filter: var(--glass-filter);
+    backdrop-filter: var(--glass-filter);
+    box-shadow: var(--glass-shadow);
+    pointer-events: none;
   }
   .drawing-tools {
     display: flex;
@@ -3697,8 +4078,15 @@
     translate: -50% 0;
     transform-origin: 50% 100%;
     border-radius: var(--radius-full);
-    background: var(--surface);
-    box-shadow: var(--shadow-xl);
+    background: var(--glass-bg);
+    -webkit-backdrop-filter: var(--glass-filter);
+    backdrop-filter: var(--glass-filter);
+    box-shadow: var(--glass-shadow);
+  }
+  /* Rangées de menu : surbrillance neutre, instantanée (les flèches la déplacent). */
+  .drawing-toolbar .drawing-popover button:hover:not(:disabled) {
+    background: var(--menu-row-hover);
+    transition: none;
   }
   @media (prefers-reduced-motion: no-preference) {
     .drawing-popover { animation: doku-pop-in var(--duration-basic) var(--ease-enter-snappy); }
@@ -3730,6 +4118,31 @@
   .drawing-shape-menu button span:nth-child(2),
   .drawing-ink-menu button span:nth-child(2),
   .drawing-signature-menu button span:nth-child(2) { flex: 1; text-align: left; white-space: nowrap; }
+  .signature-preview {
+    display: block;
+    width: auto;
+    max-width: 100%;
+    height: 44px;
+    justify-self: center;
+    margin: 2px 8px 4px;
+    color: var(--ink);
+    overflow: visible;
+  }
+  .signature-preview path {
+    fill: none;
+    stroke: currentColor;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    stroke-dasharray: 1;
+    stroke-dashoffset: 1;
+    animation: pdf-signature-draw var(--draw-ms) cubic-bezier(.2, .2, .8, .9) var(--draw-delay) forwards;
+  }
+  @keyframes pdf-signature-draw { to { stroke-dashoffset: 0; } }
+  /* La règle globale écrase la durée, pas le délai : sans ceci, les passes
+     apparaîtraient encore une à une. */
+  @media (prefers-reduced-motion: reduce) {
+    .signature-preview path { animation-delay: 0s !important; }
+  }
   .drawing-shape-menu .shape-check,
   .drawing-ink-menu .shape-check { font-size: 14px; color: var(--ink); }
   .drawing-shape-menu button.selected,

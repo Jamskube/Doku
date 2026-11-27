@@ -1,6 +1,6 @@
 # 0006. Copilote IA local : Ollama en sidecar (CPU, GGUF libre) — NPU écarté
 
-**Date** : 2026-07-13 · **Status** : accepted · **Deciders** : nicos (+ Claude) · **Tags** : ia, llm, npu, arm64, copilote
+**Date** : 2026-07-13 · **Status** : superseded by [ADR-0032](./0032-moteur-local-llamacpp-lfm3.md) · **Deciders** : nicos (+ Claude) · **Tags** : ia, llm, npu, arm64, copilote
 
 ## Context
 

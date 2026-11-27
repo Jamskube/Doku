@@ -15,7 +15,7 @@
 </script>
 
 <script lang="ts">
-  import { app, activeTab, closeTab, collapseExplorer, docHeadings, isDirty, loadBacklinksForActive, loadSnapshotsForActive, openPath, openSearchHit, openSettings, refreshExplorer, relocateOpenTabs, renameKindConflict, restoreSnapshot, runSearch, scrollToLine, setExplorerSort, tabsUnder, toggleExplorerExpanded, toggleSidebarView } from '../lib/stores.svelte'
+  import { app, activeTab, closeTab, collapseExplorer, docHeadings, isDirty, loadBacklinksForActive, loadSnapshotsForActive, openCopilot, openPath, openSearchHit, openSettings, refreshExplorer, relocateOpenTabs, renameKindConflict, restoreSnapshot, runSearch, scrollToLine, setExplorerSort, tabsUnder, toggleExplorerExpanded, type SidebarView } from '../lib/stores.svelte'
   import { baseName, flattenTree, joinPath, nameExists, normalizeNewName, parentPath, pathCrumbs, reachableExpanded, type FsEntry, type SortKey, type TreeRow } from '../lib/explorer'
   import { confirmAction, createDirAt, createFileAt, isTauri, openFolderDialog, readDirectory, renamePathAt, trashPathAt } from '../lib/tauri'
   import { DEMO_DIR } from '../lib/demo'
@@ -23,7 +23,10 @@
   import { middleTruncate } from '../lib/middle-truncate'
   import DokuMark from '../lib/DokuMark.svelte'
   import { tooltip } from '../lib/tooltip'
+  import { liquidThumb } from '../lib/liquid'
   import CopilotConversationList from './CopilotConversationList.svelte'
+  import { copilot } from '../lib/copilot.svelte'
+  import { tabLabel } from '../lib/tabs'
   import { tick, untrack } from 'svelte'
 
   // Plan : titres du Markdown seulement (un .txt/.html n'en a pas), et pas pour un
@@ -32,6 +35,44 @@
   const headings = $derived(
     activeTab()?.kind === 'md' && !activeTab()!.heavy ? docHeadings(activeTab()!.content) : [],
   )
+  // Profondeur relative au plus haut niveau présent : un document sans # commence à gauche.
+  const minLevel = $derived(headings.reduce((min, h) => Math.min(min, h.level), 6))
+  const planDepth = (level: number) => Math.min(level - minLevel, 4)
+
+  // Sélecteur de vue (capsule) : l'ordre est celui des raccourcis du menu Affichage.
+  const VIEWS: { id: SidebarView; label: string; tip: string; icon: string; kbd?: string }[] = [
+    { id: 'files', label: 'Fichiers', tip: 'Fichiers', icon: 'folder-open', kbd: 'Ctrl+Maj+E' },
+    { id: 'search', label: 'Rechercher', tip: 'Rechercher dans le dossier', icon: 'search', kbd: 'Ctrl+Maj+F' },
+    { id: 'plan', label: 'Plan', tip: 'Plan du document', icon: 'list', kbd: 'Ctrl+Maj+P' },
+    { id: 'history', label: 'Historique', tip: 'Historique des versions', icon: 'rotate-ccw-clock', kbd: 'Ctrl+Maj+H' },
+    { id: 'discussions', label: 'Discussions Doku-San', tip: 'Discussions Doku-San', icon: 'message-circle' },
+  ]
+  const viewIndex = $derived(Math.max(0, VIEWS.findIndex((v) => v.id === app.sidebarView)))
+  let switcherEl = $state<HTMLElement | null>(null)
+
+  // Onglets ARIA : ←/→/Début/Fin changent de vue, le focus suit l'onglet choisi.
+  function onSwitcherKey(e: KeyboardEvent) {
+    const last = VIEWS.length - 1
+    const next = e.key === 'ArrowRight' ? (viewIndex + 1) % VIEWS.length
+      : e.key === 'ArrowLeft' ? (viewIndex + last) % VIEWS.length
+      : e.key === 'Home' ? 0
+      : e.key === 'End' ? last
+      : -1
+    if (next < 0) return
+    e.preventDefault()
+    app.sidebarView = VIEWS[next].id
+    void tick().then(() => switcherEl?.querySelectorAll<HTMLElement>('[role="tab"]')[next]?.focus())
+  }
+
+  const docName = $derived(activeTab() ? tabLabel(activeTab()!) : null)
+
+  // Pied de carte : moteur et modèle du copilote. Le point est vert seulement quand le
+  // fournisseur répond (moteur local démarré, compte connecté) ; sinon il reste neutre.
+  const modelStatus = $derived.by(() => {
+    if (app.copilotProvider === 'openai') return { provider: 'OpenAI', name: app.openaiModel, on: copilot.openAiAuthenticated === true }
+    if (app.copilotProvider === 'minimax') return { provider: 'MiniMax', name: app.minimaxModel, on: !!copilot.minimaxStatus?.connected }
+    return { provider: 'Local', name: app.activeModel, on: copilot.ready }
+  })
 
   // Chemin actif + onglets par chemin, dérivés UNE fois : le template de l'arbre les
   // consultait par rangée (deux app.tabs.find × N rangées à chaque rendu).
@@ -628,6 +669,23 @@
     }
   })
 
+  // Historique en rail chronologique : Aujourd'hui / Hier / Plus tôt.
+  type Snapshot = (typeof app.snapshots)[number]
+  const snapshotGroups = $derived.by(() => {
+    const now = new Date()
+    const startToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime()
+    const groups: { key: string; label: string; older: boolean; items: Snapshot[] }[] = [
+      { key: 'today', label: 'Aujourd’hui', older: false, items: [] },
+      { key: 'yesterday', label: 'Hier', older: false, items: [] },
+      { key: 'older', label: 'Plus tôt', older: true, items: [] },
+    ]
+    for (const snap of app.snapshots) {
+      groups[snap.time >= startToday ? 0 : snap.time >= startToday - 86_400_000 ? 1 : 2].items.push(snap)
+    }
+    return groups.filter((g) => g.items.length)
+  })
+  const formatSnapshotTime = (time: number) => new Date(time).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })
+
   function formatSnapshotDate(time: number): string {
     return new Date(time).toLocaleString('fr-FR', {
       day: 'numeric',
@@ -646,12 +704,11 @@
   })
 
   // Repliée, la barre (largeur 0) devient `inert`. Le focus qui y était rejoint le bouton
-  // du ruban de la barre de titre AVANT la mise à jour du DOM : une fois l'aside inerte,
-  // le navigateur l'aurait déjà lâché sur <body>.
+  // « déplier » de la barre de titre, qui n'est plus inerte qu'APRÈS la mise à jour du DOM.
   let asideEl = $state<HTMLElement | null>(null)
   $effect.pre(() => {
     if (!app.sidebarOpen && asideEl?.contains(document.activeElement)) {
-      document.querySelector<HTMLElement>('.titlebar .rail-btn')?.focus()
+      void tick().then(() => document.querySelector<HTMLElement>('.titlebar .rail-btn')?.focus())
     }
   })
 
@@ -667,44 +724,55 @@
   bind:this={asideEl}
 >
   <div class="inner">
-    <div class="ribbon">
-      <button class="logo" use:tooltip={'À propos de Doku'} aria-label="À propos de Doku" onclick={() => openSettings('about')}>
-        <DokuMark size={26} />
-      </button>
-      <div class="divider"></div>
+    <div class="card">
+      <header class="brand" data-tauri-drag-region>
+        <button class="brand-mark" use:tooltip={'À propos de Doku'} aria-label="À propos de Doku" onclick={() => openSettings('about')}>
+          <DokuMark size={18} />
+          <span class="brand-name">Doku</span>
+        </button>
+        <button
+          class="icon-btn"
+          use:tooltip={'Replier la barre latérale'}
+          aria-label="Replier la barre latérale"
+          onclick={() => (app.sidebarOpen = false)}
+        >
+          <svg width="18" height="18" viewBox="-0.5 -0.5 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5.625 2.1875v10.625M1.875 5.875c0 -1.4 0 -2.1 0.2725 -2.635a2.5 2.5 0 0 1 1.0925 -1.0925C3.775 1.875 4.475 1.875 5.875 1.875h3.25c1.4 0 2.1 0 2.635 0.2725a2.5 2.5 0 0 1 1.0925 1.0925C13.125 3.775 13.125 4.475 13.125 5.875v3.25c0 1.4 0 2.1 -0.2725 2.635a2.5 2.5 0 0 1 -1.0925 1.0925C11.225 13.125 10.525 13.125 9.125 13.125H5.875c-1.4 0 -2.1 0 -2.635 -0.2725a2.5 2.5 0 0 1 -1.0925 -1.0925C1.875 11.225 1.875 10.525 1.875 9.125z" /></svg>
+        </button>
+      </header>
 
-      <button class="rib" class:active={app.sidebarView === 'files' && app.sidebarOpen} use:tooltip={{ label: 'Fichiers', kbd: 'Ctrl+Maj+E' }} aria-label="Fichiers" onclick={() => toggleSidebarView('files')}>
-        <svg class="icon" aria-hidden="true"><use href="#i-folder-open" /></svg>
-      </button>
-      <button class="rib" class:active={app.sidebarView === 'search' && app.sidebarOpen} use:tooltip={{ label: 'Rechercher dans le dossier', kbd: 'Ctrl+Maj+F' }} aria-label="Rechercher" onclick={() => toggleSidebarView('search')}>
-        <svg class="icon" aria-hidden="true"><use href="#i-search" /></svg>
-      </button>
-      <button class="rib" class:active={app.sidebarView === 'plan' && app.sidebarOpen} use:tooltip={{ label: 'Plan du document', kbd: 'Ctrl+Maj+P' }} aria-label="Plan" onclick={() => toggleSidebarView('plan')}>
-        <svg class="icon" aria-hidden="true"><use href="#i-list" /></svg>
-      </button>
-      <button class="rib" class:active={app.sidebarView === 'history' && app.sidebarOpen} use:tooltip={{ label: 'Historique des versions', kbd: 'Ctrl+Maj+H' }} aria-label="Historique" onclick={() => toggleSidebarView('history')}>
-        <svg class="icon" aria-hidden="true"><use href="#i-rotate-ccw-clock" /></svg>
-      </button>
-      <button class="rib" class:active={app.sidebarView === 'discussions' && app.sidebarOpen} use:tooltip={'Discussions Doku-San'} aria-label="Discussions Doku-San" onclick={() => toggleSidebarView('discussions')}>
-        <svg class="icon" aria-hidden="true"><use href="#i-message-circle" /></svg>
-      </button>
+      <!-- Sélecteur de vue : capsule à pastille glissante (onglets ARIA, un seul arrêt Tab). -->
+      <div class="switcher" role="tablist" aria-label="Vues de la barre latérale" bind:this={switcherEl} use:liquidThumb>
+        <!-- Enveloppe : liquidThumb observe la taille des enfants directs, et la pastille qui
+             s'étire relançait une pose sèche qui coupait son propre trajet. -->
+        <span class="switcher-track" aria-hidden="true"><span class="switcher-pill" data-liquid-thumb></span></span>
+        {#each VIEWS as view, i (view.id)}
+          <button
+            role="tab"
+            id={`sidebar-tab-${view.id}`}
+            aria-selected={i === viewIndex}
+            aria-controls="sidebar-view"
+            tabindex={i === viewIndex ? 0 : -1}
+            aria-label={view.label}
+            use:tooltip={view.kbd ? { label: view.tip, kbd: view.kbd } : view.tip}
+            onclick={() => (app.sidebarView = view.id)}
+            onkeydown={onSwitcherKey}
+          >
+            <svg class="icon" aria-hidden="true"><use href="#i-{view.icon}" /></svg>
+          </button>
+        {/each}
+      </div>
 
-      <div class="spacer"></div>
-
-      <button class="rib" class:active={app.settingsOpen} use:tooltip={'Paramètres'} aria-label="Paramètres" onclick={() => openSettings()}>
-        <svg class="icon" aria-hidden="true"><use href="#i-settings" /></svg>
-      </button>
-    </div>
-
-    <div class="panel">
-      {#if app.sidebarView === 'discussions'}
-        <CopilotConversationList />
-      {:else}
-      <div class="panel-head">
-        {#if app.sidebarView === 'files'}
-          <span class="panel-title">Fichiers</span>
-          <!-- Hiérarchie de fréquence : créer (2 boutons) reste visible, le reste
-               (ouvrir un dossier, suivre le doc, tout replier, trier) vit dans UN menu. -->
+      <div class="panel" id="sidebar-view" role="tabpanel" aria-labelledby={`sidebar-tab-${VIEWS[viewIndex].id}`}>
+        {#if app.sidebarView === 'discussions'}
+          <CopilotConversationList />
+        {:else}
+          {@const subtitle = app.sidebarView === 'search' ? (targetDir ? `Dans ${baseName(targetDir)}` : null) : app.sidebarView === 'files' ? null : docName}
+          <div class="panel-head">
+            <div class="head-text">
+              <h2 class="panel-title">{VIEWS[viewIndex].label}</h2>
+              {#if subtitle}<p class="panel-sub" title={subtitle}>{subtitle}</p>{/if}
+            </div>
+            {#if app.sidebarView === 'files'}
           <div class="actions">
             <button
               use:tooltip={canCreate ? 'Nouvelle note' : ''}
@@ -776,8 +844,8 @@
               {/if}
             </div>
           </div>
-        {/if}
-      </div>
+            {/if}
+          </div>
 
       {#if app.sidebarView === 'files' && targetDir}
         <div class="explorer-nav">
@@ -889,7 +957,7 @@
                   <span class="twist-spacer" aria-hidden="true"></span>
                 {/if}
                 <svg class="icon fold" aria-hidden="true"><use href="#i-{fileIcon(row.entry.name, row.entry.isDir, expanded)}" /></svg>
-                <span class="label grow" class:strong={row.entry.isDir} aria-hidden="true">{middleTruncate(row.entry.name, labelMax(row.depth))}</span>
+                <span class="label grow" aria-hidden="true">{middleTruncate(row.entry.name, labelMax(row.depth))}</span>
                 {#if dirty}<span class="filedot" aria-hidden="true"></span>{/if}
               </div>
               {/if}
@@ -912,16 +980,26 @@
                  jour en place. Keyer sur h.line détruisait/recréait tout le plan à chaque
                  retour chariot (toutes les lignes suivantes changent de numéro). -->
             {#each headings as h}
-              {#if h.level === 1}
-                <button class="plan-h1" class:active={h.line === app.activeHeadingLine} title={h.text} dir="auto" onclick={() => scrollToLine(h.line)}><span class="plan-text">{h.text}</span></button>
-              {:else}
-                <button class="plan-sub" class:active={h.line === app.activeHeadingLine} title={h.text} dir="auto" onclick={() => scrollToLine(h.line)}><span class="plan-text">{h.text}</span></button>
-              {/if}
+              {@const depth = planDepth(h.level)}
+              {@const current = h.line === app.activeHeadingLine}
+              <button
+                class="plan-row"
+                class:top={depth === 0}
+                class:active={current}
+                style:--depth={depth}
+                aria-current={current ? 'location' : undefined}
+                title={h.text}
+                dir="auto"
+                onclick={() => scrollToLine(h.line)}
+              >
+                {#if depth}<span class="plan-guides" aria-hidden="true"></span>{/if}
+                <span class="plan-text">{h.text}</span>
+              </button>
             {:else}
               <p class="empty">Pas de titres dans ce document</p>
             {/each}
             {#if activeTab()?.kind === 'md' && activeTab()?.path}
-              <h3 class="backlinks-head">Liens entrants{#if app.backlinksFor === activeTab()?.id && app.backlinks.length} · {app.backlinks.length}{/if}</h3>
+              <h3 class="section-head">Liens entrants{#if app.backlinksFor === activeTab()?.id && app.backlinks.length}<span class="section-count">{app.backlinks.length}</span>{/if}</h3>
               {#if app.backlinksFor !== activeTab()?.id}
                 <p class="empty">Recherche…</p>
               {:else}
@@ -990,17 +1068,42 @@
             {:else if app.snapshots.length === 0}
               <p class="empty">Aucune version enregistrée pour l'instant.</p>
             {:else}
-              {#each app.snapshots as snap (snap.name)}
-                <button class="snap" title="Restaurer cette version" onclick={() => restoreSnapshot(snap.name)}>
-                  <span class="snap-date">{formatSnapshotDate(snap.time)}</span>
-                  {#if snap.preview}<span class="snap-preview">{snap.preview}</span>{/if}
-                </button>
+              {#each snapshotGroups as group, g (group.key)}
+                <h3 class="section-head">{group.label}<span class="section-count">{group.items.length}</span></h3>
+                <ol class="timeline">
+                  {#each group.items as snap, i (snap.name)}
+                    <li class:latest={g === 0 && i === 0}>
+                      <button class="snap" title="Restaurer cette version" onclick={() => restoreSnapshot(snap.name)}>
+                        <span class="snap-date">{group.older ? formatSnapshotDate(snap.time) : formatSnapshotTime(snap.time)}</span>
+                        {#if snap.preview}<span class="snap-preview">{snap.preview}</span>{/if}
+                      </button>
+                    </li>
+                  {/each}
+                </ol>
               {/each}
             {/if}
           </div>
         {/if}
       </div>
-      {/if}
+        {/if}
+      </div>
+
+      <footer class="foot">
+        <button class="foot-row" class:active={app.settingsOpen} onclick={() => openSettings()}>
+          <svg class="icon" aria-hidden="true"><use href="#i-settings" /></svg>
+          <span class="label grow">Paramètres</span>
+        </button>
+        <button
+          class="model"
+          use:tooltip={'Modèles du copilote'}
+          aria-label={`Copilote : ${modelStatus.provider}${modelStatus.name ? ` ${modelStatus.name}` : ''}, ${modelStatus.on ? 'prêt' : 'en veille'} — ouvrir les modèles`}
+          onclick={() => openCopilot('models')}
+        >
+          <span class="model-dot" class:on={modelStatus.on} aria-hidden="true"></span>
+          <span class="model-provider">{modelStatus.provider}</span>
+          {#if modelStatus.name}<span class="model-name">{modelStatus.name}</span>{/if}
+        </button>
+      </footer>
     </div>
   </div>
 </aside>
@@ -1049,8 +1152,10 @@
   .row-menu {
     padding: 4px;
     border-radius: var(--radius-xl);
-    background: var(--composer-bg);
-    box-shadow: var(--shadow-xl);
+    background: var(--glass-bg);
+    -webkit-backdrop-filter: var(--glass-filter);
+    backdrop-filter: var(--glass-filter);
+    box-shadow: var(--glass-shadow);
     animation: doku-pop-in var(--duration-basic) var(--ease-enter-snappy);
   }
   .sort-menu.kbd,
@@ -1081,7 +1186,7 @@
   :global(:root[data-input='touch']) :is(.sort-menu, .row-menu) button { min-height: 40px; }
   /* Surbrillance instantanée : elle suit les flèches du clavier, une transition y traînerait.
      L'anneau double la teinte, trop pâle seule pour signaler le focus (WCAG 2.4.11). */
-  :is(.sort-menu, .row-menu) button:is(:hover, :focus-visible):not(:disabled) { background: var(--accent-soft); color: var(--ink); }
+  :is(.sort-menu, .row-menu) button:is(:hover, :focus-visible):not(:disabled) { background: var(--menu-row-hover); color: var(--ink); }
   :is(.sort-menu, .row-menu) button:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
   .row-menu button.danger:not(:disabled) { color: var(--danger-action-text); }
   :is(.sort-menu, .row-menu) button:disabled { opacity: var(--opacity-disabled); cursor: default; }
@@ -1094,97 +1199,184 @@
   /* Intitulé de section du menu — libellé, pas action : non focusable. */
   .menu-head { display: block; padding: 6px 8px 4px; font-size: var(--text-xs); font-weight: var(--weight-control); color: var(--ink-3); }
 
+  /* Rideau : la largeur seule anime (0 ↔ 296 = SIDEBAR_OPEN_WIDTH), même tempo que le
+     copilote. La carte flotte à --canvas-gap du haut, du bas et du bord gauche ; l'écart
+     avec la feuille est celui de `.main`. `clip` + marge : l'ombre et l'anneau de la carte
+     ne sont pas tranchés à son bord droit. */
   .sidebar {
     flex: 0 0 auto;
     width: 0;
-    overflow: hidden;
-    background: transparent;
-    /* 16 px : un flou plus large se recalcule à chaque frame pendant que la largeur anime. */
-    -webkit-backdrop-filter: blur(16px) saturate(145%);
-    backdrop-filter: blur(16px) saturate(145%);
-    box-shadow: inset 0 1px 0 var(--chrome-material-filet);
-    /* Même tempo que le panneau copilote (.cop-panel) : les deux rideaux latéraux
-       doivent respirer à la même vitesse. */
+    position: relative;
+    overflow: clip;
+    overflow-clip-margin: var(--canvas-gap);
     transition: width var(--duration-curtain) var(--ease-curtain);
   }
   .sidebar.open:not(.covered) { width: 296px; }
   .sidebar.snap { transition: none; }
   /* contain : le contenu (largeur figée) est isolé des invalidations externes — la
-     transition de width de .sidebar ne re-layoute plus l'arbre entier à chaque frame. */
-  .inner { width: 296px; height: 100%; display: flex; contain: layout paint; }
+     transition de width de .sidebar ne re-layoute plus l'arbre entier à chaque frame.
+     Masquée en fin de fermeture : sans cela, la marge de rognage laisserait voir le bord
+     de la carte (ombre, anneau) contre la fenêtre. */
+  .inner {
+    width: 296px;
+    height: 100%;
+    display: flex;
+    padding: var(--canvas-gap) 0 var(--canvas-gap) var(--canvas-gap);
+    contain: layout style;
+    visibility: hidden;
+    transition: visibility 0s linear var(--duration-curtain);
+  }
+  .sidebar.open:not(.covered) .inner { visibility: visible; transition-delay: 0s; }
+  .sidebar.snap .inner { transition: none; }
 
-  .ribbon {
-    flex: 0 0 46px;
+  /* Carte flottante (Apple 27) : matériau translucide + flou léger, sur un pseudo-élément —
+     posé sur la carte même, son backdrop-filter en ferait la racine de fond de ses menus en
+     verre, qui ne flouteraient plus rien. 16 px : un flou plus large se recalcule à chaque
+     image pendant que le rideau anime. */
+  .card {
+    position: relative;
+    isolation: isolate;
+    flex: 1;
+    min-width: 0;
     display: flex;
     flex-direction: column;
-    align-items: center;
-    gap: 2px;
-    padding: 0 0 12px;
+    border-radius: var(--sheet-radius);
+    box-shadow: var(--panel-shadow);
   }
-  .logo {
-    width: 38px;
-    height: 40px;
-    flex-shrink: 0;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    margin-bottom: 6px;
-    border: 0;
-    border-radius: var(--radius-lg);
-    background: transparent;
-    color: var(--ink);
-    cursor: pointer;
+  .card::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    border-radius: inherit;
+    background: var(--panel-bg);
+    pointer-events: none;
+    -webkit-backdrop-filter: blur(16px) saturate(140%);
+    backdrop-filter: blur(16px) saturate(140%);
   }
-  .divider { width: 20px; height: 1px; margin: 0 0 6px; background: var(--line-2); }
-  .rib {
-    width: var(--control-lg);
-    height: var(--control-lg);
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    border: 0;
-    border-radius: var(--radius-lg);
-    background: transparent;
-    color: var(--ink-3);
-    cursor: pointer;
-    transition: background-color var(--duration-basic) ease, color var(--duration-basic) ease;
+  /* Mica floute déjà le bureau : un second flou n'y verrait que du transparent. */
+  :global(:root[data-window-backdrop='mica']) .card::before {
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
   }
-  .rib .icon { font-size: 18px; }
-  .rib:hover { background: var(--fill-hover); color: var(--ink); }
-  .rib.active { background: var(--accent-soft); color: var(--ink); }
-  .spacer { flex: 1; }
 
-  .panel { flex: 1; min-width: 0; display: flex; flex-direction: column; border-left: 1px solid var(--chrome-material-divider); }
-  /* Hauteur de la barre de titre ; titre à 16 px, aligné sur les icônes des rangées
-     (8 de .panel-body + 8 de .row). */
-  .panel-head { height: var(--chrome-titlebar-height); flex-shrink: 0; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 0 8px 0 16px; }
-  .panel-title { min-width: 0; font-size: var(--text-sm); font-weight: var(--weight-strong); color: var(--ink); }
-  .actions { display: flex; align-items: center; gap: 2px; }
-  .actions button:not([role='menuitem']) {
-    width: var(--control-sm);
+  /* En-tête de carte : marque + nom (ouvre « À propos »), bouton replier. Centré sur la
+     rangée d'onglets de la barre de titre (y = 24). */
+  .brand {
+    height: 32px;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 0 4px 0 6px;
+  }
+  .brand-mark {
     height: var(--control-sm);
     display: inline-flex;
     align-items: center;
+    gap: 8px;
+    padding: 0 8px 0 6px;
+    border: 0;
+    border-radius: var(--radius-md);
+    background: transparent;
+    color: var(--ink);
+    cursor: pointer;
+    transition: background-color var(--duration-basic) ease;
+  }
+  .brand-mark:hover { background: var(--fill-hover); }
+  .brand-name { font-size: var(--text-sm); font-weight: var(--weight-strong); letter-spacing: var(--tracking-snug); }
+  .icon-btn,
+  .actions button:not([role='menuitem']) {
+    width: var(--control-sm);
+    height: var(--control-sm);
+    flex: none;
+    display: inline-flex;
+    align-items: center;
     justify-content: center;
     border: 0;
-    border-radius: var(--radius-lg);
+    border-radius: var(--radius-full);
     background: transparent;
     color: var(--ink-4);
     cursor: pointer;
-    transition: background-color var(--duration-basic) ease, color var(--duration-basic) ease;
+    transition: background-color var(--duration-basic) ease, color var(--duration-basic) ease, transform var(--duration-basic) var(--ease-enter-snappy);
   }
   .actions button:not([role='menuitem']) .icon { font-size: 16px; }
-  .actions button:not([role='menuitem']):is(:hover, .active):not(:disabled) { background: var(--fill-hover); color: var(--ink); }
+  :is(.icon-btn, .actions button:not([role='menuitem'])):is(:hover, .active):not(:disabled) { background: var(--fill-hover); color: var(--ink); }
+  :is(.icon-btn, .actions button:not([role='menuitem'])):active:not(:disabled) { transform: scale(0.97); }
   .actions button:not([role='menuitem']):disabled { opacity: var(--opacity-disabled); cursor: default; }
+  .brand-mark:focus-visible,
+  .icon-btn:focus-visible { outline-offset: -2px; }
+
+  /* Sélecteur de vue : piste en capsule, pastille liquide (src/lib/liquid.ts pose translate/width). */
+  .switcher {
+    position: relative;
+    flex-shrink: 0;
+    display: flex;
+    height: var(--control-md);
+    margin: 6px 8px 2px;
+    padding: 2px;
+    border-radius: var(--radius-full);
+    background: rgba(var(--ink-rgb), 0.055);
+  }
+  .switcher-track { position: absolute; inset: 0; pointer-events: none; }
+  .switcher-pill {
+    position: absolute;
+    top: 2px;
+    bottom: 2px;
+    left: 0;
+    border-radius: var(--radius-full);
+    background: var(--track-thumb);
+    box-shadow: 0 0 0 0.5px var(--elevation-ring), 0 1px 3px rgba(var(--shadow-rgb), 0.08);
+  }
+  /* Sombre : --track-thumb (surface-2) se confondait avec la carte ; pastille nettement plus claire. */
+  :global(:root[data-theme='dark']) .switcher-pill {
+    background: rgb(255 255 255 / 0.14);
+    box-shadow: inset 0 0.5px 0 rgb(255 255 255 / 0.1), 0 1px 3px rgb(0 0 0 / 0.4);
+  }
+  .switcher button {
+    position: relative;
+    flex: 1;
+    min-width: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: 0;
+    border-radius: var(--radius-full);
+    background: transparent;
+    color: var(--ink-4);
+    cursor: pointer;
+    transition: color var(--duration-basic) ease;
+  }
+  .switcher button .icon { font-size: 16px; }
+  .switcher button:hover { color: var(--ink-2); }
+  .switcher button[aria-selected='true'] { color: var(--ink); }
+  .switcher button:focus-visible { outline-offset: -2px; }
+
+  .panel { flex: 1; min-height: 0; min-width: 0; display: flex; flex-direction: column; timeline-scope: --panel-scroll; }
+  /* En-tête de vue : titre 13/600 aligné sur les icônes des rangées (8 + 8), sous-titre
+     (document, dossier) en encre 4, actions de la vue à droite. */
+  .panel-head {
+    min-height: 44px;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 6px 8px 4px 16px;
+  }
+  .head-text { min-width: 0; display: grid; gap: 1px; }
+  .panel-title { min-width: 0; font-size: var(--text-sm); font-weight: var(--weight-strong); color: var(--ink); letter-spacing: var(--tracking-snug); }
+  .panel-sub { min-width: 0; overflow: hidden; font-size: var(--text-xs); color: var(--ink-4); text-overflow: ellipsis; white-space: nowrap; }
+  .actions { display: flex; align-items: center; gap: 2px; }
 
   .explorer-nav {
-    height: 40px;
+    height: 36px;
     flex: 0 0 auto;
     display: flex;
     align-items: center;
     gap: 4px;
-    padding: 0 8px;
-    border-bottom: 1px solid var(--line-1);
+    padding: 0 8px 4px;
   }
   /* Précédent/suivant et chemin : deux pistes de même hauteur, boutons internes au
      rayon concentrique (rayon extérieur − marge interne). */
@@ -1195,8 +1387,8 @@
     align-items: center;
     gap: 2px;
     padding: 2px;
-    border-radius: var(--radius-lg);
-    background: var(--surface-hover);
+    border-radius: var(--radius-full);
+    background: rgba(var(--ink-rgb), 0.045);
   }
   .nav-btn {
     width: var(--control-2xs);
@@ -1205,7 +1397,7 @@
     align-items: center;
     justify-content: center;
     border: 0;
-    border-radius: var(--radius-md);
+    border-radius: var(--radius-full);
     background: transparent;
     color: var(--ink-3);
     cursor: pointer;
@@ -1218,8 +1410,8 @@
      largeur, 1 px seulement (moitié de l'écart de 2 px) pour ne pas chevaucher le voisin.
      any-pointer : sur Surface, la souris du Type Cover ne doit pas l'empêcher. */
   @media (any-pointer: coarse) {
-    .actions button:not([role='menuitem']), .nav-btn { position: relative; }
-    .actions button:not([role='menuitem'])::after { content: ''; position: absolute; inset: -6px -1px; }
+    .actions button:not([role='menuitem']), .nav-btn, .icon-btn { position: relative; }
+    :is(.actions button:not([role='menuitem']), .icon-btn)::after { content: ''; position: absolute; inset: -6px -1px; }
     .nav-btn::after { content: ''; position: absolute; inset: -8px -1px; }
   }
   .breadcrumbs {
@@ -1228,10 +1420,10 @@
     height: var(--control-sm);
     display: flex;
     align-items: center;
-    padding: 2px;
+    padding: 2px 4px;
     overflow-x: auto;
-    border-radius: var(--radius-lg);
-    background: var(--surface-hover);
+    border-radius: var(--radius-full);
+    background: rgba(var(--ink-rgb), 0.045);
     scrollbar-width: none;
     overscroll-behavior-x: contain;
     /* Tactile : défilement horizontal natif ; le drag souris est géré en JS. */
@@ -1251,7 +1443,7 @@
     padding: 0 6px;
     overflow: hidden;
     border: 0;
-    border-radius: var(--radius-md);
+    border-radius: var(--radius-full);
     background: transparent;
     color: var(--ink-3);
     font: inherit;
@@ -1263,7 +1455,7 @@
   }
   .breadcrumbs button:hover:not(:disabled) { background: var(--fill-hover); color: var(--ink); }
   .breadcrumbs button.current { max-width: 120px; color: var(--ink); font-weight: 510; cursor: default; }
-  .crumb-separator { font-size: 12px; color: var(--ink-5); }
+  .crumb-separator { flex: none; font-size: 12px; color: var(--ink-5); }
   /* Le fil d'Ariane rogne ses enfants (défilement) et chaque bouton rogne son texte :
      pas de pseudo-élément possible. Au doigt, le bouton prend toute la hauteur de la
      piste (28 px, son plafond) ; la bordure transparente garde le fond dessiné à 24 px. */
@@ -1296,7 +1488,7 @@
     flex: 1;
     min-height: 0;
     overflow-y: auto;
-    padding: 4px 8px 12px;
+    padding: 2px 8px 12px;
     contain: layout paint;
   }
   /* Les bords fondent sur les 20px (haut) / 40px (bas) de défilement restant. Sans
@@ -1312,10 +1504,25 @@
       animation-range: 0 20px, calc(100% - 40px) 100%;
     }
   }
+  /* Filet sous l'en-tête, seulement une fois la liste défilée (Apple scroll-edge « hard ») :
+     la timeline du corps est partagée avec son frère par timeline-scope sur .panel. */
+  @supports (animation-timeline: scroll()) {
+    .panel-body { scroll-timeline: --panel-scroll block; }
+    .explorer-nav,
+    .panel-head:not(:has(+ .explorer-nav)) {
+      animation: head-filet linear both;
+      animation-timeline: --panel-scroll;
+      animation-range: 0 12px;
+    }
+  }
+  @keyframes head-filet { from { box-shadow: 0 1px 0 transparent; } to { box-shadow: 0 1px 0 var(--chrome-material-divider); } }
   @keyframes edge-top { to { --edge-top: 20px; } }
   @keyframes edge-bottom { from { --edge-bottom: 40px; } to { --edge-bottom: 0px; } }
 
-  .row {
+  /* Rangées : 30 px (40 au doigt), rayon 8 ; sélection = voile d'encre + libellé 510 +
+     icône en encre pleine. */
+  .row,
+  .foot-row {
     width: 100%;
     height: 30px;
     display: flex;
@@ -1326,19 +1533,21 @@
     border-radius: var(--radius-md);
     background: transparent;
     color: var(--ink-2);
+    font: inherit;
     text-align: left;
     cursor: pointer;
     user-select: none;
     transition: background-color var(--duration-basic) ease, color var(--duration-basic) ease;
   }
-  .row.current { background: var(--accent-soft); color: var(--ink); }
-  .row.current .label { font-weight: 510; }
+  .row.current,
+  .foot-row.active { background: var(--row-selected); color: var(--ink); }
+  :is(.row.current, .foot-row.active) .label { font-weight: 510; }
+  :is(.row.current, .foot-row.active) :is(.fold, .icon) { color: var(--ink); }
   .fold { flex-shrink: 0; font-size: 16px; color: var(--ink-4); }
   .label { min-width: 0; overflow: hidden; font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
-  .label.strong { font-weight: 510; }
   .label.grow { flex: 1; min-width: 4ch; }
   /* Pastille « non enregistré » : dessinée en CSS (le glyphe ● variait d'une police à l'autre). */
-  .filedot { flex-shrink: 0; width: 6px; height: 6px; border-radius: 50%; background: var(--ink); }
+  .filedot { flex-shrink: 0; width: 6px; height: 6px; margin-right: 2px; border-radius: 50%; background: var(--ink); }
   /* Chevron de dépliage : pivote à 90° quand le dossier est ouvert. La marge négative
      le colle à 4px de l'icône, l'icône restant à 8px du libellé. */
   .twist {
@@ -1367,9 +1576,9 @@
   .folder-empty p { max-width: 24ch; margin: 4px 0 16px; font-size: var(--text-xs); line-height: var(--leading-snug); color: var(--ink-3); text-wrap: pretty; }
   .folder-empty button {
     height: var(--control-md);
-    padding: 0 12px;
+    padding: 0 14px;
     border: 0;
-    border-radius: var(--radius-lg);
+    border-radius: var(--radius-full);
     background: var(--ink);
     color: var(--cream-content);
     font: inherit;
@@ -1383,18 +1592,35 @@
   .folder-empty button:disabled { opacity: var(--opacity-disabled); cursor: default; }
 
   /* Rangées dans une zone défilante masquée : l'anneau de focus se dessine dedans. */
-  :is(.row, .plan-h1, .plan-sub, .backlink, .snap, .result-file, .hit, .breadcrumbs button):focus-visible { outline-offset: -2px; }
+  :is(.row, .plan-row, .backlink, .snap, .result-file, .hit, .breadcrumbs button, .foot-row, .model, .switcher button):focus-visible { outline-offset: -2px; }
 
-  .plan { padding-top: 4px; }
-  .plan-h1,
-  .plan-sub {
+  /* En-têtes de section : 11/600, 16 px au-dessus, compte aligné à droite. */
+  .section-head {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin: 16px 0 4px;
+    padding: 0 8px;
+    font-size: var(--text-2xs);
+    font-weight: var(--weight-strong);
+    line-height: 16px;
+    color: var(--section-label);
+  }
+  .history > .section-head:first-child { margin-top: 4px; }
+  .section-count { margin-left: auto; font-weight: var(--weight-control); font-variant-numeric: tabular-nums; }
+
+  /* Plan : un filet de guidage par niveau franchi ; le titre courant porte une barre
+     d'encre de 2 px à la place du filet de son propre niveau. */
+  .plan-row {
+    position: relative;
     width: 100%;
     display: block;
     min-height: 30px;
-    padding: 6px 8px;
+    padding: 6px 8px 6px calc(8px + var(--depth) * 14px);
     border: 0;
     border-radius: var(--radius-md);
     background: transparent;
+    color: var(--ink-3);
     font: inherit;
     font-size: 13px;
     line-height: 18px;
@@ -1402,6 +1628,28 @@
     cursor: pointer;
     transition: background-color var(--duration-basic) ease, color var(--duration-basic) ease;
   }
+  .plan-row.top { color: var(--ink-2); font-weight: 510; }
+  .plan-row.active { color: var(--ink); }
+  .plan-guides {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 11px;
+    width: calc(var(--depth) * 14px);
+    background: repeating-linear-gradient(to right, var(--line-2) 0 1px, transparent 1px 14px);
+    pointer-events: none;
+  }
+  .plan-row.active::before {
+    content: '';
+    position: absolute;
+    top: 7px;
+    bottom: 7px;
+    left: max(1px, calc(var(--depth) * 14px - 3px));
+    width: 2px;
+    border-radius: 1px;
+    background: var(--ink);
+  }
+  .plan-row:not(.top) + .plan-row.top { margin-top: 4px; }
   /* Un titre sans espace (URL, identifiant) débordait en défilement horizontal. */
   .plan-text {
     display: -webkit-box;
@@ -1411,10 +1659,6 @@
     overflow: hidden;
     overflow-wrap: anywhere;
   }
-  .plan-h1 { color: var(--ink); font-weight: var(--weight-strong); }
-  .plan-sub { padding-inline-start: 20px; color: var(--ink-3); }
-  :is(.plan-h1, .plan-sub).active { background: var(--accent-soft); color: var(--ink); }
-  .backlinks-head { margin: 16px 0 2px; padding: 0 8px; font-size: 12px; font-weight: 510; line-height: 24px; color: var(--ink-3); }
   .backlink {
     width: 100%;
     display: flex;
@@ -1434,7 +1678,32 @@
   .backlink-ctx { overflow: hidden; font-size: 12px; color: var(--ink-3); text-overflow: ellipsis; white-space: nowrap; }
   .empty { padding: 8px; font-size: var(--text-xs); color: var(--ink-3); text-wrap: pretty; }
 
-  .history { padding-top: 4px; }
+  /* Historique : rail chronologique, un point par version, le plus récent en encre. */
+  .timeline { margin: 0; padding: 0; list-style: none; }
+  .timeline li { position: relative; padding-left: 20px; }
+  .timeline li::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 11px;
+    width: 1px;
+    background: var(--line-2);
+  }
+  .timeline li:first-child::before { top: 15px; }
+  .timeline li:last-child::before { bottom: calc(100% - 15px); }
+  .timeline li::after {
+    content: '';
+    position: absolute;
+    top: 12px;
+    left: 8px;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--ink-5);
+    pointer-events: none;
+  }
+  .timeline li.latest::after { background: var(--ink); box-shadow: 0 0 0 3px var(--accent-soft); }
   .snap {
     width: 100%;
     display: flex;
@@ -1452,23 +1721,20 @@
   .snap-date { font-size: 13px; font-weight: 510; color: var(--ink-2); font-variant-numeric: tabular-nums; }
   .snap-preview { overflow: hidden; font-size: 12px; color: var(--ink-3); text-overflow: ellipsis; white-space: nowrap; }
 
-  .search { padding-top: 4px; }
   .search-field {
-    height: 30px;
+    height: var(--control-md);
     display: flex;
     align-items: center;
     gap: 8px;
-    margin-bottom: 8px;
-    padding: 0 8px;
-    border: 1px solid var(--line-1);
-    border-radius: var(--radius-lg);
-    background: var(--cream-content);
+    margin: 2px 0 8px;
+    padding: 0 10px;
+    border-radius: var(--radius-full);
+    background: rgba(var(--ink-rgb), 0.055);
     color: var(--ink-4);
-    transition: border-color var(--duration-basic) ease, box-shadow var(--duration-basic) ease;
+    transition: background-color var(--duration-basic) ease, box-shadow var(--duration-basic) ease;
   }
-  .search-field:hover { border-color: var(--line-3); }
-  .search-field:focus-within { border-color: var(--line-3); outline: 2px solid var(--focus-ring); outline-offset: -1px; }
-  .search-field > .icon { font-size: 16px; }
+  .search-field:focus-within { background: var(--cream-content); box-shadow: 0 0 0 0.5px var(--line-2); outline: 2px solid var(--focus-ring); outline-offset: -1px; }
+  .search-field > .icon { font-size: 15px; }
   .search-input {
     flex: 1;
     min-width: 0;
@@ -1494,9 +1760,9 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    margin-right: -4px;
+    margin-right: -6px;
     border: 0;
-    border-radius: var(--radius-md);
+    border-radius: var(--radius-full);
     background: transparent;
     color: var(--ink-3);
     opacity: 0.75;
@@ -1514,7 +1780,7 @@
   @media (any-pointer: coarse) {
     .search-clear::after { content: ''; position: absolute; inset: -8px -4px -8px 0; }
   }
-  .search-status { margin: -2px 0 4px; padding: 0 8px; font-size: var(--text-xs); color: var(--ink-3); font-variant-numeric: tabular-nums; }
+  .search-status { margin: -2px 0 4px; padding: 0 8px; font-size: var(--text-2xs); font-weight: var(--weight-strong); color: var(--section-label); font-variant-numeric: tabular-nums; }
   .result { margin-bottom: 4px; }
   .result-file,
   .hit {
@@ -1530,22 +1796,59 @@
   }
   .result-file { height: 30px; align-items: center; gap: 8px; padding: 0 8px; color: var(--ink-2); }
   .result-file .label { font-weight: 510; }
-  /* Doigt : rangées de 40 px (grammaire commune), saisie en place comprise pour ne pas sauter.
-     Placée après `.row`, `.newrow` et `.result-file` : même spécificité, l'ordre tranche. */
-  :global(:where(:root[data-input='touch'])) :is(.row, .newrow, .result-file) { height: 40px; }
   /* Extraits alignés sous le nom du fichier (marge + icône + écart). */
   .hit { gap: 8px; padding: 4px 8px 4px 32px; color: var(--ink-3); }
-  .count { flex-shrink: 0; font-size: 12px; color: var(--ink-3); font-variant-numeric: tabular-nums; }
+  .count { flex-shrink: 0; font-size: 12px; color: var(--ink-4); font-variant-numeric: tabular-nums; }
   .hit-line { flex-shrink: 0; min-width: 20px; font-size: 12px; color: var(--ink-4); font-variant-numeric: tabular-nums; }
   .hit-text { min-width: 0; overflow: hidden; font-size: var(--text-xs); text-overflow: ellipsis; white-space: nowrap; }
   .hl { padding: 0 2px; border-radius: var(--radius-xs); background: var(--accent-soft); color: var(--ink); }
 
+  /* Pied de carte : Paramètres + état du modèle du copilote. */
+  .foot {
+    flex-shrink: 0;
+    display: grid;
+    gap: 2px;
+    padding: 8px;
+    border-top: 1px solid var(--chrome-material-divider);
+  }
+  .foot-row .icon { flex: none; font-size: 16px; color: var(--ink-4); }
+  .model {
+    min-width: 0;
+    height: 26px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 0 8px 0 12px;
+    border: 0;
+    border-radius: var(--radius-md);
+    background: transparent;
+    color: var(--ink-3);
+    font: inherit;
+    font-size: var(--text-xs);
+    text-align: left;
+    cursor: pointer;
+    transition: background-color var(--duration-basic) ease, color var(--duration-basic) ease;
+  }
+  .model-dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--ink-5); transition: background-color var(--duration-moderate) ease, box-shadow var(--duration-moderate) ease; }
+  .model-dot.on { background: var(--ok); box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 22%, transparent); }
+  .model-provider { flex: none; font-weight: 510; }
+  .model-name { min-width: 0; margin-left: auto; overflow: hidden; color: var(--ink-4); text-overflow: ellipsis; white-space: nowrap; font-variant-numeric: tabular-nums; }
+
+  /* Doigt : rangées de 40 px (grammaire commune), saisie en place comprise pour ne pas sauter.
+     Placée après `.row`, `.newrow` et `.result-file` : même spécificité, l'ordre tranche. */
+  :global(:where(:root[data-input='touch'])) :is(.row, .newrow, .result-file, .foot-row, .model) { height: 40px; }
+  :global(:where(:root[data-input='touch'])) :is(.plan-row, .snap, .backlink) { min-height: 40px; }
+  :global(:where(:root[data-input='touch'])) .switcher { height: 44px; }
+  :global(:where(:root[data-input='touch'])) :is(.icon-btn, .brand-mark) { width: 36px; height: 36px; }
+  :global(:where(:root[data-input='touch'])) .brand-mark { width: auto; }
+
   /* Survols de rangée réservés à la souris : au doigt, la rangée touchée resterait
      allumée à côté de la rangée courante. */
   @media (hover: hover) and (pointer: fine) {
-    .row:not(.current):hover,
-    :is(.plan-h1, .plan-sub):not(.active):hover,
+    :is(.row, .foot-row):not(.current, .active):hover,
+    .plan-row:hover,
     .backlink:hover,
+    .model:hover,
     :is(.result-file, .hit):hover { background: var(--surface-hover); color: var(--ink); }
     .snap:hover { background: var(--surface-hover); }
   }

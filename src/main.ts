@@ -30,6 +30,12 @@ if (isTauri) {
 // Sprite Lucide dans le DOM de chaque fenêtre : les <use href="#i-…"> le résolvent sans
 // requête réseau (scripts/subset-icons.mjs).
 document.body.insertAdjacentHTML('afterbegin', iconSprite)
+// Filtre « goo » (src/lib/liquid.ts) : flou puis seuillage de l'alpha, deux formes proches
+// fusionnent comme deux gouttes. Jamais sur du texte (il baverait) : seules les formes le portent.
+document.body.insertAdjacentHTML(
+  'afterbegin',
+  '<svg width="0" height="0" style="position:absolute" aria-hidden="true"><filter id="doku-goo"><feGaussianBlur in="SourceGraphic" stdDeviation="5" result="b"/><feColorMatrix in="b" values="1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 22 -9"/></filter></svg>',
+)
 
 // Sur un appareil hybride (Surface : écran tactile + Type Cover), `(any-pointer: coarse)`
 // est TOUJOURS vrai : le dessin tactile ne peut pas en dépendre. On suit le dernier

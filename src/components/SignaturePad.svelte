@@ -4,6 +4,8 @@
   // tracés que le crayon du lecteur PDF), donc net à toutes les tailles de pose.
   import { extendPdfDrawingPoints, pdfStrokePathData, smoothPdfDrawingStroke, type PdfDrawingPoint } from '../lib/pdf-drawing'
   import { untrack } from 'svelte'
+  import { closeDialog } from '../lib/dialog-close'
+  import { tooltip } from '../lib/tooltip'
   import { SIGNATURE_STROKE_WIDTH, SIGNATURE_STROKE_WIDTHS, captureSignature, type SavedSignature } from '../lib/pdf-signature-stamp'
 
   let { onsave, onclose, strokeWidth: initialStrokeWidth = SIGNATURE_STROKE_WIDTH }: {
@@ -87,16 +89,15 @@
   }
 </script>
 
-<dialog class="sigpad" bind:this={dlg} {onclose} aria-labelledby="sigpad-title">
-  <div class="window">
-    <header>
-      <span class="title-icon" aria-hidden="true"><svg class="icon" aria-hidden="true"><use href="#i-signature" /></svg></span>
-      <div class="title">
-        <h2 id="sigpad-title">Ma signature</h2>
-        <p>Tracez-la au doigt, au stylet ou à la souris.</p>
+<dialog class="doku-modal sigpad" bind:this={dlg} {onclose} oncancel={(event) => { event.preventDefault(); closeDialog(dlg) }} aria-labelledby="sigpad-title">
+  <div class="doku-window">
+    <header class="doku-window-head">
+      <span class="doku-tile tint-plum" aria-hidden="true"><svg class="icon" aria-hidden="true"><use href="#i-signature" /></svg></span>
+      <div class="doku-window-heading">
+        <h2 id="sigpad-title" class="doku-window-title">Ma signature</h2>
+        <p class="doku-window-sub">Tracez-la au doigt, au stylet ou à la souris.</p>
       </div>
-      <span class="spacer"></span>
-      <button class="close" aria-label="Fermer" onclick={() => dlg?.close()}><svg class="icon" aria-hidden="true"><use href="#i-x" /></svg></button>
+      <button class="doku-window-close" aria-label="Fermer" use:tooltip={{ label: 'Fermer', kbd: 'Échap' }} onclick={() => closeDialog(dlg)}><svg class="icon" aria-hidden="true"><use href="#i-x" /></svg></button>
     </header>
 
     <div class="paper">
@@ -132,53 +133,16 @@
       {/each}
     </div>
 
-    <footer>
-      <small>Conservée sur cet appareil uniquement.</small>
-      <span class="spacer"></span>
-      <button class="secondary" disabled={!strokes.length} onclick={() => { strokes = [] }}>Effacer</button>
-      <button class="primary" disabled={!signature || saving} onclick={() => void save()}>Enregistrer</button>
+    <footer class="doku-window-foot">
+      <p class="doku-foot-note">Conservée sur cet appareil uniquement.</p>
+      <button class="doku-btn" disabled={!strokes.length} onclick={() => { strokes = [] }}>Effacer</button>
+      <button class="doku-btn is-primary" disabled={!signature || saving} onclick={() => void save()}>Enregistrer</button>
     </footer>
   </div>
 </dialog>
 
 <style>
-  .sigpad {
-    width: min(620px, calc(100vw - 32px));
-    max-width: none;
-    margin: auto;
-    padding: 0;
-    border: 0;
-    background: transparent;
-    color: var(--ink);
-    overflow: visible;
-  }
-  .sigpad::backdrop {
-    background: var(--scrim);
-    animation: doku-fade-in var(--duration-dialog) var(--ease-enter-snappy);
-  }
-  .window {
-    display: flex;
-    flex-direction: column;
-    background: var(--surface);
-    border-radius: var(--radius-2xl);
-    box-shadow: var(--shadow-dialog);
-    overflow: hidden;
-    animation: doku-dialog-in var(--duration-dialog) var(--ease-enter-snappy);
-  }
-  header { min-height: 60px; display: flex; align-items: center; gap: 12px; padding: 12px 12px 12px 16px; }
-  .title-icon {
-    width: 36px; height: 36px; display: inline-flex; align-items: center; justify-content: center;
-    border-radius: var(--radius-xl); background: var(--accent-soft); color: var(--ink); font-size: 18px;
-  }
-  .title h2 { margin: 0; font-size: var(--text-lg); line-height: var(--leading-tight); font-weight: var(--weight-strong); letter-spacing: var(--tracking-tight); }
-  .title p { margin: 2px 0 0; font-size: var(--text-xs); line-height: 1.3; color: var(--ink-3); }
-  .spacer { flex: 1 1 auto; }
-  .close {
-    width: var(--control-md); height: var(--control-md); display: inline-flex; align-items: center; justify-content: center;
-    border: 0; border-radius: var(--radius-lg); background: transparent; color: var(--ink-4); font-size: 16px; cursor: pointer;
-    transition: background-color var(--duration-basic) ease, color var(--duration-basic) ease;
-  }
-  .close:hover { background: var(--fill-hover); color: var(--ink); }
+  .sigpad { width: min(620px, calc(100vw - 32px)); }
 
   /* Papier BLANC et encre noire dans les deux thèmes : c'est ce que la signature sera
      une fois posée sur une page, pas un élément d'interface à assombrir. */
@@ -197,29 +161,15 @@
     text-align: center; font-size: var(--text-lg); color: #b5b5b5; pointer-events: none;
   }
 
-  .thickness { display: flex; align-items: center; gap: 4px; padding: 10px 16px 0; font-size: var(--text-xs); color: var(--ink-3); }
+  .thickness { display: flex; align-items: center; gap: 4px; padding: 12px 16px 16px; font-size: var(--text-xs); color: var(--ink-3); }
   .thickness > span { margin-right: 6px; }
   .thickness button {
     width: 44px; height: var(--control-md); display: inline-flex; align-items: center; justify-content: center;
-    border: 0; border-radius: var(--radius-lg); background: transparent; cursor: pointer;
+    border: 0; border-radius: var(--radius-full); background: transparent; cursor: pointer;
     transition: background-color var(--duration-basic) ease;
   }
   .thickness button:hover { background: var(--fill-hover); }
   .thickness button.selected { background: var(--accent-soft); }
   .thickness .sample { width: 24px; border-radius: var(--radius-full); background: var(--ink); }
 
-  footer { display: flex; align-items: center; gap: 8px; padding: 12px 16px; }
-  footer small { font-size: var(--text-xs); color: var(--ink-3); }
-  footer button {
-    display: inline-flex; align-items: center; justify-content: center;
-    height: var(--control-md); padding: 0 12px; border: 0; border-radius: var(--radius-lg);
-    font: inherit; font-size: var(--text-sm); font-weight: var(--weight-control); cursor: pointer;
-    transition: background-color var(--duration-basic) ease, transform var(--duration-basic) var(--ease-enter-snappy);
-  }
-  footer button:disabled { opacity: var(--opacity-disabled); cursor: default; }
-  footer button:not(:disabled):active { transform: scale(0.97); }
-  footer .primary { background: var(--ink); color: var(--cream-content); }
-  footer .primary:hover:not(:disabled) { background: var(--ink-2); }
-  footer .secondary { background: var(--accent-soft); color: var(--ink); }
-  footer .secondary:hover:not(:disabled) { background: var(--fill-pressed); }
 </style>

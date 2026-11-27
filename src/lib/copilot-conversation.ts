@@ -40,6 +40,7 @@ export interface PersistedActivity {
 export interface PersistedChatMessage {
   role: 'user' | 'assistant'
   content: string
+  at?: number
   terminal?: 'complete' | 'interrupted' | 'failed' | 'notice'
   sourceLabel?: string
   evidence?: PersistedEvidence[]
@@ -94,7 +95,7 @@ export interface ConversationSearchResult {
 }
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
-const PROVIDERS = new Set<CopilotProvider>(['ollama', 'openai', 'minimax'])
+const PROVIDERS = new Set<CopilotProvider>(['local', 'openai', 'minimax'])
 const ACTIVITY_KINDS = new Set<PersistedActivity['kind']>(['context', 'memory', 'web-plan', 'web-search', 'answer'])
 
 function string(value: unknown, max: number): string {
@@ -242,6 +243,7 @@ function parseMessage(value: unknown): PersistedChatMessage | null {
   return {
     role: record.role,
     content,
+    at: typeof record.at === 'number' && Number.isFinite(record.at) && record.at > 0 ? record.at : undefined,
     terminal,
     sourceLabel: inline(record.sourceLabel, 160) || undefined,
     evidence: evidence.length ? evidence : undefined,
@@ -314,7 +316,7 @@ export function parseConversation(raw: string): ConversationV1 | null {
     contextFolder: pathFolder(record.contextFolder),
     memoryFolder: pathFolder(record.memoryFolder),
     webSearchEnabled: record.webSearchEnabled === true,
-    lastProvider: PROVIDERS.has(record.lastProvider as CopilotProvider) ? record.lastProvider as CopilotProvider : 'ollama',
+    lastProvider: PROVIDERS.has(record.lastProvider as CopilotProvider) ? record.lastProvider as CopilotProvider : 'local',
     workspace: parseWorkspacePathSnapshot(record.workspace),
   }
 }
@@ -384,14 +386,14 @@ export function searchConversations(records: readonly ConversationV1[], query: s
 }
 
 const PROVIDER_CONTEXT_CHARS: Record<CopilotProvider, number> = {
-  ollama: 48_000,
+  local: 48_000,
   minimax: 240_000,
   openai: 420_000,
 }
 
 export function historyBudget(provider: CopilotProvider, fixedChars: number): number {
   const total = PROVIDER_CONTEXT_CHARS[provider]
-  const outputReserve = provider === 'ollama' ? 12_000 : 32_000
+  const outputReserve = provider === 'local' ? 12_000 : 32_000
   return Math.max(0, total - Math.max(0, fixedChars) - outputReserve)
 }
 

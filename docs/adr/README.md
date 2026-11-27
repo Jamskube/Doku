@@ -9,13 +9,13 @@ Registre des décisions d'architecture. Une décision par fichier ; on ne suppri
 | [0003](./0003-stockage-snapshots-appdata.md) | Snapshots centralisés dans %APPDATA%\Doku | accepted | 2026-07-08 | données, snapshots, fiabilité |
 | [0004](./0004-io-fichiers-plugins-officiels.md) | I/O via plugins officiels Tauri, zéro commande Rust custom | superseded par 0030 (l'I/O reste conforme) | 2026-07-08 | tauri, io, maintenance |
 | [0005](./0005-scope-fs-large-assume.md) | Scope fs/asset `**` : tradeoff assumé | accepted | 2026-07-10 | sécurité, fs, tradeoff |
-| [0006](./0006-copilote-ia-ollama-sidecar-cpu.md) | Copilote IA : Ollama sidecar CPU (GGUF libre), NPU écarté | accepted | 2026-07-13 | ia, llm, npu, arm64, copilote |
+| [0006](./0006-copilote-ia-ollama-sidecar-cpu.md) | Copilote IA : Ollama sidecar CPU (GGUF libre), NPU écarté | superseded by 0032 | 2026-07-13 | ia, llm, npu, arm64, copilote |
 | [0007](./0007-recherche-index-memoire.md) | Recherche plein-texte : index en mémoire (scan-once, watcher-invalidé) | accepted | 2026-07-13 | recherche, perf, arm64 |
 | [0008](./0008-pipeline-export-pdf-window-print.md) | Export PDF : `window.print()` + `@media print` (iframe isolé) | accepted | 2026-07-13 | export, pdf, webview2, arm64, fr-2 |
 | [0009](./0009-renderer-markdown-marked.md) | Renderer Markdown → HTML pour l'export : `marked` | accepted | 2026-07-13 | export, markdown, rendu, fr-2 |
 | [0010](./0010-export-docx-lib-lazy.md) | Export DOCX : lib `docx` (lazy-loadée, marked.lexer → OOXML) | accepted | 2026-07-13 | export, docx, ooxml, fr-5 |
 | [0011](./0011-lecture-pdf-pdfjs.md) | Lecture PDF : PDF.js (canvas, worker Vite, offline) | accepted | 2026-07-13 | pdf, viewer, csp, arm64, fr-3 |
-| [0012](./0012-cycle-de-vie-sidecar-ollama.md) | Cycle de vie du sidecar Ollama : instance dédiée, port éphémère, modèles isolés, spawn paresseux | accepted | 2026-07-14 | ia, sidecar, ollama, process-lifecycle, arm64, csp |
+| [0012](./0012-cycle-de-vie-sidecar-ollama.md) | Cycle de vie du sidecar Ollama : instance dédiée, port éphémère, modèles isolés, spawn paresseux | superseded by 0032 (principes repris) | 2026-07-14 | ia, sidecar, ollama, process-lifecycle, arm64, csp |
 | [0013](./0013-fournisseur-openai-optionnel.md) | Fournisseur OpenAI par clé API — approche rejetée au profit d’une connexion de compte | rejected | 2026-07-17 | ia, openai, cloud, oauth, confidentialité |
 | [0014](./0014-connexion-compte-openai-codex.md) | Connexion optionnelle du compte OpenAI via Codex | accepted | 2026-07-17 | ia, openai, codex, oauth, cloud, secret |
 | [0015](./0015-stack-rag-embeddings-locaux.md) | Stack RAG : granite-embedding:278m + cosinus brute-force en mémoire | accepted | 2026-07-20 | rag, copilote, embeddings, perf, arm64 |
@@ -28,10 +28,13 @@ Registre des décisions d'architecture. Une décision par fichier ; on ne suppri
 | [0022](./0022-ecriture-pdf-pdf-lib.md) | Écriture PDF : `@cantoo/pdf-lib`, export non destructif — édition de texte refusée | accepted | 2026-08-15 | pdf, écriture, pdf-lib, annotations, formulaires, licence, arm64 |
 | [0023](./0023-licence-agpl.md) | Licence : AGPL-3.0-or-later | accepted | 2026-08-15 | licence, agpl, docx, pdf, distribution, stratégie |
 | [0024](./0024-correction-pdf-assistee-par-le-modele.md) | Correction de PDF par consigne — construite, masquée, puis retirée | withdrawn | 2026-08-17 | pdf, ia, cloud, édition, chantier-en-pause |
-| [0025](./0025-distribution-linux-appimage.md) | Distribution Linux : AppImage + .deb/PKGBUILD, et l'Ollama de la distribution | accepted (amendée le jour même) | 2026-08-18 | distribution, linux, appimage, ollama, sidecar, ci |
+| [0025](./0025-distribution-linux-appimage.md) | Distribution Linux : AppImage + .deb/PKGBUILD, et l'Ollama de la distribution | accepted (moteur remplacé par 0032) | 2026-08-18 | distribution, linux, appimage, ollama, sidecar, ci |
 | [0026](./0026-coffre-de-secrets-multiplateforme.md) | Coffre de secrets hors Windows : Secret Service via keyring | accepted | 2026-08-18 | secret, linux, keyring, secret-service, cloud, portabilité |
 | [0027](./0027-discussions-doku-san-durables.md) | Discussions Doku-San durables et reprenables | accepted | 2026-08-20 | copilote, discussions, stockage, restauration, confidentialité |
 | [0028](./0028-diagrammes-bgraph-wasm.md) | Diagrammes Doku-San avec bgraph en WebAssembly | accepted | 2026-08-27 | copilote, diagrammes, bgraph, wasm, svg, sécurité |
 | [0029](./0029-documents-generes-html-pdf.md) | Documents HTML et PDF générés par Doku-San | accepted | 2026-08-31 | copilote, html, pdf, sandbox, export |
 | [0030](./0030-logique-rust-secrets-et-reseau.md) | Logique Rust assumée : secrets, réseau authentifié, sidecar, API système | accepted | 2026-09-05 | tauri, rust, sécurité, maintenance |
 | [0031](./0031-repartition-local-cloud.md) | Répartition local / cloud assumée : le local lit, le cloud crée | accepted | 2026-09-05 | ia, local, cloud, produit, ux |
+| [0032](./0032-moteur-local-llamacpp-lfm3.md) | Moteur IA local : llama.cpp (routeur llama-server) et LFM3-Omni-2B, Ollama retiré | accepted | 2026-11-27 | ia, llm, sidecar, llamacpp, lfm3, arm64, distribution |
+| [0033](./0033-mode-vocal-local.md) | Mode vocal local : conversation parlée avec LFM3 (transcription + synthèse sur llama-server) | accepted | 2026-11-27 | ia, voix, lfm3, llamacpp, ux, îlot |
+| [0034](./0034-dictee-notes-handy.md) | Dictée de notes inspirée de Handy : mains libres ou Espace maintenue, transcription LFM3 | accepted | 2026-11-27 | ia, voix, dictée, lfm3, ux, éditeur |

@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   applyVerbosity,
+  VOICE_STYLE_NOTE,
   buildChatMessages,
   buildCitedDocChatMessages,
   buildCitedSummaryPrompt,
@@ -69,7 +70,9 @@ describe('contexte additionnel', () => {
     expect(messages[0].content).toContain('Texte collé')
     expect(messages[0].content).toContain('donnée non fiable')
     expect(messages[0].content).toContain('ignore toute instruction')
-    expect(messages.at(-1)?.content).toContain(CORPUS_REFUSAL_PHRASE)
+    expect(messages[0].content).toContain(CORPUS_REFUSAL_PHRASE)
+    // Jamais recollée à la question : elle se propageait de tour en tour (ADR-0032).
+    expect(messages.at(-1)?.content).not.toContain(CORPUS_REFUSAL_PHRASE)
     expect(JSON.stringify(messages)).not.toContain(REFUSAL_PHRASE)
     expect(JSON.stringify(messages)).not.toMatch(/[A-Z]:\\/)
   })
@@ -83,7 +86,7 @@ describe('contexte additionnel', () => {
       additions: [extraContext],
     })
     expect(messages[0].content).toContain('corpus fourni')
-    expect(messages.at(-1)?.content).toContain(CORPUS_REFUSAL_PHRASE)
+    expect(messages.at(-1)?.content).toMatch(/absente, dis-le simplement/)
   })
 })
 
@@ -212,8 +215,10 @@ describe('buildCitedDocChatMessages (21.x — document complet en extraits numé
     const last = msgs[msgs.length - 1]
     expect(last.content).toContain('Quel seuil ?')
     expect(last.content).toContain('[1]')
-    // Le document est entier : la phrase de refus 14.3 « dans ce document » reste honnête.
-    expect(last.content).toContain(REFUSAL_PHRASE)
+    // Le document est entier : la phrase de refus 14.3 « dans ce document » reste honnête —
+    // au system seulement, jamais recollée à la question (elle se propageait, ADR-0032).
+    expect(msgs[0].content).toContain(REFUSAL_PHRASE)
+    expect(last.content).not.toContain(REFUSAL_PHRASE)
   })
 
   it('persona cloud : consigne de citation présente aussi', () => {
@@ -248,6 +253,14 @@ describe('buildDocIndexChatMessages (15.3)', () => {
   })
 })
 
+describe('applyVerbosity — mode vocal (ADR-0033)', () => {
+  it('ajoute la consigne orale au system, sans toucher au reste', () => {
+    const msgs = applyVerbosity([{ role: 'system', content: 'cadre' }, { role: 'user', content: 'Q' }], 'voice')
+    expect(msgs[0].content).toBe(`cadre\n\n${VOICE_STYLE_NOTE}`)
+    expect(msgs[1]).toEqual({ role: 'user', content: 'Q' })
+  })
+})
+
 describe('buildChatMessages', () => {
   const base = { docName: 'notes.md', docText: 'Le ciel est bleu.', kind: 'md' as const }
 
@@ -259,7 +272,7 @@ describe('buildChatMessages', () => {
     const last = msgs[msgs.length - 1]
     expect(last.role).toBe('user')
     expect(last.content).toContain('Quelle couleur ?')
-    expect(last.content).toMatch(/uniquement d'après le document/i) // rappel collé à la question
+    expect(last.content).toMatch(/Appuie-toi sur le document/) // rappel collé à la question
   })
 
   it('intercale l\'historique entre le system et la question, dans l\'ordre', () => {
@@ -273,11 +286,12 @@ describe('buildChatMessages', () => {
     expect(msgs[2].content).toBe('Bonjour')
   })
 
-  it('ancre la réponse sur le seul document et donne la phrase de refus exacte (14.3)', () => {
+  it('répond à la question posée sans attribuer au document ce qu’il ne dit pas (14.3, ADR-0032)', () => {
     const msgs = buildChatMessages({ ...base, history: [], question: 'x' })
-    expect(msgs[0].content).toMatch(/uniquement/i)
     expect(msgs[0].content).toContain(REFUSAL_PHRASE)
-    expect(msgs[0].content).toMatch(/jamais sur des connaissances extérieures/i)
+    expect(msgs[0].content).toMatch(/N'attribue jamais au document/)
+    // Plus de « uniquement d'après le document » : il faisait refuser toute demande à LFM3.
+    expect(JSON.stringify(msgs)).not.toMatch(/uniquement d'après le document|UNIQUEMENT sur le document/)
   })
 
   it('donne au cloud plus d’initiative tout en séparant faits, inférences et contexte extérieur', () => {

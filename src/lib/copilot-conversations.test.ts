@@ -38,7 +38,7 @@ function record(id = createConversationId(), overrides: Partial<ConversationV1> 
     contextFolder: null,
     memoryFolder: null,
     webSearchEnabled: false,
-    lastProvider: 'ollama',
+    lastProvider: 'local',
     workspace: {
       split: false,
       activePaneId: 'primary',

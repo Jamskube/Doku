@@ -12,7 +12,7 @@
 <script lang="ts">
   import { onMount, tick } from 'svelte'
   import { EditorState, type Extension } from '@codemirror/state'
-  import { app, COLUMN_PX, docHeadings, forcePreview, isDirty, openCopilot, workspace, zoomDocText } from '../lib/stores.svelte'
+  import { app, COLUMN_PX, docHeadings, forcePreview, isDirty, openCopilot, scrollToLine, workspace, zoomDocText } from '../lib/stores.svelte'
   import { cacheEditorRuntime, editorRuntimeForTab, publishEditorSelection, registerEditor, registeredTabForPane, selectionForPane, unregisterEditor, updateEditorRegistration } from '../lib/editor-registry.svelte'
   import { baseExtensions, htmlSourceExtensions, livePreviewComp, previewExtensions, serializeDoc, sourceExtensions, txtExtensions } from '../lib/editor/editor'
   import { docDirCompartment, docDirFacet } from '../lib/editor/live-preview'
@@ -38,7 +38,9 @@
     wrapCodeBlock,
   } from '../lib/editor/format-commands'
   import { diffWords, MAX_INSTRUCTION, normalizeInstruction, type RephraseMode } from '../lib/copilot-service'
-  import DokuMark from '../lib/DokuMark.svelte'
+  import NumberRoll from './NumberRoll.svelte'
+  import HeadingRail from './HeadingRail.svelte'
+  import DocContextMenu, { type DocMenuItem } from './DocContextMenu.svelte'
   import PdfView from './PdfView.svelte'
   import DocxView from './DocxView.svelte'
   import type { PaneId } from '../lib/workspace'
@@ -140,7 +142,7 @@
     view.dispatch(view.state.replaceSelection(imageMarkdown(name)))
   }
 
-  let { onOpen, paneId, tabId }: { onOpen: () => void; paneId: PaneId; tabId: number | null } = $props()
+  let { paneId, tabId }: { paneId: PaneId; tabId: number | null } = $props()
   const tab = $derived(app.tabs.find((item) => item.id === tabId))
   const paneSelection = $derived(selectionForPane(paneId))
   const sourceMode = $derived(workspace[paneId].sourceMode)
@@ -299,6 +301,7 @@
       selectionMenuInsertOpen = false
       return
     }
+    if (muteSelectionMenu) return
     if (suppressMenuOnce) {
       suppressMenuOnce = false
       return
@@ -455,6 +458,79 @@
     openCopilot('models')
   }
 
+  // Menu contextuel (clic droit, touche Menu, Maj+F10) : remplace celui de WebView2. Il reprend
+  // les actions du menu de sélection, qu'il masque pendant qu'il est ouvert.
+  let contextMenu = $state<{ x: number; y: number; kbd: boolean; items: DocMenuItem[] } | null>(null)
+  // Posé au keydown de la touche Menu / Maj+F10, consommé par le `contextmenu` qui suit.
+  let contextMenuByKey = false
+  // Coupe la publication du menu de sélection pendant une action lancée du menu contextuel :
+  // la sélection survit au gras, mais l'utilisateur vient de choisir dans un menu.
+  let muteSelectionMenu = false
+
+  function closeContextMenu(refocus: boolean) {
+    contextMenu = null
+    if (refocus) view?.focus()
+  }
+
+  function formatFromContext(cmd: (v: EditorView) => boolean) {
+    if (!view) return
+    muteSelectionMenu = true
+    view.focus()
+    cmd(view)
+    muteSelectionMenu = false
+  }
+
+  function rewriteFromContext() {
+    if (!view) return
+    selectionMenuExpanded = true
+    selectionMenuInsertOpen = false
+    selectionMenuConfig = copilotNeedsSetup
+    view.focus()
+    positionSelectionMenu(view)
+  }
+
+  function contextMenuItems(currentView: EditorView): DocMenuItem[] {
+    const sel = currentView.state.selection.main
+    const text = sel.empty ? '' : currentView.state.sliceDoc(sel.from, sel.to)
+    const refocusAfter = (action: () => Promise<void>) => () => void action().finally(() => view?.focus())
+    const items: DocMenuItem[] = [
+      { label: 'Couper', icon: 'scissors', kbd: 'Ctrl+X', disabled: !text, run: refocusAfter(cutSelection) },
+      { label: 'Copier', icon: 'copy', kbd: 'Ctrl+C', disabled: !text, run: refocusAfter(copySelection) },
+      { label: 'Coller', icon: 'clipboard-paste', kbd: 'Ctrl+V', run: refocusAfter(pasteClipboard) },
+    ]
+    if (tab?.kind === 'md') {
+      items.push(
+        'sep',
+        { label: 'Gras', icon: 'bold', kbd: 'Ctrl+B', run: () => formatFromContext(toggleBold) },
+        { label: 'Italique', icon: 'italic', kbd: 'Ctrl+I', run: () => formatFromContext(toggleItalic) },
+        { label: 'Barré', icon: 'strikethrough', run: () => formatFromContext(toggleStrike) },
+        { label: 'Code inline', icon: 'code', run: () => formatFromContext(toggleInlineCode) },
+        { label: 'Lien', icon: 'link', kbd: 'Ctrl+K', run: () => formatFromContext(toggleLink) },
+      )
+    }
+    if (/\S/.test(text) && !copilot.generating && !rephrase.current) {
+      items.push('sep', { label: 'Réécrire avec Doku-San', icon: 'sparkles', run: rewriteFromContext })
+    }
+    return items
+  }
+
+  function openContextMenu(event: MouseEvent) {
+    const kbd = contextMenuByKey
+    contextMenuByKey = false
+    if (!view) return
+    event.preventDefault()
+    hideSelectionMenu()
+    let { clientX: x, clientY: y } = event
+    // Au clavier, les coordonnées de l'événement sont celles de l'élément focalisé : on ancre
+    // le menu sous le curseur de texte.
+    if (kbd) {
+      const caret = view.coordsAtPos(view.state.selection.main.head)
+      if (caret) ({ left: x, bottom: y } = caret)
+    }
+    selectionByKey = kbd
+    contextMenu = { x, y: kbd ? y + 4 : y, kbd, items: contextMenuItems(view) }
+  }
+
   function makeState(tabId: number, content: string): EditorState {
     const tab = app.tabs.find((t) => t.id === tabId)
     const dir = parentPath(tab?.path ?? null) ?? ''
@@ -496,28 +572,33 @@
 
   // Scroll-spy : titre courant = dernier titre au-dessus du haut du viewport (4.6).
   // Titres seulement pour le Markdown (un .txt/.html n'a pas de structure de titres).
+  // Gros fichier : pas de titres (docHeadings est O(doc), gèlerait le scroll).
+  const headings = $derived(tab?.kind === 'md' && !tab.heavy ? docHeadings(tab.content) : [])
+  // Titre courant de CE volet : le rail le suit même quand l'autre volet est actif, alors que
+  // app.activeHeadingLine (plan de la barre latérale) ne suit que le volet actif.
+  let paneHeadingLine = $state(0)
+
   function updateActiveHeading(v: EditorView) {
-    if (workspace.activePaneId !== paneId) return
-    // Gros fichier : pas de scroll-spy (docHeadings est O(doc), gèlerait le scroll).
-    const headings = tab?.kind === 'md' && !tab.heavy ? docHeadings(tab.content) : []
-    if (!headings.length) {
-      app.activeHeadingLine = 0
-      return
+    let active = 0
+    if (headings.length) {
+      const block = v.elementAtHeight(v.scrollDOM.scrollTop + 24)
+      const topLine = v.state.doc.lineAt(block.from).number
+      active = headings[0].line
+      for (const h of headings) {
+        if (h.line <= topLine) active = h.line
+        else break
+      }
     }
-    const block = v.elementAtHeight(v.scrollDOM.scrollTop + 24)
-    const topLine = v.state.doc.lineAt(block.from).number
-    let active = headings[0].line
-    for (const h of headings) {
-      if (h.line <= topLine) active = h.line
-      else break
-    }
-    app.activeHeadingLine = active
+    paneHeadingLine = active
+    if (workspace.activePaneId === paneId) app.activeHeadingLine = active
   }
 
   // Le zoom change la hauteur des lignes : CodeMirror remesure (curseur, défilement), et le
   // volet actif affiche brièvement le niveau — y compris au clavier (Ctrl+0/=/-), mais
   // l'entrée du badge ne s'anime que pour Ctrl+molette : un raccourci reste immobile.
   let zoomBadge = $state(false)
+  // Document défilé : le fondu de bord sous les onglets n'apparaît qu'à ce moment.
+  let scrolled = $state(false)
   let zoomBadgeKbd = $state(false)
   let zoomBadgeTimer: ReturnType<typeof setTimeout> | undefined
   let seenZoom = app.docZoom
@@ -552,6 +633,7 @@
       if (!view) return
       const top = view.scrollDOM.scrollTop
       lastScrollTop.set(view, top)
+      if (top > 0 !== scrolled) scrolled = top > 0
       const current = app.tabs.find((item) => item.id === renderedId)
       if (current) cacheEditorRuntime(current.id, view.state, current.rev, top)
       if (scrollScheduled) return
@@ -561,8 +643,9 @@
         if (view) updateActiveHeading(view)
       })
     }
-    const onSelectionIntent = () => {
-      if (!view) return
+    const onSelectionIntent = (event: PointerEvent) => {
+      // Le relâché du clic droit précède le `contextmenu` : pas de bulle de sélection sous le menu.
+      if (!view || event.button === 2) return
       publishSelection(view, renderedId, true)
     }
     const onPointerDown = (event: PointerEvent) => {
@@ -574,6 +657,7 @@
     }
     const onKeyDown = (event: KeyboardEvent) => {
       selectionByKey = true
+      if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) contextMenuByKey = true
       if (event.key !== 'Escape') return
       // Un Échap déjà consommé par un autre overlay (modale, recherche…) ne doit pas écarter
       // une proposition qui a coûté une génération complète.
@@ -612,6 +696,7 @@
     // Pas de listener keyup : toute sélection clavier passe par un dispatch CM6, déjà
     // couvert par l'updateListener (selectionSet) — le keyup doublait chaque publication.
     view.dom.addEventListener('pointerup', onSelectionIntent)
+    view.dom.addEventListener('contextmenu', openContextMenu)
     window.addEventListener('resize', hideSelectionMenu)
     document.addEventListener('pointerdown', onPointerDown)
     document.addEventListener('keydown', onKeyDown)
@@ -621,6 +706,7 @@
       view?.scrollDOM.removeEventListener('scroll', onScroll)
       clearTimeout(zoomBadgeTimer)
       view?.dom.removeEventListener('pointerup', onSelectionIntent)
+      view?.dom.removeEventListener('contextmenu', openContextMenu)
       window.removeEventListener('resize', hideSelectionMenu)
       document.removeEventListener('pointerdown', onPointerDown)
       document.removeEventListener('keydown', onKeyDown)
@@ -682,6 +768,7 @@
       text: sel.empty ? '' : view.state.sliceDoc(sel.from, sel.to),
     })
     selectionMenu = null
+    contextMenu = null
   })
 
   $effect(() => {
@@ -770,7 +857,7 @@
 
 <div class="doc">
   {#if zoomBadge}
-    <button class="zoom-badge" class:kbd={zoomBadgeKbd} use:tooltip={{ label: 'Revenir à 100 %', kbd: 'Ctrl+0' }} onclick={() => zoomDocText(0)}>{Math.round(app.docZoom * 100)} %</button>
+    <button class="zoom-badge" class:kbd={zoomBadgeKbd} use:tooltip={{ label: 'Revenir à 100 %', kbd: 'Ctrl+0' }} onclick={() => zoomDocText(0)}><NumberRoll value={`${Math.round(app.docZoom * 100)} %`} /></button>
   {/if}
   {#if tab?.heavy && !app.focus}
     <div class="heavy-notice" role="status">
@@ -804,7 +891,18 @@
       <PdfView path={tab!.path ?? ''} {paneId} />
     {/key}
   {/if}
+  {#if !(htmlRender || pdfRender || docxRender)}
+    <div class="scroll-edge" class:on={scrolled} aria-hidden="true"></div>
+  {/if}
   <div class="editor-host doku-doc" class:source-mode={effectiveSourceMode} class:txt={tab?.kind === 'txt'} class:hidden={htmlRender || pdfRender || docxRender} bind:this={host}></div>
+
+  {#if headings.length >= 3 && !app.focus && !splitLargeSourceMode}
+    <HeadingRail {headings} activeLine={paneHeadingLine} muted={!!selectionMenu || !!contextMenu} onJump={scrollToLine} />
+  {/if}
+
+  {#if contextMenu}
+    <DocContextMenu x={contextMenu.x} y={contextMenu.y} kbd={contextMenu.kbd} items={contextMenu.items} label="Actions sur le document" onClose={closeContextMenu} />
+  {/if}
 
   {#if selectionMenu}
     <div
@@ -970,23 +1068,6 @@
     </div>
   {/if}
 
-  {#if !tab}
-    <div class="empty">
-      <span class="empty-mark"><DokuMark size={64} /></span>
-      <p class="empty-title">Aucun document ouvert</p>
-      <button class="empty-open" onclick={onOpen}>
-        <svg class="icon" style="font-size:16px" aria-hidden="true"><use href="#i-folder-open" /></svg>
-        Ouvrir un fichier
-        <span class="keys"><kbd>Ctrl+O</kbd></span>
-      </button>
-      <dl class="empty-shortcuts">
-        <div><dt><kbd>Ctrl+/</kbd></dt><dd>source ↔ rendu</dd></div>
-        <div><dt><kbd>F9</kbd></dt><dd>mode focus</dd></div>
-        <div><dt><kbd>Ctrl+Maj+E</kbd></dt><dd>explorateur</dd></div>
-        <div><dt><kbd>Ctrl+Maj+P</kbd></dt><dd>plan</dd></div>
-      </dl>
-    </div>
-  {/if}
 </div>
 
 <style>
@@ -1038,62 +1119,6 @@
   .heavy-action:hover { background: rgba(var(--ink-rgb), 0.12); }
   .heavy-action:focus-visible { outline-offset: -1px; }
 
-  .empty {
-    position: absolute;
-    inset: 0;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    gap: 12px;
-    padding: 24px 12px;
-    background: var(--cream-content);
-    user-select: none;
-  }
-  .empty-mark { display: inline-flex; color: var(--ink-4); opacity: 0.35; }
-  .empty-title { margin: 0; font-size: var(--text-lg); line-height: 24px; font-weight: var(--weight-strong); letter-spacing: var(--tracking-tight); color: var(--ink-2); text-wrap: balance; }
-  .empty-open {
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    height: var(--control-md);
-    margin-top: 4px;
-    padding: 0 8px 0 12px;
-    border: 0;
-    border-radius: var(--radius-lg);
-    background: var(--accent-soft);
-    color: var(--ink);
-    font-size: 13px;
-    font-weight: 510;
-    cursor: pointer;
-    transition: background-color var(--duration-basic) ease;
-  }
-  .empty-open:hover { background: rgba(var(--ink-rgb), 0.12); }
-  .empty-open .keys { display: inline-flex; gap: 2px; margin-left: 4px; color: var(--ink-3); }
-  /* Touche à la Kube : capuchon plat teinté par la couleur du texte qui l'entoure, donc
-     juste dans le bouton comme dans la liste des raccourcis sans règle de plus. */
-  .empty kbd {
-    min-width: 16px;
-    padding: 2px 5px;
-    border-radius: var(--radius-xs);
-    background: color-mix(in srgb, currentColor 10%, transparent);
-    font-family: var(--font-sans);
-    font-size: var(--text-xs);
-    font-weight: 400;
-    line-height: 1;
-    text-align: center;
-  }
-  .empty-shortcuts {
-    margin: 12px 0 0;
-    display: grid;
-    grid-template-columns: auto auto;
-    gap: 8px 24px;
-    font-size: 12px;
-    color: var(--ink-3);
-  }
-  .empty-shortcuts div { display: flex; align-items: center; gap: 8px; }
-  .empty-shortcuts dt { display: inline-flex; gap: 2px; }
-  .empty-shortcuts dd { margin: 0; }
   .focus-dirty {
     position: absolute;
     top: 14px;
@@ -1107,6 +1132,23 @@
     pointer-events: none;
   }
   .editor-host { flex: 1; min-height: 0; user-select: text; }
+  /* Fondu de bord sous les onglets, une fois le document défilé : le texte s'efface sous le
+     chrome au lieu d'y être tranché. Ligne de hauteur nulle juste au-dessus de l'éditeur (sous
+     les bandeaux éventuels) ; la gouttière de défilement de 9px reste dégagée. */
+  .scroll-edge { position: relative; z-index: 2; flex: none; height: 0; }
+  .scroll-edge::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 9px;
+    height: 16px;
+    background: linear-gradient(var(--cream-content), transparent);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity var(--duration-basic) ease;
+  }
+  .scroll-edge.on::after { opacity: 1; }
   .editor-host.hidden { display: none; }
   .html-view {
     flex: 1;
@@ -1117,16 +1159,18 @@
   }
   .editor-host :global(.cm-editor) { height: 100%; }
 
-  /* Menu de sélection à la Kube : surface élevée opaque (le texte dessous bouge), gouttière
-     4px, rangées de 32px au rayon concentrique (12 − 4 = 8), ombre de rôle « menu ». */
+  /* Menu de sélection à la Kube, en verre (couche flottante) : gouttière 4px, rangées de 32px
+     au rayon concentrique (12 − 4 = 8). */
   .selection-menu {
     position: fixed;
     z-index: var(--z-popover);
     width: 264px;
     padding: 4px;
     border-radius: var(--radius-xl);
-    background: var(--composer-bg);
-    box-shadow: var(--shadow-xl);
+    background: var(--glass-bg);
+    -webkit-backdrop-filter: var(--glass-filter);
+    backdrop-filter: var(--glass-filter);
+    box-shadow: var(--glass-shadow);
     color: var(--ink);
     font-family: var(--font-sans);
     font-size: 13px;
@@ -1154,7 +1198,7 @@
     transition: background-color var(--duration-basic) ease, color var(--duration-basic) ease;
   }
   .selection-format-btn .icon { font-size: 16px; }
-  .selection-format-btn:hover { background: rgba(var(--ink-rgb), 0.06); color: var(--ink); }
+  .selection-format-btn:hover { background: var(--menu-row-hover); color: var(--ink); }
   .selection-format-btn:active { background: rgba(var(--ink-rgb), 0.12); }
   .selection-format-btn:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -1px; }
   /* Doigt : changements VISIBLES → dernier pointeur utilisé (main.ts), pas `any-pointer`. */
@@ -1175,7 +1219,6 @@
     font: inherit;
     text-align: left;
     cursor: pointer;
-    transition: background-color var(--duration-basic) ease;
   }
   .selection-menu-action .icon { font-size: 15px; color: var(--ink-4); transition: color var(--duration-basic) ease; }
   /* `overflow: hidden` n'est PAS décoratif : sans lui, un libellé trop long pour la largeur
@@ -1188,8 +1231,9 @@
     font-family: inherit;
     font-size: 12px;
   }
+  /* Survol neutre et instantané (DESIGN.md, menus flottants). */
   .selection-menu-action:hover,
-  .selection-menu-rewrite.open { background: var(--accent-soft); }
+  .selection-menu-rewrite.open { background: var(--menu-row-hover); }
   .selection-menu-action:hover .icon { color: var(--ink-2); }
   .selection-menu-action:active { background: rgba(var(--ink-rgb), 0.12); }
   .selection-menu-action:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }

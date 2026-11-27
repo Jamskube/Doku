@@ -1,5 +1,10 @@
 <script lang="ts">
   import { app, chooseWikilinkCandidate, createWikilinkTarget, dismissWikiPrompt } from '../lib/stores.svelte'
+  import { closeDialog } from '../lib/dialog-close'
+
+  let dlg: HTMLDialogElement | undefined = $state()
+  // Annuler/Échap jouent la sortie ; onclose démonte ensuite via dismissWikiPrompt.
+  const dismiss = () => (dlg ? closeDialog(dlg) : dismissWikiPrompt())
 
   // <dialog> modale native (comme ConfirmDialog) : piège de focus, fond inerte, Échap.
   // Entrée n'est plus interceptée : le bouton focalisé reçoit son clic natif, donc
@@ -17,146 +22,83 @@
     // ne doivent pas partir en même temps.
     e.preventDefault()
     e.stopPropagation()
-    dismissWikiPrompt()
+    dismiss()
   }
 </script>
 
 {#if app.wikiPrompt}
   {@const p = app.wikiPrompt}
   <dialog
-    class="card"
+    class="doku-modal"
+    bind:this={dlg}
     use:modal
     aria-labelledby="wiki-title"
     aria-describedby="wiki-message"
     onkeydown={onKey}
-    oncancel={(e) => { e.preventDefault(); dismissWikiPrompt() }}
+    oncancel={(e) => { e.preventDefault(); dismiss() }}
     onclose={(e) => { if (e.currentTarget.isConnected && app.wikiPrompt) dismissWikiPrompt() }}
   >
-    {#if p.kind === 'create'}
-      <div class="heading">
-        <span class="tile" aria-hidden="true"><svg class="icon" aria-hidden="true"><use href="#i-file-plus" /></svg></span>
-        <div class="copy">
-          <h2 id="wiki-title" class="title">Créer une note</h2>
-          <p id="wiki-message" class="msg">« {p.target} » n'existe pas encore. Créer <strong>{p.fileName}</strong> dans ce dossier ?</p>
+    <section class="doku-alert">
+      {#if p.kind === 'create'}
+        <span class="doku-tile tint-sage" aria-hidden="true"><svg class="icon" aria-hidden="true"><use href="#i-file-plus" /></svg></span>
+        <h2 id="wiki-title" class="doku-alert-title">Créer une note</h2>
+        <p id="wiki-message" class="doku-alert-message">« {p.target} » n'existe pas encore. Créer <strong>{p.fileName}</strong> dans ce dossier ?</p>
+        <div class="doku-alert-actions">
+          <!-- svelte-ignore a11y_autofocus -->
+          <button class="doku-btn is-primary" autofocus onclick={() => createWikilinkTarget()}>Créer</button>
+          <button class="doku-btn" onclick={dismiss}>Annuler</button>
         </div>
-      </div>
-      <div class="actions">
-        <button class="btn secondary" onclick={dismissWikiPrompt}>Annuler</button>
-        <!-- svelte-ignore a11y_autofocus -->
-        <button class="btn primary" autofocus onclick={() => createWikilinkTarget()}>Créer</button>
-      </div>
-    {:else}
-      <h2 id="wiki-title" class="title">Plusieurs notes trouvées</h2>
-      <p id="wiki-message" class="msg">Quelle note « {p.target} » ouvrir ?</p>
-      <div class="candidates">
-        {#each p.candidates as c (c.path)}
-          <button class="cand" onclick={() => chooseWikilinkCandidate(c.path)}>
-            <span class="cand-name">{c.name}</span>
-            {#if c.dir}<span class="cand-dir">{c.dir}</span>{/if}
-          </button>
-        {/each}
-      </div>
-      <div class="actions">
-        <button class="btn secondary" onclick={dismissWikiPrompt}>Annuler</button>
-      </div>
-    {/if}
+      {:else}
+        <span class="doku-tile tint-slate" aria-hidden="true"><svg class="icon" aria-hidden="true"><use href="#i-copy" /></svg></span>
+        <h2 id="wiki-title" class="doku-alert-title">Plusieurs notes trouvées</h2>
+        <p id="wiki-message" class="doku-alert-message">Quelle note « {p.target} » ouvrir ?</p>
+        <div class="candidates doku-inset-group">
+          {#each p.candidates as c (c.path)}
+            <button class="cand doku-inset-row" onclick={() => chooseWikilinkCandidate(c.path)}>
+              <span class="doku-inset-copy">
+                <span class="doku-inset-label">{c.name}</span>
+                {#if c.dir}<span class="doku-inset-help">{c.dir}</span>{/if}
+              </span>
+              <svg class="icon chevron" aria-hidden="true"><use href="#i-chevron-right" /></svg>
+            </button>
+          {/each}
+        </div>
+        <div class="doku-alert-actions">
+          <button class="doku-btn" onclick={dismiss}>Annuler</button>
+        </div>
+      {/if}
+    </section>
   </dialog>
 {/if}
 
 <style>
-  /* Alerte à la Kube : rayon 2xl, ombre de rôle, entrée qui monte en fondu. `margin:
-     auto` + `max-*` : le reset d'app.css écrase le centrage natif du <dialog>. */
-  .card {
-    width: min(440px, calc(100vw - 48px));
-    max-width: none;
-    max-height: none;
-    margin: auto;
-    border: 0;
-    background: var(--surface);
-    color: var(--ink);
-    border-radius: var(--radius-2xl);
-    box-shadow: var(--shadow-dialog);
-    padding: 20px;
-    animation: doku-dialog-in var(--duration-dialog) var(--ease-enter-snappy);
-  }
-  /* --scrim passe par --shadow-rgb, jamais --ink-rgb : en sombre, ce dernier est
-     CLAIR et le voile éclaircirait la page au lieu de l'assombrir. */
-  .card::backdrop {
-    background: var(--scrim);
-    animation: doku-fade-in var(--duration-dialog) var(--ease-enter-snappy);
-  }
-  /* Tuile d'icône 36px des alertes (ConfirmDialog) : même en-tête d'une modale à l'autre. */
-  .heading { display: flex; align-items: flex-start; gap: 12px; }
-  .tile {
-    width: 36px;
-    height: 36px;
-    flex: 0 0 auto;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    border-radius: var(--radius-xl);
-    background: var(--accent-soft);
-    color: var(--ink);
-    font-size: 18px;
-  }
-  .copy { min-width: 0; padding-top: 2px; }
-  .title {
-    margin: 0 0 6px;
-    font-size: var(--text-lg);
-    line-height: var(--leading-tight);
-    font-weight: var(--weight-strong);
-    letter-spacing: var(--tracking-tight);
-    color: var(--ink);
-    text-wrap: balance;
-  }
-  .msg {
-    margin: 0 0 20px;
-    font-size: var(--text-md);
-    line-height: var(--leading-normal);
-    color: var(--ink-3);
-    text-wrap: pretty;
-  }
-  .msg strong { color: var(--ink); font-weight: var(--weight-strong); }
-  .candidates { display: flex; flex-direction: column; gap: 2px; margin: 0 0 20px; max-height: 260px; overflow-y: auto; }
-  /* Rangées de liste : 32px, rayon de rangée, survol en --accent-soft. */
-  .cand {
-    display: flex;
-    align-items: baseline;
-    gap: 8px;
-    width: 100%;
-    min-height: var(--control-md);
-    padding: 7px 12px;
-    background: var(--surface-2);
-    border: 0;
-    border-radius: var(--radius-md);
-    cursor: pointer;
+  /* Choix entre plusieurs notes : une liste encastrée dans l'alerte, une rangée par note. */
+  .candidates {
+    align-self: stretch;
+    max-height: 260px;
+    margin-top: 16px;
+    overflow-y: auto;
     text-align: left;
+  }
+  .cand {
+    width: 100%;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
     transition: background-color var(--duration-basic) ease;
   }
+  .cand:first-child { border-radius: var(--radius-xl) var(--radius-xl) 0 0; }
+  .cand:last-child { border-radius: 0 0 var(--radius-xl) var(--radius-xl); }
+  .cand:only-child { border-radius: var(--radius-xl); }
+  .cand :global(.doku-inset-help) { overflow-wrap: anywhere; }
+  .chevron { font-size: 14px; color: var(--ink-5); }
   /* Survol de rangée réservé à la souris : au doigt, il resterait allumé après le toucher. */
   @media (hover: hover) and (pointer: fine) {
-    .cand:hover { background: var(--accent-soft); }
+    .cand:hover { background: var(--surface-hover); }
   }
-  .cand-name { font-size: var(--text-sm); color: var(--ink); font-weight: var(--weight-control); }
-  .cand-dir { min-width: 0; overflow-wrap: anywhere; font-size: var(--text-xs); color: var(--ink-3); }
-  .actions { display: flex; justify-content: flex-end; gap: 8px; }
-  .btn {
-    height: var(--control-md);
-    padding: 0 14px;
-    border-radius: var(--radius-lg);
-    border: 0;
-    font-size: var(--text-sm);
-    font-weight: var(--weight-control);
-    cursor: pointer;
-    transition: background-color var(--duration-basic) ease, transform var(--duration-basic) var(--ease-enter-snappy);
-  }
-  .btn:active { transform: scale(0.97); }
-  .btn.secondary { background: var(--accent-soft); color: var(--ink); }
-  .btn.secondary:hover { background: var(--fill-pressed); }
-  .btn.primary { background: var(--ink); color: var(--cream-content); }
-  .btn.primary:hover { background: var(--ink-2); }
-  /* Focus CLAVIER : c'est une boîte de dialogue, elle se pilote au clavier. */
-  .btn:focus-visible,
-  .cand:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
   .cand:focus-visible { outline-offset: -2px; }
 </style>

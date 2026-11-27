@@ -15,7 +15,7 @@ L'AppImage produite par Tauri passe par `linuxdeploy-plugin-gtk`, qui **embarque
 Could not create default EGL display: EGL_BAD_PARAMETER. Aborting...
 ```
 
-Aucun réglage `WEBKIT_*` n'y change quoi que ce soit : la panne est **sous** WebKit, dans l'initialisation de GDK. Le raisonnement déjà retenu pour Ollama dans [ADR-0025](../docs/adr/0025-distribution-linux-appimage.md) — ne pas transporter ce que la distribution fournit mieux — vaut donc pour **toute la pile système**, pas seulement pour le sidecar.
+Aucun réglage `WEBKIT_*` n'y change quoi que ce soit : la panne est **sous** WebKit, dans l'initialisation de GDK. Le raisonnement d'[ADR-0025](../docs/adr/0025-distribution-linux-appimage.md) — ne pas transporter ce que la distribution fournit mieux — vaut donc pour **toute la pile système**. Seule exception : le moteur IA llama.cpp (ADR-0032), livré dans `/usr/lib/doku/llama` (build CPU officiel, quelques dizaines de Mo) ; la CI vérifie par `ldd` qu'il se lie sur Arch.
 
 L'AppImage reste publiée : elle est commode là où elle fonctionne, sur les dérivées d'Ubuntu.
 
@@ -36,7 +36,7 @@ doku                  # ou depuis le menu des applications
 sudo pacman -R doku   # désinstallation propre
 ```
 
-Ollama reste facultatif et vient d'Arch : `sudo pacman -S ollama`.
+Le copilote local est embarqué : aucun paquet IA à installer à côté.
 
 ## Dependencies
 - Internal: `.github/workflows/build-arch-x64.yml` (compile et empaquette), `src-tauri/` (binaire, icônes, licences)

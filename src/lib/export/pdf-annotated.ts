@@ -9,6 +9,7 @@
 import { baseName } from '../paths'
 import { parsePdfAnnotationManifest, pdfAnnotationIdentity } from '../pdf-annotations'
 import { PdfBurnError, burnPdfAnnotations } from '../pdf-write'
+import { trackExport } from './progress'
 
 export interface AnnotatedPdfPorts {
   readFileBytes: (path: string) => Promise<Uint8Array | null>
@@ -46,7 +47,7 @@ export async function exportAnnotatedPdf(path: string, ports: AnnotatedPdfPorts)
       : 'Ce PDF n’a aucune annotation à graver.')
   }
 
-  const result = await burnPdfAnnotations(bytes, drawings)
+  const result = await trackExport('Gravure des annotations', () => burnPdfAnnotations(bytes, drawings))
   const saved = await ports.save(annotatedPdfName(path), result.bytes)
   return { saved, burned: result.burned, notes: result.notes, skipped: result.skipped }
 }

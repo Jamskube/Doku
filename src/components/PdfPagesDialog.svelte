@@ -4,6 +4,8 @@
   // ce qu'il enregistre est TOUJOURS une copie — le document ouvert reste intact.
   import { app, closePdfPages } from '../lib/stores.svelte'
   import { baseName } from '../lib/paths'
+  import { closeDialog } from '../lib/dialog-close'
+  import { tooltip } from '../lib/tooltip'
   import { openPdfDialog, readFileBytes, savePdfDialog } from '../lib/tauri'
   import {
     dropPdfPagePlan,
@@ -173,7 +175,7 @@
       try {
         const result = await applyPdfPagePlan(sources.map((source) => source.bytes), plan)
         const base = fileName.replace(/\.pdf$/i, '')
-        if (await writeCopy(`${base} — pages.pdf`, result.bytes)) closePdfPages()
+        if (await writeCopy(`${base} — pages.pdf`, result.bytes)) closeDialog(dlg)
       } catch (error) {
         message = error instanceof PdfBurnError ? error.message : 'Doku n’a pas pu écrire ce PDF.'
       }
@@ -258,16 +260,15 @@
   $effect(() => () => trackDrag(false))
 </script>
 
-<dialog class="pages" bind:this={dlg} onclose={closePdfPages} aria-label="Organiser les pages">
-  <div class="window">
-    <header>
-      <span class="title-icon" aria-hidden="true"><svg class="icon" aria-hidden="true"><use href="#i-layers" /></svg></span>
-      <div class="title">
-        <strong>Organiser les pages</strong>
-        <small>{fileName}</small>
+<dialog class="doku-modal pages" bind:this={dlg} onclose={closePdfPages} oncancel={(e) => { e.preventDefault(); closeDialog(dlg) }} aria-label="Organiser les pages">
+  <div class="doku-window">
+    <header class="doku-window-head">
+      <span class="doku-tile tint-slate" aria-hidden="true"><svg class="icon" aria-hidden="true"><use href="#i-layers" /></svg></span>
+      <div class="doku-window-heading">
+        <h2 class="doku-window-title">Organiser les pages</h2>
+        <p class="doku-window-sub">{fileName}</p>
       </div>
-      <span class="spacer"></span>
-      <button class="icon-button" aria-label="Fermer" onclick={closePdfPages}><svg class="icon" aria-hidden="true"><use href="#i-x" /></svg></button>
+      <button class="doku-window-close" aria-label="Fermer" use:tooltip={{ label: 'Fermer', kbd: 'Échap' }} onclick={() => closeDialog(dlg)}><svg class="icon" aria-hidden="true"><use href="#i-x" /></svg></button>
     </header>
 
     <div class="tools">
@@ -343,13 +344,12 @@
       {/if}
     </div>
 
-    <footer>
+    <footer class="doku-window-foot">
       <!-- Jamais d'écrasement du document ouvert : l'action s'appelle « copie », et le
            nom proposé porte un suffixe. -->
-      <small>Le document d’origine n’est jamais modifié.</small>
-      <span class="spacer"></span>
-      <button class="secondary" onclick={closePdfPages}>Annuler</button>
-      <button class="primary" disabled={untouched || saving} onclick={() => void saveCopy()}>
+      <p class="doku-foot-note">Le document d’origine n’est jamais modifié.</p>
+      <button class="doku-btn" onclick={() => closeDialog(dlg)}>Annuler</button>
+      <button class="doku-btn is-primary" disabled={untouched || saving} onclick={() => void saveCopy()}>
         {saving ? 'Écriture…' : 'Enregistrer une copie…'}
       </button>
     </footer>
@@ -357,48 +357,8 @@
 </dialog>
 
 <style>
-  .pages {
-    width: min(980px, calc(100vw - 32px));
-    max-width: none;
-    max-height: none;
-    margin: auto;
-    padding: 0;
-    border: 0;
-    background: transparent;
-    color: var(--ink);
-    overflow: visible;
-  }
-  /* Voile discret, partagé par toutes les modales de Doku. */
-  .pages::backdrop {
-    background: var(--scrim);
-    animation: doku-fade-in var(--duration-dialog) var(--ease-enter-snappy);
-  }
-  .window {
-    height: min(660px, calc(100vh - 48px));
-    display: flex;
-    flex-direction: column;
-    background: var(--surface);
-    border-radius: var(--radius-2xl);
-    box-shadow: var(--shadow-dialog);
-    overflow: hidden;
-    animation: doku-dialog-in var(--duration-dialog) var(--ease-enter-snappy);
-  }
-  header {
-    min-height: 60px;
-    flex: 0 0 auto;
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    padding: 12px 12px 12px 16px;
-    border-bottom: 1px solid var(--line-1);
-  }
-  .title-icon {
-    width: 36px; height: 36px; display: inline-flex; align-items: center; justify-content: center;
-    border-radius: var(--radius-xl); background: var(--accent-soft); color: var(--ink); font-size: 18px;
-  }
-  .title { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
-  .title strong { font-size: var(--text-lg); line-height: var(--leading-tight); font-weight: var(--weight-strong); letter-spacing: var(--tracking-tight); }
-  .title small { overflow: hidden; font-size: var(--text-xs); color: var(--ink-3); text-overflow: ellipsis; white-space: nowrap; }
+  .pages { width: min(980px, calc(100vw - 32px)); }
+  .pages .doku-window { height: min(660px, calc(100vh - 48px)); }
   .spacer { flex: 1 1 auto; }
 
   .tools {
@@ -410,7 +370,7 @@
     border-bottom: 1px solid var(--line-1);
   }
   /* Boutons fantômes, sans contour permanent : le fond n'apparaît qu'au survol. */
-  .tools button, footer button {
+  .tools button {
     display: inline-flex;
     align-items: center;
     gap: 6px;
@@ -429,8 +389,8 @@
   /* Alignement optique : côté icône = côté texte − 2 px. */
   .tools button { height: var(--control-sm); padding: 0 10px 0 8px; border-radius: var(--radius-md); }
   .tools .icon { font-size: 16px; }
-  .tools button:hover:not(:disabled), footer button:hover:not(:disabled) { background: var(--fill-hover); color: var(--ink); }
-  .tools button:disabled, footer button:disabled, .card-tools button:disabled { opacity: var(--opacity-disabled); cursor: default; }
+  .tools button:hover:not(:disabled) { background: var(--fill-hover); color: var(--ink); }
+  .tools button:disabled, .card-tools button:disabled { opacity: var(--opacity-disabled); cursor: default; }
   .summary { font-size: var(--text-xs); color: var(--ink-3); font-variant-numeric: tabular-nums; }
   .message { margin: 0; padding: 8px 16px; font-size: var(--text-xs); color: var(--err-text); }
 
@@ -542,33 +502,5 @@
   /* Numéro posé sur la vignette, dans le coin opposé au badge « Inséré ». */
   .number { right: 14px; top: 14px; font-variant-numeric: tabular-nums; }
 
-  footer {
-    flex: 0 0 auto;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 12px 16px;
-    border-top: 1px solid var(--line-1);
-  }
-  footer small { font-size: var(--text-xs); color: var(--ink-3); }
-  footer .primary { background: var(--ink); color: var(--cream-content); }
-  footer .primary:hover:not(:disabled) { background: var(--ink-2); color: var(--cream-content); }
-  footer .secondary { background: var(--accent-soft); color: var(--ink); }
-  footer .secondary:hover:not(:disabled) { background: var(--fill-pressed); color: var(--ink); }
-
-  .icon-button {
-    display: grid;
-    place-items: center;
-    width: var(--control-md);
-    height: var(--control-md);
-    border: 0;
-    border-radius: var(--radius-lg);
-    background: transparent;
-    color: var(--ink-4);
-    font-size: 16px;
-    cursor: pointer;
-    transition: background-color var(--duration-basic) ease, color var(--duration-basic) ease, transform var(--duration-basic) var(--ease-enter-snappy);
-  }
-  .icon-button:hover { background: var(--fill-hover); color: var(--ink); }
-  .tools button:not(:disabled):active, footer button:not(:disabled):active, .card-tools button:not(:disabled):active, .icon-button:active { transform: scale(0.97); }
+  .tools button:not(:disabled):active, .card-tools button:not(:disabled):active { transform: scale(0.97); }
 </style>
