@@ -1,0 +1,7 @@
+﻿ctl-offline.err.log: 0.00.013.735 I srv    load_model: loading model 'LiquidAI/LFM3-Omni-2B-GGUF:Q2_XYZ'
+ctl-offline.err.log: 0.00.013.866 E srv    load_model: failed to load model, ''
+ctl-offline.err.log: 0.00.014.287 E srv  server_run_i: exiting due to model loading error
+ctl-online.err.log: 0.00.457.806 E common_download_get_hf_plan: no GGUF files found in repository LiquidAI/LFM3-Omni-2B-GGUF
+ctl-online.err.log: 0.00.474.585 I srv    load_model: loading model 'LiquidAI/LFM3-Omni-2B-GGUF:Q2_XYZ'
+ctl-online.err.log: 0.00.486.189 E srv    load_model: failed to load model, ''
+ctl-online.err.log: 0.00.486.683 E srv  server_run_i: exiting due to model loading error

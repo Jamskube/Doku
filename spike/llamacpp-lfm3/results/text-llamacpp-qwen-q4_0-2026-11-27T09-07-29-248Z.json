@@ -1,0 +1,62 @@
+{
+  "label": "llamacpp-qwen-q4_0",
+  "target": {
+    "label": "llamacpp-qwen-q4_0",
+    "api": "llamacpp",
+    "url": "http://127.0.0.1:8090",
+    "model": "qwen-q4_0",
+    "pid": 24540
+  },
+  "runs": 3,
+  "gen": 400,
+  "at": "2026-11-27T09:07:29.248Z",
+  "coldStart": {
+    "ttftMs": 25703,
+    "promptTokens": 565
+  },
+  "bySize": {
+    "1800": {
+      "promptTokens": 565,
+      "ttftMs": 1503,
+      "apiPrefillMs": 1474,
+      "prefillTokS": 383.3,
+      "decodeTokS": 54.8,
+      "e2eMs": 7118,
+      "completionTokens": 312
+    },
+    "3600": {
+      "promptTokens": 1039,
+      "ttftMs": 3281,
+      "apiPrefillMs": 3268,
+      "prefillTokS": 318,
+      "decodeTokS": 50.5,
+      "e2eMs": 7809,
+      "completionTokens": 228
+    },
+    "7200": {
+      "promptTokens": 1995,
+      "ttftMs": 8740,
+      "apiPrefillMs": 8709,
+      "prefillTokS": 229.1,
+      "decodeTokS": 22,
+      "e2eMs": 26542,
+      "completionTokens": 362
+    },
+    "14400": {
+      "promptTokens": 3909,
+      "ttftMs": 27598,
+      "apiPrefillMs": 27515,
+      "prefillTokS": 142.1,
+      "decodeTokS": 14.5,
+      "e2eMs": 55032,
+      "completionTokens": 400
+    }
+  },
+  "samples": {
+    "1800": "**Résumé**  \nLa gestion locale de connaissances utilise Markdown pour gérer des fichiers simples, permettant une lecture sans outils propriétaires. Les notes sont autonomes, versionables et peuvent être ouverts, édités et archivés sans dépendance à une plateforme en ligne. Les wikilinks facilitent le lien entre notes, et un cache maintient la correspondance à jour. La recherche est rapide et précise, et le rendu respecte la syntaxe Markdown étendue avec une gestion stricte de l'inline HTML. L'édition en aperçu direct révèle la syntaxe et assure la sauvegarde atomique. Le copilote d'assistance est intégré pour aider l'utilisateur.\n\n**Synthèse**  \nLa gestion locale de connaissances utilise Markdown pour gérer des fichiers simples, permettant une lecture sans dépendance à une plateforme en ligne. Les notes sont autonomes, versionables et peuvent être ouverts, édités et archivés sans dépendance à une plateforme en ligne. Les wikilinks facilitent le lien entre notes, et un cache maintient la correspondance à jour. La recherche est rapide et précise, et le rendu respecte la syntaxe Markdown étendue avec une gestion stricte de l'inline HTML. L'édition en aperçu direct révèle la syntaxe et assure la sauvegarde atomique. Le copilote d'assistance est intégré pour aider l'utilisateur.",
+    "3600": "Voici le résumé du document en huit points clairs :\n\n1. **Principe 1** : Gestion locale de connaissances avec Markdown, notes autonomes et versionnable.\n2. **Liage** : Utilisation de wikilinks pour accéder aux notes via des crochets.\n3. **Recherche** : Baisse de latence grâce à un cache mis à jour.\n4. **Édition** : Aperçu direct pour une syntaxe Markdown étendue.\n5. **Rendu** : Respect de la syntaxe Markdown et HTML inline.\n6. **Édition en ligne** : Assistance intégrée pour l'édition hors ligne.\n7. **Résumé** : Segmentation et fusion des segments résumés pour un résumé global.\n8. **Questions** : Réponse ancrée sur le contenu du document.\n\n**Synthèse** : Le document décrit une méthode de gestion de connaissances basée sur Markdown, avec une forte attention au confort de l'utilisateur et à la durabilité du format.",
+    "7200": "**Résumé :**\n\nLa gestion locale de connaissances utilise des fichiers Markdown simples, autonomes et versionnables, permettant une gestion efficace et durable des informations sans dépendance d'un service en ligne. Les notes sont liées par des wikilinks, et la recherche est rapide et précise, optimisée pour un usage quotidien. Le rendu Markdown respecte la syntaxe étendue, et l'édition en aperçu direct révèle la syntaxe au niveau du curseur. Le copilote d'assistance fonctionne hors ligne, et les réponses aux questions sont ancrées sur le contenu pour une transparence maximale. L'indexation des fichiers est localisée et incrémentale, et la lecture du texte page par page est optimisée pour les documents numérisés sans couche texte.\n\n**Synthèse :**\n\nLa gestion locale de connaissances utilise des fichiers Markdown simples, autonomes et versionnables, permettant une gestion efficace et durable des informations sans dépendance d'un service en ligne. Les notes sont liées par des wikilinks, et la recherche est rapide et précise, optimisée pour un usage quotidien. Le rendu Markdown respecte la syntaxe étendue, et l'édition en aperçu direct révèle la syntaxe au niveau du curseur. Le copilote d'assistance fonctionne hors ligne, et les réponses aux questions sont ancrées sur le contenu pour une transparence maximale. L'indexation des fichiers est localisée et incrémentale, et la lecture du texte page par page est optimisée pour les documents numérisés sans couche texte.",
+    "14400": "Voici le résumé du document en huit points clairs et fidèles, en français :\n\n1. **Principe 1** : La gestion locale de connaissances utilise des fichiers Markdown simples, ouverts et édité sans dépendance d'un service en ligne. Les notes sont autonomes, versionnables et peuvent être ouverts, édités et archivés sans dépendance à un service en ligne.\n\n2. **Principe 2** : Les notes sont liées par des wikilinks de la forme double-crochet, résolus vers le fichier cible du dossier courant ou de ses sous-dossiers. Un cache maintient la correspondance à jour, garantissant que le clic ouvre toujours la bonne note même après déplacement ou renommage.\n\n3. **Principe 3** : La recherche balaie le dossier de contexte, retourne les fichiers correspondants avec des extraits surlignés, et respecte la syntaxe Markdown étendue. Le rendu respecte la syntaxe Markdown étendue, HTML inline est autorisé, scripts et gestionnaires d'événements sont neutralisés pour éviter les vulnérabilités.\n\n4. **Principe 4** : L'édition en aperçu direct révèle la syntaxe au niveau du curseur puis re-rend le bloc à la sortie. La sauvegarde est atomique, et un indicateur signale les modifications non enregistrées. Le copilote d'assistance fonctionne hors ligne et ne quitte pas la machine pendant la génération.\n\n5. **Principe 5** : La lecture du document extrait la couche texte page par page, et détecte document numérisé sans couche texte. Un document sans couche texte est signalé honnêtement, aucune"
+  },
+  "peakWorkingSetMB": 1932
+}

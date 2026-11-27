@@ -1,0 +1,10 @@
+﻿Ollama 0.40.18 (ARM64, runner llama-server, system_info: NEON ARM_FMA LLAMAFILE REPACK - sans DOTPROD ni MATMUL_INT8), bench interrompu volontairement apres 3600c run1 (verdict deja acquis) :
+
+ollama0.40.18-qwen1.5b-q4_0 chauffe (jetée) TTFT=30653ms
+ollama0.40.18-qwen1.5b-q4_0 1800c run1: prompt=565tok TTFT=12464 prefillAPI=11585ms decode=28.4t/s e2e=22748 out=292
+ollama0.40.18-qwen1.5b-q4_0 1800c run2: prompt=565tok TTFT=8539 prefillAPI=8452ms decode=28.0t/s e2e=20869 out=346
+ollama0.40.18-qwen1.5b-q4_0 1800c run3: prompt=564tok TTFT=9987 prefillAPI=9953ms decode=31.7t/s e2e=20583 out=336
+ollama0.40.18-qwen1.5b-q4_0 3600c run1: prompt=1039tok TTFT=21115 prefillAPI=21026ms decode=12.9t/s e2e=45517 out=316
+
+[killed]
+

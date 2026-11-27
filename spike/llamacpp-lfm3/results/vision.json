@@ -1,0 +1,92 @@
+[
+  {
+    "img": "page-scan.png",
+    "q": "Quel est le numéro du permis de construire, et quelles pièces manquent au dossier ?",
+    "truth": "PC 045 287 26 B0031 ; plan de masse (PCMI2) et notice descriptive (PCMI4)",
+    "ms": 86204,
+    "answer": "Le numéro du permis de construire est **PC 045 287 26 B0031**.\n\nAu dossier, deux pièces manquent :\n- la **pièce PCMI2**\n- la **notice descriptive (pièce PCMI4)**",
+    "timings": {
+      "cache_n": 0,
+      "prompt_n": 2050,
+      "prompt_ms": 34882.769,
+      "prompt_per_token_ms": 17.01598487804878,
+      "prompt_per_second": 58.76827037440749,
+      "predicted_n": 50,
+      "predicted_ms": 2287.861,
+      "predicted_per_token_ms": 46.69104081632653,
+      "predicted_per_second": 21.41738505966927
+    }
+  },
+  {
+    "img": "page-scan.png",
+    "q": "Transcris le texte de ce courrier.",
+    "truth": "(transcription intégrale)",
+    "ms": 41214,
+    "answer": "**Mairie de Saint-Aubin-sur-Loire**\n\nService de l'urbanisme — 12 rue des Tilleuls, 45230 Saint-Aubin\n\n**Objet : permis de construire n° PC 045 287 26 B0031**\n\nLe 14 octobre 2026\n\nMadame Durand,\n\nNous accusons réception de votre demande de permis de construire déposée le 2 septembre 2026 pour l'extension de 38 m² de votre habitation. Le dossier est incomplet : il manque le plan de masse (pièce PCMI2) et la notice descriptive (pièce PCMI4).\n\nVous disposez d'un délai de trois mois pour transmettre ces pièces, faute de quoi la demande sera rejetée tacitement.\n\nVeuillez agréer, Madame, nos salutations distinguées.\n\n*Le responsable du service, Jean-Marc Lefèvre*",
+    "timings": {
+      "cache_n": 1,
+      "prompt_n": 2040,
+      "prompt_ms": 34865.711,
+      "prompt_per_token_ms": 17.09103480392157,
+      "prompt_per_second": 58.510207923194216,
+      "predicted_n": 186,
+      "predicted_ms": 6184.849,
+      "predicted_per_token_ms": 33.43161621621622,
+      "predicted_per_second": 29.91180544585648
+    }
+  },
+  {
+    "img": "page-table.png",
+    "q": "Quel est le montant de l'achat de livres au T4, et le total annuel du budget ?",
+    "truth": "3 100 € ; 14 320 €",
+    "ms": 14244,
+    "answer": "Le montant de l'achat de livres au T4 est de **3 100 euros**, et le total annuel du budget est de **14 320 euros**.",
+    "timings": {
+      "cache_n": 1,
+      "prompt_n": 1248,
+      "prompt_ms": 13456.083,
+      "prompt_per_token_ms": 10.78211778846154,
+      "prompt_per_second": 92.74615800155216,
+      "predicted_n": 34,
+      "predicted_ms": 731.213,
+      "predicted_per_token_ms": 22.157969696969698,
+      "predicted_per_second": 45.13048865378488
+    }
+  },
+  {
+    "img": "page-table.png",
+    "q": "Convertis ce tableau en tableau Markdown.",
+    "truth": "(6 lignes × 6 colonnes)",
+    "ms": 23356,
+    "answer": "**Budget prévisionnel 2027 — Association Les Amis du Livre**\n\n| Poste | T1 | T2 | T3 | T4 | Total |\n|-------|----|----|----|----|-------|\n| Location salle | 1 200 | 1 200 | 1 200 | 1 200 | 4 800 |\n| Achat de livres | 2 500 | 800 | 650 | 3 100 | 7 050 |\n| Communication | 300 | 450 | 200 | 900 | 1 850 |\n| Assurance | 620 | 0 | 0 | 0 | 620 |\n| Total | 4 620 | 2 450 | 2 050 | 5 200 | 14 320 |\n\n*Montants en euros TTC.*",
+    "timings": {
+      "cache_n": 1,
+      "prompt_n": 1235,
+      "prompt_ms": 16250.380000000001,
+      "prompt_per_token_ms": 13.158202429149798,
+      "prompt_per_second": 75.99822281078966,
+      "predicted_n": 173,
+      "predicted_ms": 7064.3910000000005,
+      "predicted_per_token_ms": 41.072040697674424,
+      "predicted_per_second": 24.347463213743406
+    }
+  },
+  {
+    "img": "page-form.png",
+    "q": "Extrais les champs de ce formulaire en JSON (nom, prénom, date de naissance, adresse, téléphone, courriel, formule).",
+    "truth": "MARTIN, Élodie, 03/11/1987, 7 impasse des Glycines 69007 Lyon, 06 12 34 56 78, e.martin@exemple.fr, Famille (25 €)",
+    "ms": 22207,
+    "answer": "```json\n{\n  \"nom\": \"MARTIN\",\n  \"prénom\": \"Élodie\",\n  \"date_de_naissance\": \"03/11/1987\",\n  \"adresse\": \"7 impasse des Glycines, 69007 Lyon\",\n  \"téléphone\": \"06 12 34 56 78\",\n  \"courriel\": \"e.martin@example.fr\",\n  \"formule\": \"Famille (25 €)\"\n}\n```",
+    "timings": {
+      "cache_n": 1,
+      "prompt_n": 1375,
+      "prompt_ms": 18616.882,
+      "prompt_per_token_ms": 13.539550545454546,
+      "prompt_per_second": 73.85769539711322,
+      "predicted_n": 101,
+      "predicted_ms": 3528.292,
+      "predicted_per_token_ms": 35.28292,
+      "predicted_per_second": 28.34232540844125
+    }
+  }
+]

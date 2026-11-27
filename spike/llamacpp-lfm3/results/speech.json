@@ -1,0 +1,77 @@
+{
+  "tts": [
+    {
+      "id": "fr-court",
+      "file": "results/audio/fr-court.wav",
+      "text": "Bonjour, je suis Doku-San, votre assistant de lecture.",
+      "firstByteMs": 43293,
+      "totalMs": 44671,
+      "audioSec": 3.76,
+      "rtf": 11.88,
+      "sampleRate": 24000,
+      "contentType": "audio/wav"
+    },
+    {
+      "id": "fr-reponse",
+      "file": "results/audio/fr-reponse.wav",
+      "text": "Le document décrit le choix de Tauri pour Doku. Electron a été écarté parce qu'il embarque Chromium et consomme trop de mémoire. La décision privilégie la légèreté et la réutilisation des briques existantes.",
+      "firstByteMs": 370,
+      "totalMs": 5309,
+      "audioSec": 12,
+      "rtf": 0.44,
+      "sampleRate": 24000,
+      "contentType": "audio/wav"
+    },
+    {
+      "id": "fr-nombres",
+      "file": "results/audio/fr-nombres.wav",
+      "text": "Le rendez-vous est fixé au mardi 14 octobre 2026 à 9 h 30, salle 212. Le budget total s’élève à 14 320 euros, soit 4,5 % de plus qu’en 2025.",
+      "firstByteMs": 362,
+      "totalMs": 5546,
+      "audioSec": 12.16,
+      "rtf": 0.46,
+      "sampleRate": 24000,
+      "contentType": "audio/wav"
+    }
+  ],
+  "asr": [
+    {
+      "id": "fr-reponse",
+      "via": "transcriptions",
+      "ms": 2871,
+      "audioSec": 12,
+      "reference": "Le document décrit le choix de Tauri pour Doku. Electron a été écarté parce qu'il embarque Chromium et consomme trop de mémoire. La décision privilégie la légèreté et la réutilisation des briques existantes.",
+      "transcript": "Le document décrit le choix de Tori pour deux clous. Electron a été écarté parce qu'il embarque chromium et consomme trop de mémoire. La décision privilégie la légèreté et la réutilisation des briques existantes."
+    },
+    {
+      "id": "fr-nombres",
+      "via": "transcriptions",
+      "ms": 2717,
+      "audioSec": 12.16,
+      "reference": "Le rendez-vous est fixé au mardi 14 octobre 2026 à 9 h 30, salle 212. Le budget total s’élève à 14 320 euros, soit 4,5 % de plus qu’en 2025.",
+      "transcript": "Le rendez-vous est fixé au mardi 14 octobre 2020, à N9-30, salle ludostotal. Le budget total s'élève à 4,05 euros, soit 4,5 millions C, de plus qu'en d'autres topiancies."
+    }
+  ],
+  "realtime": {
+    "events": {
+      "session.created": 1,
+      "session.updated": 1,
+      "conversation.item.added": 1,
+      "conversation.item.done": 1,
+      "response.created": 1,
+      "response.output_item.added": 1,
+      "response.content_part.added": 2,
+      "response.output_text.delta": 13,
+      "response.output_audio.delta": 65,
+      "response.output_text.done": 1,
+      "response.content_part.done": 2,
+      "response.output_audio.done": 1,
+      "response.output_item.done": 1,
+      "response.done": 1
+    },
+    "firstAudioMs": 592,
+    "firstTextMs": 403,
+    "audioBytes": 245760,
+    "transcript": "Bonjour, je suis Doku-San, votre assistant."
+  }
+}

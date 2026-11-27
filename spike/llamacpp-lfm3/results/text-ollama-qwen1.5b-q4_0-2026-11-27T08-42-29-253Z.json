@@ -1,0 +1,62 @@
+﻿{
+    "label":  "ollama-qwen1.5b-q4_0",
+    "target":  {
+                   "label":  "ollama-qwen1.5b-q4_0",
+                   "api":  "ollama",
+                   "url":  "http://127.0.0.1:8099",
+                   "model":  "qwen2.5:1.5b-instruct-q4_0",
+                   "pid":  12488
+               },
+    "runs":  3,
+    "gen":  400,
+    "at":  "2026-11-27T08:42:29.253Z",
+    "coldStart":  {
+                      "ttftMs":  6715,
+                      "promptTokens":  565
+                  },
+    "bySize":  {
+                   "1800":  {
+                                "promptTokens":  565,
+                                "ttftMs":  6750,
+                                "apiPrefillMs":  6486,
+                                "prefillTokS":  87.1,
+                                "decodeTokS":  41.9,
+                                "e2eMs":  17176,
+                                "completionTokens":  400
+                            },
+                   "3600":  {
+                                "promptTokens":  1039,
+                                "ttftMs":  13861,
+                                "apiPrefillMs":  13025,
+                                "prefillTokS":  79.8,
+                                "decodeTokS":  32.5,
+                                "e2eMs":  24482,
+                                "completionTokens":  351
+                            },
+                   "7200":  {
+                                "promptTokens":  1995,
+                                "ttftMs":  30693,
+                                "apiPrefillMs":  30395,
+                                "prefillTokS":  65.6,
+                                "decodeTokS":  24.3,
+                                "e2eMs":  45540,
+                                "completionTokens":  400
+                            },
+                   "14400":  {
+                                 "promptTokens":  3908,
+                                 "ttftMs":  74069,
+                                 "apiPrefillMs":  73457,
+                                 "prefillTokS":  53.2,
+                                 "decodeTokS":  20.6,
+                                 "e2eMs":  93530,
+                                 "completionTokens":  400
+                             }
+               },
+    "samples":  {
+                    "1800":  "**Résumé :**\n\nLa gestion locale de connaissances utilise Markdown pour gérer des fichiers simples, favorisant la durabilité et l\u0027autonomie. Les notes sont autonomes et versionables sans dépendance à un service en ligne. Le lien entre les notes est résolu par wikilinks, maintenus par un cache invalidé. La recherche est rapide avec latence inférieure à 300 ms pour des milliers de notes. Le rendu Markdown respecte la syntaxe étendue et évite scripts malveillants. L\u0027édition en aperçu direct révèle les modifications sans interruption, garantissant une sauvegarde atomique.\n\n**Synthèse :**\n\nLa gestion locale de connaissances utilise Markdown pour gérer des fichiers simples, favorisant la durabilité et l\u0027autonomie. Les notes sont autonomes et versionables sans dépendance à un service en ligne. Le lien entre les notes est résolu par wikilinks, maintenus par un cache invalidé. La recherche est rapide avec latence inférieure à 300 ms pour des milliers de notes. Le rendu Markdown respecte la syntaxe étendue et évite scripts malveillants. L\u0027édition en aperçu direct révèle les modifications sans interruption, garantissant une sauvegarde atomique.\n\n**Synthèse :**\n\nLa gestion locale de connaissances utilise Markdown pour gérer des fichiers simples, favorisant la durabilité et l\u0027autonomie. Les notes sont autonomes et versionables sans dépendance à un service en ligne. Le lien entre les notes est résolu par wikilinks, maintenus par un cache invalidé. La recherche est rapide avec latence inférieure à 300 ms pour des milliers de notes. Le rendu Markdown respecte la syntaxe étendue et év",
+                    "3600":  "**Résumé :**\n\nLa gestion locale de connaissances utilise des fichiers Markdown pour stocker et partager notes. Les wikilinks facilitent la recherche en texte intégral, tandis que le rendu respecte les conventions Markdown avec une syntaxe étendue. L\u0027édition en aperçu direct permet un retour rapide aux modifications sans dépendance à un service en ligne.\n\n**Synthèse :**\n\nLa méthode utilise des fichiers simples pour stocker et partager des notes, favorisant la durabilité et l\u0027accessibilité sans dépendances externes. La recherche est optimisée avec une correspondance instantanée grâce au cache invalidé par observateur de fichiers, garantissant un rendu rapide et précis.\n\n**Résumé :**\n\nLa gestion locale de connaissances utilise des fichiers Markdown simples pour stocker et partager notes. Les wikilinks facilitent la recherche en texte intégral, tandis que le rendu respecte les conventions Markdown avec une syntaxe étendue. L\u0027édition en aperçu direct permet un retour rapide aux modifications sans dépendance à un service en ligne.\n\n**Synthèse :**\n\nLa méthode utilise des fichiers simples pour stocker et partager notes, favorisant la durabilité et l\u0027accessibilité sans dépendances externes. La recherche est optimisée avec une correspondance instantanée grâce au cache invalidé par observateur de fichiers, garantissant un rendu rapide et précis.\n\n**Résumé :**\n\nLa gestion locale de connaissances utilise des fichiers Markdown simples pour stocker et partager notes. Les wikilinks facilitent la recherche en texte intégral, tandis que le rendu respecte les conventions Markdown avec une syntaxe étendue. L\u0027édition en aperçu direct permet un retour rapide aux modifications sans dépendance à un service en ligne.\n\n**Synthèse :**\n\nLa méthode utilise des",
+                    "7200":  "**Résumé :**\n\nLa gestion locale de connaissances utilise des fichiers Markdown simples pour stocker les notes, permettant une lecture directe et un aperçu direct sans dépendance d\u0027un service en ligne. Les wikilinks utilisent des liens de double crochets résolus vers les fichiers cibles dans le dossier courant ou ses sous-dossiers. La recherche balaie le contexte du dossier pour retourner les notes correspondantes avec des extraits surlignés, et la réduction par carte évite la troncature silencieuse lors de la fusion des résumés.\n\n**Synthèse :**\n\nLa gestion locale de connaissances utilise un format Markdown simple pour stocker et accéder aux notes, offrant une lecture directe et un aperçu direct sans dépendance d\u0027un service en ligne. Les wikilinks résolus vers les fichiers cibles dans le dossier courant ou ses sous-dossiers facilitent l\u0027accès rapide à ces informations. La recherche balaie le contexte du dossier pour retourner les notes correspondantes avec des extraits surlignés, et la réduction par carte évite la troncature silencieuse lors de la fusion des résumés.\n\n**Références :**\n\n1. **Section 1 — principe 1**\n2. **Section 1 — principe 2**\n3. **Section 1 — principe 3**\n4. **Section 2 — principe 1**\n5. **Section 2 — principe 2**\n6. **Section 2 — principe 3**\n7. **Section 3 — principe 1**",
+                    "14400":  "**Résumé :**\n\nLa gestion locale des connaissances utilise Markdown pour stocker et indexer les notes sans dépendre d\u0027une plateforme en ligne. Les wikilinks résolus vers le dossier courant maintiennent la correspondance à jour, tandis que la recherche retourne les fichiers correspondants avec des extraits surlignés. Le rendu respecte la syntaxe Markdown étendue et l\u0027édition en aperçu direct révèle la syntaxe au niveau du curseur.\n\n**Synthèse :**\n\nLa gestion locale de connaissances utilise Markdown pour stocker et indexer les notes sans dépendre d\u0027une plateforme en ligne. Les wikilinks résolus vers le dossier courant maintiennent la correspondance à jour, tandis que la recherche retourne les fichiers correspondants avec des extraits surlignés. Le rendu respecte la syntaxe Markdown étendue et l\u0027édition en aperçu direct révèle la syntaxe au niveau du curseur.\n\n**Résumé :**\n\nLa gestion locale de connaissances utilise Markdown pour stocker et indexer les notes sans dépendre d\u0027une plateforme en ligne. Les wikilinks résolus vers le dossier courant maintiennent la correspondance à jour, tandis que la recherche retourne les fichiers correspondants avec des extraits surlignés. Le rendu respecte la syntaxe Markdown étendue et l\u0027édition en aperçu direct révèle la syntaxe au niveau du curseur.\n\n**Synthèse :**\n\nLa gestion locale de connaissances utilise Markdown pour stocker et indexer les notes sans dépendre d\u0027une plateforme en ligne. Les wikilinks résolus vers le dossier courant maintiennent la correspondance à jour, tandis que la recherche retourne les fichiers correspondants avec des extraits surlignés. Le rendu"
+                },
+    "peakWorkingSetMB":  1973
+}

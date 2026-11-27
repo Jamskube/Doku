@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <title>Banc IslandSiri</title>
+  <style>
+    body { margin: 0; padding: 24px; font: 13px/1.4 system-ui, sans-serif; background: var(--page); color: var(--label); }
+    :root[data-theme='light'] { --page: #f4f1ea; --label: #5b574f; --island: rgb(28 26 22); }
+    :root[data-theme='dark'] { --page: #1b1a18; --label: #a7a29a; --island: #0b0a09; }
+    .grid { display: grid; grid-template-columns: 110px 360px 360px; gap: 20px 28px; align-items: center; }
+    .island { position: relative; background: var(--island); color: #f3efe8; width: 360px; }
+    .capsule { height: 56px; border-radius: 28px; }
+    .card { height: 200px; border-radius: 34px; }
+    .content { position: relative; z-index: 1; padding: 0 22px; }
+    .capsule .content { line-height: 56px; opacity: .6; }
+    .card .content { padding-top: 22px; }
+    .q { opacity: .6; font-size: 12px; margin-bottom: 8px; }
+    .a { font-size: 14px; }
+  </style>
+</head>
+<body>
+  <div class="grid" id="grid"></div>
+  <script type="module">
+    import '/src/app.css'
+    import { mount } from 'svelte'
+    import IslandSiri from '/src/components/IslandSiri.svelte'
+    const params = new URLSearchParams(location.search)
+    document.documentElement.dataset.theme = params.get('theme') ?? 'dark'
+    const grid = document.getElementById('grid')
+    const phases = (params.get('phases') ?? 'listening,thinking,answering').split(',')
+    for (const phase of phases) {
+      const label = document.createElement('div')
+      label.textContent = phase
+      grid.append(label)
+      for (const kind of ['capsule', 'card']) {
+        const island = document.createElement('div')
+        island.className = `island ${kind}`
+        island.innerHTML = kind === 'capsule'
+          ? '<div class="content">Demander à Doku-San…</div>'
+          : '<div class="content"><div class="q">De quoi parle ce document ?</div><div class="a">Il décrit l’îlot de la barre de titre et la question rapide à Doku-San, sans ouvrir le panneau.</div></div>'
+        if (params.get('siri') !== 'off') mount(IslandSiri, { target: island, anchor: island.firstChild, props: { phase } })
+        grid.append(island)
+      }
+    }
+    window.__ready = true
+  </script>
+</body>
+</html>

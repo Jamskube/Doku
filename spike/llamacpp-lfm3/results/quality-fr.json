@@ -1,0 +1,290 @@
+[
+  {
+    "id": "resume",
+    "title": "Résumé d'un document (ADR-0001)",
+    "out": {
+      "lfm3-q4_0-text": {
+        "text": "*   **Stack technique :** Tauri 2 + Svelte 5 + TypeScript sur Surface Pro 11 ARM64.\n*   **Binaire requis :** ARM64 Windows natif, pas d'émulation x64.\n*   **Réutilisation KUDE :** Tokens AIR, `sanitize.ts`, patterns onglets/sidebar, config CM6.\n*   **Moteur WYSIWYG :** Tauri 2 (WebView2) pour les éditeurs web, vs Electron/Flutter.\n*   **Synthèse :** C'est la solution optimale pour légèreté et réutilisation de capital KUDE sur cette machine.\n\n**En résumé :** Doku choisit le stack Tauri 2 + Svelte 5 + TypeScript car il combine légèreté, accès aux éditeurs web et réutilisation du capital KUDE déjà validée.",
+        "ms": 33892,
+        "timings": {
+          "cache_n": 0,
+          "prompt_n": 1089,
+          "prompt_ms": 3205.16,
+          "prompt_per_token_ms": 2.9432139577594123,
+          "prompt_per_second": 339.76462953487504,
+          "predicted_n": 197,
+          "predicted_ms": 3949.8050000000003,
+          "predicted_per_token_ms": 20.152066326530615,
+          "predicted_per_second": 49.62270289292762
+        }
+      },
+      "qwen-q4_0": {
+        "text": "**Résumé en cinq piques courtes :**\n\n- **Stack:** Tauri 2 + Svelte 5 + TypeScript\n- **Date:** 2026-07-08\n- **Status:** accepted\n- **Deciders:** nicos (+ Claude)\n- **Tags:** stack, desktop, arm64\n\n**Synthèse de synthèse :**\n\nLa décision a été prise pour le choix du Stack applicatif Tauri 2 + Svelte 5 + TypeScript. Ce choix répond à plusieurs critères: légèreté (démarrage rapide), réutilisation des briques KUDE, et accès aux éditeurs web indispensables au WYSIWYG. Le projet est basé sur le succès de Tauri 2 + Svelte 5 + CodeMirror 6 dans la machine cible ARM64.",
+        "ms": 32202,
+        "timings": {
+          "cache_n": 0,
+          "prompt_n": 1141,
+          "prompt_ms": 3683.332,
+          "prompt_per_token_ms": 3.2281612620508326,
+          "prompt_per_second": 309.77386779144535,
+          "predicted_n": 188,
+          "predicted_ms": 4997.877,
+          "predicted_per_token_ms": 26.726614973262034,
+          "predicted_per_second": 37.41588678552913
+        }
+      }
+    }
+  },
+  {
+    "id": "points-cles",
+    "title": "Points clés",
+    "out": {
+      "lfm3-q4_0-text": {
+        "text": "1. Choisi : Option 1 — Tauri 2 + Svelte 5 + TypeScript.\n2. Seule option qui satisfait à la fois la légèreté (vs Electron), l'accès aux éditeurs web indispensables au WYSIWYG (vs WinUI/Flutter) et la réutilisation du capital KUDE — le tout déjà validé en conditions réelles sur la machine ARM64 cible.\n3. Positive : binaire léger et démarrage rapide ; briques KUDE réimportables telles quelles ; même modèle mental entre les deux projets.",
+        "ms": 26079,
+        "timings": {
+          "cache_n": 0,
+          "prompt_n": 1125,
+          "prompt_ms": 4687.226,
+          "prompt_per_token_ms": 4.1664231111111105,
+          "prompt_per_second": 240.01402962007808,
+          "predicted_n": 129,
+          "predicted_ms": 4059.1420000000003,
+          "predicted_per_token_ms": 31.712046875000002,
+          "predicted_per_second": 31.53375762661173
+        }
+      },
+      "qwen-q4_0": {
+        "text": "Les trois points clés de ce document sont :\n\n1. **Légèreté** : Le produit doit être léger pour permettre un démarrage rapide et une gestion efficace des mémoires.\n\n2. **Réutilisation du capital KUDE** : Les briques réutilisables doivent être disponibles directement sans avoir besoin de créer d'API supplémentaires.\n\n3. **Démarrage rapide** : Le démarrage doit être inférieur à 1,5 secondes pour une utilisation quotidienne efficace.",
+        "ms": 24410,
+        "timings": {
+          "cache_n": 0,
+          "prompt_n": 1179,
+          "prompt_ms": 4502.057,
+          "prompt_per_token_ms": 3.8185385920271413,
+          "prompt_per_second": 261.88029160892455,
+          "predicted_n": 116,
+          "predicted_ms": 3031.723,
+          "predicted_per_token_ms": 26.362808695652173,
+          "predicted_per_second": 37.93222533852862
+        }
+      }
+    }
+  },
+  {
+    "id": "actions",
+    "title": "Actions à suivre (brainstorm)",
+    "out": {
+      "lfm3-q4_0-text": {
+        "text": "- Périmètre v1 du PRD\n- Examiner le repo existant\n- Spec UX avec Claude design\n- v1 (explorateur + wikilinks)\n- v1.5 (recherche)",
+        "ms": 25268,
+        "timings": {
+          "cache_n": 0,
+          "prompt_n": 869,
+          "prompt_ms": 2674.414,
+          "prompt_per_token_ms": 3.077576524741082,
+          "prompt_per_second": 324.9309942290161,
+          "predicted_n": 52,
+          "predicted_ms": 1131.296,
+          "predicted_per_token_ms": 22.18227450980392,
+          "predicted_per_second": 45.08103979860266
+        }
+      },
+      "qwen-q4_0": {
+        "text": "```markdown\n- **DO FIRST** : Cœur visionneuse multi-format à onglets\n- **DO FIRST** : Lecture/édition Markdown fluide\n- **QUICK WINS** : Navigation dossier, wikilinks, recherche\n- **QUICK WINS** : Petits plus quotidiens (Coller intelligent)\n- **CONSIDER** : Export un clic (Md → PDF / HTML / DOCX ; inverse)\n```",
+        "ms": 28103,
+        "timings": {
+          "cache_n": 0,
+          "prompt_n": 909,
+          "prompt_ms": 3086.3650000000002,
+          "prompt_per_token_ms": 3.3953410341034105,
+          "prompt_per_second": 294.52122480652804,
+          "predicted_n": 95,
+          "predicted_ms": 1852.104,
+          "predicted_per_token_ms": 19.70323404255319,
+          "predicted_per_second": 50.753089459339215
+        }
+      }
+    }
+  },
+  {
+    "id": "qa-citee",
+    "title": "Q&A citée (extraits RAG)",
+    "out": {
+      "lfm3-q4_0-text": {
+        "text": "Doku évite de corrompre un document lors d'une panne de courant grâce à la sauvegarde atomique : écriture d'un fichier temporaire puis renommage [2]. La recherche plein-texte balaie le dossier de contexte et la cible de latence reste sous trois cents millisecondes [3].",
+        "ms": 15425,
+        "timings": {
+          "cache_n": 0,
+          "prompt_n": 397,
+          "prompt_ms": 1173.215,
+          "prompt_per_token_ms": 2.9552015113350123,
+          "prompt_per_second": 338.386399764749,
+          "predicted_n": 69,
+          "predicted_ms": 1307.761,
+          "predicted_per_token_ms": 19.231779411764705,
+          "predicted_per_second": 51.997268614066336
+        }
+      },
+      "qwen-q4_0": {
+        "text": "Doku évite de corrompre un document lors d'une panne de courant grâce à une sauvegarde atomique. Cette sauvegarde consiste en la création d'un fichier temporaire et son renommage après la coupure, ce qui assure que le document ne reste jamais à moitié écrit. La recherche plein-texte est effectuée sur un millier de notes avec une latence visée de moins de trois cents millisecondes pour maintenir l'efficacité même en cas d'interruption du réseau.",
+        "ms": 11610,
+        "timings": {
+          "cache_n": 0,
+          "prompt_n": 425,
+          "prompt_ms": 1575.703,
+          "prompt_per_token_ms": 3.707536470588235,
+          "prompt_per_second": 269.72088014048336,
+          "predicted_n": 120,
+          "predicted_ms": 2722.151,
+          "predicted_per_token_ms": 22.875218487394957,
+          "predicted_per_second": 43.71542945266446
+        }
+      }
+    }
+  },
+  {
+    "id": "qa-piege",
+    "title": "Q&A piège (information absente)",
+    "out": {
+      "lfm3-q4_0-text": {
+        "text": "Je ne trouve pas cette information dans ce document.",
+        "ms": 20481,
+        "timings": {
+          "cache_n": 0,
+          "prompt_n": 1134,
+          "prompt_ms": 3559.529,
+          "prompt_per_token_ms": 3.1389144620811287,
+          "prompt_per_second": 318.5814752457418,
+          "predicted_n": 11,
+          "predicted_ms": 202.04,
+          "predicted_per_token_ms": 20.204,
+          "predicted_per_second": 49.49514947535142
+        }
+      },
+      "qwen-q4_0": {
+        "text": "Je ne trouve pas cette information dans ce document.",
+        "ms": 27621,
+        "timings": {
+          "cache_n": 0,
+          "prompt_n": 1188,
+          "prompt_ms": 3695.2760000000003,
+          "prompt_per_token_ms": 3.110501683501684,
+          "prompt_per_second": 321.49154758670255,
+          "predicted_n": 11,
+          "predicted_ms": 270.654,
+          "predicted_per_token_ms": 27.0654,
+          "predicted_per_second": 36.94754188003872
+        }
+      }
+    }
+  },
+  {
+    "id": "reformuler",
+    "title": "Reformuler une sélection (clarify)",
+    "out": {
+      "lfm3-q4_0-text": {
+        "text": "Il faut noter que, puisque l'application doit rester légère et fonctionner sur une machine ARM64, il est essentiel de choisir une pile technique qui n'impose pas d'émulation x64. Une telle pile dégraderait les performances, donc elle est indispensable.",
+        "ms": 27339,
+        "timings": {
+          "cache_n": 0,
+          "prompt_n": 211,
+          "prompt_ms": 693.4540000000001,
+          "prompt_per_token_ms": 3.2865118483412323,
+          "prompt_per_second": 304.2739677036977,
+          "predicted_n": 55,
+          "predicted_ms": 1249.9750000000001,
+          "predicted_per_token_ms": 23.14768518518519,
+          "predicted_per_second": 43.20086401728034
+        }
+      },
+      "qwen-q4_0": {
+        "text": "Il est important de noter que, dans la mesure où l'application doit rester légère et fonctionner sur une machine ARM64, il faut choisir une pile technique qui n'impose pas d'émulation x64. Cette option permettrait de maintenir les performances élevées sans dégrader les performances.",
+        "ms": 31360,
+        "timings": {
+          "cache_n": 0,
+          "prompt_n": 253,
+          "prompt_ms": 838.64,
+          "prompt_per_token_ms": 3.314782608695652,
+          "prompt_per_second": 301.67890870933894,
+          "predicted_n": 68,
+          "predicted_ms": 2098.067,
+          "predicted_per_token_ms": 31.314432835820895,
+          "predicted_per_second": 31.934156535515786
+        }
+      }
+    }
+  },
+  {
+    "id": "corriger",
+    "title": "Corriger (orthographe/grammaire)",
+    "out": {
+      "lfm3-q4_0-text": {
+        "text": "Les fichiers que nous avons ouverts hier étaient corrompus, mais la sauvegarde atomique nous a permis de les récupérer sans perte. Il faudrait quand même vérifier les autres dossiers",
+        "ms": 28758,
+        "timings": {
+          "cache_n": 0,
+          "prompt_n": 188,
+          "prompt_ms": 685.996,
+          "prompt_per_token_ms": 3.6489148936170213,
+          "prompt_per_second": 274.0540761170619,
+          "predicted_n": 42,
+          "predicted_ms": 871.336,
+          "predicted_per_token_ms": 21.25209756097561,
+          "predicted_per_second": 47.05417887014883
+        }
+      },
+      "qwen-q4_0": {
+        "text": "\"\"\"\nLes fichiers que nous avons ouverts hier étaient corrompus, mais la sauvegarde atomique nous a permis de les récupérer sans perte. Il faudrait toutefois vérifier les autres dossiers.\n\"\"\"",
+        "ms": 24768,
+        "timings": {
+          "cache_n": 0,
+          "prompt_n": 223,
+          "prompt_ms": 655.613,
+          "prompt_per_token_ms": 2.939968609865471,
+          "prompt_per_second": 340.13968606479733,
+          "predicted_n": 52,
+          "predicted_ms": 1088.0620000000001,
+          "predicted_per_token_ms": 21.334549019607845,
+          "predicted_per_second": 46.872328966547855
+        }
+      }
+    }
+  },
+  {
+    "id": "traduire",
+    "title": "Traduction FR→EN (consigne libre)",
+    "out": {
+      "lfm3-q4_0-text": {
+        "text": "The copilot operates entirely offline: no request leaves the machine during generation. This is the guarantee of confidentiality that distinguishes Doku from cloud-based assistants.",
+        "ms": 23241,
+        "timings": {
+          "cache_n": 0,
+          "prompt_n": 211,
+          "prompt_ms": 767.687,
+          "prompt_per_token_ms": 3.6383270142180097,
+          "prompt_per_second": 274.8515996753885,
+          "predicted_n": 31,
+          "predicted_ms": 846.9780000000001,
+          "predicted_per_token_ms": 28.2326,
+          "predicted_per_second": 35.42004632942059
+        }
+      },
+      "qwen-q4_0": {
+        "text": "**Translation in English:**\n\n\"The co-pilot operates entirely offline: no request leaves the machine during generation. This is the guarantee of confidentiality that distinguishes Doku from cloud-based assistants.\"",
+        "ms": 20810,
+        "timings": {
+          "cache_n": 0,
+          "prompt_n": 246,
+          "prompt_ms": 653.389,
+          "prompt_per_token_ms": 2.656052845528455,
+          "prompt_per_second": 376.49853303315484,
+          "predicted_n": 39,
+          "predicted_ms": 752.844,
+          "predicted_per_token_ms": 19.811684210526316,
+          "predicted_per_second": 50.47526446381986
+        }
+      }
+    }
+  }
+]

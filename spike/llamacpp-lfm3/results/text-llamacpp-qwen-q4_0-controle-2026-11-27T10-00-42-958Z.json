@@ -1,0 +1,42 @@
+{
+  "label": "llamacpp-qwen-q4_0-controle",
+  "target": {
+    "label": "llamacpp-qwen-q4_0-controle",
+    "api": "llamacpp",
+    "url": "http://127.0.0.1:8092",
+    "model": "qwen-q4_0",
+    "pid": 17784
+  },
+  "runs": 3,
+  "gen": 400,
+  "at": "2026-11-27T10:00:42.958Z",
+  "coldStart": {
+    "ttftMs": 1808,
+    "promptTokens": 565
+  },
+  "bySize": {
+    "1800": {
+      "promptTokens": 565,
+      "ttftMs": 2520,
+      "apiPrefillMs": 2504,
+      "prefillTokS": 225.6,
+      "decodeTokS": 37.6,
+      "e2eMs": 11409,
+      "completionTokens": 336
+    },
+    "3600": {
+      "promptTokens": 1039,
+      "ttftMs": 4266,
+      "apiPrefillMs": 4234,
+      "prefillTokS": 245.4,
+      "decodeTokS": 28,
+      "e2eMs": 15523,
+      "completionTokens": 318
+    }
+  },
+  "samples": {
+    "1800": "**Résumé**  \nLa gestion locale de connaissances utilise Markdown pour gérer des fichiers simples, permettant une lecture sans outils propriétaires. Les notes sont autonomes, versionables et peuvent être ouverts, édités et archivés sans dépendance à une plateforme en ligne. Les wikilinks facilitent le lien entre notes, et un cache maintient la correspondance à jour. La recherche est rapide, et le rendu respecte la syntaxe Markdown étendue avec HTML inline. L'édition en aperçu direct révèle la syntaxe au niveau du curseur, et la sauvegarde est atomique pour éviter les coupures d'alimentation. Un copilote d'assistance est intégré pour aider l'utilisateur.\n\n**Synthèse**  \nLa gestion locale de connaissances utilise Markdown pour gérer des fichiers simples, permettant une lecture sans dépendance à une plateforme en ligne. Les notes sont autonomes, versionables et peuvent être ouverts, édités et archivés sans dépendance à une plateforme en ligne. Les wikilinks facilitent le lien entre notes, et un cache maintient la correspondance à jour. La recherche est rapide, et le rendu respecte la syntaxe Markdown étendue avec HTML inline. L'édition en aperçu direct révèle la syntaxe au niveau du curseur, et la sauvegarde est atomique pour éviter les coupures d'alimentation. Un copilote d'assistance est intégré pour aider l'utilisateur.",
+    "3600": "Voici le résumé du document en huit piques claires et fidèles, en français :\n\n**Principe 1 :**\n- **Fichiers Markdown** : simples, autonomes, versionnables.\n- **Wikilinks** : résolus vers fichiers sous le même dossier.\n- **Cache invalidé** : maintient la correspondance à jour.\n- **Recherche** : balaie le dossier, retourne fichiers avec extraits surlignés.\n- **Rendu** : respecte syntaxe Markdown étendue, HTML inline.\n- **Édition** : aperçu direct, atomique sauvegarde.\n- **Copilote** : fonctionne hors ligne, non dépendant de réseau.\n- **Résumé** : segmentation, fusion des résumés.\n- **Questions** : réponse ancrée sur le contenu.\n- **Indexation** : vecteurs d'embeddings locaux, incrémental.\n\n**Principe 2 :**\n- **Fichiers Markdown** : simples, lisibles sans outil propriétaire.\n- **Fichiers** : simples, autonomes, versionnables.\n- **Cache invalidé** : maintient la correspondance à jour.\n- **Recherche** : balaie le dossier, retourne fichiers avec extraits surlignés.\n- **Rendu** : respecte syntaxe Markdown étendue, HTML inline.\n- **Édition** : aperçu direct, atomique sauvegarde.\n- **Copilote** : fonctionne hors ligne, non dépendant de réseau.\n- **Résumé** : segmentation, fusion des résumés.\n- **Questions** : réponse ancrée sur le contenu.\n- **Indexation** : vecteurs d'embeddings locaux, incrémental.\n\n**Synthèse :**\nLa gestion locale"
+  },
+  "peakWorkingSetMB": 1723
+}

@@ -1,0 +1,62 @@
+{
+  "dims": {
+    "ollama": 768,
+    "llama": 768
+  },
+  "ollamaMs": 17014,
+  "llamaMs": 6237,
+  "vectorCosine": [
+    1,
+    1,
+    1,
+    1,
+    1,
+    1
+  ],
+  "pairs": [
+    {
+      "pair": "0-1",
+      "ollama": 0.6401,
+      "llama": 0.6401,
+      "delta": 0.00001
+    },
+    {
+      "pair": "2-3",
+      "ollama": 0.6692,
+      "llama": 0.6691,
+      "delta": 0.00001
+    },
+    {
+      "pair": "0-3",
+      "ollama": 0.5303,
+      "llama": 0.5303,
+      "delta": 0.00002
+    },
+    {
+      "pair": "1-4",
+      "ollama": 0.4856,
+      "llama": 0.4856,
+      "delta": 0.00001
+    },
+    {
+      "pair": "0-5",
+      "ollama": 0.5423,
+      "llama": 0.5423,
+      "delta": 0.00001
+    },
+    {
+      "pair": "2-4",
+      "ollama": 0.547,
+      "llama": 0.5469,
+      "delta": 0.00001
+    }
+  ],
+  "texts": [
+    "«sauvegarde» — La sauvegarde est atomique : écriture d'un fichier temporaire puis renommage, afin qu'une coupure ne laisse jamais un document à moitié écrit.",
+    "Comment éviter de corrompre un fichier lors d'une panne de courant ?",
+    "«wikilinks» — Le liage entre notes s'effectue par des wikilinks résolus vers le fichier cible du dossier courant.",
+    "Comment relier deux notes entre elles ?",
+    "«recette» — Faire revenir les oignons dans le beurre, ajouter la crème et laisser mijoter vingt minutes.",
+    "The copilot runs fully offline: no request leaves the machine during generation."
+  ]
+}

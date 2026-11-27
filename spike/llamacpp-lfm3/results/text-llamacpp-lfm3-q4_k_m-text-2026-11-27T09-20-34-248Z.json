@@ -1,0 +1,62 @@
+{
+  "label": "llamacpp-lfm3-q4_k_m-text",
+  "target": {
+    "label": "llamacpp-lfm3-q4_k_m-text",
+    "api": "llamacpp",
+    "url": "http://127.0.0.1:8090",
+    "model": "lfm3-q4_k_m-text",
+    "pid": 24540
+  },
+  "runs": 3,
+  "gen": 400,
+  "at": "2026-11-27T09:20:34.248Z",
+  "coldStart": {
+    "ttftMs": 35985,
+    "promptTokens": 492
+  },
+  "bySize": {
+    "1800": {
+      "promptTokens": 492,
+      "ttftMs": 2833,
+      "apiPrefillMs": 2818,
+      "prefillTokS": 174.6,
+      "decodeTokS": 42.6,
+      "e2eMs": 9052,
+      "completionTokens": 270
+    },
+    "3600": {
+      "promptTokens": 927,
+      "ttftMs": 4855,
+      "apiPrefillMs": 4841,
+      "prefillTokS": 191.5,
+      "decodeTokS": 30.1,
+      "e2eMs": 16746,
+      "completionTokens": 323
+    },
+    "7200": {
+      "promptTokens": 1797,
+      "ttftMs": 10934,
+      "apiPrefillMs": 10858,
+      "prefillTokS": 165.5,
+      "decodeTokS": 19.5,
+      "e2eMs": 31431,
+      "completionTokens": 400
+    },
+    "14400": {
+      "promptTokens": 3546,
+      "ttftMs": 23301,
+      "apiPrefillMs": 23275,
+      "prefillTokS": 152.4,
+      "decodeTokS": 20,
+      "e2eMs": 43278,
+      "completionTokens": 400
+    }
+  },
+  "samples": {
+    "1800": "*   Les notes sont stockées dans des fichiers Markdown autonomes, versionnables, accessibles sans outil propriétaire.\n*   Le lien entre notes est établi via des wikilinks double-crochet résolus vers le dossier courant ou ses sous-dossiers.\n*   La recherche full-text balaye le contexte et retourne les fichiers correspondants avec des extraits surlignés.\n*   Le rendu respecte la syntaxe Markdown étendue (tableaux, listes, blocs de code) avec un HTML inline protégé contre les scripts.\n*   L'édition en aperçu révèle la syntaxe au niveau du curseur puis re-rend le bloc à la sortie.\n*   La sauvegarde est atomique (écriture temporaire suivie d'un renommage) pour éviter les documents à moitié écrits.\n*   Un indicateur signale les modifications non enregistrées.\n\n**Synthèse :** Ce document décrit une gestion de connaissances basée sur des fichiers Markdown autonomes, utilisant des liens hyperliens, une recherche efficace, un rendu sécurisé et une sauvegarde atomique pour garantir la durabilité et la lisibilité des notes.",
+    "3600": "*   Les notes sont stockées dans des fichiers Markdown simples, autonomes, versionnables et lisibles sans outil propriétaire.\n*   Le lien entre notes est établi via des wikilinks double-crochet résolus vers le dossier courant ou ses sous-dossiers, avec un cache invalidé pour garantir la correspondance à jour.\n*   La recherche full-text balaye le contexte et retourne les fichiers correspondants avec des extraits surlignés, avec une latence sous trois cents millisecondes sur un corpus de milliers de notes.\n*   Le rendu respecte la syntaxe Markdown étendue (tableaux, listes de tâches, blocs de code colorés) et utilise une liste d'autorisation stricte pour neutraliser les scripts et gestionnaires d'événements.\n*   L'édition en aperçu révèle la syntaxe au niveau du curseur puis re-rend le bloc à la sortie, avec une sauvegarde atomique (écriture temporaire puis renommage) pour éviter les documents à moitié écrits.\n*   Le copilote d'assistance fonctionne intégralement hors ligne grâce à un moteur d'inférence local, garantissant la confidentialité des prompts.\n*   Le résumé de long documents utilise une segmentation pour éviter la troncature silencieuse, fusionnant les résumés par carte pour préserver la fin du document.\n\n**Synthèse :** Ce document décrit une gestion locale de connaissances basée sur des fichiers Markdown autonomes, offrant une recherche rapide, un rendu sécurisé, une édition atomique et une confidentialité hors ligne.",
+    "7200": "*   **Gestion de données** : Les notes sont stockées dans des fichiers Markdown simples, autonomes, versionnables et lisibles sans outil propriétaire.\n*   **Liaison entre notes** : Les liens entre notes sont créés via des wikilinks de type double-crochet, résolus vers le dossier courant ou ses sous-dossiers, avec un cache invalidé pour garantir la correspondance à jour.\n*   **Recherche** : La recherche plein-texte balaye le dossier de contexte pour retourner les fichiers correspondants avec des extraits surlignés, avec une latence sous trois cents millisecondes.\n*   **Rendu** : Le rendu respecte la syntaxe Markdown étendue (tableaux, listes de tâches, blocs de code colorés) et utilise une liste d'autorisation stricte pour neutraliser les scripts et gestionnaires d'événements.\n*   **Édition** : L'édition en aperçu direct révèle la syntaxe au niveau du curseur puis re-rend le bloc à la sortie, avec une sauvegarde atomique (fichier temporaire renommé) pour éviter les documents à moitié écrits.\n*   **Assistance** : Le copilote d'assistance fonctionne intégralement hors ligne grâce à un moteur d'inférence local, garantissant la confidentialité et évitant les requêtes vers des serveurs distants.\n*   **Résumé** : Le résumé d'un long document utilise une segmentation quand le texte dépasse la fenêtre de contexte, puis fusionne les résumés par carte pour éviter la troncature silencieuse.\n*   **Réponse aux questions** : Les questions reçoivent une réponse ancrée sur le contenu, et si l'information demandée est absente, le copilote le dit franchement plutôt que d'inventer, privilégiant l'honnêteté.\n\n",
+    "14400": "*   **Gestion de données :** Le système repose sur des fichiers Markdown simples, autonomes, versionnables et lisibles sans outil propriétaire, privilégiant la durabilité du format.\n*   **Liaison entre notes :** Les notes sont reliées par des wikilinks de type double-crochet, résolus vers le dossier courant ou ses sous-dossiers, avec un cache invalidé pour garantir la correspondance à jour.\n*   **Recherche :** La recherche plein-texte balaye le dossier de contexte pour retourner les fichiers correspondants avec des extraits surlignés, avec une latence sous trois cents millisecondes.\n*   **Rendu :** Le rendu respecte la syntaxe Markdown étendue (tableaux, listes de tâches, blocs de code colorés) et utilise une liste d'autorisation stricte pour neutraliser les scripts et gestionnaires d'événements.\n*   **Édition :** L'édition en aperçu direct révèle la syntaxe au niveau du curseur puis re-rend le bloc à la sortie, avec une sauvegarde atomique (fichier temporaire renommé) pour éviter les documents à moitié écrits.\n*   **Assistance :** Le copilote d'assistance fonctionne intégralement hors ligne grâce à un moteur d'inférence local, garantissant la confidentialité et évitant les prompts transitant par un serveur distant.\n*   **Résumé :** Pour les documents longs, la segmentation et la fusion des résumés évitent la troncature silencieuse, préservant la fin du document sans avertir l'utilisateur.\n*   **Interaction :** Les questions posées reçoivent une réponse ancrée sur le contenu, et en cas d'absence d'information, le copilote le dit franchement plutôt que d'inventer, préservant la confiance.\n\n**Synthèse :** Ce document"
+  },
+  "peakWorkingSetMB": 1791
+}

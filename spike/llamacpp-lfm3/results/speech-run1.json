@@ -1,0 +1,77 @@
+{
+  "tts": [
+    {
+      "id": "fr-court",
+      "file": "results/audio/fr-court.wav",
+      "text": "Bonjour, je suis Doku-San, votre assistant de lecture.",
+      "firstByteMs": 544,
+      "totalMs": 2712,
+      "audioSec": 3.6,
+      "rtf": 0.75,
+      "sampleRate": 24000,
+      "contentType": "audio/wav"
+    },
+    {
+      "id": "fr-reponse",
+      "file": "results/audio/fr-reponse.wav",
+      "text": "Le document décrit le choix de Tauri pour Doku. Electron a été écarté parce qu'il embarque Chromium et consomme trop de mémoire. La décision privilégie la légèreté et la réutilisation des briques existantes.",
+      "firstByteMs": 515,
+      "totalMs": 7985,
+      "audioSec": 11.36,
+      "rtf": 0.7,
+      "sampleRate": 24000,
+      "contentType": "audio/wav"
+    },
+    {
+      "id": "fr-nombres",
+      "file": "results/audio/fr-nombres.wav",
+      "text": "Le rendez-vous est fixé au mardi 14 octobre 2026 à 9 h 30, salle 212. Le budget total s’élève à 14 320 euros, soit 4,5 % de plus qu’en 2025.",
+      "firstByteMs": 471,
+      "totalMs": 7474,
+      "audioSec": 10.72,
+      "rtf": 0.7,
+      "sampleRate": 24000,
+      "contentType": "audio/wav"
+    }
+  ],
+  "asr": [
+    {
+      "id": "fr-reponse",
+      "via": "transcriptions",
+      "ms": 2821,
+      "audioSec": 11.36,
+      "reference": "Le document décrit le choix de Tauri pour Doku. Electron a été écarté parce qu'il embarque Chromium et consomme trop de mémoire. La décision privilégie la légèreté et la réutilisation des briques existantes.",
+      "transcript": "Le document décrit le choix de Tori pour Dokou. Electron a été écarté parce qu'il embarque chromium et consomme trop de mémoire. La décision privilégie la légèreté et la réutilisation des briques existantes."
+    },
+    {
+      "id": "fr-nombres",
+      "via": "transcriptions",
+      "ms": 2934,
+      "audioSec": 10.72,
+      "reference": "Le rendez-vous est fixé au mardi 14 octobre 2026 à 9 h 30, salle 212. Le budget total s’élève à 14 320 euros, soit 4,5 % de plus qu’en 2025.",
+      "transcript": "Le rendez-vous est fixé au mardi 5 octobre 2036 à Neves sur Siadud. Salle budget total s'élève à 4 anciens sur Heroes, soit 15 à 18 celle-ci et de plus qu'en d'autres fronts signés."
+    }
+  ],
+  "realtime": {
+    "events": {
+      "session.created": 1,
+      "session.updated": 1,
+      "conversation.item.added": 1,
+      "conversation.item.done": 1,
+      "response.created": 1,
+      "response.output_item.added": 1,
+      "response.content_part.added": 2,
+      "response.output_text.delta": 13,
+      "response.output_audio.delta": 72,
+      "response.output_text.done": 1,
+      "response.content_part.done": 2,
+      "response.output_audio.done": 1,
+      "response.output_item.done": 1,
+      "response.done": 1
+    },
+    "firstAudioMs": 602,
+    "firstTextMs": 372,
+    "audioBytes": 272640,
+    "transcript": "Bonjour, je suis Doku-San, votre assistant."
+  }
+}
